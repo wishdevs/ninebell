@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState, type ReactNode } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { RiCheckLine, RiArrowDownSLine } from '@remixicon/react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
@@ -93,13 +93,10 @@ export function Dropdown({
               )}
             </span>
           </span>
-          <ChevronDown
+          <RiArrowDownSLine
             size={16}
             aria-hidden
-            className={cn(
-              'text-foreground-tertiary transition-transform',
-              open && 'rotate-180',
-            )}
+            className={cn('text-foreground-tertiary transition-transform', open && 'rotate-180')}
           />
         </button>
       </PopoverTrigger>
@@ -137,7 +134,7 @@ export function Dropdown({
                     ) : null}
                   </span>
                   {isActive ? (
-                    <Check size={14} aria-hidden className="text-success shrink-0" />
+                    <RiCheckLine size={14} aria-hidden className="text-success shrink-0" />
                   ) : null}
                 </button>
               </li>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import { RiArrowLeftLine } from '@remixicon/react';
 import { cn } from '@/lib/utils';
 
 export interface BackButtonProps {
@@ -46,7 +46,7 @@ export function BackButton({ label, fallback, className, iconSize = 14 }: BackBu
       className={cn(BASE_CLASSES, className)}
       aria-label={`${label}으로 돌아가기`}
     >
-      <ArrowLeft size={iconSize} /> {label}
+      <RiArrowLeftLine size={iconSize} /> {label}
     </button>
   );
 }

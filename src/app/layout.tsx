@@ -40,7 +40,7 @@ export const metadata: Metadata = {
   },
   description: 'ETRIBE AX SYSTEM — 프론트엔드 디자인 기본형',
   icons: {
-    icon: '/favicon.svg',
+    icon: '/favicon.ico',
   },
 };
 

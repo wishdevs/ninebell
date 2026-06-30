@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react';
+import { RiArrowDownSLine } from '@remixicon/react';
 import { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -22,7 +22,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
         >
           {children}
         </select>
-        <ChevronDown
+        <RiArrowDownSLine
           aria-hidden="true"
           className="text-foreground-tertiary pointer-events-none absolute top-1/2 right-3 h-3 w-3 -translate-y-1/2"
         />

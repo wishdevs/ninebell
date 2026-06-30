@@ -1,4 +1,4 @@
-import { ListTodo } from 'lucide-react';
+import { RiListCheck3 } from '@remixicon/react';
 import { Avatar } from '@/components/ui/avatar';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SectionCard } from '@/components/ui/section-card';
@@ -29,7 +29,7 @@ export function WorksTab({ project }: WorksTabProps) {
   if (works.length === 0) {
     return (
       <EmptyState
-        icon={<ListTodo size={18} aria-hidden />}
+        icon={<RiListCheck3 size={18} aria-hidden />}
         title="이 프로젝트에 등록된 업무가 없습니다"
         description="업무를 추가하면 진행 상황과 담당자가 여기에 표시됩니다."
       />

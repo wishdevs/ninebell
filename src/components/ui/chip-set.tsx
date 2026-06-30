@@ -1,6 +1,6 @@
 'use client';
 
-import { X } from 'lucide-react';
+import { RiCloseLine } from '@remixicon/react';
 import {
   forwardRef,
   type ButtonHTMLAttributes,
@@ -128,7 +128,7 @@ export const Chip = forwardRef<HTMLButtonElement | HTMLSpanElement, ChipProps>(
                 shape === 'pill' ? 'rounded-r-full px-1.5' : 'rounded-r-[var(--radius-md)] px-1.5',
               )}
             >
-              <X size={12} strokeWidth={2} aria-hidden />
+              <RiCloseLine size={12} aria-hidden />
             </button>
           ) : null}
         </span>

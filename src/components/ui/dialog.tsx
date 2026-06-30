@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { RiCloseLine } from '@remixicon/react';
 import { cn } from '@/lib/utils';
 
 const noopSubscribe = () => () => {};
@@ -100,7 +100,7 @@ export function Dialog({
             className="text-muted-foreground hover:text-foreground shrink-0 rounded-[var(--radius-sm)] p-1 transition-colors"
             aria-label="닫기"
           >
-            <X size={16} />
+            <RiCloseLine size={16} />
           </button>
         </header>
         <div className="flex-1 overflow-y-auto">{children}</div>

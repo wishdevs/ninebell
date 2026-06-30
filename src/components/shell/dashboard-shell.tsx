@@ -19,9 +19,9 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           className="bg-surface relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
         >
           <Topbar />
-          <main className="animate-page-enter relative z-0 flex min-h-0 flex-1 flex-col px-[var(--grid-gutter)] pt-10">
+          <main className="animate-page-enter relative z-0 flex min-h-0 flex-1 flex-col px-[var(--grid-gutter)] pt-6">
             {children}
-            <div aria-hidden className="pointer-events-none h-24 w-full shrink-0" />
+            <div aria-hidden className="pointer-events-none h-8 w-full shrink-0" />
           </main>
         </div>
       </div>

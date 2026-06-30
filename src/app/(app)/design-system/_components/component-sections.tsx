@@ -1,4 +1,11 @@
-import { Inbox, Info, Palette, Plus, SearchX, Trash2 } from 'lucide-react';
+import {
+  RiInboxLine,
+  RiInformationLine,
+  RiPaletteLine,
+  RiAddLine,
+  RiSearchLine,
+  RiDeleteBinLine,
+} from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip-set';
 import { EmptyHint } from '@/components/ui/empty-hint';
@@ -36,7 +43,7 @@ export function ButtonShowcaseSection() {
         <Button variant="ghost">Ghost</Button>
         <Button variant="danger">Danger</Button>
         <Button size="icon" aria-label="아이콘 버튼">
-          <Palette size={16} />
+          <RiPaletteLine size={16} />
         </Button>
       </Showcase>
 
@@ -55,13 +62,13 @@ export function ButtonShowcaseSection() {
 
       <Showcase label="아이콘 조합 · 비활성">
         <Button size="sm">
-          <Plus size={14} /> 새로 만들기
+          <RiAddLine size={14} /> 새로 만들기
         </Button>
         <Button size="sm" variant="secondary">
-          <Info size={14} /> 자세히
+          <RiInformationLine size={14} /> 자세히
         </Button>
         <Button size="sm" variant="danger">
-          <Trash2 size={14} /> 삭제
+          <RiDeleteBinLine size={14} /> 삭제
         </Button>
         <Button disabled>비활성</Button>
         <Button variant="secondary" disabled>
@@ -125,17 +132,17 @@ export function EmptyShowcaseSection() {
     >
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmptyState
-          icon={<SearchX size={18} strokeWidth={1.75} aria-hidden />}
+          icon={<RiSearchLine size={18} aria-hidden />}
           title="조건에 맞는 결과가 없습니다"
           description="필터를 완화하거나 새 항목을 추가해 시작하세요."
           action={
             <Button variant="secondary" size="sm">
-              <Plus size={14} /> 새로 만들기
+              <RiAddLine size={14} /> 새로 만들기
             </Button>
           }
         />
         <EmptyHint
-          icon={<Inbox size={14} strokeWidth={1.75} aria-hidden />}
+          icon={<RiInboxLine size={14} aria-hidden />}
           title="알림 없음"
           description="새 활동이 도착하면 이곳에 표시됩니다."
         />

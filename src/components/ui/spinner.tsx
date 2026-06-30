@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react';
+import { RiLoader4Line } from '@remixicon/react';
 import { cn } from '@/lib/utils';
 
 interface SpinnerProps {
@@ -27,7 +27,7 @@ interface SpinnerProps {
  */
 export function Spinner({ size = 14, strokeWidth, label, className }: SpinnerProps) {
   return (
-    <Loader2
+    <RiLoader4Line
       size={size}
       strokeWidth={strokeWidth}
       role={label ? 'status' : undefined}

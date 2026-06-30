@@ -6,7 +6,7 @@
  */
 
 export type NavIconKey =
-  'home' | 'works' | 'analytics' | 'projects' | 'members' | 'settings' | 'design';
+  'home' | 'agents' | 'works' | 'analytics' | 'projects' | 'members' | 'settings' | 'design';
 
 export interface NavItem {
   href: string;
@@ -30,6 +30,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   {
     label: 'Workspace',
     items: [
+      { href: '/agents', label: '에이전트', icon: 'agents' },
       { href: '/works', label: '업무', icon: 'works' },
       { href: '/analytics', label: '애널리틱스', icon: 'analytics' },
       { href: '/projects', label: '프로젝트', icon: 'projects' },

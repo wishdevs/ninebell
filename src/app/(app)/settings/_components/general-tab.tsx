@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Check } from 'lucide-react';
+import { RiCheckLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -80,14 +80,14 @@ export function GeneralTab() {
                 )}
                 style={{ backgroundColor: swatch.value }}
               >
-                {isSelected ? (
-                  <Check size={14} strokeWidth={2.5} className="text-white" aria-hidden />
-                ) : null}
+                {isSelected ? <RiCheckLine size={14} className="text-white" aria-hidden /> : null}
               </button>
             );
           })}
         </div>
-        <p className="text-muted-foreground text-xs">사이드바에서 조직을 빠르게 구분할 때 쓰입니다.</p>
+        <p className="text-muted-foreground text-xs">
+          사이드바에서 조직을 빠르게 구분할 때 쓰입니다.
+        </p>
       </div>
 
       <div className="border-border-subtle flex justify-end border-t pt-5">

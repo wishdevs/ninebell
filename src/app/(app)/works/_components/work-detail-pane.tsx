@@ -1,6 +1,6 @@
 'use client';
 
-import { X } from 'lucide-react';
+import { RiCloseLine } from '@remixicon/react';
 import type { ReactNode } from 'react';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -46,7 +46,7 @@ export function WorkDetailPane({ work, onClose }: { work: Work; onClose: () => v
           aria-label="상세 닫기"
           className="-mt-1 -mr-1 shrink-0"
         >
-          <X size={18} aria-hidden />
+          <RiCloseLine size={18} aria-hidden />
         </Button>
       </div>
 

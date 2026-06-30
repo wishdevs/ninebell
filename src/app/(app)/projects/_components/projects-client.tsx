@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { FolderOpen, Plus } from 'lucide-react';
+import { RiFolderOpenLine, RiAddLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -23,7 +23,12 @@ export function ProjectsClient() {
   const [filter, setFilter] = useState<Filter>('all');
 
   const counts = useMemo<Record<Filter, number>>(() => {
-    const base: Record<Filter, number> = { all: PROJECTS.length, active: 0, paused: 0, archived: 0 };
+    const base: Record<Filter, number> = {
+      all: PROJECTS.length,
+      active: 0,
+      paused: 0,
+      archived: 0,
+    };
     for (const project of PROJECTS) base[project.status] += 1;
     return base;
   }, []);
@@ -39,9 +44,12 @@ export function ProjectsClient() {
         title="프로젝트"
         description="팀이 진행 중인 프로젝트를 한눈에 살펴보고 상태별로 필터링하세요."
         action={
-          <Button onClick={() => toast.success('새 프로젝트 생성은 기본형 데모에서 비활성화되어 있습니다')}>
-            <Plus size={16} aria-hidden />
-            새 프로젝트
+          <Button
+            onClick={() =>
+              toast.success('새 프로젝트 생성은 기본형 데모에서 비활성화되어 있습니다')
+            }
+          >
+            <RiAddLine size={16} aria-hidden />새 프로젝트
           </Button>
         }
       />
@@ -80,7 +88,7 @@ export function ProjectsClient() {
 
       {visible.length === 0 ? (
         <EmptyState
-          icon={<FolderOpen size={20} aria-hidden />}
+          icon={<RiFolderOpenLine size={20} aria-hidden />}
           title="해당 상태의 프로젝트가 없습니다"
           description="다른 상태 필터를 선택해 보세요."
         />

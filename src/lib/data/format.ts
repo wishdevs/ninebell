@@ -63,6 +63,26 @@ export function formatDate(iso: string): string {
   return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium' }).format(d);
 }
 
+/**
+ * "2026. 6. 29. 16:24" 형태의 날짜+시간. timeZone을 Asia/Seoul로 고정해
+ * 서버/클라이언트가 동일 문자열을 렌더한다(하이드레이션 안전).
+ */
+const DATETIME_FMT = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return DATETIME_FMT.format(d);
+}
+
 interface Offset {
   minutes?: number;
   hours?: number;

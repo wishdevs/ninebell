@@ -1,4 +1,4 @@
-import { Bell } from 'lucide-react';
+import { RiNotification3Line } from '@remixicon/react';
 import { Sparkline } from '@/components/ui/sparkline';
 import type { GeoInsight } from '@/lib/data/home';
 import { InsightCardShell } from './insight-card-shell';
@@ -21,9 +21,8 @@ export function InsightCardGeo({ data }: InsightCardGeoProps) {
             <span className="text-muted-foreground ml-1 text-sm font-normal">개 브랜드</span>
           </p>
           <p className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-            <Bell
+            <RiNotification3Line
               size={11}
-              strokeWidth={2}
               aria-hidden
               className={data.alarmCount > 0 ? 'text-warning' : 'text-foreground-tertiary'}
             />

@@ -1,31 +1,35 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  BarChart3,
-  Briefcase,
-  FolderKanban,
-  Home,
-  Palette,
-  Settings,
-  UserCog,
-  X,
-  type LucideIcon,
-} from 'lucide-react';
+  RiBarChartBoxLine,
+  RiRobot2Line,
+  RiBriefcaseLine,
+  RiFolderLine,
+  RiHome5Line,
+  RiPaletteLine,
+  RiSettings3Line,
+  RiUserSettingsLine,
+  RiCloseLine,
+  type RemixiconComponentType,
+} from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey } from '@/lib/data/nav';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from './mobile-nav-context';
-import { WorkspaceSwitcher } from './workspace-switcher';
+import { SidebarSession } from './sidebar-session';
+import { SidebarUserCard } from './sidebar-user-card';
 
-const ICONS: Record<NavIconKey, LucideIcon> = {
-  home: Home,
-  works: Briefcase,
-  analytics: BarChart3,
-  projects: FolderKanban,
-  members: UserCog,
-  settings: Settings,
-  design: Palette,
+const ICONS: Record<NavIconKey, RemixiconComponentType> = {
+  home: RiHome5Line,
+  agents: RiRobot2Line,
+  works: RiBriefcaseLine,
+  analytics: RiBarChartBoxLine,
+  projects: RiFolderLine,
+  members: RiUserSettingsLine,
+  settings: RiSettings3Line,
+  design: RiPaletteLine,
 };
 
 export function Sidebar() {
@@ -54,7 +58,7 @@ export function Sidebar() {
               className="text-muted-foreground hover:text-foreground absolute top-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors"
               aria-label="메뉴 닫기"
             >
-              <X size={16} strokeWidth={1.75} aria-hidden />
+              <RiCloseLine size={16} aria-hidden />
             </button>
             {inner}
           </aside>
@@ -67,8 +71,17 @@ export function Sidebar() {
 function SidebarInner({ pathname }: { pathname: string | null }) {
   return (
     <>
-      <div className="relative z-40 shrink-0">
-        <WorkspaceSwitcher />
+      <div className="border-border-subtle shrink-0 border-b px-5 py-5">
+        <Link href="/" aria-label="NINEBELL 홈" className="inline-flex items-center">
+          <Image
+            src="/ninebell-logo.png"
+            alt="NINEBELL"
+            width={2303}
+            height={350}
+            priority
+            className="h-6 w-auto"
+          />
+        </Link>
       </div>
       <div className="flex-1 overflow-x-hidden overflow-y-auto">
         <nav className="flex flex-col gap-4 px-4 pt-4 pb-6">
@@ -95,7 +108,7 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
                         : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
                     )}
                   >
-                    <Icon size={18} aria-hidden strokeWidth={active ? 2.5 : 1.5} />
+                    <Icon size={18} aria-hidden />
                     {label}
                   </Link>
                 );
@@ -104,16 +117,9 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
           ))}
         </nav>
       </div>
-      <div className="font-display border-border mt-auto flex shrink-0 items-baseline gap-[0.4em] border-t px-4 py-4">
-        <span className="text-foreground-tertiary text-[11px] font-medium tracking-[0.18em] uppercase">
-          Etribe
-        </span>
-        <span className="text-foreground-tertiary text-[11px] font-normal tracking-[0.08em] uppercase">
-          ·
-        </span>
-        <span className="text-foreground-tertiary text-[11px] font-semibold tracking-[0.04em] uppercase">
-          AX
-        </span>
+      <div className="mt-auto">
+        <SidebarSession />
+        <SidebarUserCard />
       </div>
     </>
   );

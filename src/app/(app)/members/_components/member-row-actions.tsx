@@ -1,7 +1,12 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { MoreHorizontal, Trash2, UserCheck, UserX } from 'lucide-react';
+import {
+  RiMoreLine,
+  RiDeleteBinLine,
+  RiUserFollowLine,
+  RiUserUnfollowLine,
+} from '@remixicon/react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import type { WorkspaceMember } from '@/lib/data/members';
@@ -37,13 +42,19 @@ export function MemberRowActions({
             'data-[state=open]:bg-muted data-[state=open]:text-foreground',
           )}
         >
-          <MoreHorizontal size={16} aria-hidden />
+          <RiMoreLine size={16} aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-44 p-1">
         <div role="menu" className="grid gap-0.5">
           <MenuItem
-            icon={isSuspended ? <UserCheck size={14} aria-hidden /> : <UserX size={14} aria-hidden />}
+            icon={
+              isSuspended ? (
+                <RiUserFollowLine size={14} aria-hidden />
+              ) : (
+                <RiUserUnfollowLine size={14} aria-hidden />
+              )
+            }
             label={isSuspended ? '활성화' : '정지'}
             onSelect={() => {
               onToggleStatus(member);
@@ -51,7 +62,7 @@ export function MemberRowActions({
             }}
           />
           <MenuItem
-            icon={<Trash2 size={14} aria-hidden />}
+            icon={<RiDeleteBinLine size={14} aria-hidden />}
             label="삭제"
             danger
             onSelect={() => {

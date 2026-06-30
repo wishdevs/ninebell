@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react';
+import { RiLoader4Line } from '@remixicon/react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -10,13 +10,7 @@ import { cn } from '@/lib/utils';
  * light/dark in ``globals.css``.
  */
 export type StatusBadgeStatus =
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'running'
-  | 'pending'
-  | 'paused'
-  | 'batch_submitted';
+  'completed' | 'failed' | 'cancelled' | 'running' | 'pending' | 'paused' | 'batch_submitted';
 
 type Tone = 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'muted';
 
@@ -129,7 +123,7 @@ export function StatusBadge({
         className,
       )}
     >
-      {isRunning ? <Loader2 size={11} className="animate-spin" strokeWidth={2.5} /> : null}
+      {isRunning ? <RiLoader4Line size={11} className="animate-spin" /> : null}
       {label}
       {showCounter ? (
         <span className="font-mono tabular-nums">

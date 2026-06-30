@@ -1,16 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { UserPlus } from 'lucide-react';
+import { RiUserAddLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import {
-  WORKSPACE_MEMBERS,
-  type MemberStatus,
-  type WorkspaceMember,
-} from '@/lib/data/members';
+import { WORKSPACE_MEMBERS, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
 import { CURRENT_USER, ROLE_LABEL, type OrgRole } from '@/lib/data/workspace';
 import { MembersTable } from './members-table';
 import { InviteDialog, type InviteInput } from './invite-dialog';
@@ -35,7 +31,9 @@ export function MembersClient() {
     const next: MemberStatus = member.status === 'suspended' ? 'active' : 'suspended';
     setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, status: next } : m)));
     toast.success(
-      next === 'suspended' ? `${member.name} 님을 정지했습니다` : `${member.name} 님을 활성화했습니다`,
+      next === 'suspended'
+        ? `${member.name} 님을 정지했습니다`
+        : `${member.name} 님을 활성화했습니다`,
     );
   }
 
@@ -69,7 +67,7 @@ export function MembersClient() {
         description="워크스페이스 멤버와 역할을 관리합니다."
         action={
           <Button variant="primary" onClick={() => setInviteOpen(true)}>
-            <UserPlus size={16} aria-hidden />
+            <RiUserAddLine size={16} aria-hidden />
             멤버 초대
           </Button>
         }

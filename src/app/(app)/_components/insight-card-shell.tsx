@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight } from 'lucide-react';
+import { RiArrowRightUpLine } from '@remixicon/react';
 import { cn } from '@/lib/utils';
 
 interface InsightCardShellProps {
@@ -49,9 +49,8 @@ export function InsightCardShell({
           </p>
           <p className="text-muted-foreground text-xs">{caption}</p>
         </div>
-        <ArrowUpRight
+        <RiArrowRightUpLine
           size={14}
-          strokeWidth={2}
           aria-hidden
           className="text-foreground-tertiary group-hover:text-accent shrink-0 transition-colors"
         />

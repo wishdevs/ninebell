@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, UserPlus, Users } from 'lucide-react';
+import { RiCheckboxCircleLine, RiUserAddLine, RiGroupLine } from '@remixicon/react';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -13,11 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
-import {
-  MEMBER_STATUS_LABEL,
-  type MemberStatus,
-  type WorkspaceMember,
-} from '@/lib/data/members';
+import { MEMBER_STATUS_LABEL, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
 import { ROLE_LABEL, type OrgRole } from '@/lib/data/workspace';
 import { formatDate, formatRelativeKorean } from '@/lib/data/format';
 import { MemberRowActions } from './member-row-actions';
@@ -62,12 +58,12 @@ export function MembersTable({
   if (members.length === 0) {
     return (
       <EmptyState
-        icon={<Users size={18} aria-hidden />}
+        icon={<RiGroupLine size={18} aria-hidden />}
         title="멤버가 없습니다"
         description="아직 이 워크스페이스에 멤버가 없습니다. 새 멤버를 초대해 협업을 시작하세요."
         action={
           <Button variant="primary" size="sm" onClick={onInviteClick}>
-            <UserPlus size={16} aria-hidden />
+            <RiUserAddLine size={16} aria-hidden />
             멤버 초대
           </Button>
         }
@@ -100,7 +96,10 @@ export function MembersTable({
             {members.map((member) => {
               const isSelf = member.id === currentUserId;
               return (
-                <tr key={member.id} className="border-border-subtle row-hover border-b last:border-0">
+                <tr
+                  key={member.id}
+                  className="border-border-subtle row-hover border-b last:border-0"
+                >
                   <Td>
                     <div className="flex items-center gap-3">
                       <Avatar userId={member.id} hasAvatar={false} label={member.name} size={36} />
@@ -126,10 +125,7 @@ export function MembersTable({
                         value={member.role}
                         onValueChange={(value) => onRoleChange(member, value as OrgRole)}
                       >
-                        <SelectTrigger
-                          aria-label={`${member.name} 역할`}
-                          className="w-[7.5rem]"
-                        >
+                        <SelectTrigger aria-label={`${member.name} 역할`} className="w-[7.5rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -153,7 +149,7 @@ export function MembersTable({
                   <Td>
                     {member.emailVerified ? (
                       <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                        <CheckCircle2 size={13} className="text-success" aria-hidden />
+                        <RiCheckboxCircleLine size={13} className="text-success" aria-hidden />
                         인증됨
                       </span>
                     ) : (
@@ -161,11 +157,11 @@ export function MembersTable({
                     )}
                   </Td>
 
-                  <Td className="text-muted-foreground tabular-nums text-xs">
+                  <Td className="text-muted-foreground text-xs tabular-nums">
                     {formatRelativeKorean(member.lastActiveAt)}
                   </Td>
 
-                  <Td className="text-muted-foreground tabular-nums text-xs">
+                  <Td className="text-muted-foreground text-xs tabular-nums">
                     {formatDate(member.joinedAt)}
                   </Td>
 

@@ -1,4 +1,4 @@
-import { Activity, ShieldAlert } from 'lucide-react';
+import { RiPulseLine, RiShieldLine } from '@remixicon/react';
 import type { MonitoringInsight } from '@/lib/data/home';
 import { formatPercent } from '@/lib/data/format';
 import { InsightCardShell } from './insight-card-shell';
@@ -15,7 +15,7 @@ export function InsightCardMonitoring({ data }: InsightCardMonitoringProps) {
   const hasIncident = data.downCount > 0;
   const hint = hasIncident ? (
     <span className="text-danger inline-flex items-center gap-1">
-      <ShieldAlert size={11} strokeWidth={2} aria-hidden />
+      <RiShieldLine size={11} aria-hidden />
       현재 다운 {data.downCount}건 — 즉시 확인 필요
     </span>
   ) : (
@@ -34,7 +34,7 @@ export function InsightCardMonitoring({ data }: InsightCardMonitoringProps) {
           </p>
         </div>
         <div className="text-foreground-tertiary inline-flex items-center gap-1.5 text-xs">
-          <Activity size={12} strokeWidth={2} aria-hidden />
+          <RiPulseLine size={12} aria-hidden />
           사이트 {data.siteCount}개
         </div>
       </div>

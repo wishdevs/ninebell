@@ -1,7 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { BarChart3, CalendarDays, ListChecks, Pencil, Share2, Users } from 'lucide-react';
+import {
+  RiBarChartBoxLine,
+  RiCalendar2Line,
+  RiListCheck,
+  RiPencilLine,
+  RiShareLine,
+  RiGroupLine,
+} from '@remixicon/react';
 import { toast } from 'sonner';
 import { BackButton } from '@/components/ui/back-button';
 import { Button } from '@/components/ui/button';
@@ -37,14 +44,14 @@ export function ProjectDetailClient({ project }: ProjectDetailClientProps) {
   const [tab, setTab] = useState<string>('overview');
 
   const meta = [
-    { icon: BarChart3, label: '진행률', value: formatPercent(project.progress, 0) },
+    { icon: RiBarChartBoxLine, label: '진행률', value: formatPercent(project.progress, 0) },
     {
-      icon: ListChecks,
+      icon: RiListCheck,
       label: '업무',
       value: `열린 ${project.openWorkCount} / 전체 ${project.workCount}`,
     },
-    { icon: Users, label: '멤버', value: `${project.members.length}명` },
-    { icon: CalendarDays, label: '생성', value: formatDate(project.createdAt) },
+    { icon: RiGroupLine, label: '멤버', value: `${project.members.length}명` },
+    { icon: RiCalendar2Line, label: '생성', value: formatDate(project.createdAt) },
   ];
 
   return (
@@ -76,19 +83,15 @@ export function ProjectDetailClient({ project }: ProjectDetailClientProps) {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => toast('편집 화면은 준비 중입니다.')}
-            >
-              <Pencil size={14} aria-hidden /> 편집
+            <Button variant="ghost" size="sm" onClick={() => toast('편집 화면은 준비 중입니다.')}>
+              <RiPencilLine size={14} aria-hidden /> 편집
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => toast.success('공유 링크를 클립보드에 복사했습니다.')}
             >
-              <Share2 size={14} aria-hidden /> 공유
+              <RiShareLine size={14} aria-hidden /> 공유
             </Button>
           </div>
         </div>

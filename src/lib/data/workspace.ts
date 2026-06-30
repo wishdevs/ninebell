@@ -6,6 +6,8 @@
  * 정적 픽스처만 남긴다.
  */
 
+import { relativeFromNow } from './format';
+
 export type OrgRole = 'owner' | 'admin' | 'member' | 'client';
 
 export const ROLE_LABEL: Record<OrgRole, string> = {
@@ -38,6 +40,8 @@ export interface CurrentUser {
   hasAvatar: false;
   /** 전역 슈퍼관리자 여부 — 사이드바 "시스템" 그룹 노출용. */
   isSystemAdmin: boolean;
+  /** 직전 접속 시각(ISO) — 탑바 "최근 접속" 표시용. */
+  lastAccessAt: string;
 }
 
 export const CURRENT_USER: CurrentUser = {
@@ -45,6 +49,7 @@ export const CURRENT_USER: CurrentUser = {
   fullName: '김도현',
   email: 'dohyun.kim@etribe.co.kr',
   hasAvatar: false,
+  lastAccessAt: relativeFromNow({ hours: 21, minutes: 36 }),
   isSystemAdmin: true,
 };
 

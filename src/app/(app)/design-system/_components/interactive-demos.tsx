@@ -1,6 +1,6 @@
 'use client';
 
-import { Save } from 'lucide-react';
+import { RiSaveLine } from '@remixicon/react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -37,7 +37,12 @@ export function InteractiveDemos() {
   return (
     <div className="grid gap-8 lg:grid-cols-2">
       <div className="flex flex-col gap-5">
-        <FormField id="ds-name" label="표시 이름" required hint="목록과 헤더에 노출되는 이름입니다.">
+        <FormField
+          id="ds-name"
+          label="표시 이름"
+          required
+          hint="목록과 헤더에 노출되는 이름입니다."
+        >
           <Input
             id="ds-name"
             value={name}
@@ -69,14 +74,16 @@ export function InteractiveDemos() {
         <div className="border-border bg-background flex items-center justify-between gap-4 rounded-sm border px-3 py-2.5">
           <div className="flex min-w-0 flex-col">
             <Label>이메일 알림</Label>
-            <span className="text-muted-foreground text-xs">새 활동이 있을 때 메일로 알립니다.</span>
+            <span className="text-muted-foreground text-xs">
+              새 활동이 있을 때 메일로 알립니다.
+            </span>
           </div>
           <Switch checked={notify} onCheckedChange={setNotify} aria-label="이메일 알림 토글" />
         </div>
 
         <div>
           <Button size="sm" onClick={() => toast.success('저장했습니다.')}>
-            <Save size={14} /> 저장
+            <RiSaveLine size={14} /> 저장
           </Button>
         </div>
       </div>
@@ -91,23 +98,14 @@ export function InteractiveDemos() {
             <TabsTrigger value="activity">활동</TabsTrigger>
             <TabsTrigger value="settings">설정</TabsTrigger>
           </TabsList>
-          <TabsContent
-            value="overview"
-            className="text-muted-foreground text-sm leading-relaxed"
-          >
+          <TabsContent value="overview" className="text-muted-foreground text-sm leading-relaxed">
             라디스 기반 탭은 키보드 화살표 이동과 활성 상태 표시를 기본 제공합니다. 활성 탭은 하단
             보더로만 강조해 데이터에 방해되지 않습니다.
           </TabsContent>
-          <TabsContent
-            value="activity"
-            className="text-muted-foreground text-sm leading-relaxed"
-          >
+          <TabsContent value="activity" className="text-muted-foreground text-sm leading-relaxed">
             최근 활동 스트림이 들어갈 영역입니다. 콘텐츠가 없을 때는 EmptyHint 로 대체합니다.
           </TabsContent>
-          <TabsContent
-            value="settings"
-            className="text-muted-foreground text-sm leading-relaxed"
-          >
+          <TabsContent value="settings" className="text-muted-foreground text-sm leading-relaxed">
             설정 폼이 들어갈 영역입니다. 좌측 폼 컨트롤과 동일한 FormField · Input · Switch 패턴을
             재사용합니다.
           </TabsContent>

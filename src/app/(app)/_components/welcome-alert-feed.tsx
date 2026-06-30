@@ -1,5 +1,10 @@
 import Link from 'next/link';
-import { AlertTriangle, ArrowRight, Bell, Info } from 'lucide-react';
+import {
+  RiAlertLine,
+  RiArrowRightLine,
+  RiNotification3Line,
+  RiInformationLine,
+} from '@remixicon/react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SectionCard } from '@/components/ui/section-card';
 import type { HomeAlert, HomeAlertSeverity } from '@/lib/data/home';
@@ -10,10 +15,10 @@ interface WelcomeAlertFeedProps {
   alerts: readonly HomeAlert[];
 }
 
-const SEVERITY_ICON: Record<HomeAlertSeverity, typeof AlertTriangle> = {
-  urgent: AlertTriangle,
-  warning: AlertTriangle,
-  info: Info,
+const SEVERITY_ICON: Record<HomeAlertSeverity, typeof RiAlertLine> = {
+  urgent: RiAlertLine,
+  warning: RiAlertLine,
+  info: RiInformationLine,
 };
 
 /**
@@ -41,7 +46,7 @@ export function WelcomeAlertFeed({ alerts }: WelcomeAlertFeedProps) {
     >
       {alerts.length === 0 ? (
         <EmptyState
-          icon={<Bell size={18} strokeWidth={1.75} aria-hidden />}
+          icon={<RiNotification3Line size={18} aria-hidden />}
           title="처리할 항목이 없습니다"
           description="모니터링/모듈에서 새 알림이 발생하면 이 영역에 표시됩니다."
           compact
@@ -76,7 +81,7 @@ function AlertRow({ alert }: { alert: HomeAlert }) {
             SEVERITY_TONE[alert.severity],
           )}
         >
-          <Icon size={14} strokeWidth={2} />
+          <Icon size={14} />
         </span>
         <div className="grid min-w-0 gap-0.5">
           <p className="text-foreground truncate text-sm font-medium">{alert.title}</p>
@@ -89,7 +94,7 @@ function AlertRow({ alert }: { alert: HomeAlert }) {
       </div>
       <span className="text-muted-foreground group-hover:text-foreground inline-flex shrink-0 items-center gap-1 text-xs font-medium transition-colors">
         {alert.ctaLabel}
-        <ArrowRight size={12} strokeWidth={2} aria-hidden />
+        <RiArrowRightLine size={12} aria-hidden />
       </span>
     </Link>
   );

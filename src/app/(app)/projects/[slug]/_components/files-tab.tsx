@@ -1,4 +1,4 @@
-import { FileText } from 'lucide-react';
+import { RiFileTextLine } from '@remixicon/react';
 import { SectionCard } from '@/components/ui/section-card';
 import { PROJECT_FILES } from '@/lib/data/projects';
 import { formatRelativeKorean } from '@/lib/data/format';
@@ -25,7 +25,11 @@ export function FilesTab() {
               <tr key={file.id} className="border-border-subtle row-hover border-t">
                 <td className="py-2.5">
                   <span className="flex items-center gap-2">
-                    <FileText size={15} className="text-foreground-tertiary shrink-0" aria-hidden />
+                    <RiFileTextLine
+                      size={15}
+                      className="text-foreground-tertiary shrink-0"
+                      aria-hidden
+                    />
                     <span className="text-foreground text-sm font-medium">{file.name}</span>
                   </span>
                 </td>

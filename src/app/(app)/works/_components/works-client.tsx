@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Search } from 'lucide-react';
+import { RiAddLine, RiSearchLine } from '@remixicon/react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -71,7 +71,7 @@ export function WorksClient() {
         description="팀의 업무를 상태·담당자·마감 기준으로 추적합니다. 행을 선택하면 오른쪽에서 상세를 확인할 수 있습니다."
         action={
           <Button onClick={() => toast.info('새 업무 폼은 데모에서 비활성화되어 있습니다.')}>
-            <Plus size={16} aria-hidden />새 업무
+            <RiAddLine size={16} aria-hidden />새 업무
           </Button>
         }
       />
@@ -110,7 +110,7 @@ export function WorksClient() {
         </div>
 
         <div className="relative sm:w-64">
-          <Search
+          <RiSearchLine
             size={16}
             aria-hidden
             className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
@@ -130,7 +130,7 @@ export function WorksClient() {
         <div className="min-w-0">
           {filtered.length === 0 ? (
             <EmptyState
-              icon={<Search size={18} aria-hidden />}
+              icon={<RiSearchLine size={18} aria-hidden />}
               title="조건에 맞는 업무가 없습니다"
               description="상태 필터를 바꾸거나 검색어를 지워 보세요."
             />

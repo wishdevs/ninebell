@@ -26,3 +26,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local recycle bin
+.recycles/
+
+# python backend
+backend/.venv/
+backend/venv/
+**/__pycache__/
+*.py[cod]
+backend/.env
+backend/.pytest_cache/
+.ruff_cache/

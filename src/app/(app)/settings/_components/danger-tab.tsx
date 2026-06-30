@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle, Archive, Trash2 } from 'lucide-react';
+import { RiAlertLine, RiArchiveLine, RiDeleteBinLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -18,7 +18,7 @@ export function DangerTab() {
       className="border-danger/40 bg-danger/5 flex flex-col gap-6 rounded-[var(--radius-lg)] border p-6"
     >
       <header className="flex items-center gap-2">
-        <AlertTriangle size={18} strokeWidth={1.75} className="text-danger" aria-hidden />
+        <RiAlertLine size={18} className="text-danger" aria-hidden />
         <div className="grid gap-0.5">
           <p className="text-danger text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
             위험 구역
@@ -44,7 +44,7 @@ export function DangerTab() {
           className="shrink-0"
           onClick={() => setOpen('archive')}
         >
-          <Archive size={14} strokeWidth={1.75} aria-hidden />
+          <RiArchiveLine size={14} aria-hidden />
           <span className="ml-1.5">조직 보관</span>
         </Button>
       </div>
@@ -63,7 +63,7 @@ export function DangerTab() {
           className="shrink-0"
           onClick={() => setOpen('delete')}
         >
-          <Trash2 size={14} strokeWidth={1.75} aria-hidden />
+          <RiDeleteBinLine size={14} aria-hidden />
           <span className="ml-1.5">조직 삭제</span>
         </Button>
       </div>

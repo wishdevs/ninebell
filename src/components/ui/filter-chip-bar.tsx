@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ChipSet } from '@/components/ui/chip-set';
 import { cn } from '@/lib/utils';
-import { X } from 'lucide-react';
+import { RiCloseLine } from '@remixicon/react';
 
 /**
  * Minimal contract for a filter that can be rendered as a removable chip
@@ -123,7 +123,7 @@ function FilterChip({ filter }: FilterChipProps) {
           aria-label={`${filter.label} 필터 제거`}
           className="text-muted-foreground hover:text-foreground hover:bg-muted/60 inline-flex h-full items-center rounded-r-[var(--radius-md)] px-1.5 transition-colors"
         >
-          <X size={12} strokeWidth={2} aria-hidden />
+          <RiCloseLine size={12} aria-hidden />
         </button>
       </span>
 

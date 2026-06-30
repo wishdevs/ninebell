@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { RiAlertLine } from '@remixicon/react';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -73,7 +73,7 @@ export function ConfirmDialog({
         <div className="flex items-start gap-3">
           {variant === 'danger' ? (
             <span className="bg-danger/10 text-danger flex h-9 w-9 shrink-0 items-center justify-center rounded-full">
-              <AlertTriangle size={18} strokeWidth={2} />
+              <RiAlertLine size={18} />
             </span>
           ) : null}
           <div className="text-muted-foreground text-sm leading-relaxed">{message}</div>

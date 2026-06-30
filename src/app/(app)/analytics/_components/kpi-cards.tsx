@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react';
+import { RiArrowRightDownLine, RiArrowRightUpLine, RiSubtractLine } from '@remixicon/react';
 import { SectionCard } from '@/components/ui/section-card';
 import { KPIS, type KpiDatum } from '@/lib/data/analytics';
 import { cn } from '@/lib/utils';
@@ -42,13 +42,13 @@ function DeltaChip({ delta, tone }: { delta: number; tone: KpiDatum['tone'] }) {
   if (Math.abs(delta) < 0.05) {
     return (
       <span className="text-foreground-tertiary inline-flex items-center gap-0.5 font-semibold tabular-nums">
-        <Minus size={12} aria-hidden />
+        <RiSubtractLine size={12} aria-hidden />
         0.0%
       </span>
     );
   }
   const isUp = delta > 0;
-  const Arrow = isUp ? ArrowUpRight : ArrowDownRight;
+  const Arrow = isUp ? RiArrowRightUpLine : RiArrowRightDownLine;
   return (
     <span
       className={cn(

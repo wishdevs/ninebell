@@ -1,4 +1,4 @@
-import { BookOpen, ClipboardCheck } from 'lucide-react';
+import { RiBookOpenLine, RiClipboardLine } from '@remixicon/react';
 import type { PlaybookInsight } from '@/lib/data/home';
 import { formatRelativeKorean } from '@/lib/data/format';
 import { InsightCardShell } from './insight-card-shell';
@@ -19,7 +19,7 @@ export function InsightCardPlaybook({ data }: InsightCardPlaybookProps) {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="grid gap-1.5">
           <p className="text-foreground-tertiary inline-flex items-center gap-1.5 text-[10px] tracking-[0.06em] uppercase">
-            <BookOpen size={11} strokeWidth={2} aria-hidden />
+            <RiBookOpenLine size={11} aria-hidden />
             현재 버전
           </p>
           <p className="font-display text-foreground text-2xl leading-none font-semibold tracking-tight tabular-nums">
@@ -29,7 +29,7 @@ export function InsightCardPlaybook({ data }: InsightCardPlaybookProps) {
         </div>
         <div className="grid gap-1.5">
           <p className="text-foreground-tertiary inline-flex items-center gap-1.5 text-[10px] tracking-[0.06em] uppercase">
-            <ClipboardCheck size={11} strokeWidth={2} aria-hidden />
+            <RiClipboardLine size={11} aria-hidden />
             리뷰 대기
           </p>
           <p className="font-display text-foreground text-2xl leading-none font-semibold tracking-tight tabular-nums">

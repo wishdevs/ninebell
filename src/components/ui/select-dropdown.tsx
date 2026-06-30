@@ -1,7 +1,7 @@
 'use client';
 
 import * as SelectPrimitive from '@radix-ui/react-select';
-import { ChevronDown } from 'lucide-react';
+import { RiArrowDownSLine } from '@remixicon/react';
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -39,7 +39,7 @@ export const SelectTrigger = forwardRef<
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown className="text-foreground-tertiary h-3 w-3 shrink-0" aria-hidden />
+      <RiArrowDownSLine className="text-foreground-tertiary h-3 w-3 shrink-0" aria-hidden />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));

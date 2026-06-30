@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
+import { RiArrowRightDownLine, RiArrowRightUpLine } from '@remixicon/react';
 import { Sparkline } from '@/components/ui/sparkline';
 import type { GaInsight } from '@/lib/data/home';
 import { formatInteger } from '@/lib/data/format';
@@ -16,7 +16,7 @@ interface InsightCardGaProps {
 export function InsightCardGa({ data }: InsightCardGaProps) {
   const isUp = data.deltaPct > 0;
   const isDown = data.deltaPct < 0;
-  const Arrow = isDown ? ArrowDownRight : ArrowUpRight;
+  const Arrow = isDown ? RiArrowRightDownLine : RiArrowRightUpLine;
   const tone = isUp ? 'text-success' : isDown ? 'text-danger' : 'text-foreground-tertiary';
 
   return (
@@ -27,9 +27,12 @@ export function InsightCardGa({ data }: InsightCardGaProps) {
             {formatInteger(data.sessions7d)}
           </p>
           <span
-            className={cn('inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums', tone)}
+            className={cn(
+              'inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums',
+              tone,
+            )}
           >
-            <Arrow size={11} strokeWidth={2} aria-hidden />
+            <Arrow size={11} aria-hidden />
             {isUp ? '+' : ''}
             {data.deltaPct.toFixed(1)}%
             <span className="text-foreground-tertiary ml-1 font-normal">전주 대비</span>
