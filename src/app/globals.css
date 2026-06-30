@@ -1,0 +1,413 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   Design tokens — Swiss typography baseline with Bento dashboard surfaces.
+   Light and dark are both first-class. Avoid per-component ad-hoc palettes.
+   ========================================================================== */
+
+@theme inline {
+  /* Pretendard handles both Hangul and Latin in body copy. */
+  --font-sans:
+    var(--font-pretendard), -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Malgun Gothic', system-ui, sans-serif;
+  /* Geist Sans is reserved for English/numeric display accents
+     (brand marks, large counters). Falls back to Pretendard for Hangul. */
+  --font-display:
+    var(--font-geist-sans), var(--font-pretendard), -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+  --font-mono:
+    var(--font-geist-mono), ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ── Semantic colors ── */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-foreground-secondary: var(--foreground-secondary);
+  --color-foreground-tertiary: var(--foreground-tertiary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  /* Sentiment palette — muted data-viz colors (NOT the loud status tokens).
+     Shared by every 감정 분석 surface so charts/bars/text stay in lockstep. */
+  --color-sentiment-positive: var(--sentiment-positive);
+  --color-sentiment-neutral: var(--sentiment-neutral);
+  --color-sentiment-negative: var(--sentiment-negative);
+  --color-sentiment-mixed: var(--sentiment-mixed);
+
+  /* 지식그래프 감정/추세선/토픽 목록 공유 팔레트 (rose/teal). text-graph-sentiment-*
+     유틸리티가 동작하도록 매핑. */
+  --color-graph-sentiment-positive: var(--graph-sentiment-positive);
+  --color-graph-sentiment-neutral: var(--graph-sentiment-neutral);
+  --color-graph-sentiment-negative: var(--graph-sentiment-negative);
+  --color-graph-sentiment-mixed: var(--graph-sentiment-mixed);
+
+  /* ── Radii (4px scale) ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* ── Multi-level shadow system ── */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-card-raised: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.16), 0 8px 16px rgba(0, 0, 0, 0.08);
+
+  /* ── Layout ── */
+  --grid-gutter: clamp(1rem, 0.6rem + 1.5vw, 2rem);
+  --content-max: 1240px;
+
+  /* ── Type scale (dashboard-tuned, 14px base) ── */
+  --text-caption: 0.6875rem; /* 11px */
+  --text-body-sm: 0.8125rem; /* 13px */
+  --text-body: 0.875rem; /* 14px */
+  --text-body-lg: 1rem; /* 16px */
+  --text-heading-sm: 1.125rem; /* 18px */
+  --text-heading: 1.5rem; /* 24px */
+  --text-section: clamp(1.75rem, 1rem + 2vw, 2.5rem);
+  --text-hero: clamp(2.5rem, 1.2rem + 4vw, 4.75rem);
+
+  /* ── Motion ── */
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ---- Light theme (default) ---- */
+:root {
+  --background: oklch(97% 0 0);
+  --foreground: oklch(14% 0 0);
+  --foreground-secondary: oklch(36% 0 0);
+  --foreground-tertiary: oklch(50% 0 0);
+  --muted: oklch(95% 0 0);
+  --muted-foreground: oklch(44% 0 0);
+  --surface: oklch(100% 0 0);
+  --surface-raised: oklch(99% 0 0);
+  --surface-overlay: oklch(100% 0 0 / 0.85);
+  --border: oklch(91% 0 0);
+  --border-subtle: oklch(94% 0 0);
+  --border-strong: oklch(80% 0 0);
+  --accent: oklch(56% 0.21 258);
+  --accent-foreground: oklch(98% 0 0);
+  --success: oklch(55% 0.18 150);
+  --warning: oklch(68% 0.18 72);
+  --danger: oklch(56% 0.22 27);
+  --info: oklch(56% 0.16 240);
+  /* Sentiment (low-chroma, harmonised for side-by-side data viz) */
+  --sentiment-positive: oklch(45% 0.14 150);
+  --sentiment-neutral: var(--muted-foreground);
+  --sentiment-negative: oklch(50% 0.14 25);
+  --sentiment-mixed: oklch(58% 0.13 72);
+  /* 감정 분석 + 추세선 + 사이드 sparkline 공유 팔레트 (분석 탭용 --sentiment-* 와
+     분리). 긍정/언급 = teal, 부정/미언급 = rose. 채도를 낮춰 부드럽게.
+     .dark 엔 밝은 값 별도. */
+  --graph-sentiment-positive: oklch(70% 0.12 168);
+  --graph-sentiment-neutral: #8d99ae;
+  --graph-sentiment-negative: oklch(67% 0.15 18);
+  --graph-sentiment-mixed: #f4a261;
+  /* Scope (미포함/미언급 X · 포함/언급 O) — 추세선이 감정 막대와 동일 색.
+     X→부정 rose, O→긍정 teal 참조. */
+  --scope-x: var(--graph-sentiment-negative);
+  --scope-o: var(--graph-sentiment-positive);
+  color-scheme: light;
+}
+
+/* ---- Dark theme (explicit, no generic invert) ---- */
+.dark {
+  --background: oklch(12% 0 0);
+  --foreground: oklch(96% 0 0);
+  --foreground-secondary: oklch(78% 0 0);
+  --foreground-tertiary: oklch(58% 0 0);
+  --muted: oklch(20% 0 0);
+  --muted-foreground: oklch(62% 0 0);
+  --surface: oklch(16% 0 0);
+  --surface-raised: oklch(20% 0 0);
+  --surface-overlay: oklch(18% 0 0 / 0.85);
+  --border: oklch(24% 0 0);
+  --border-subtle: oklch(20% 0 0);
+  --border-strong: oklch(36% 0 0);
+  --accent: oklch(72% 0.16 258);
+  --accent-foreground: oklch(14% 0 0);
+  --success: oklch(72% 0.16 150);
+  --warning: oklch(82% 0.16 72);
+  --danger: oklch(70% 0.2 27);
+  --info: oklch(72% 0.14 240);
+  /* Sentiment (low-chroma, harmonised for side-by-side data viz) */
+  --sentiment-positive: oklch(72% 0.12 150);
+  --sentiment-neutral: var(--muted-foreground);
+  --sentiment-negative: oklch(72% 0.1 25);
+  --sentiment-mixed: oklch(75% 0.12 72);
+  /* 감정/추세선 공유 팔레트 — 다크에선 밝게 올리되 채도는 낮춰 부드럽게.
+     neutral·mixed 는 :root hex 그대로 상속. */
+  --graph-sentiment-positive: oklch(76% 0.13 168);
+  --graph-sentiment-negative: oklch(74% 0.14 18);
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Global base styles
+   ========================================================================== */
+
+html {
+  font-feature-settings: 'cv11', 'ss01', 'ss03', 'cv02';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+  color: var(--foreground);
+}
+
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   Interactive card — hover lift with shadow promotion
+   ========================================================================== */
+.card-interactive {
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out),
+    border-color var(--duration-fast) ease;
+}
+.card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-raised);
+  border-color: var(--border-strong);
+}
+.card-interactive:active {
+  transform: translateY(0) scale(0.995);
+}
+
+/* ==========================================================================
+   Table row hover
+   ========================================================================== */
+.row-hover {
+  transition: background var(--duration-fast) ease;
+}
+.row-hover:hover {
+  background: var(--surface-raised);
+}
+
+/* ==========================================================================
+   Page enter animation — content fades in + slides up
+   ========================================================================== */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-page-enter {
+  animation: page-enter var(--duration-normal) var(--ease-out) both;
+}
+
+/* ==========================================================================
+   Aurora — barely-visible drift used as auth hero ambience.
+   Two layers translate + rotate slowly out of phase. Pause when the user
+   prefers reduced motion (handled by the global reduce-motion block below).
+   ========================================================================== */
+@keyframes aurora-a {
+  0% {
+    transform: translate3d(-12%, -8%, 0) rotate(0deg) scale(1.05);
+  }
+  50% {
+    transform: translate3d(8%, 6%, 0) rotate(20deg) scale(1.15);
+  }
+  100% {
+    transform: translate3d(-12%, -8%, 0) rotate(0deg) scale(1.05);
+  }
+}
+@keyframes aurora-b {
+  0% {
+    transform: translate3d(10%, 12%, 0) rotate(0deg) scale(1.1);
+  }
+  50% {
+    transform: translate3d(-6%, -4%, 0) rotate(-25deg) scale(1);
+  }
+  100% {
+    transform: translate3d(10%, 12%, 0) rotate(0deg) scale(1.1);
+  }
+}
+.animate-aurora-a {
+  animation: aurora-a 26s ease-in-out infinite;
+}
+.animate-aurora-b {
+  animation: aurora-b 32s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   Sidebar glass (backdrop-blur layer)
+   ========================================================================== */
+.sidebar-glass {
+  background: var(--surface-overlay);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+}
+
+/* ==========================================================================
+   Data numbers — tabular figures for alignment
+   ========================================================================== */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Hide native scrollbars while keeping scroll behaviour. Used on the
+   horizontal tab bar where a visible scrollbar would distract from the
+   content rail.
+   ========================================================================== */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+   Tiptap markdown editor — typographic styles applied to content rendered
+   by Tiptap (works module description). Mirrored across editable and
+   read-only modes via the `.tiptap-doc` class on the ProseMirror root.
+   ========================================================================== */
+.tiptap-doc {
+  font-size: var(--text-body);
+  line-height: 1.65;
+  color: var(--foreground);
+}
+.tiptap-doc :where(h1) {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 1.25rem 0 0.5rem;
+}
+.tiptap-doc :where(h2) {
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1rem 0 0.4rem;
+}
+.tiptap-doc :where(h3) {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0.85rem 0 0.35rem;
+}
+.tiptap-doc :where(p) {
+  margin: 0.5rem 0;
+}
+.tiptap-doc :where(ul, ol) {
+  padding-left: 1.4rem;
+  margin: 0.5rem 0;
+}
+.tiptap-doc :where(ul) {
+  list-style: disc;
+}
+.tiptap-doc :where(ol) {
+  list-style: decimal;
+}
+.tiptap-doc :where(li > p) {
+  margin: 0.15rem 0;
+}
+.tiptap-doc :where(blockquote) {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 0.85rem;
+  margin: 0.75rem 0;
+  color: var(--foreground-secondary);
+  font-style: italic;
+}
+.tiptap-doc :where(code) {
+  background: var(--muted);
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85em;
+  font-family: var(--font-mono);
+}
+.tiptap-doc :where(pre) {
+  background: var(--muted);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.tiptap-doc :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+.tiptap-doc :where(a) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tiptap-doc :where(img) {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0.75rem 0;
+}
+.tiptap-doc :where(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75rem 0;
+  font-size: 0.85rem;
+}
+.tiptap-doc :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+  min-width: 60px;
+}
+.tiptap-doc :where(th) {
+  background: var(--muted);
+  font-weight: 600;
+}
+.tiptap-doc :where(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
+.tiptap-doc.ProseMirror-focused {
+  outline: none;
+}
