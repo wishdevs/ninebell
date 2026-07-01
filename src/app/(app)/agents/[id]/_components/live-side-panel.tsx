@@ -13,6 +13,7 @@ import type {
   LiveTransactions,
   UseLiveRunReturn,
 } from '@/lib/live/types';
+import { WORKFLOW_STEP_DEFS } from '@/lib/live/step-defs';
 import { cn } from '@/lib/utils';
 import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionEmpty } from './intervention-empty';
@@ -23,6 +24,8 @@ interface LiveSidePanelProps {
   resultAction?: React.ReactNode;
   /** 실행 이력·템플릿 탭 데이터(하단 패널에서 우측 탭으로 이동). 없으면 두 탭을 숨긴다. */
   runsPanel?: RunsPanelProps;
+  /** 엔진에 등록된 워크플로우 id(예: `expense-card-chat`) — 단계 라벨 번역·전체 단계 표시에 쓴다. */
+  workflowId?: string;
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
@@ -32,7 +35,7 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelProps) {
+export function LiveSidePanel({ run, resultAction, runsPanel, workflowId }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -94,7 +97,7 @@ export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelPro
         </TabsContent>
 
         <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <LiveStepList steps={run.steps} status={run.status} />
+          <LiveStepList steps={run.steps} status={run.status} workflowId={workflowId} />
         </TabsContent>
 
         <TabsContent value="log" className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -122,26 +125,74 @@ export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelPro
 
 // ── 라이브 단계 목록 ─────────────────────────────────────────────────
 
-const STEP_DOT: Record<LiveStepStatus, string> = {
+type DisplayStepStatus = LiveStepStatus | 'pending';
+
+interface DisplayStep {
+  id: string;
+  label: string;
+  status: DisplayStepStatus;
+  ms?: number;
+  skill?: string;
+  detail?: string;
+}
+
+const STEP_DOT: Record<DisplayStepStatus, string> = {
   running: 'bg-accent/15 text-accent',
   done: 'bg-success/15 text-success',
   failed: 'bg-danger/15 text-danger',
+  pending: 'bg-muted text-muted-foreground',
 };
 
-const STEP_LABEL: Record<LiveStepStatus, string> = {
+const STEP_LABEL: Record<DisplayStepStatus, string> = {
   running: '진행 중',
   done: '완료',
   failed: '실패',
+  pending: '대기',
 };
+
+/**
+ * 라이브 단계(도착한 것만)를 워크플로우 정의(전체 순서·한글 라벨)와 병합한다.
+ * 정의에 없는 워크플로우/단계는 원래 id 를 라벨로 써 그대로 노출한다(안전 폴백).
+ */
+function buildDisplaySteps(
+  workflowId: string | undefined,
+  steps: readonly LiveStepState[],
+): DisplayStep[] {
+  const defs = workflowId ? WORKFLOW_STEP_DEFS[workflowId] : undefined;
+  if (!defs) {
+    return steps.map((s) => ({ id: s.step, label: s.step, status: s.status, ms: s.ms }));
+  }
+  const byId = new Map(steps.map((s) => [s.step, s] as const));
+  const known = new Set(defs.map((d) => d.id));
+  const merged = defs.map((d): DisplayStep => {
+    const live = byId.get(d.id);
+    return {
+      id: d.id,
+      label: d.label,
+      status: live?.status ?? 'pending',
+      ms: live?.ms,
+      skill: d.skill,
+      detail: d.detail,
+    };
+  });
+  // 정의에 없는(향후 추가된) 단계는 도착 순서 그대로 뒤에 붙인다.
+  const extra = steps
+    .filter((s) => !known.has(s.step))
+    .map((s): DisplayStep => ({ id: s.step, label: s.step, status: s.status, ms: s.ms }));
+  return [...merged, ...extra];
+}
 
 export function LiveStepList({
   steps,
   status,
+  workflowId,
 }: {
   steps: readonly LiveStepState[];
   status: UseLiveRunReturn['status'];
+  workflowId?: string;
 }) {
-  if (steps.length === 0) {
+  const display = buildDisplaySteps(workflowId, steps);
+  if (display.length === 0) {
     return (
       <p className="text-foreground-tertiary py-6 text-center text-[12px]">
         {status === 'connecting' ? '세션에 연결하는 중…' : '아직 단계가 없습니다.'}
@@ -150,9 +201,9 @@ export function LiveStepList({
   }
   return (
     <ol className="flex flex-col">
-      {steps.map((step, i) => (
-        <li key={step.step} className="relative flex gap-3 pb-4 last:pb-0">
-          {i < steps.length - 1 ? (
+      {display.map((step, i) => (
+        <li key={step.id} className="relative flex gap-3 pb-4 last:pb-0">
+          {i < display.length - 1 ? (
             <span
               aria-hidden
               className="bg-border absolute top-6 left-[11px] h-[calc(100%-1rem)] w-px"
@@ -168,6 +219,8 @@ export function LiveStepList({
               <RiCheckLine size={12} aria-hidden />
             ) : step.status === 'failed' ? (
               <RiCloseLine size={12} aria-hidden />
+            ) : step.status === 'pending' ? (
+              <span className="text-[10px] font-bold tabular-nums">{i + 1}</span>
             ) : (
               <RiLoader4Line size={12} className="animate-spin" aria-hidden />
             )}
@@ -175,7 +228,7 @@ export function LiveStepList({
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
-                {step.step}
+                {step.label}
               </span>
               <span
                 className={cn(
@@ -186,10 +239,18 @@ export function LiveStepList({
                 {STEP_LABEL[step.status]}
               </span>
             </div>
-            {step.ms != null ? (
-              <span className="text-foreground-tertiary mt-0.5 block text-[10px] tabular-nums">
-                {step.ms}ms
+            {step.skill ? (
+              <span className="text-foreground-tertiary border-border-subtle mt-0.5 mr-1.5 inline-block rounded border px-1.5 py-0.5 text-[10px]">
+                {step.skill}
               </span>
+            ) : null}
+            {step.ms != null ? (
+              <span className="text-foreground-tertiary text-[10px] tabular-nums">{step.ms}ms</span>
+            ) : null}
+            {step.detail ? (
+              <p className="text-muted-foreground mt-1 text-[11px] leading-relaxed">
+                {step.detail}
+              </p>
             ) : null}
           </div>
         </li>
