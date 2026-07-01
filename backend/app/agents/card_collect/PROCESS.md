@@ -110,14 +110,53 @@
   - 에이전트 이름/설명을 다건 정리형에 맞게 갱신. 기존 expense-card-chat 그래프는 보존(다른 종류 재활용 가능).
   - 대화형 UX: 리스트 요약 채팅 보고 → 건별 예산단위/계정/프로젝트 입력 + 적요 추천(HITL 루프) → 일괄적용 → F7 저장.
 
+## 코드피커 컬럼/의존성(실측 확정, probe7/8)
+
+- 예산단위 `bg_cd`: 팝업 컬럼 `BG_CD/BG_NM`. keyword '경영' → 7건(code 2000 '경영 본부').
+- 계정 `acct_cd`: 팝업 제목 "회계기표계정(예산계정 연동)", 컬럼 `ACCT_CD/ACCT_NM`.
+  ⚠ **예산단위 선택 전에는 0건**. 예산단위(2000) 적용 후 기본 1건(511008 (제)복리후생비-4대보험).
+  → **채우기 순서: 예산단위 → 계정 → 프로젝트 필수**(nodes.FIELD_SPEC 순서 유지). keyword 무매칭 시 기본목록 폴백(steps.fill_codepicker).
+- 프로젝트 `pjt_cd`: 팝업 "프로젝트(WBS)", 컬럼 `PJT_NO/PJT_NM/WBS_NO/WBS_NM…`. keyword '나인벨' → 500건.
+
+## 다행 처리 + 일괄적용 확인창(해결·통합)
+
+- **근본원인**: `일괄적용` 클릭 시 **'예산현황' 확인 모달**(그리드 없는 소형 k-window, 확인/취소)이 뜬다.
+  이걸 dismiss 하지 않으면 다음 행 코드피커가 'last non-법인카드 window' 셀렉터로 이 모달을 읽어 **0건** →
+  둘째 행부터 코드피커 실패. **해결**: `js.BUDGET_CONFIRM_JS`로 '확인' 클릭 후 진행(`steps.apply_row`에 통합).
+  ⚠ 이 확인은 **draft(메모리) 반영 완료**일 뿐 **F7 저장 아님**(서브에이전트 실측 검증).
+- 계정은 keyword 무매칭 시 기본목록 폴백(`steps.fill_codepicker`) — 예산단위로 이미 좁혀진 기본 1건 사용.
+
+## 코드피커 검색창 id 상이(정확성 주의)
+
+- 예산단위/계정 팝업 검색창 = `#keyword`. **프로젝트 팝업 검색창 = `#s_search_key`**(다름).
+- 초기 `PICKER_SEARCH_JS`가 `#keyword`만 타겟 → 프로젝트는 필터 안 되고 항상 전체목록 0번(SPARES_ACM) 선택되는
+  버그. **수정**: `PICKER_SEARCH_JS`가 `#keyword || #s_search_key || [id$=search_key] || [id*=keyword]` 순으로 타겟
+  (반환에 `field` 포함). → 프로젝트도 사용자 keyword로 실필터. (서브에이전트 라이브 재검증 중.)
+- 계정: 예산단위 연동으로 보통 1건 자동축소. 다건일 때 `#keyword` 필터 동작은 확인 진행 중.
+
+## 적대적 코드리뷰 반영(Workflow, 13건 확정 → 수정)
+
+- **HIGH #1**: `fill_codepicker` 무매칭 시 임의 index0 선택·성공보고 → **이름매칭만 선택**(0/다건은 실패,
+  후보 반환). `allow_default`(계정만 True)로 자동축소 단일만 예외. 성공 메시지는 **실제 선택명** 표시.
+- MED #2/#4/#7: `collect_rows`·`save` 의 `wait_hitl` **TimeoutError try/except**(step failed+명확 메시지).
+- MED #3: `_parse_fields` **경계 매칭** + 적요는 끝까지(값 안 라벨단어 오분배 방지). 단위검증 통과.
+- MED #6: `apply_row` **정확히 1행 체크 검증**(checked!=1이면 일괄적용 중단).
+- LOW #8: `run_query` **안정값 폴링**(느린 그리드 0 오인 방지). #11: 적요 실패 **치명화**.
+  #12: `params.today` **형식검증**(오류→오늘). #13: filled==0에도 `save` step emit(pending 방지).
+  #10: 저장 버튼 **문서 전역 탐색**(+F7 폴백).
+- **잔여 한계(문서화)**: #5 행 루프가 턴마다 새 `wait_hitl`(chat_form의 지속 큐 아님) — 필드채움 중
+  전송은 stale decision으로 거절되나 FE가 오류표시→재전송(무손실 아님/UI 게이트로 완화). #9 '완료'는
+  남은 행 전체 종료(의도된 동작, 로그로 안내). #10 저장 경로는 실저장 라이브 미검증(게이트).
+
 ## 남은 작업 체크리스트(⑤⑥)
 
-- [ ] 계정(`acct_cd`)·프로젝트(`pjt_cd`) 코드피커 유효 keyword/컬럼 확인
-- [ ] 행별 write 루프 완성(적요 인라인 + 3코드피커 + apply_row)
-- [ ] `apply_row`(일괄적용) 실동작 검증 + `save_document` F7 실배선
-- [ ] 헤드리스 10회 반복 테스트(저장 직전까지) — 안정성 확인
-- [ ] LangGraph 노드/그래프(`graph.py`) + registry 등록
-- [ ] 프론트 매핑(card-chat→card-collect)·step-defs·에이전트 메타·HITL 대화 UX
+- [x] 계정(`acct_cd`)·프로젝트(`pjt_cd`) 코드피커 keyword/컬럼 확인 (probe7/8)
+- [x] 행별 write 루프 — 다행 이슈(예산현황 확인창) 해결·통합
+- [x] `apply_row`(일괄적용) + 예산현황 확인창 처리 — 10/10 검증
+- [x] 헤드리스 10회 반복 테스트(저장 직전까지) — **10/10 PASS(avg 55s)**
+- [x] LangGraph 노드/그래프(`graph.py`) + registry 등록 (`card-collect`)
+- [x] 프론트 매핑(card-chat→card-collect)·step-defs·에이전트 메타 (HITL은 chat/choice 인프라 재사용)
+- [~] 리뷰 반영 후 회귀 재검증(갱신 fill_codepicker N=3) — 진행 중
 - [ ] 최종 1회 실저장 검증(사람 확인)
 
 ## 검증 로그

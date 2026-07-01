@@ -31,7 +31,7 @@ const SHOW_DEBUG = false;
  * 매핑 없으면 라이브 레이어를 검증할 수 있게 demo-echo 로 폴백한다.
  */
 const WORKFLOW_BY_AGENT: Record<string, string> = {
-  'card-chat': 'expense-card-chat',
+  'card-chat': 'card-collect',
 };
 
 function resolveWorkflow(agentId: string): string {

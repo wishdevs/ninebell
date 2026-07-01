@@ -125,11 +125,15 @@ PICKER_SEARCH_JS = """(q) => {
   const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
     .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
   if (!p) return { ok:false, reason:'no-pop' };
-  const kw = p.querySelector('#keyword') || [...p.querySelectorAll('input')].filter(i=>i.offsetParent!==null).pop();
+  // 팝업별 검색창 id 상이: 예산단위/계정=#keyword, 프로젝트=#s_search_key. 알려진 id 우선,
+  // 없으면 search_key/keyword 접미·접두 → 마지막으로 첫 보이는 text input.
+  const kw = p.querySelector('#keyword') || p.querySelector('#s_search_key')
+    || p.querySelector('[id$=search_key]') || p.querySelector('[id*=keyword]')
+    || [...p.querySelectorAll('input')].filter(i=>i.offsetParent!==null && (i.type==='text'||!i.type))[0];
   if (!kw) return { ok:false, reason:'no-keyword' };
   const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); d.set.call(kw, q);
   ['input','change'].forEach(t => kw.dispatchEvent(new Event(t, { bubbles:true })));
-  return { ok:true };
+  return { ok:true, field: kw.id || '(no-id)' };
 }"""
 
 # 코드피커 팝업 옵션 읽기(인자 [codeField,nameField,limit]). 반환 {rows, options:[{code,name}]}.
@@ -170,12 +174,38 @@ PICKER_APPLY_BTN_JS = """() => {
   return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2), text:c(b.innerText) };
 }"""
 
+# 일괄적용 후 뜨는 '예산현황' 확인창(제목=예산현황, grid 없음, 버튼 확인/취소)의 '확인' 클릭.
+# 일괄적용 시 예산 가용성 체크 모달이 뜨며, 확인해야 draft(메모리) 반영이 완료된다.
+# ⚠ draft 반영 완료일 뿐 F7 저장 아님. 미처리 시 이 창이 남아, 다음 행 코드피커의
+# 'last non-법인카드 window' 셀렉터가 이 창을 읽어 검색결과 0건이 된다. 반환 {n, clicked}.
+BUDGET_CONFIRM_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const w = [...document.querySelectorAll('.k-window')].filter(x => x.offsetParent!==null)
+    .filter(x => !/법인카드/.test(c((x.querySelector('.k-window-title')||{}).innerText)) && !x.querySelector('.dews-ui-grid'))
+    .slice(-1)[0];
+  if (!w) return { n:0 };
+  const b = [...w.querySelectorAll('button')].filter(x => x.offsetParent!==null).find(x => /확인|예|OK/i.test(c(x.innerText)));
+  if (!b) return { n:1, clicked:null };
+  b.click(); return { n:1, clicked:c(b.innerText) };
+}"""
+
+
 # ── 일괄적용 / 저장(F7) 버튼(법인카드 팝업) ───────────────────────────────────────
 # ⚠ 저장은 steps 에서 SAVE 게이트가 열렸을 때만 클릭한다.
 def card_button_box_js(text: str) -> str:
     return f"""() => {{
       const win = {CARD_WIN}; if (!win) return null;
       const b = [...win.querySelectorAll('button')].filter(x=>x.offsetParent!==null)
+        .find(x => (x.innerText||'').trim() === {text!r});
+      if (!b) return null; const r = b.getBoundingClientRect();
+      return {{ x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }};
+    }}"""
+
+
+# 문서 전역에서 정확 텍스트 버튼 좌표(저장은 카드팝업이 아닌 결의서 본화면에 있을 수 있음, 리뷰 #10).
+def document_button_box_js(text: str) -> str:
+    return f"""() => {{
+      const b = [...document.querySelectorAll('button')].filter(x=>x.offsetParent!==null)
         .find(x => (x.innerText||'').trim() === {text!r});
       if (!b) return null; const r = b.getBoundingClientRect();
       return {{ x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }};

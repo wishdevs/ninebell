@@ -11,10 +11,14 @@ from __future__ import annotations
 
 from app.live.registry import register_workflow
 
+from .card_collect.graph import build_card_collect_graph
 from .expense_card import build_expense_card_chat_graph
 
 # 1회 컴파일 후 재사용(demo_echo 등록 패턴과 동일).
 _expense_card_chat_graph = build_expense_card_chat_graph()
 register_workflow("expense-card-chat", lambda: _expense_card_chat_graph)
 
-__all__ = ["build_expense_card_chat_graph"]
+_card_collect_graph = build_card_collect_graph()
+register_workflow("card-collect", lambda: _card_collect_graph)
+
+__all__ = ["build_card_collect_graph", "build_expense_card_chat_graph"]
