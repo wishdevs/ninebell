@@ -163,6 +163,20 @@ PICKER_SELECT_JS = """(row) => {
   } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
 }"""
 
+# 코드피커 팝업 닫기(실패 경로에서 열린 채 남으면 다음 코드피커가 이 팝업을 읽어 오작동).
+PICKER_CLOSE_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return false;
+  const x = p.querySelector('.k-i-close, .k-window-action, [aria-label*=Close], [title*=닫기]');
+  if (x) { x.click(); return true; }
+  const b = [...p.querySelectorAll('button')].filter(e=>e.offsetParent!==null)
+    .find(e => /닫기|취소|close/i.test(c(e.innerText)));
+  if (b) { b.click(); return true; }
+  return false;
+}"""
+
 # 코드피커 팝업 '적용/확인' 버튼 좌표.
 PICKER_APPLY_BTN_JS = """() => {
   const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();

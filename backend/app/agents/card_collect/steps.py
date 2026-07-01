@@ -113,6 +113,13 @@ async def fill_codepicker(
         return {"ok": False, "reason": f"{field_id} 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
     await page.wait_for_timeout(1_500)
+
+    async def _fail(reason: str, **extra: Any) -> dict:
+        # 실패 시 열린 코드피커 팝업을 닫는다 — 안 닫으면 다음 코드피커가 이 팝업을 읽어 오작동한다.
+        await page.evaluate(js.PICKER_CLOSE_JS)
+        await page.wait_for_timeout(400)
+        return {"ok": False, "reason": reason, **extra}
+
     if keyword:
         s = await page.evaluate(js.PICKER_SEARCH_JS, keyword)
         if s.get("ok"):
@@ -125,11 +132,14 @@ async def fill_codepicker(
     if keyword:
         k = _norm(keyword)
         matches = [o for o in opts if k and k in _norm(o.get("name"))]
-        if len(matches) == 1:
+        uniq_codes = {o.get("code") for o in matches}
+        if len(uniq_codes) == 1:
+            # 1건 또는 동일 코드로 수렴하는 중복 후보(예: 예산단위 '경영 본부' 7행 모두 code 2000
+            # — BIZPLAN 조합만 다르고 BG_CD 는 동일) → 사실상 단일 선택이므로 확정(임의선택 아님).
             chosen = matches[0]
         elif len(matches) > 1:
-            cands = ", ".join(o.get("name", "") for o in matches[:6])
-            return {"ok": False, "reason": f"'{keyword}' 후보 여러 건({cands}) — 더 구체적으로", "ambiguous": True}
+            cands = ", ".join(sorted({o.get("name", "") for o in matches})[:6])
+            return await _fail(f"'{keyword}' 후보 여러 건({cands}) — 더 구체적으로", ambiguous=True)
         elif allow_default:
             # 무매칭 → 기본목록(빈검색) 재조회. 자동축소 **단일**이면 채택(예: 계정=예산단위 연동),
             # 다건이면 실패(임의선택 금지). ⚠ index0 blind pick 아님(리뷰 HIGH #1).
@@ -140,19 +150,19 @@ async def fill_codepicker(
             if len(dflt) == 1:
                 chosen = dflt[0]
             else:
-                return {"ok": False, "reason": f"'{keyword}' 무매칭·자동후보 {len(dflt)}건 — 계정명을 확인"}
+                return await _fail(f"'{keyword}' 무매칭·자동후보 {len(dflt)}건 — 계정명을 확인")
         else:
             cands = ", ".join(o.get("name", "") for o in opts[:6]) or "없음"
-            return {"ok": False, "reason": f"'{keyword}' 일치 없음(후보: {cands})", "rows": read.get("rows")}
+            return await _fail(f"'{keyword}' 일치 없음(후보: {cands})", rows=read.get("rows"))
     else:
         if len(opts) == 1:
             chosen = opts[0]
         else:
-            return {"ok": False, "reason": f"{field_id} keyword 필요(후보 {len(opts)}건)"}
+            return await _fail(f"{field_id} keyword 필요(후보 {len(opts)}건)")
 
     sel = await page.evaluate(js.PICKER_SELECT_JS, chosen["i"])
     if not sel.get("ok"):
-        return {"ok": False, "reason": f"{field_id} 행 선택 실패: {sel}"}
+        return await _fail(f"{field_id} 행 선택 실패: {sel}")
     await page.wait_for_timeout(400)
     apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
     if apply_box:
