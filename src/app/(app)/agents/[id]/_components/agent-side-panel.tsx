@@ -6,20 +6,27 @@ import type { Agent, LogEntry, LogLevel, StepStatus, WorkflowStep } from '@/lib/
 import { LOG_LEVEL_LABEL } from '@/lib/data/agents';
 import { formatRelativeKorean } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
+import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionPanel } from './intervention-panel';
 
+interface AgentSidePanelProps {
+  agent: Agent;
+  /** 템플릿 탭 데이터. (실행 이력은 top-level /logs 페이지와 중복이라 여기선 노출하지 않는다.) */
+  runsPanel?: RunsPanelProps;
+}
+
 /**
- * 브라우저 오른쪽 영역 — 상세 워크플로우 · 로그를 탭으로 표현한다.
- * 사람 개입(선택/대화)이 들어오면 "개입" 탭이 추가되고 기본 선택된다.
+ * 브라우저 오른쪽 영역(미실행 상태) — 워크플로우 · 로그 · 템플릿을 탭으로 표현한다.
+ * 단계 목록은 상단 스텝퍼가 기본 노출하므로, 기본 탭은 워크플로우(또는 개입이 있으면 개입).
  */
-export function AgentSidePanel({ agent }: { agent: Agent }) {
+export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
   const hasIntervention = Boolean(agent.intervention);
   const [tab, setTab] = useState(hasIntervention ? 'intervention' : 'workflow');
 
   return (
     <section className="border-border bg-surface flex min-h-[440px] flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:h-full lg:min-h-0 lg:min-w-0">
       <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="shrink-0 px-3 pt-1">
+        <TabsList className="no-scrollbar shrink-0 overflow-x-auto px-3 pt-1">
           {hasIntervention ? (
             <TabsTrigger value="intervention" className="gap-1.5">
               개입
@@ -33,6 +40,7 @@ export function AgentSidePanel({ agent }: { agent: Agent }) {
               {agent.logs.length}
             </span>
           </TabsTrigger>
+          {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
         {hasIntervention && agent.intervention ? (
@@ -48,6 +56,12 @@ export function AgentSidePanel({ agent }: { agent: Agent }) {
         <TabsContent value="log" className="min-h-0 flex-1 overflow-y-auto p-3">
           <LogList logs={agent.logs} />
         </TabsContent>
+
+        {runsPanel ? (
+          <TabsContent value="templates" className="min-h-0 flex-1 overflow-y-auto p-3">
+            <TemplatesTab {...runsPanel} />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </section>
   );

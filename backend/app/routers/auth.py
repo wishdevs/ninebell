@@ -205,7 +205,7 @@ async def signup(body: SignupBody, request: Request, response: Response, db: DbS
         omnisol_userid=userid,
         display_name=body.display_name or None,
         department=body.department or None,
-        email=body.email,
+        email=body.email or None,  # 빈문자열/누락은 None 으로 정규화(email 선택 입력)
         status="active",
         role_id=role.id if role is not None else None,
         agreed_terms_at=now,

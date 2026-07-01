@@ -15,14 +15,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
-import { AgentRunsPanel } from './agent-runs-panel';
+import type { RunsPanelProps } from './agent-runs-panel';
+import { AgentProgress } from './agent-progress';
 import { AgentSidePanel } from './agent-side-panel';
-import { AgentWorkflow } from './agent-workflow';
-import { BrowserStage } from './browser-stage';
 import { LiveBrowserStage } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
 import { SaveTemplateButton } from './save-template-button';
-import { SessionTimer } from './session-timer';
+import { SessionStatus } from './session-status';
 
 /** 디버그 단계 이동 바 노출 여부. 필요할 때 true로. */
 const SHOW_DEBUG = false;
@@ -131,6 +130,14 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const canSaveTemplate =
     isLive && run.status === 'succeeded' && !session.templateId && !!run.runId;
 
+  // 실행 이력·템플릿 — 우측 사이드 패널의 탭으로 주입(하단 별도 패널에서 이동).
+  const runsPanel: RunsPanelProps = {
+    agentId: defaultWorkflow,
+    refreshKey,
+    onReplay: (templateId) => startRun(defaultWorkflow, templateId),
+    replayDisabled: isLive && !terminal,
+  };
+
   return (
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
       {/* 헤더 */}
@@ -151,7 +158,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
-            <SessionTimer agent={agent} />
+            <SessionStatus isLive={isLive} status={run.status} />
             <LiveControls
               enabled={isLive}
               terminal={terminal}
@@ -178,26 +185,25 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         />
       ) : null}
 
-      {/* 상단: 단계 진행(단순화 기본 · 펼치기 시 React Flow) */}
-      <AgentWorkflow agent={view} />
+      {/* 상단: 단계 진행 — 라이브 중엔 실제 run.steps, 미실행 시 중립 개요(목업 단계 감춤). */}
+      <AgentProgress agent={agent} isLive={isLive} status={run.status} steps={run.steps} />
 
-      {/* 하단: 브라우저 열 폭을 16:9(높이 기준)로 잡고, 남는 가로는 우측 패널이 흡수해 넓어진다.
-          브라우저 열 ≈ (가용 높이 − 크롬·푸터) × 16/9. 패널 최소 360px. */}
-      <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(320px,calc((100dvh-416px)*16/9),calc(100%-376px))_minmax(360px,1fr)] lg:items-stretch">
-        {isLive ? (
-          <LiveBrowserStage
-            targetUrl={agent.targetUrl}
-            status={run.status}
-            steps={run.steps}
-            screenshot={run.screenshot}
-            connected={run.connected}
-          />
-        ) : (
-          <BrowserStage agent={view} />
-        )}
+      {/* 하단: 브라우저 + 우측 패널. 하단 이력/템플릿 패널을 우측 탭으로 옮겨 이 그리드가
+          남는 높이를 모두 쓴다. 브라우저 열 폭 ≈ (가용 높이 − 크롬·푸터) × 16/9, 패널 최소 360px.
+          하단 패널 제거분(높이+간격)만큼 상수를 줄여 브라우저를 더 크게 잡는다. */}
+      <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(320px,calc((100dvh-280px)*16/9),calc(100%-376px))_minmax(360px,1fr)] lg:items-stretch">
+        {/* 브라우저는 항상 라이브 스테이지 — 미실행 시 run 은 idle 상태라 중립 대기 화면을
+            보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). */}
+        <LiveBrowserStage
+          targetUrl={agent.targetUrl}
+          status={run.status}
+          screenshot={run.screenshot}
+          connected={run.connected}
+        />
         {isLive ? (
           <LiveSidePanel
             run={run}
+            runsPanel={runsPanel}
             resultAction={
               canSaveTemplate && run.runId ? (
                 <SaveTemplateButton
@@ -209,17 +215,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             }
           />
         ) : (
-          <AgentSidePanel agent={view} />
+          <AgentSidePanel agent={view} runsPanel={runsPanel} />
         )}
       </div>
-
-      {/* 실행 이력 · 템플릿 — 라이브 실행과 공존하는 하단 영역. */}
-      <AgentRunsPanel
-        agentId={defaultWorkflow}
-        refreshKey={refreshKey}
-        onReplay={(templateId) => startRun(defaultWorkflow, templateId)}
-        replayDisabled={isLive && !terminal}
-      />
     </div>
   );
 }

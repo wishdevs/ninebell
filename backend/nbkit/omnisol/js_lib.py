@@ -69,12 +69,30 @@ AVATAR_CLICK_JS = (
 
 PROFILE_JS = r"""() => {
   const out = { display_name: "", department: "", user_types: [] };
+  const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  // '/' 포함 전체 부서명 포착(예 '인사/기획팀'). '/'가 빠지면 접두부(인사)가 잘린다.
+  const deptRe = /([가-힣A-Za-z0-9][가-힣A-Za-z0-9/]*(?:팀|부서|부|실|본부|센터|그룹|사업부|TF))/;
   const sel = [...document.querySelectorAll('select')]
     .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
   if (sel) out.user_types = [...sel.options].map(o => (o.text || '').trim()).filter(Boolean);
-  const body = document.body ? (document.body.innerText || '') : '';
-  const dept = body.match(/([가-힣A-Za-z0-9]+(?:팀|부서|부|실|본부|센터|그룹|TF))/);
-  if (dept) out.department = dept[1];
+  // 1) 전용 엘리먼트(.dept-name) — 가장 정확(슬래시 포함 전체 부서명, 실측 확인).
+  const deptEl = document.querySelector('.user-info .dept-name, .dept-name');
+  if (deptEl) out.department = clean(deptEl.innerText || deptEl.textContent).slice(0, 60);
+  // 2) 폴백: 사용자유형 select 근처 패널에서 부서 토큰 탐색.
+  if (!out.department && sel) {
+    let node = sel.closest('.user-info, .user-info-change, .k-window, [role=dialog]') || sel.parentElement;
+    for (let i = 0; i < 5 && node; i++) {
+      const m = clean(node.innerText).match(deptRe);
+      if (m) { out.department = m[1]; break; }
+      node = node.parentElement;
+    }
+  }
+  // 3) 최종 폴백: 본문 전체 첫 매치(정확도 낮음 — 위 두 경로 실패 시에만).
+  if (!out.department) {
+    const body = document.body ? clean(document.body.innerText) : '';
+    const m = body.match(deptRe);
+    if (m) out.department = m[1];
+  }
   const nameEl = document.querySelector(
     '[class*="user"] [class*="name"], .user-name, .username, header [class*="name"]'
   );

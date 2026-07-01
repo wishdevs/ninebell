@@ -24,28 +24,37 @@ _AVATAR_CLICK_JS = (
     "|| [...document.querySelectorAll('header img, img[alt]')].pop(); if (a) a.click(); }"
 )
 
-# 사용자유형(회계/인사) select 를 기준점으로, 그 아래/근처(패널)에서 부서를 우선 탐색하고,
-# 못 찾으면 본문 전체 첫 매치로 폴백(ninebell-bak 기존 동작). 이름은 헤더/패널 사용자명 후보.
+# 부서는 사용자 패널의 전용 엘리먼트 `.dept-name`(예 "인사/기획팀") 에 들어있다(실측 확인).
+# 이를 1순위로 읽는다. 못 찾으면 사용자유형(회계/인사) select 근처(패널)에서 정규식으로 잡고,
+# 그래도 없으면 본문 전체 첫 매치로 폴백. 정규식 문자셋에 '/'를 포함해 "인사/기획팀" 이
+# "기획팀" 으로 잘리지 않게 한다(과거 버그: '/' 미포함으로 접두부 유실). 이름은 기존 셀렉터 유지.
 _PROFILE_JS = r"""() => {
   const out = { display_name: "", department: "" };
-  const deptRe = /([가-힣A-Za-z0-9]+(?:팀|부서|부|실|본부|센터|그룹|TF))/;
+  const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  // '/' 포함 전체 부서명 포착(예 '인사/기획팀'). '/'가 빠지면 접두부가 잘린다.
+  const deptRe = /([가-힣A-Za-z0-9][가-힣A-Za-z0-9/]*(?:팀|부서|부|실|본부|센터|그룹|사업부|TF))/;
 
-  // 사용자유형 select: 옵션 텍스트에 '사용자'(회계사용자/인사사용자 등)가 들어가는 select.
-  const utSel = [...document.querySelectorAll('select')]
-    .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
-  // 1) 사용자유형 정보가 든 패널에서 부서 토큰 우선 탐색(부서는 사용자유형 바로 아래).
-  if (utSel) {
-    let node = utSel.closest('.k-window, [role=dialog], .k-animation-container, .k-popup')
-      || utSel.parentElement;
-    for (let i = 0; i < 4 && node; i++) {
-      const m = (node.innerText || '').match(deptRe);
-      if (m) { out.department = m[1]; break; }
-      node = node.parentElement;
+  // 1) 전용 엘리먼트(.dept-name) — 가장 정확(슬래시 포함 전체 부서명).
+  const deptEl = document.querySelector('.user-info .dept-name, .dept-name');
+  if (deptEl) out.department = clean(deptEl.innerText || deptEl.textContent).slice(0, 60);
+
+  // 2) 폴백: 사용자유형 select(옵션에 '사용자' 포함) 근처 패널에서 부서 토큰 탐색.
+  if (!out.department) {
+    const utSel = [...document.querySelectorAll('select')]
+      .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
+    if (utSel) {
+      let node = utSel.closest('.user-info, .user-info-change, .k-window, [role=dialog]')
+        || utSel.parentElement;
+      for (let i = 0; i < 5 && node; i++) {
+        const m = clean(node.innerText).match(deptRe);
+        if (m) { out.department = m[1]; break; }
+        node = node.parentElement;
+      }
     }
   }
-  // 2) 폴백: 패널에서 못 찾으면 본문 전체 첫 매치.
+  // 3) 최종 폴백: 본문 전체 첫 매치(정확도 낮음 — 위 두 경로 실패 시에만).
   if (!out.department) {
-    const body = document.body ? (document.body.innerText || '') : '';
+    const body = document.body ? clean(document.body.innerText) : '';
     const m = body.match(deptRe);
     if (m) out.department = m[1];
   }

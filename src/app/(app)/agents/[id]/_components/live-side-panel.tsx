@@ -14,21 +14,24 @@ import type {
   UseLiveRunReturn,
 } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
+import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 
 interface LiveSidePanelProps {
   run: UseLiveRunReturn;
   /** 결과 탭 하단에 덧붙일 액션(예: '템플릿으로 저장'). 종료·결과가 있을 때만 표시된다. */
   resultAction?: React.ReactNode;
+  /** 실행 이력·템플릿 탭 데이터(하단 패널에서 우측 탭으로 이동). 없으면 두 탭을 숨긴다. */
+  runsPanel?: RunsPanelProps;
 }
 
-type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
+type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
 
 /**
  * 라이브 사이드 패널 — 라이브 스트림에서 파생한 개입/워크플로우/로그/결과 탭.
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, resultAction }: LiveSidePanelProps) {
+export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -51,7 +54,7 @@ export function LiveSidePanel({ run, resultAction }: LiveSidePanelProps) {
         onValueChange={(v) => setTab(v as TabKey)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="shrink-0 px-3 pt-1">
+        <TabsList className="no-scrollbar shrink-0 overflow-x-auto px-3 pt-1">
           {hasHitl ? (
             <TabsTrigger value="intervention" className="gap-1.5">
               개입
@@ -66,6 +69,7 @@ export function LiveSidePanel({ run, resultAction }: LiveSidePanelProps) {
             </span>
           </TabsTrigger>
           {hasResult ? <TabsTrigger value="result">결과</TabsTrigger> : null}
+          {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
         {hasHitl && run.hitl ? (
@@ -100,6 +104,12 @@ export function LiveSidePanel({ run, resultAction }: LiveSidePanelProps) {
             {resultAction ? (
               <div className="border-border mt-4 border-t pt-4">{resultAction}</div>
             ) : null}
+          </TabsContent>
+        ) : null}
+
+        {runsPanel ? (
+          <TabsContent value="templates" className="min-h-0 flex-1 overflow-y-auto p-3">
+            <TemplatesTab {...runsPanel} />
           </TabsContent>
         ) : null}
       </Tabs>

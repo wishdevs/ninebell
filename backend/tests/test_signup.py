@@ -66,6 +66,51 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
     assert fastapi_app.state.signup_cache.get(token) is None
 
 
+async def test_signup_succeeds_without_email(client, sm, monkeypatch):
+    _wire_state(monkeypatch)
+    token = _seed_pending("noemail")
+
+    # email 키를 아예 생략(선택 입력).
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "홍길동",
+            "department": "개발팀",
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert "session" in resp.cookies
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "noemail"))).scalar_one()
+        assert u.email is None
+        assert u.role.code == "user"
+
+
+async def test_signup_normalizes_empty_email_to_none(client, sm, monkeypatch):
+    _wire_state(monkeypatch)
+    token = _seed_pending("blankemail")
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "홍길동",
+            "department": "개발팀",
+            "email": "",
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "blankemail"))).scalar_one()
+        assert u.email is None
+
+
 async def test_signup_assigns_super_admin_from_env(client, sm, monkeypatch):
     monkeypatch.setenv("SUPER_ADMIN_OMNISOL_IDS", "boss01")
     get_settings.cache_clear()

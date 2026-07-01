@@ -26,7 +26,8 @@ class SignupBody(BaseModel):
     signup_token: str = Field(min_length=1, alias="signupToken")
     display_name: str = Field(min_length=1, max_length=255, alias="displayName")
     department: str | None = Field(default=None, max_length=255)
-    email: str = Field(min_length=1, max_length=320)
+    # 지금은 선택 입력(누락/빈문자열 허용). 추후 필수화 예정.
+    email: str | None = Field(default=None, max_length=320)
     agreed_terms: bool = Field(alias="agreedTerms")
 
 
