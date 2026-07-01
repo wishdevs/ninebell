@@ -102,6 +102,24 @@
   컬럼 예: 예산단위 `BG_CD/BG_NM/BIZPLAN_CD/…`). **초기 rows=0 → `#keyword` 입력 + 검색으로 채운 뒤 행 선택**.
   (기존 `expense_card/tools.py do_fill_search` 패턴과 동일 — 재사용/포팅 가능.)
 
+## 통합 방향(⑥, 확정)
+
+- 프론트 **기존 `card-chat` 에이전트("법인카드 지결 — 대화형 폼 채움")를 card_collect 로 교체**(사용자 확정).
+  - `WORKFLOW_BY_AGENT['card-chat'] = 'card-collect'` 로 매핑 변경(현재 'expense-card-chat').
+  - `register_workflow('card-collect', …)` 등록. `step-defs.ts` 에 card-collect 단계 정의 추가.
+  - 에이전트 이름/설명을 다건 정리형에 맞게 갱신. 기존 expense-card-chat 그래프는 보존(다른 종류 재활용 가능).
+  - 대화형 UX: 리스트 요약 채팅 보고 → 건별 예산단위/계정/프로젝트 입력 + 적요 추천(HITL 루프) → 일괄적용 → F7 저장.
+
+## 남은 작업 체크리스트(⑤⑥)
+
+- [ ] 계정(`acct_cd`)·프로젝트(`pjt_cd`) 코드피커 유효 keyword/컬럼 확인
+- [ ] 행별 write 루프 완성(적요 인라인 + 3코드피커 + apply_row)
+- [ ] `apply_row`(일괄적용) 실동작 검증 + `save_document` F7 실배선
+- [ ] 헤드리스 10회 반복 테스트(저장 직전까지) — 안정성 확인
+- [ ] LangGraph 노드/그래프(`graph.py`) + registry 등록
+- [ ] 프론트 매핑(card-chat→card-collect)·step-defs·에이전트 메타·HITL 대화 UX
+- [ ] 최종 1회 실저장 검증(사람 확인)
+
 ## 검증 로그
 
 - v0→v1 (2026-07-01): probe_card/probe2/probe3 3회 — 진입~조회~77건, '불공'=02, 카드 5장·컬럼 확정.
