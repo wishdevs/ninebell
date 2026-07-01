@@ -34,7 +34,7 @@ export function LiveBrowserStage({
   return (
     // 카드 폭 = min(셀폭, (셀높이 − 크롬)×16/9). 하단 바 제거로 비-화면 높이가 크롬(≈48px)만 남는다.
     <div className="[container-type:size] flex min-h-0 items-start justify-center lg:h-full">
-      <section className="border-border bg-surface flex min-h-0 w-full max-w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:w-[min(100cqw,calc((100cqh-48px)*16/9))]">
+      <section className="border-border bg-surface flex min-h-0 w-full max-w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:w-[min(100cqw,calc((100cqh-48px)*16/10))]">
         {/* 브라우저 크롬 */}
         <div className="border-border bg-surface-raised flex items-center gap-3 border-b px-3 py-2.5">
           <div className="flex shrink-0 items-center gap-1.5" aria-hidden>
@@ -50,7 +50,9 @@ export function LiveBrowserStage({
         </div>
 
         {/* 스크린캐스트 — 카드 폭이 곧 16:9 폭이므로 화면은 풀폭 + 16:9. */}
-        <div className="bg-muted/30 relative aspect-[16/9] w-full">
+        {/* 스크린캐스트 종횡비(≈16:10, CDP 1280×800)에 맞춘 컨테이너 — LiveScreen 은 object-contain
+            이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
+        <div className="bg-muted/30 relative aspect-[16/10] w-full">
           <LiveScreen src={screenshot} live={live} />
         </div>
       </section>

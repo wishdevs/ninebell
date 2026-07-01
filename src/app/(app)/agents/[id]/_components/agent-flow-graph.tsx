@@ -235,7 +235,7 @@ export function AgentFlowGraph({ graph }: { graph: FlowGraph }) {
   );
 
   return (
-    <div className="bg-muted/20 border-border h-[360px] w-full overflow-hidden rounded-[var(--radius-md)] border">
+    <div className="bg-muted/20 border-border h-full min-h-[320px] w-full overflow-hidden rounded-[var(--radius-md)] border">
       <ReactFlow
         colorMode={colorMode}
         nodes={nodes}

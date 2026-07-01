@@ -16,7 +16,6 @@ import { Button } from '@/components/ui/button';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
 import type { RunsPanelProps } from './agent-runs-panel';
-import { AgentProgress } from './agent-progress';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -185,13 +184,13 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         />
       ) : null}
 
-      {/* 상단: 단계 진행 — 라이브 중엔 실제 run.steps, 미실행 시 중립 개요(목업 단계 감춤). */}
-      <AgentProgress agent={agent} isLive={isLive} status={run.status} steps={run.steps} />
+      {/* 상단 단계 섹션은 제거 — 세로 공간을 브라우저에 양보한다. 워크플로우 그래프는 우측
+          '워크플로우' 탭에서 크게 본다(브라우저와 세로 공간 경쟁을 피함). */}
 
-      {/* 하단: 브라우저 + 우측 패널. 하단 이력/템플릿 패널을 우측 탭으로 옮겨 이 그리드가
-          남는 높이를 모두 쓴다. 브라우저 열 폭 ≈ (가용 높이 − 크롬·푸터) × 16/9, 패널 최소 360px.
-          하단 패널 제거분(높이+간격)만큼 상수를 줄여 브라우저를 더 크게 잡는다. */}
-      <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(320px,calc((100dvh-280px)*16/9),calc(100%-376px))_minmax(360px,1fr)] lg:items-stretch">
+      {/* 브라우저 + 우측 패널. 상단 섹션이 없어 그리드가 남는 높이를 전부 쓴다. 브라우저 열 폭은
+          스크린캐스트 종횡비(≈16:10)에 맞춰 (가용 높이)×16/10 로 잡아 화면이 잘리지 않고 꽉
+          차게(레터박스 최소), 좌우로 과하게 넓지 않게 하고 패널 최소폭(≈440px)은 유지한다. */}
+      <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)] lg:items-stretch">
         {/* 브라우저는 항상 라이브 스테이지 — 미실행 시 run 은 idle 상태라 중립 대기 화면을
             보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). */}
         <LiveBrowserStage
