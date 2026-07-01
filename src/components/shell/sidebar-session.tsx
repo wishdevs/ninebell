@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { RiTimeLine } from '@remixicon/react';
-import { CURRENT_USER } from '@/lib/data/workspace';
+import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { formatDateTime } from '@/lib/data/format';
 
 const TIME_FMT = new Intl.DateTimeFormat('ko-KR', {
@@ -18,6 +18,7 @@ const TIME_FMT = new Intl.DateTimeFormat('ko-KR', {
  * 하이드레이션을 안전하게 한다.
  */
 export function SidebarSession() {
+  const user = useCurrentUser();
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
     setNow(new Date());
@@ -33,7 +34,7 @@ export function SidebarSession() {
           최근 접속
         </span>
         <span className="text-foreground-secondary shrink-0 tabular-nums">
-          {formatDateTime(CURRENT_USER.lastAccessAt)}
+          {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : '—'}
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">

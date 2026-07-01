@@ -13,16 +13,24 @@ import {
   SelectValue,
 } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
-import { MEMBER_STATUS_LABEL, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
-import { ROLE_LABEL, type OrgRole } from '@/lib/data/workspace';
+import type { Role } from '@/lib/auth/permissions';
+import {
+  MEMBER_ROLE_LABEL,
+  MEMBER_STATUS_LABEL,
+  type MemberStatus,
+  type WorkspaceMember,
+} from '@/lib/data/members';
 import { formatDate, formatRelativeKorean } from '@/lib/data/format';
 import { MemberRowActions } from './member-row-actions';
+import type { MemberCaps } from './members-client';
 
 interface MembersTableProps {
   members: readonly WorkspaceMember[];
   /** 현재 로그인한 사용자 id — 본인 행은 역할 변경/액션을 잠근다. */
   currentUserId: string;
-  onRoleChange: (member: WorkspaceMember, role: OrgRole) => void;
+  /** 현재 사용자의 멤버 변경 권한 — 어포던스 노출을 게이팅한다. */
+  caps: MemberCaps;
+  onRoleChange: (member: WorkspaceMember, role: Role) => void;
   onToggleStatus: (member: WorkspaceMember) => void;
   onRequestRemove: (member: WorkspaceMember) => void;
   /** 빈 상태에서 초대 다이얼로그를 여는 콜백. */
@@ -30,7 +38,7 @@ interface MembersTableProps {
 }
 
 /** 모든 역할 옵션 — 인라인 역할 셀렉트에서 사용. */
-const ROLE_OPTIONS: readonly OrgRole[] = ['owner', 'admin', 'member', 'client'];
+const ROLE_OPTIONS: readonly Role[] = ['super_admin', 'admin', 'user'];
 
 /** 상태 → StatusPill 톤 매핑. */
 const STATUS_VARIANT: Record<MemberStatus, 'success' | 'info' | 'danger'> = {
@@ -39,17 +47,17 @@ const STATUS_VARIANT: Record<MemberStatus, 'success' | 'info' | 'danger'> = {
   suspended: 'danger',
 };
 
-/** 본인 행에서 셀렉트 대신 보여줄 역할 배지 톤. */
-const ROLE_BADGE: Record<OrgRole, string> = {
-  owner: 'bg-accent/10 text-accent',
+/** 읽기 전용 역할 배지 톤. */
+const ROLE_BADGE: Record<Role, string> = {
+  super_admin: 'bg-accent/10 text-accent',
   admin: 'bg-warning/10 text-warning',
-  member: 'bg-muted text-muted-foreground',
-  client: 'bg-info/10 text-info',
+  user: 'bg-muted text-muted-foreground',
 };
 
 export function MembersTable({
   members,
   currentUserId,
+  caps,
   onRoleChange,
   onToggleStatus,
   onRequestRemove,
@@ -60,12 +68,14 @@ export function MembersTable({
       <EmptyState
         icon={<RiGroupLine size={18} aria-hidden />}
         title="멤버가 없습니다"
-        description="아직 이 워크스페이스에 멤버가 없습니다. 새 멤버를 초대해 협업을 시작하세요."
+        description="아직 등록된 사용자가 없습니다. 옴니솔 계정으로 로그인하면 사용자가 등록됩니다."
         action={
-          <Button variant="primary" size="sm" onClick={onInviteClick}>
-            <RiUserAddLine size={16} aria-hidden />
-            멤버 초대
-          </Button>
+          caps.canWrite ? (
+            <Button variant="primary" size="sm" onClick={onInviteClick}>
+              <RiUserAddLine size={16} aria-hidden />
+              멤버 초대
+            </Button>
+          ) : undefined
         }
       />
     );
@@ -95,6 +105,10 @@ export function MembersTable({
           <tbody>
             {members.map((member) => {
               const isSelf = member.id === currentUserId;
+              // 역할 셀렉트는 본인이 아니고 roles:assign 권한이 있을 때만. 그 외는 읽기 전용 배지.
+              const canEditRole = !isSelf && caps.canAssignRole;
+              // 행 액션(정지/삭제)은 본인이 아니고 쓰기/삭제 권한 중 하나라도 있을 때만.
+              const canActOnRow = !isSelf && (caps.canWrite || caps.canDelete);
               return (
                 <tr
                   key={member.id}
@@ -112,18 +126,18 @@ export function MembersTable({
                             </span>
                           ) : null}
                         </p>
-                        <p className="text-muted-foreground font-mono text-xs">{member.email}</p>
+                        <p className="text-muted-foreground font-mono text-xs">
+                          {member.email || '—'}
+                        </p>
                       </div>
                     </div>
                   </Td>
 
                   <Td>
-                    {isSelf ? (
-                      <RoleBadge role={member.role} />
-                    ) : (
+                    {canEditRole ? (
                       <Select
                         value={member.role}
-                        onValueChange={(value) => onRoleChange(member, value as OrgRole)}
+                        onValueChange={(value) => onRoleChange(member, value as Role)}
                       >
                         <SelectTrigger aria-label={`${member.name} 역할`} className="w-[7.5rem]">
                           <SelectValue />
@@ -131,11 +145,13 @@ export function MembersTable({
                         <SelectContent>
                           {ROLE_OPTIONS.map((role) => (
                             <SelectItem key={role} value={role}>
-                              {ROLE_LABEL[role]}
+                              {MEMBER_ROLE_LABEL[role]}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                    ) : (
+                      <RoleBadge role={member.role} />
                     )}
                   </Td>
 
@@ -166,14 +182,15 @@ export function MembersTable({
                   </Td>
 
                   <Td className="text-right">
-                    {isSelf ? (
-                      <span className="text-foreground-tertiary text-xs">—</span>
-                    ) : (
+                    {canActOnRow ? (
                       <MemberRowActions
                         member={member}
+                        caps={caps}
                         onToggleStatus={onToggleStatus}
                         onRequestRemove={onRequestRemove}
                       />
+                    ) : (
+                      <span className="text-foreground-tertiary text-xs">—</span>
                     )}
                   </Td>
                 </tr>
@@ -186,7 +203,7 @@ export function MembersTable({
   );
 }
 
-function RoleBadge({ role }: { role: OrgRole }) {
+function RoleBadge({ role }: { role: Role }) {
   return (
     <span
       className={cn(
@@ -194,7 +211,7 @@ function RoleBadge({ role }: { role: OrgRole }) {
         ROLE_BADGE[role],
       )}
     >
-      {ROLE_LABEL[role]}
+      {MEMBER_ROLE_LABEL[role]}
     </span>
   );
 }

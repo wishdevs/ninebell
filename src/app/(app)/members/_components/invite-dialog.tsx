@@ -12,11 +12,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select-dropdown';
-import { ROLE_LABEL, type OrgRole } from '@/lib/data/workspace';
+import type { Role } from '@/lib/auth/permissions';
+import { MEMBER_ROLE_LABEL } from '@/lib/data/members';
 
 export interface InviteInput {
   email: string;
-  role: OrgRole;
+  role: Role;
 }
 
 interface InviteDialogProps {
@@ -28,17 +29,17 @@ interface InviteDialogProps {
 /** 가벼운 형식 검증 — 실제 전송이 없으므로 모양만 확인한다. */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** 초대 시 부여 가능한 역할 — 소유자는 초대로 만들 수 없다. */
-const INVITABLE_ROLES: readonly OrgRole[] = ['admin', 'member', 'client'];
+/** 초대 시 부여 가능한 역할 — 최고관리자는 초대로 만들 수 없다. */
+const INVITABLE_ROLES: readonly Role[] = ['admin', 'user'];
 
 export function InviteDialog({ open, onClose, onInvite }: InviteDialogProps) {
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<OrgRole>('member');
+  const [role, setRole] = useState<Role>('user');
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
     setEmail('');
-    setRole('member');
+    setRole('user');
     setError(null);
   }
 
@@ -89,7 +90,7 @@ export function InviteDialog({ open, onClose, onInvite }: InviteDialogProps) {
             type="email"
             inputMode="email"
             autoComplete="off"
-            placeholder="name@etribe.co.kr"
+            placeholder="name@ninebell.co.kr"
             value={email}
             aria-invalid={error ? true : undefined}
             onChange={(e) => {
@@ -103,7 +104,7 @@ export function InviteDialog({ open, onClose, onInvite }: InviteDialogProps) {
         </FormField>
 
         <FormField id="invite-role" label="역할" hint="초대된 멤버에게 부여할 권한입니다.">
-          <Select value={role} onValueChange={(value) => setRole(value as OrgRole)}>
+          <Select value={role} onValueChange={(value) => setRole(value as Role)}>
             {/* z-[200]: 다이얼로그(z-100) 위로 팝업이 떠야 가려지지 않는다. */}
             <SelectTrigger id="invite-role" className="h-9 w-full">
               <SelectValue />
@@ -111,7 +112,7 @@ export function InviteDialog({ open, onClose, onInvite }: InviteDialogProps) {
             <SelectContent className="z-[200]">
               {INVITABLE_ROLES.map((value) => (
                 <SelectItem key={value} value={value}>
-                  {ROLE_LABEL[value]}
+                  {MEMBER_ROLE_LABEL[value]}
                 </SelectItem>
               ))}
             </SelectContent>

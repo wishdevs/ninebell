@@ -1,0 +1,17 @@
+# 더존 옴니솔 대시보드 백엔드 — 런타임 + 개발/테스트 의존성
+# Python 3.13
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pyjwt==2.10.1
+pydantic-settings==2.7.1
+playwright==1.49.1
+
+# 개발/테스트
+httpx==0.28.1
+pytest==8.3.4
+pytest-asyncio==0.25.2
+aiosqlite==0.20.0

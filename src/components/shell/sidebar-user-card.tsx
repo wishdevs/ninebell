@@ -10,7 +10,7 @@ import {
 } from '@remixicon/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTheme } from '@/components/theme-provider';
-import { CURRENT_USER } from '@/lib/data/workspace';
+import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { cn } from '@/lib/utils';
 
 function avatarInitial(name: string): string {
@@ -25,6 +25,7 @@ export function SidebarUserCard() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
+  const user = useCurrentUser();
 
   useEffect(() => {
     if (!open) return;
@@ -60,20 +61,20 @@ export function SidebarUserCard() {
           aria-hidden
           className="from-accent to-accent/70 text-accent-foreground flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-xs font-semibold tracking-tight"
         >
-          {avatarInitial(CURRENT_USER.fullName)}
+          {avatarInitial(user.displayName)}
         </span>
         <span className="min-w-0 flex-1">
           <span
             className="text-foreground block truncate text-[length:var(--text-body)] leading-tight font-semibold"
-            title={CURRENT_USER.fullName}
+            title={user.displayName}
           >
-            {CURRENT_USER.fullName}
+            {user.displayName}
           </span>
           <span
             className="text-foreground-tertiary block truncate text-[length:var(--text-caption)] leading-tight"
-            title={CURRENT_USER.email}
+            title={user.email ?? user.omnisolUserid}
           >
-            {CURRENT_USER.email}
+            {user.email ?? user.omnisolUserid}
           </span>
         </span>
         <RiExpandUpDownLine size={13} aria-hidden className="text-foreground-tertiary shrink-0" />

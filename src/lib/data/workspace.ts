@@ -47,7 +47,7 @@ export interface CurrentUser {
 export const CURRENT_USER: CurrentUser = {
   id: 'u-001',
   fullName: '김도현',
-  email: 'dohyun.kim@etribe.co.kr',
+  email: 'dohyun.kim@ninebell.co.kr',
   hasAvatar: false,
   lastAccessAt: relativeFromNow({ hours: 21, minutes: 36 }),
   isSystemAdmin: true,

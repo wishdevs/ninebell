@@ -9,9 +9,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <section className="bg-background relative flex flex-col">
         <header className="flex items-center px-6 py-6 sm:px-10 lg:px-12 lg:py-8">
           <Link href="/login" className="flex items-center gap-3">
-            <span className="font-display text-base font-semibold tracking-tight">
-              ETRIBE AX SYSTEM
-            </span>
+            <span className="font-display text-base font-semibold tracking-tight">NINEBELL</span>
           </Link>
         </header>
 
@@ -20,7 +18,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </div>
 
         <footer className="text-foreground-tertiary px-6 pb-6 text-[length:var(--text-caption)] sm:px-10 lg:px-12 lg:pb-8">
-          © 2026 ETRIBE Inc.
+          © 2026 나인벨
         </footer>
       </section>
 

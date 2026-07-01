@@ -78,11 +78,11 @@ export const WORK_CATEGORIES: readonly WorkCategory[] = [
 ];
 
 export const MEMBERS: readonly Member[] = [
-  { id: 'u-001', name: '김도현', email: 'dohyun.kim@etribe.co.kr' },
-  { id: 'u-002', name: '이서연', email: 'seoyeon.lee@etribe.co.kr' },
-  { id: 'u-003', name: '박준호', email: 'junho.park@etribe.co.kr' },
-  { id: 'u-004', name: '최하늘', email: 'haneul.choi@etribe.co.kr' },
-  { id: 'u-005', name: '정유진', email: 'yujin.jung@etribe.co.kr' },
+  { id: 'u-001', name: '김도현', email: 'dohyun.kim@ninebell.co.kr' },
+  { id: 'u-002', name: '이서연', email: 'seoyeon.lee@ninebell.co.kr' },
+  { id: 'u-003', name: '박준호', email: 'junho.park@ninebell.co.kr' },
+  { id: 'u-004', name: '최하늘', email: 'haneul.choi@ninebell.co.kr' },
+  { id: 'u-005', name: '정유진', email: 'yujin.jung@ninebell.co.kr' },
 ];
 
 export const PROJECT_REFS: readonly ProjectRef[] = [

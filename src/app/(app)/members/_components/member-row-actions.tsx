@@ -10,9 +10,12 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import type { WorkspaceMember } from '@/lib/data/members';
+import type { MemberCaps } from './members-client';
 
 interface MemberRowActionsProps {
   member: WorkspaceMember;
+  /** 정지/삭제 항목 노출을 게이팅한다. */
+  caps: MemberCaps;
   onToggleStatus: (member: WorkspaceMember) => void;
   onRequestRemove: (member: WorkspaceMember) => void;
 }
@@ -20,10 +23,11 @@ interface MemberRowActionsProps {
 /**
  * 행 우측의 ⋯ 액션 메뉴. 상태에 따라 정지/활성 라벨을 토글하고, 삭제는
  * 부모로 위임(부모가 ConfirmDialog를 띄운다). Radix Popover로 포털 +
- * 바깥 클릭 + ESC를 처리한다.
+ * 바깥 클릭 + ESC를 처리한다. 정지는 users:write, 삭제는 users:delete로 게이팅.
  */
 export function MemberRowActions({
   member,
+  caps,
   onToggleStatus,
   onRequestRemove,
 }: MemberRowActionsProps) {
@@ -47,29 +51,33 @@ export function MemberRowActions({
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-44 p-1">
         <div role="menu" className="grid gap-0.5">
-          <MenuItem
-            icon={
-              isSuspended ? (
-                <RiUserFollowLine size={14} aria-hidden />
-              ) : (
-                <RiUserUnfollowLine size={14} aria-hidden />
-              )
-            }
-            label={isSuspended ? '활성화' : '정지'}
-            onSelect={() => {
-              onToggleStatus(member);
-              setOpen(false);
-            }}
-          />
-          <MenuItem
-            icon={<RiDeleteBinLine size={14} aria-hidden />}
-            label="삭제"
-            danger
-            onSelect={() => {
-              onRequestRemove(member);
-              setOpen(false);
-            }}
-          />
+          {caps.canWrite ? (
+            <MenuItem
+              icon={
+                isSuspended ? (
+                  <RiUserFollowLine size={14} aria-hidden />
+                ) : (
+                  <RiUserUnfollowLine size={14} aria-hidden />
+                )
+              }
+              label={isSuspended ? '활성화' : '정지'}
+              onSelect={() => {
+                onToggleStatus(member);
+                setOpen(false);
+              }}
+            />
+          ) : null}
+          {caps.canDelete ? (
+            <MenuItem
+              icon={<RiDeleteBinLine size={14} aria-hidden />}
+              label="삭제"
+              danger
+              onSelect={() => {
+                onRequestRemove(member);
+                setOpen(false);
+              }}
+            />
+          ) : null}
         </div>
       </PopoverContent>
     </Popover>

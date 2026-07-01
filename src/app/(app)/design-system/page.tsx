@@ -26,7 +26,7 @@ export default function DesignSystemPage() {
         title="디자인 시스템"
         description={
           <>
-            ETRIBE AX SYSTEM의 시각 언어 · 컴포넌트 표준. 모든 토큰은{' '}
+            NINEBELL의 시각 언어 · 컴포넌트 표준. 모든 토큰은{' '}
             <span className="font-mono text-xs">globals.css</span>에 정의되며 라이트/다크를 동시에
             지원합니다. 우측 상단 사용자 메뉴의 테마 토글로 두 테마를 확인하세요.
           </>

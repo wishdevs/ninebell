@@ -35,10 +35,10 @@ const geistMono = localFont({
 
 export const metadata: Metadata = {
   title: {
-    default: 'ETRIBE AX SYSTEM',
-    template: '%s · ETRIBE AX SYSTEM',
+    default: 'NINEBELL',
+    template: '%s · NINEBELL',
   },
-  description: 'ETRIBE AX SYSTEM — 프론트엔드 디자인 기본형',
+  description: '나인벨 더존 옴니솔 자동화 대시보드',
   icons: {
     icon: '/favicon.ico',
   },

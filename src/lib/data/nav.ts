@@ -40,6 +40,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members' },
+      { href: '/logs', label: '로깅', icon: 'analytics' },
       { href: '/settings', label: '조직 설정', icon: 'settings', exact: true },
     ],
   },

@@ -16,7 +16,7 @@ export default function LoginPage() {
           로그인
         </h1>
         <p className="text-muted-foreground text-[length:var(--text-body)] leading-relaxed">
-          ETRIBE AX SYSTEM 계정으로 계속하기
+          옴니솔 계정으로 계속하기
         </p>
       </header>
       <LoginForm />
