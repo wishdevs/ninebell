@@ -11,6 +11,9 @@ bcrypt==5.0.0
 pydantic-settings==2.7.1
 playwright==1.49.1
 
+# 라이브 워크플로우 엔진(P2 engine) — LangGraph 그래프 인터페이스
+langgraph==0.2.76
+
 # 개발/테스트
 httpx==0.28.1
 pytest==8.3.4

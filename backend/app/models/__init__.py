@@ -6,6 +6,7 @@ from app.models.access_log import AccessLog
 from app.models.agent import Agent
 from app.models.agent_intervention import AgentIntervention
 from app.models.agent_log import AgentLog
+from app.models.agent_run import AgentRun
 from app.models.agent_step import AgentStep
 from app.models.base import Base
 from app.models.permission import Permission
@@ -24,4 +25,5 @@ __all__ = [
     "AgentStep",
     "AgentLog",
     "AgentIntervention",
+    "AgentRun",
 ]

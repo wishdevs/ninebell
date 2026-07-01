@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     erp_base: str = "https://erp.ninebell.co.kr"
     max_concurrent_erp_logins: int = 3
 
+    # --- 라이브 세션(run) / 스크린캐스트 ---
+    # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).
+    session_detach_grace_s: float = 120.0
+    # 종료된 흐름을 재연결용 버퍼로 유지하는 시간(브라우저는 이미 닫힘).
+    session_terminal_grace_s: float = 120.0
+    session_reaper_interval_s: float = 15.0
+    # CDP Page.startScreencast 파라미터(라이브 뷰). q50·everyNthFrame=2 → ~16fps.
+    screencast_quality: int = 50
+    screencast_max_width: int = 1280
+    screencast_max_height: int = 800
+    screencast_every_nth_frame: int = 2
+    # HITL(사용자 개입) 대기 상한(초).
+    hitl_timeout_s: int = 300
+
     # 쉼표 구분 문자열(헬퍼로 파싱) — pydantic 의 list 자동 JSON 파싱 회피.
     super_admin_omnisol_ids: str = ""
     cors_origins: str = "http://localhost:3101"

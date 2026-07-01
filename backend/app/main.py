@@ -20,8 +20,9 @@ from playwright.async_api import async_playwright
 from app.config import get_settings
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
+from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, auth, logs, users
+from app.routers import agents, auth, logs, runs, users
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -50,6 +51,14 @@ def create_app() -> FastAPI:
         app.state.erp_browser = await pw.chromium.launch(headless=True)
         app.state.erp_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_logins)
 
+        # --- 라이브 실행(run): run 당 fresh 헤드리스 브라우저 팩토리 + 세션 리퍼 ---
+        # 라우터(runs.py)가 이 팩토리로 run 당 새 브라우저를 열고 finally 에서 닫는다.
+        async def _launch_browser():
+            return await pw.chromium.launch(headless=True)
+
+        app.state.browser_factory = _launch_browser
+        session_reaper = asyncio.create_task(reap_sessions())
+
         # --- 자격증명 캐시 + 회원가입 대기 캐시 + 주기 reaper ---
         app.state.cred_cache = CredCache()
         app.state.signup_cache = SignupCache()
@@ -65,8 +74,10 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            session_reaper.cancel()
             cred_reaper.cancel()
             signup_reaper.cancel()
+            await close_all_sessions()  # 살아있는 라이브 세션의 브라우저까지 정리
             try:
                 await app.state.erp_browser.close()
             finally:
@@ -86,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(agents.router)
     app.include_router(logs.router)
+    app.include_router(runs.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:
