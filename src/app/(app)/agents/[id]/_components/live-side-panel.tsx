@@ -15,6 +15,7 @@ import type {
 } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
+import { InterventionEmpty } from './intervention-empty';
 
 interface LiveSidePanelProps {
   run: UseLiveRunReturn;
@@ -55,12 +56,12 @@ export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelPro
         className="flex min-h-0 flex-1 flex-col"
       >
         <TabsList className="no-scrollbar shrink-0 overflow-x-auto px-3 pt-1">
-          {hasHitl ? (
-            <TabsTrigger value="intervention" className="gap-1.5">
-              개입
+          <TabsTrigger value="intervention" className="gap-1.5">
+            개입
+            {hasHitl ? (
               <span className="bg-warning size-1.5 animate-pulse rounded-full" aria-hidden />
-            </TabsTrigger>
-          ) : null}
+            ) : null}
+          </TabsTrigger>
           <TabsTrigger value="workflow">워크플로우</TabsTrigger>
           <TabsTrigger value="log">
             로그
@@ -72,9 +73,9 @@ export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelPro
           {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
-        {hasHitl && run.hitl ? (
-          <TabsContent value="intervention" className="min-h-0 flex-1 overflow-hidden p-4">
-            {run.hitl.kind === 'chat' ? (
+        <TabsContent value="intervention" className="min-h-0 flex-1 overflow-hidden p-4">
+          {run.hitl ? (
+            run.hitl.kind === 'chat' ? (
               <LiveChatCard
                 hitl={run.hitl}
                 messages={run.chat}
@@ -86,9 +87,11 @@ export function LiveSidePanel({ run, resultAction, runsPanel }: LiveSidePanelPro
                 hitl={run.hitl}
                 onSubmit={(payload) => run.sendHitl(run.hitl!.id, payload)}
               />
-            )}
-          </TabsContent>
-        ) : null}
+            )
+          ) : (
+            <InterventionEmpty />
+          )}
+        </TabsContent>
 
         <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto p-4">
           <LiveStepList steps={run.steps} status={run.status} />
@@ -131,7 +134,7 @@ const STEP_LABEL: Record<LiveStepStatus, string> = {
   failed: '실패',
 };
 
-function LiveStepList({
+export function LiveStepList({
   steps,
   status,
 }: {

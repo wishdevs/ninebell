@@ -74,10 +74,11 @@ export function AgentDetailLoader({ id }: { id: string }) {
   // status === 'success' 이므로 data는 항상 존재하나, 훅 반환 타입이 분기되지
   // 않아 좁혀지지 않으므로 명시적으로 가드한다.
   if (!data) return null;
-  // 상단 스텝퍼·워크플로우 탭의 "단계 계획"은 프론트 픽스처(agents.ts)를 소스로 쓴다 —
-  // 상세 steps 는 백엔드 /agents/{id}(agent_fixtures) 에서 오지만, 실제 워크플로우 순서로
-  // 보이도록 픽스처가 있으면 steps 만 오버레이한다(나머지 필드는 백엔드 그대로).
+  // 상단 스텝퍼·펼침 상세의 "단계 계획"은 프론트 픽스처(agents.ts)를 소스로 쓴다 —
+  // 상세 steps/flowGraph 는 백엔드 /agents/{id} 에서 오지만, 픽스처가 있으면 steps 와
+  // flowGraph 를 프론트 픽스처로 오버레이한다(펼침 React Flow 그래프가 flows.ts 의
+  // 정확한 FlowGraph 모양을 쓰도록). 나머지 필드는 백엔드 그대로.
   const fixture = findAgent(data.id);
-  const agent = fixture ? { ...data, steps: fixture.steps } : data;
+  const agent = fixture ? { ...data, steps: fixture.steps, flowGraph: fixture.flowGraph } : data;
   return <AgentDetailClient agent={agent} />;
 }

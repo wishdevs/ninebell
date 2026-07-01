@@ -7,7 +7,7 @@ import { LOG_LEVEL_LABEL } from '@/lib/data/agents';
 import { formatRelativeKorean } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
 import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
-import { InterventionPanel } from './intervention-panel';
+import { InterventionEmpty } from './intervention-empty';
 
 interface AgentSidePanelProps {
   agent: Agent;
@@ -16,23 +16,18 @@ interface AgentSidePanelProps {
 }
 
 /**
- * 브라우저 오른쪽 영역(미실행 상태) — 워크플로우 · 로그 · 템플릿을 탭으로 표현한다.
- * 단계 목록은 상단 스텝퍼가 기본 노출하므로, 기본 탭은 워크플로우(또는 개입이 있으면 개입).
+ * 브라우저 오른쪽 영역(미실행 상태) — 개입 · 워크플로우 · 로그 · 템플릿 탭.
+ * 개입은 라이브 실행이 요청할 때만 생기므로, 미실행에서는 픽스처 목업 대화 대신 중립 빈 상태를
+ * 보여준다(가짜 채팅 노출 금지). 기본 탭은 워크플로우(상단 스텝퍼와 함께 단계를 노출).
  */
 export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
-  const hasIntervention = Boolean(agent.intervention);
-  const [tab, setTab] = useState(hasIntervention ? 'intervention' : 'workflow');
+  const [tab, setTab] = useState('workflow');
 
   return (
     <section className="border-border bg-surface flex min-h-[440px] flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:h-full lg:min-h-0 lg:min-w-0">
       <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
         <TabsList className="no-scrollbar shrink-0 overflow-x-auto px-3 pt-1">
-          {hasIntervention ? (
-            <TabsTrigger value="intervention" className="gap-1.5">
-              개입
-              <span className="bg-warning size-1.5 animate-pulse rounded-full" aria-hidden />
-            </TabsTrigger>
-          ) : null}
+          <TabsTrigger value="intervention">개입</TabsTrigger>
           <TabsTrigger value="workflow">워크플로우</TabsTrigger>
           <TabsTrigger value="log">
             로그
@@ -43,11 +38,9 @@ export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
           {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
-        {hasIntervention && agent.intervention ? (
-          <TabsContent value="intervention" className="min-h-0 flex-1 overflow-y-auto p-4">
-            <InterventionPanel intervention={agent.intervention} />
-          </TabsContent>
-        ) : null}
+        <TabsContent value="intervention" className="min-h-0 flex-1 overflow-y-auto p-4">
+          <InterventionEmpty />
+        </TabsContent>
 
         <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto p-4">
           <WorkflowDetail steps={agent.steps} />
@@ -83,7 +76,7 @@ const STEP_LABEL: Record<StepStatus, string> = {
   error: '오류',
 };
 
-function WorkflowDetail({ steps }: { steps: readonly WorkflowStep[] }) {
+export function WorkflowDetail({ steps }: { steps: readonly WorkflowStep[] }) {
   return (
     <ol className="flex flex-col">
       {steps.map((step, i) => (

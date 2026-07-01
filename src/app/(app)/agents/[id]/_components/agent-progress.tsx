@@ -1,10 +1,20 @@
 'use client';
 
-import { Fragment } from 'react';
-import { RiCheckLine, RiCloseLine, RiLoader4Line } from '@remixicon/react';
+import { Fragment, useState } from 'react';
+import {
+  RiCheckLine,
+  RiCloseLine,
+  RiFullscreenExitLine,
+  RiFullscreenLine,
+  RiLoader4Line,
+} from '@remixicon/react';
 import type { Agent, WorkflowStep } from '@/lib/data/agents';
+import type { FlowGraph, FlowNodeStatus } from '@/lib/data/flows';
 import type { LiveRunStatus, LiveStepState, LiveStepStatus } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
+import { AgentFlowGraph } from './agent-flow-graph';
+import { WorkflowDetail } from './agent-side-panel';
+import { LiveStepList } from './live-side-panel';
 
 interface AgentProgressProps {
   agent: Agent;
@@ -16,26 +26,83 @@ interface AgentProgressProps {
 }
 
 /**
- * 상단 단계 진행 — 컴팩트한 스텝퍼(+ 라이브 진행률)만. 헤딩·설명·태그 등 부가요소는 제거.
+ * 상단 단계 진행 — 기본은 컴팩트 1줄 스텝퍼(+ 라이브 진행률), 우측 "펼치기"로 상세 뷰 전환.
  * - 미실행: 이 에이전트의 단계 목록(`agent.steps`)을 중립으로 항상 노출(무슨 단계를 하는지).
- * - 라이브: `run.steps` 로 진행/완료/실패를 오버레이 + 진행률.
+ *   펼치면 각 단계의 상태·설명·하위단계까지 세로 타임라인으로.
+ * - 라이브: `run.steps` 로 진행/완료/실패를 오버레이 + 진행률. 펼치면 단계별 타이밍 타임라인.
  */
 export function AgentProgress({ agent, isLive, status, steps }: AgentProgressProps) {
+  const [expanded, setExpanded] = useState(false);
   const done = steps.filter((s) => s.status === 'done').length;
   const progress = steps.length === 0 ? 0 : Math.round((done / steps.length) * 100);
 
   return (
-    <section className="border-border bg-surface flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-lg)] border px-4 py-3 shadow-[var(--shadow-card)]">
-      <div className="min-w-0 flex-1">
-        {isLive ? (
-          <LiveStepper steps={steps} status={status} />
-        ) : (
-          <PlanStepper steps={agent.steps} />
-        )}
+    <section className="border-border bg-surface flex flex-col gap-3 rounded-[var(--radius-lg)] border px-4 py-3 shadow-[var(--shadow-card)]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1">
+          {isLive ? (
+            <LiveStepper steps={steps} status={status} />
+          ) : (
+            <PlanStepper steps={agent.steps} />
+          )}
+        </div>
+        {isLive ? <ProgressMeter progress={progress} status={status} /> : null}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] border px-2.5 py-1 text-[length:var(--text-body-sm)] font-medium transition-colors"
+        >
+          {expanded ? (
+            <RiFullscreenExitLine size={14} aria-hidden />
+          ) : (
+            <RiFullscreenLine size={14} aria-hidden />
+          )}
+          {expanded ? '접기' : '펼치기'}
+        </button>
       </div>
-      {isLive ? <ProgressMeter progress={progress} status={status} /> : null}
+
+      {expanded ? (
+        <div className="border-border border-t pt-3">
+          {agent.flowGraph ? (
+            // flowGraph 가 있으면 React Flow 그래프(노드·엣지·브랜치). 라이브면 run.steps 상태를
+            // 노드에 오버레이(title 매칭), 미실행이면 중립 그래프 그대로.
+            <AgentFlowGraph
+              graph={isLive ? overlayFlow(agent.flowGraph, steps) : agent.flowGraph}
+            />
+          ) : (
+            // 없으면 상세 세로 타임라인으로 폴백(라이브=run.steps, 미실행=agent.steps).
+            <div className="max-h-[42vh] overflow-y-auto">
+              {isLive ? (
+                <LiveStepList steps={steps} status={status} />
+              ) : (
+                <WorkflowDetail steps={agent.steps} />
+              )}
+            </div>
+          )}
+        </div>
+      ) : null}
     </section>
   );
+}
+
+/**
+ * 라이브 run.steps 상태를 그래프 노드에 오버레이한다(노드 title ↔ 단계명 매칭).
+ * 매칭되는 단계가 없으면 노드는 그대로(pending) — 즉, 최소한 그래프 구조는 항상 표시된다.
+ */
+function overlayFlow(graph: FlowGraph, steps: readonly LiveStepState[]): FlowGraph {
+  if (steps.length === 0) return graph;
+  const byTitle = new Map(steps.map((s) => [s.step, s.status]));
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) => {
+      const st = byTitle.get(n.title);
+      if (!st) return n;
+      const status: FlowNodeStatus =
+        st === 'running' ? 'active' : st === 'failed' ? 'error' : 'done';
+      return { ...n, status };
+    }),
+  };
 }
 
 function ProgressMeter({ progress, status }: { progress: number; status: LiveRunStatus }) {
@@ -108,7 +175,13 @@ const LABEL_TONE: Record<LiveStepStatus, string> = {
   failed: 'text-danger font-semibold',
 };
 
-function LiveStepper({ steps, status }: { steps: readonly LiveStepState[]; status: LiveRunStatus }) {
+function LiveStepper({
+  steps,
+  status,
+}: {
+  steps: readonly LiveStepState[];
+  status: LiveRunStatus;
+}) {
   if (steps.length === 0) {
     return (
       <span className="text-foreground-secondary flex items-center gap-2 text-[length:var(--text-body-sm)]">
