@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import CamelModel
 
@@ -12,6 +12,22 @@ from app.schemas.common import CamelModel
 class LoginBody(BaseModel):
     userid: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=200)
+
+
+class SignupBody(BaseModel):
+    """POST /auth/signup — 로그인이 signupRequired 를 반환한 뒤 프론트가 제출.
+
+    프론트는 camelCase 로 보낸다(signupToken/displayName/agreedTerms).
+    displayName/department 는 로그인 프리필 값(사용자 수정 가능), email 은 필수 입력.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    signup_token: str = Field(min_length=1, alias="signupToken")
+    display_name: str = Field(min_length=1, max_length=255, alias="displayName")
+    department: str | None = Field(default=None, max_length=255)
+    email: str = Field(min_length=1, max_length=320)
+    agreed_terms: bool = Field(alias="agreedTerms")
 
 
 class AuthMe(CamelModel):

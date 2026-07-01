@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { RiUserAddLine, RiErrorWarningLine } from '@remixicon/react';
+import { RiErrorWarningLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
@@ -15,7 +15,6 @@ import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { MEMBER_ROLE_LABEL, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { MembersTable } from './members-table';
-import { InviteDialog, type InviteInput } from './invite-dialog';
 
 /** 멤버 변경 권한 묶음 — 테이블이 어떤 어포던스를 노출할지 결정한다. */
 export interface MemberCaps {
@@ -52,7 +51,6 @@ export function MembersClient() {
 
   const { status, data, error, reload } = useApiResource<WorkspaceMember[]>('/users');
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
-  const [inviteOpen, setInviteOpen] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<WorkspaceMember | null>(null);
 
   // 서버 스냅샷이 도착/갱신되면 편집 가능한 로컬 상태로 동기화한다.
@@ -106,28 +104,10 @@ export function MembersClient() {
     }
   }
 
-  // 옴니솔 최초 로그인 시 사용자가 자동 등록되므로 별도 초대 API는 없다.
-  // 초대 어포던스는 권한 게이팅만 유지하고, 제출은 안내 토스트로 처리한다(플레이스홀더).
-  function handleInvite({ email }: InviteInput) {
-    toast.message('초대 안내', {
-      description: `${email} 사용자는 옴니솔 계정으로 최초 로그인하면 자동으로 등록됩니다.`,
-    });
-  }
-
+  // 사용자 생성은 옴니솔 최초 로그인 → 회원가입 플로우가 담당한다(별도 초대 없음).
   return (
     <div className="animate-page-enter flex flex-col gap-8">
-      <PageHeader
-        title="멤버"
-        description="조직의 전역 사용자와 역할을 관리합니다."
-        action={
-          caps.canWrite ? (
-            <Button variant="primary" onClick={() => setInviteOpen(true)}>
-              <RiUserAddLine size={16} aria-hidden />
-              멤버 초대
-            </Button>
-          ) : undefined
-        }
-      />
+      <PageHeader title="멤버" description="조직의 전역 사용자와 역할을 관리합니다." />
 
       {status === 'loading' ? (
         <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
@@ -153,15 +133,8 @@ export function MembersClient() {
           onRoleChange={handleRoleChange}
           onToggleStatus={handleToggleStatus}
           onRequestRemove={setPendingRemoval}
-          onInviteClick={() => setInviteOpen(true)}
         />
       )}
-
-      <InviteDialog
-        open={inviteOpen}
-        onClose={() => setInviteOpen(false)}
-        onInvite={handleInvite}
-      />
 
       {pendingRemoval ? (
         <ConfirmDialog

@@ -23,6 +23,7 @@ from app.erp.credcache import CredCache
 from app.models import Base
 from app.routers import agents, auth, logs, users
 from app.services.seed import seed_all
+from app.services.signup_cache import SignupCache
 
 logger = logging.getLogger("app.main")
 
@@ -49,9 +50,11 @@ def create_app() -> FastAPI:
         app.state.erp_browser = await pw.chromium.launch(headless=True)
         app.state.erp_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_logins)
 
-        # --- 자격증명 캐시 + 주기 reaper ---
+        # --- 자격증명 캐시 + 회원가입 대기 캐시 + 주기 reaper ---
         app.state.cred_cache = CredCache()
-        reaper = asyncio.create_task(app.state.cred_cache.reaper())
+        app.state.signup_cache = SignupCache()
+        cred_reaper = asyncio.create_task(app.state.cred_cache.reaper())
+        signup_reaper = asyncio.create_task(app.state.signup_cache.reaper())
 
         if not settings.cookie_secure:
             logger.warning(
@@ -62,7 +65,8 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
-            reaper.cancel()
+            cred_reaper.cancel()
+            signup_reaper.cancel()
             try:
                 await app.state.erp_browser.close()
             finally:

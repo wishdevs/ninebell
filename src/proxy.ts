@@ -10,7 +10,8 @@ import { NextResponse, type NextRequest } from 'next/server';
  * 실제 경로(`/login` 등)로 공개 여부를 판단한다.
  */
 
-const PUBLIC_PATHS = ['/login'];
+// `/signup`은 세션 이전 단계(로그인 응답으로 받은 signupToken이 인증 수단)라 공개.
+const PUBLIC_PATHS = ['/login', '/signup'];
 
 export function proxy(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;

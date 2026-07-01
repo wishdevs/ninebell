@@ -9,12 +9,29 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, api } from '@/lib/api/client';
 
+/** 회원가입 유도 시 sessionStorage에 넘길 pending 정보 키. */
+const SIGNUP_STORAGE_KEY = 'nb_signup';
+
+/**
+ * `POST /auth/login` 응답 계약.
+ * - 기존 유저/로컬 계정: 세션 발급 후 `{ ok: true }`.
+ * - 옴니솔 첫 접속(유저 없음): 세션 미발급, 회원가입 유도 `{ signupRequired, signupToken, prefill }`.
+ */
+type LoginResponse =
+  | { ok: true }
+  | {
+      signupRequired: true;
+      signupToken: string;
+      prefill: { displayName: string; department: string | null };
+    };
+
 /**
  * 옴니솔(더존 ERP) 자격증명 로그인 폼.
  *
  * 옴니솔이 사실상 IdP라 이메일이 아닌 **옴니솔 아이디 + 비밀번호**로 인증한다.
- * `POST /auth/login`이 헤드리스로 ERP를 검증한 뒤 httpOnly 세션 쿠키를 발급하면
- * 홈으로 이동한다. 자격증명 오류(401)는 인라인 메시지로 노출한다.
+ * `POST /auth/login`이 자격증명을 검증한 뒤 응답을 분기한다: 세션이 발급되면
+ * 홈으로, 첫 접속이면 prefill을 저장하고 회원가입으로 유도한다. 자격증명
+ * 오류(401)는 인라인 메시지로 노출한다.
  */
 export function LoginForm() {
   const router = useRouter();
@@ -29,7 +46,20 @@ export function LoginForm() {
     setError(null);
     setSubmitting(true);
     try {
-      await api.post('/auth/login', { userid, password });
+      const res = await api.post<LoginResponse>('/auth/login', { userid, password });
+      if ('signupRequired' in res && res.signupRequired) {
+        // 첫 접속 — 세션 미발급. prefill+토큰을 넘겨 회원가입 단계로 유도한다.
+        sessionStorage.setItem(
+          SIGNUP_STORAGE_KEY,
+          JSON.stringify({
+            signupToken: res.signupToken,
+            displayName: res.prefill.displayName,
+            department: res.prefill.department,
+          }),
+        );
+        router.push('/signup');
+        return;
+      }
       // 세션 쿠키 발급 완료 → 보호 라우트로. refresh로 미들웨어가 쿠키를 재평가하게 한다.
       router.replace('/');
       router.refresh();

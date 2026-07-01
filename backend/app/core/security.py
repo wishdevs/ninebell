@@ -2,7 +2,8 @@
 
 DB 의존성이 없어 단위 테스트가 쉽다(ax `core/security.py` 구조 이식, PyJWT 로 교체).
 세션 토큰은 httpOnly 쿠키로 운반되며 claim: sub(user.id), jti, iat, exp, type='session'.
-비밀번호 해싱은 두지 않는다 — 인증 권위는 더존 옴니솔(헤드리스 검증)이고 로컬 비번 저장 금지.
+옴니솔 계정은 비밀번호를 DB 에 저장하지 않는다(인증 권위는 헤드리스 검증).
+단, 로컬 계정(시스템 관리자 등)만 bcrypt 해시를 저장/검증한다(hash_password/verify_password).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import bcrypt
 import jwt
 
 from app.config import get_settings
@@ -51,3 +53,16 @@ def decode_session_token(token: str) -> dict[str, Any]:
     if payload.get("type") != _TOKEN_TYPE:
         raise InvalidTokenError("not a session token")
     return payload
+
+
+def hash_password(password: str) -> str:
+    """로컬 계정 비밀번호를 bcrypt 로 해싱해 문자열로 반환."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """평문 비밀번호를 bcrypt 해시와 대조. 해시가 손상돼도 예외 없이 False."""
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False

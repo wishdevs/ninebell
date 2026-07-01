@@ -15,7 +15,9 @@ import {
   RiCloseLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
-import { NAV_GROUPS, type NavIconKey } from '@/lib/data/nav';
+import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
+import { roleAtLeast } from '@/lib/auth/permissions';
+import { usePermissions } from '@/hooks/use-permissions';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from './mobile-nav-context';
 import { SidebarSession } from './sidebar-session';
@@ -69,6 +71,15 @@ export function Sidebar() {
 }
 
 function SidebarInner({ pathname }: { pathname: string | null }) {
+  const { has, role } = usePermissions();
+
+  // 게이트 평가: permission이면 보유 여부, minRole이면 롤 계층, 없으면 전원 노출.
+  const isVisible = (item: NavItem): boolean => {
+    if (item.permission) return has(item.permission);
+    if (item.minRole) return roleAtLeast(role, item.minRole);
+    return true;
+  };
+
   return (
     <>
       <div className="border-border-subtle shrink-0 border-b px-5 py-5">
@@ -85,36 +96,41 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
       </div>
       <div className="flex-1 overflow-x-hidden overflow-y-auto">
         <nav className="flex flex-col gap-4 px-4 pt-4 pb-6">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.label ?? '__home'} className="flex flex-col gap-0.5">
-              {group.label ? (
-                <p className="text-foreground-tertiary mt-4 mb-1.5 px-3 text-[10px] font-semibold tracking-widest uppercase">
-                  {group.label}
-                </p>
-              ) : null}
-              {group.items.map(({ href, label, icon, exact }) => {
-                const Icon = ICONS[icon];
-                const active = exact
-                  ? pathname === href
-                  : pathname === href || (href !== '/' && pathname?.startsWith(`${href}/`));
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    className={cn(
-                      'relative flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2.5 text-[length:var(--text-body)] transition-all duration-[var(--duration-fast)]',
-                      active
-                        ? 'bg-surface text-foreground ring-border/50 font-semibold shadow-sm ring-1'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
-                    )}
-                  >
-                    <Icon size={18} aria-hidden />
-                    {label}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
+          {NAV_GROUPS.map((group) => {
+            const visibleItems = group.items.filter(isVisible);
+            // 그룹 내 표시 항목이 0개면 헤더까지 통째로 숨긴다.
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={group.label ?? '__home'} className="flex flex-col gap-0.5">
+                {group.label ? (
+                  <p className="text-foreground-tertiary mt-4 mb-1.5 px-3 text-[10px] font-semibold tracking-widest uppercase">
+                    {group.label}
+                  </p>
+                ) : null}
+                {visibleItems.map(({ href, label, icon, exact }) => {
+                  const Icon = ICONS[icon];
+                  const active = exact
+                    ? pathname === href
+                    : pathname === href || (href !== '/' && pathname?.startsWith(`${href}/`));
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      className={cn(
+                        'relative flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2.5 text-[length:var(--text-body)] transition-all duration-[var(--duration-fast)]',
+                        active
+                          ? 'bg-surface text-foreground ring-border/50 font-semibold shadow-sm ring-1'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
+                      )}
+                    >
+                      <Icon size={18} aria-hidden />
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
       </div>
       <div className="mt-auto">

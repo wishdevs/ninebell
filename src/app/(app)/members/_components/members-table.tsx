@@ -1,8 +1,7 @@
 'use client';
 
-import { RiCheckboxCircleLine, RiUserAddLine, RiGroupLine } from '@remixicon/react';
+import { RiCheckboxCircleLine, RiGroupLine } from '@remixicon/react';
 import { Avatar } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
@@ -33,8 +32,6 @@ interface MembersTableProps {
   onRoleChange: (member: WorkspaceMember, role: Role) => void;
   onToggleStatus: (member: WorkspaceMember) => void;
   onRequestRemove: (member: WorkspaceMember) => void;
-  /** 빈 상태에서 초대 다이얼로그를 여는 콜백. */
-  onInviteClick: () => void;
 }
 
 /** 모든 역할 옵션 — 인라인 역할 셀렉트에서 사용. */
@@ -61,7 +58,6 @@ export function MembersTable({
   onRoleChange,
   onToggleStatus,
   onRequestRemove,
-  onInviteClick,
 }: MembersTableProps) {
   if (members.length === 0) {
     return (
@@ -69,14 +65,6 @@ export function MembersTable({
         icon={<RiGroupLine size={18} aria-hidden />}
         title="멤버가 없습니다"
         description="아직 등록된 사용자가 없습니다. 옴니솔 계정으로 로그인하면 사용자가 등록됩니다."
-        action={
-          caps.canWrite ? (
-            <Button variant="primary" size="sm" onClick={onInviteClick}>
-              <RiUserAddLine size={16} aria-hidden />
-              멤버 초대
-            </Button>
-          ) : undefined
-        }
       />
     );
   }
