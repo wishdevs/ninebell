@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   RiBugLine,
   RiArrowLeftSLine,
@@ -15,11 +15,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
+import { AgentRunsPanel } from './agent-runs-panel';
 import { AgentSidePanel } from './agent-side-panel';
 import { AgentWorkflow } from './agent-workflow';
 import { BrowserStage } from './browser-stage';
 import { LiveBrowserStage } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
+import { SaveTemplateButton } from './save-template-button';
 import { SessionTimer } from './session-timer';
 
 /** 디버그 단계 이동 바 노출 여부. 필요할 때 true로. */
@@ -96,7 +98,13 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const defaultWorkflow = useMemo(() => resolveWorkflow(agent.id), [agent.id]);
   // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
   // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
-  const [session, setSession] = useState<{ workflowId: string; runId: string; enabled: boolean }>({
+  const [session, setSession] = useState<{
+    workflowId: string;
+    runId: string;
+    enabled: boolean;
+    /** 지정되면 이 런은 템플릿 AUTO 재생(대화 없이 저장된 selections 적용). */
+    templateId?: string;
+  }>({
     workflowId: defaultWorkflow,
     runId: '',
     enabled: false,
@@ -104,12 +112,24 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const run = useLiveRun(session.workflowId, {
     runId: session.enabled ? session.runId : undefined,
     enabled: session.enabled,
+    templateId: session.enabled ? session.templateId : undefined,
   });
-  const startRun = (workflowId: string) =>
-    setSession({ workflowId, runId: newRunId(), enabled: true });
+  const startRun = (workflowId: string, templateId?: string) =>
+    setSession({ workflowId, runId: newRunId(), enabled: true, templateId });
   const stopRun = () => setSession((s) => ({ ...s, enabled: false }));
   const isLive = session.enabled;
   const terminal = run.status === 'succeeded' || run.status === 'failed';
+
+  // 이력·템플릿 새로고침 트리거 — 런이 끝나거나 템플릿을 저장하면 올려서 재조회한다.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bumpRefresh = () => setRefreshKey((k) => k + 1);
+  useEffect(() => {
+    if (terminal) setRefreshKey((k) => k + 1);
+  }, [terminal]);
+
+  // 대화형 런이 성공적으로 끝났을 때만 '템플릿으로 저장'을 노출(재생/데모는 selections 없음).
+  const canSaveTemplate =
+    isLive && run.status === 'succeeded' && !session.templateId && !!run.runId;
 
   return (
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
@@ -175,8 +195,31 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         ) : (
           <BrowserStage agent={view} />
         )}
-        {isLive ? <LiveSidePanel run={run} /> : <AgentSidePanel agent={view} />}
+        {isLive ? (
+          <LiveSidePanel
+            run={run}
+            resultAction={
+              canSaveTemplate && run.runId ? (
+                <SaveTemplateButton
+                  runId={run.runId}
+                  agentId={defaultWorkflow}
+                  onSaved={bumpRefresh}
+                />
+              ) : undefined
+            }
+          />
+        ) : (
+          <AgentSidePanel agent={view} />
+        )}
       </div>
+
+      {/* 실행 이력 · 템플릿 — 라이브 실행과 공존하는 하단 영역. */}
+      <AgentRunsPanel
+        agentId={defaultWorkflow}
+        refreshKey={refreshKey}
+        onReplay={(templateId) => startRun(defaultWorkflow, templateId)}
+        replayDisabled={isLive && !terminal}
+      />
     </div>
   );
 }

@@ -9,7 +9,16 @@
 import type { PermissionCode, Role } from '@/lib/auth/permissions';
 
 export type NavIconKey =
-  'home' | 'agents' | 'works' | 'analytics' | 'projects' | 'members' | 'settings' | 'design';
+  | 'home'
+  | 'agents'
+  | 'works'
+  | 'analytics'
+  | 'projects'
+  | 'members'
+  | 'settings'
+  | 'design'
+  | 'audit'
+  | 'logging';
 
 export interface NavItem {
   href: string;
@@ -42,7 +51,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members', permission: 'users:read' },
-      { href: '/logs', label: '로깅', icon: 'analytics', permission: 'logs:read' },
+      // 감사 = 사용자 접속/행동 감시(로그인 access_logs). 로깅 = 에이전트 사용 내역(runs).
+      { href: '/audit', label: '감사', icon: 'audit', permission: 'logs:read' },
+      { href: '/logs', label: '로깅', icon: 'logging', permission: 'logs:read' },
     ],
   },
   {

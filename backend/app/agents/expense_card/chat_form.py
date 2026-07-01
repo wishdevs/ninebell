@@ -33,7 +33,7 @@ from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_tran
 from app.live.hitl import _hitl_owner, _hitl_queues
 from nbkit.patterns import emit_shot
 
-from .domain import remark_for
+from .domain import remark_for, use_item_from_remark
 from .gemini import gemini_chat_decide
 from .tools import (
     SCAFFOLD_DROPDOWN_FIELDS,
@@ -173,6 +173,110 @@ async def _wait_modal_idle(page: Any, timeout_ms: int = 15000) -> bool:
     return False
 
 
+async def _auto_replay(events: asyncio.Queue, page: Any, template: list[dict]) -> dict:
+    """AUTO 재생(회수) — 저장된 selections 를 순서대로 그대로 적용한다(대화·Gemini 없음).
+
+    ninebell-bak `erp/graph.py` 의 chat_form AUTO 분기 이식(P3 가 YAGNI 로 미이식). 각 적용을
+    chat{note:"action"} + log 로 스트리밍하고, HITL/Gemini 는 열지 않는다. 예외는 잡아
+    다음 selection 으로 계속(노드가 죽지 않게). ⚠ 저장(F7)·상신 절대 금지 — 모달 '적용'까지만.
+
+    template 항목은 대화형이 누적한 구조: {"tool","field","value","query"?}.
+    set_expense 는 예산단위+계정(자동축소)+적요(규칙)를 한 번에 채운다(부분 템플릿 견고화).
+    """
+    chat_prefix = uuid.uuid4().hex
+    seq = 0
+
+    async def _say(content: str) -> None:
+        nonlocal seq
+        seq += 1
+        await emit_chat(
+            events,
+            chat_id=f"{chat_prefix}-{seq}",
+            role="assistant",
+            content=content,
+            streaming=False,
+            note="action",
+        )
+
+    await emit_log(events, "템플릿 자동 채움 시작(대화 없음, 적용까지만).", "info")
+    await emit_shot(events.put, page)
+
+    # 옛/불완전 템플릿 보정 — set_expense 가 없으면 적요에서 사용항목을 역추론해 맨 앞에 끼운다
+    # (예산단위·계정이 함께 채워지도록). 제/판은 set_expense 처리부에서 제조 기본 적용.
+    if not any((s.get("tool") or "") == "set_expense" for s in template):
+        for s in template:
+            if (s.get("tool") or "") == "fill_text" and (s.get("field") or "") == "적요":
+                ui = use_item_from_remark(s.get("value", ""))
+                if ui:
+                    template = [
+                        {"tool": "set_expense", "field": "예산단위", "value": ui, "query": ""},
+                        *template,
+                    ]
+                    await emit_log(
+                        events, f"[auto] 옛 템플릿 보정 — 적요에서 예산단위 '{ui}' 추론(자동 추가)", "info"
+                    )
+                break
+
+    applied: list[str] = []
+    for sel in template:
+        name = (sel.get("tool") or "").strip()
+        field = (sel.get("field") or "").strip()
+        value = (sel.get("value") or "").strip()
+        try:
+            if name == "fill_search":
+                action = await do_fill_search(page, field, (sel.get("query") or "").strip(), value)
+            elif name == "fill_dropdown":
+                action = await do_fill_dropdown(page, field, value)
+            elif name == "fill_text":
+                action = await do_fill_text(page, field, value)
+            elif name == "set_expense":
+                # 예산단위 + 계정(자동축소) + 적요(규칙)를 한 번에. value=사용항목, query=division.
+                division = (sel.get("query") or "").strip()
+                bstatus, bmsg = await do_budget(page, value, division)
+                if bstatus == "ambiguous" and not division:
+                    # 제/판 미지정(옛 템플릿) → 회수는 되물을 수 없으니 제조 기본으로 재시도.
+                    division = "제조"
+                    bstatus, bmsg = await do_budget(page, value, division)
+                    bmsg += " (제/판 미지정 → 제조 기본)"
+                if bstatus == "ok":
+                    astatus, _amsg = await do_account(page)
+                    remark = remark_for(value)
+                    rstatus = await do_fill_text(page, "적요", remark)
+                    action = (
+                        f"ok: 예산단위 {bmsg} / 계정 {'ok' if astatus == 'ok' else 'warn'} / "
+                        f"적요 '{remark}' {'ok' if rstatus.startswith('ok') else 'warn'}"
+                    )
+                else:
+                    action = bstatus + ": " + bmsg
+            elif name == "set_account":
+                # set_expense 가 이미 처리했으면 중복이나 무해(자동축소 1건 재선택).
+                astatus, amsg = await do_account(page)
+                action = ("ok: " if astatus == "ok" else "warn: ") + amsg
+            else:
+                action = f"skip: 알 수 없는 도구 '{name}'"
+        except Exception as exc:  # noqa: BLE001 — graceful(노드가 죽지 않게)
+            logger.warning("auto replay 예외: %s %s=%s", name, field, value, exc_info=True)
+            action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:60]}"
+        level = "ok" if action.startswith("ok") else "warn"
+        if action.startswith("ok"):
+            applied.append(f"{field}={value}")
+        await emit_log(events, f"[auto] {action}", level)
+        await _say(action)
+        await emit_shot(events.put, page)
+
+    summary = ", ".join(applied) if applied else "(적용된 필드 없음)"
+    await emit_log(events, f"템플릿 자동 채움 완료 — {summary} (저장 안 함)", "ok")
+    await emit_shot(events.put, page)
+    await emit_step(events, "chat_form", "done")
+    # 재생한 template(입력 selections)을 결과에 담아 회수 — 상세 inputs 에서 '무엇을 재생했는지'.
+    return {
+        "result": {
+            "summary": f"템플릿 자동 채움 완료: {summary} (적용까지만, 저장·상신 안 함)",
+            "selections": list(template),
+        }
+    }
+
+
 def make_chat_form_node(timeout_s: int = 600):
     """대화형 폼 채움 노드 팩토리. timeout_s = 사용자 입력 한 턴 대기 상한(초)."""
 
@@ -185,6 +289,12 @@ def make_chat_form_node(timeout_s: int = 600):
 
         # 카드 모달 로딩 오버레이가 걷힐 때까지 대기 → 로딩 화면 캡처/조작 방지.
         await _wait_modal_idle(page)
+
+        # AUTO 재생(회수): params["template"] 에 저장된 selections 가 있으면 대화(chat HITL·
+        # Gemini)를 건너뛰고 순서대로 그대로 적용한다. 없으면 아래 기존 대화형 경로 유지.
+        template = (state.get("params") or {}).get("template")
+        if template:
+            return await _auto_replay(events, page, template)
 
         settings = get_settings()
         if not settings.gemini_api_key:
@@ -207,8 +317,10 @@ def make_chat_form_node(timeout_s: int = 600):
         chat_prefix = uuid.uuid4().hex  # 이 노드 인스턴스의 채팅 id 접두(FE upsert 키 안정화).
         history = ""
         selections: list[dict] = []  # 성공한 fill 을 ChatSelection 으로 누적(필드별 최신값만).
+        messages: list[str] = []  # 사용자가 입력한 자연어 메시지 누적(실행 이력 inputs 용).
         seq = 0
         pending_budget: str | None = None  # set_expense 가 제/판 모호로 물어본 직전 사용항목.
+        gemini_errors = 0  # 이 세션에서 Gemini 판단 호출이 실패한 횟수(종료 상태 판정용).
 
         def _summary() -> str:
             return ", ".join(f"{s['field']}={s['value']}" for s in selections) or "채운 필드 없음"
@@ -300,16 +412,46 @@ def make_chat_form_node(timeout_s: int = 600):
                 # 종료는 사용자가 '선택 완료'(done)를 눌렀을 때만. 에이전트는 스스로 끝내지 않는다.
                 if msg.get("done"):
                     summary = _summary()
+                    # 채운 필드가 하나도 없으면 succeeded 로 두지 않는다 — 0필드/Gemini실패가 성공처럼
+                    # 보이는 오해 방지. 사유를 담아 failed(error)로 종료한다.
+                    if not selections:
+                        reason = (
+                            "Gemini 판단 호출이 반복 실패해 필드를 채우지 못했습니다"
+                            if gemini_errors
+                            else "채운 필드가 없습니다(0필드)"
+                        )
+                        await _say(f"완료했지만 채운 필드가 없습니다 — {reason}.", done=True)
+                        await emit_log(events, f"대화형 폼 종료(0필드) — {reason} (저장 안 함)", "warn")
+                        await emit_shot(events.put, page)
+                        await emit_step(events, "chat_form", "failed")
+                        return {
+                            "error": f"대화형 폼 종료 — {reason}. 채운 필드 없음(저장·상신 안 함).",
+                            "messages": list(messages),
+                            "gemini_errors": gemini_errors,
+                        }
                     await _say(f"선택을 완료했습니다 — {summary}", done=True)
                     await emit_log(events, f"대화형 폼 완료(사용자 '선택 완료') — {summary} (저장 안 함)", "ok")
                     await emit_shot(events.put, page)
                     await emit_step(events, "chat_form", "done")
-                    return {"result": f"대화형 폼 완료: {summary} (적용까지만, 저장·상신 안 함)"}
+                    # 결과에 구조화 selections/messages 를 담아 회수한다 — run.result(JSONVariant)로
+                    # 영속되어 프론트가 GET /runs/{id}(inputs) 나 라이브 result 프레임에서
+                    # '템플릿으로 저장'·이력 재구성에 쓴다.
+                    return {
+                        "result": {
+                            "summary": f"대화형 폼 완료: {summary} (적용까지만, 저장·상신 안 함)",
+                            "selections": list(selections),
+                            "messages": list(messages),
+                        }
+                    }
 
                 user_text = (msg.get("message") or "").strip()
                 if not user_text:
                     continue
                 history += f"사용자: {user_text}\n"
+                # 사용자 입력을 누적(inputs) + 로그로 남긴다 — 실행 이력에서 '무엇을 입력했는지'
+                # 재구성(실패해도 로그로 추적 가능).
+                messages.append(user_text)
+                await emit_log(events, f"사용자 입력: {user_text}", "info")
 
                 # 예산단위 제/판 모호로 물어본 상태면 '제조/판매' 답을 Gemini 없이 직접 처리.
                 if pending_budget:
@@ -343,6 +485,7 @@ def make_chat_form_node(timeout_s: int = 600):
                         )
                     except Exception:  # noqa: BLE001
                         logger.exception("chat gemini decide failed")
+                        gemini_errors += 1  # 종료 시 0필드면 사유(Gemini 실패)로 표시.
                         await _say("판단 호출에 실패했어요. 다시 한 번 말씀해 주세요.")
                         break
 

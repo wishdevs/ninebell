@@ -13,6 +13,8 @@ import {
   RiSettings3Line,
   RiUserSettingsLine,
   RiCloseLine,
+  RiShieldCheckLine,
+  RiFileList3Line,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
@@ -32,6 +34,8 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   members: RiUserSettingsLine,
   settings: RiSettings3Line,
   design: RiPaletteLine,
+  audit: RiShieldCheckLine,
+  logging: RiFileList3Line,
 };
 
 export function Sidebar() {

@@ -17,6 +17,8 @@ import { cn } from '@/lib/utils';
 
 interface LiveSidePanelProps {
   run: UseLiveRunReturn;
+  /** 결과 탭 하단에 덧붙일 액션(예: '템플릿으로 저장'). 종료·결과가 있을 때만 표시된다. */
+  resultAction?: React.ReactNode;
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
@@ -26,7 +28,7 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run }: LiveSidePanelProps) {
+export function LiveSidePanel({ run, resultAction }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -95,6 +97,9 @@ export function LiveSidePanel({ run }: LiveSidePanelProps) {
         {hasResult ? (
           <TabsContent value="result" className="min-h-0 flex-1 overflow-y-auto p-4">
             <LiveResult result={run.result} error={run.error} transactions={run.transactions} />
+            {resultAction ? (
+              <div className="border-border mt-4 border-t pt-4">{resultAction}</div>
+            ) : null}
           </TabsContent>
         ) : null}
       </Tabs>
@@ -196,7 +201,7 @@ const LOG_LABEL: Record<LiveLogLevel, string> = {
   error: 'ERR',
 };
 
-function LiveLogList({ logs }: { logs: readonly LiveLogLine[] }) {
+export function LiveLogList({ logs }: { logs: readonly LiveLogLine[] }) {
   if (logs.length === 0) {
     return (
       <p className="text-foreground-tertiary py-6 text-center text-[12px]">아직 로그가 없습니다.</p>
@@ -228,7 +233,7 @@ function LiveLogList({ logs }: { logs: readonly LiveLogLine[] }) {
 
 // ── 결과 ─────────────────────────────────────────────────────────────
 
-function LiveResult({
+export function LiveResult({
   result,
   error,
   transactions,

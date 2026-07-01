@@ -10,18 +10,21 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.core.deps import SESSION_COOKIE, CurrentUser
+from app.core.deps import SESSION_COOKIE, CurrentUser, user_has_permission
+from app.core.permissions import LOGS_READ
 from app.core.security import InvalidTokenError, decode_session_token
 from app.live import store
 from app.live.hitl import hitl_owner, resolve_hitl
 from app.live.registry import get_workflow
 from app.live.runner import run_workflow
-from app.live.session import create_session, get_session
+from app.live.session import cancel_session, create_session, get_session
+from app.models import AgentRun, AgentTemplate
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -55,6 +58,20 @@ class CollectRequest(BaseModel):
     cursor: int = Field(default=0, ge=0)
     # 워크플로우 파라미터(그래프 state["params"] 로 주입).
     params: dict | None = None
+    # AUTO 재생(회수): 저장된 템플릿 id. 있으면 그 selections 를 params["template"] 로 주입해
+    # expense_card chat_form 의 AUTO 경로(대화·Gemini 없이 순서대로 적용)를 태운다.
+    templateId: str | None = Field(default=None, max_length=40)
+
+
+class CancelRequest(BaseModel):
+    runId: str = Field(min_length=1, max_length=40)
+
+
+class TemplateCreate(BaseModel):
+    agentId: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    # 대화형 실행에서 누적한 ChatSelection[] — [{"tool","field","value","query"?}, ...].
+    selections: list[dict] = Field(default_factory=list)
 
 
 class HitlDecision(BaseModel):
@@ -142,12 +159,24 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser):
     # 세션 자격증명(비밀번호)을 CredCache(jti)에서 조회해 실 워크플로우(expense-card-chat)에
     # 주입한다. demo-echo 는 비밀번호를 쓰지 않으므로 None 이어도 무해하다.
     creds = {"userid": user.omnisol_userid, "password": _omnisol_password(request)}
-    params = body.params or {}
+    params = dict(body.params or {})
+
+    # AUTO 재생(회수): templateId 가 있으면 소유자·워크플로우를 검증하고 저장된 selections 를
+    # params["template"] 로 주입한다. chat_form 이 이를 보면 대화 없이 순서대로 적용한다.
+    if body.templateId:
+        tpl = await store.get_template(body.templateId)
+        if tpl is None or str(tpl.user_id) != owner:
+            return JSONResponse({"error": "템플릿을 찾을 수 없습니다."}, status_code=404)
+        if tpl.agent_id != body.agentId:
+            return JSONResponse(
+                {"error": "템플릿의 에이전트가 요청과 일치하지 않습니다."}, status_code=400
+            )
+        params["template"] = tpl.selections or []
 
     def producer():
         return run_workflow(factory(), browser_factory, creds, params, semaphore=semaphore)
 
-    async def on_terminal(status: str, note: str | None, logs: list) -> None:
+    async def on_terminal(status: str, note: object, logs: list) -> None:
         if tracked_run_id:
             await store.set_terminal(tracked_run_id, status, note, logs)
 
@@ -172,3 +201,203 @@ async def hitl(body: HitlDecision, user: CurrentUser):
         "done": body.done,
     }
     return {"ok": resolve_hitl(body.decisionId, payload)}
+
+
+# ── 즉시 종료(cancel) ──────────────────────────────────────────────────────
+@router.post("/cancel")
+async def cancel(body: CancelRequest, user: CurrentUser):
+    """실행을 즉시 종료(브라우저 반납) — 소유자 검증 후 세션 cancel. 멱등(세션 없어도 200)."""
+    owner = str(user.id)
+    run = await store.get_run(body.runId)
+    # 추적된 런이면 소유자만. 다른 사용자의 런은 존재를 숨긴다(404).
+    if run is not None and str(run.user_id) != owner:
+        return JSONResponse({"error": "런을 찾을 수 없습니다."}, status_code=404)
+    sess = get_session(body.runId)
+    if sess is not None and sess.owner and sess.owner != owner:
+        return JSONResponse({"error": "이 흐름에 대한 권한이 없습니다."}, status_code=403)
+
+    cancelled = await cancel_session(body.runId)
+    # 세션이 없지만(이미 정리됨) DB 가 아직 미완료면 직접 cancelled 로 확정한다(멱등).
+    if not cancelled and run is not None and run.status in ("running", "waiting"):
+        await store.set_terminal(
+            body.runId, "cancelled", "사용자가 실행을 종료했습니다.", run.logs or []
+        )
+    return {"ok": True, "status": "cancelled"}
+
+
+# ── 실행 이력(run history) — 직렬화 헬퍼(camelCase) ──────────────────────────
+def _result_summary(result: object) -> str | None:
+    """목록용 짧은 결과 요약. 구조 결과(dict — 대화형 selections)는 summary 우선."""
+    if result is None:
+        return None
+    if isinstance(result, str):
+        return result[:200]
+    if isinstance(result, dict) and result.get("summary"):
+        return str(result["summary"])[:200]
+    return json.dumps(result, ensure_ascii=False, default=str)[:200]
+
+
+# 단계 로그 마커(session._accumulate_log) → 상태. 구조 필드가 없는 옛 로그의 폴백 파싱용.
+_STEP_MARKS = {"▶": "running", "✓": "done", "✗": "failed"}
+
+
+def _step_of(line: dict) -> tuple[str, str] | None:
+    """로그 1줄에서 (step, status) 추출 — 구조 필드 우선, 없으면 '{mark} {step} ({status})' 파싱."""
+    step, status = line.get("step"), line.get("status")
+    if step and status:
+        return str(step), str(status)
+    msg = str(line.get("message", ""))
+    if msg and msg[0] in _STEP_MARKS:
+        rest = msg[1:].strip()
+        if rest.endswith(")") and " (" in rest:
+            name, sp = rest.rsplit(" (", 1)
+            return name.strip(), sp[:-1].strip()
+        return rest, _STEP_MARKS[msg[0]]
+    return None
+
+
+def _failed_step(logs: list | None) -> str | None:
+    """실패한 마지막 단계명(logs 에서 status='failed' 인 마지막 step). 없으면 None."""
+    for line in reversed(logs or []):
+        parsed = _step_of(line)
+        if parsed and parsed[1] == "failed":
+            return parsed[0]
+    return None
+
+
+def _run_steps(logs: list | None) -> list[dict]:
+    """단계별 진행(step+status+message+ts) — 어느 step 에서 실패했는지 재구성용."""
+    out: list[dict] = []
+    for line in logs or []:
+        parsed = _step_of(line)
+        if parsed:
+            out.append(
+                {
+                    "step": parsed[0],
+                    "status": parsed[1],
+                    "message": line.get("message"),
+                    "ts": line.get("ts"),
+                }
+            )
+    return out
+
+
+def _run_inputs(result: object) -> dict:
+    """상세용 inputs — 사용자가 입력한 값. 완료된 대화형/AUTO 는 result(dict)에 담긴
+    selections(+대화형 messages)를 회수한다. 실패/미완료(result=문자열)면 빈 목록."""
+    if isinstance(result, dict):
+        return {
+            "selections": result.get("selections") or [],
+            "messages": result.get("messages") or [],
+        }
+    return {"selections": [], "messages": []}
+
+
+def _display_name(r: AgentRun) -> str | None:
+    """실행자 표시명 — users.display_name(없으면 omnisol_userid 폴백)."""
+    u = getattr(r, "user", None)
+    if u is None:
+        return None
+    return u.display_name or u.omnisol_userid
+
+
+def _run_summary(r: AgentRun) -> dict:
+    return {
+        "id": r.id,
+        "agentId": r.agent_id,
+        "userId": str(r.user_id),  # 로깅 뷰(관리자 전체)에서 실행 주체 식별용(안정 키).
+        "userDisplayName": _display_name(r),  # 누가 실행했는지(users.display_name 조인).
+        "status": r.status,
+        "startedAt": r.started_at,
+        "finishedAt": r.finished_at,
+        "resultSummary": _result_summary(r.result),
+        # 실패한 실행이면 마지막 실패 단계명(아니면 null) — 목록에서 실패지점 한눈에.
+        "failedStep": _failed_step(r.logs) if r.status == "failed" else None,
+    }
+
+
+def _run_detail(r: AgentRun) -> dict:
+    return {
+        **_run_summary(r),
+        "result": r.result,
+        "inputs": _run_inputs(r.result),  # 무엇을 입력했는지(selections/messages)
+        "steps": _run_steps(r.logs),  # 어느 단계에서 실패했는지(step+status)
+        "logs": r.logs or [],
+    }
+
+
+def _template_dict(t: AgentTemplate) -> dict:
+    return {
+        "id": t.id,
+        "agentId": t.agent_id,
+        "name": t.name,
+        "selections": t.selections or [],
+        "createdAt": t.created_at,
+    }
+
+
+# ── 템플릿 CRUD(대화형 selections 저장·재생) ────────────────────────────────
+# ⚠ 라우트 순서: GET /runs/templates 는 GET /runs/{run_id} 보다 먼저 선언해야
+#   '/runs/templates' 가 {run_id} 로 잡히지 않는다(FastAPI 는 선언 순서로 매칭).
+@router.post("/templates")
+async def create_template(body: TemplateCreate, user: CurrentUser):
+    """대화형 실행에서 누적한 selections 를 이름 붙여 저장. 소유자=현재 유저."""
+    template_id = f"tpl-{uuid.uuid4().hex[:16]}"
+    tpl = await store.create_template(
+        template_id=template_id,
+        agent_id=body.agentId,
+        user_id=user.id,
+        name=body.name,
+        selections=body.selections,
+    )
+    return _template_dict(tpl)
+
+
+@router.get("/templates")
+async def list_templates(user: CurrentUser, agentId: str | None = None):
+    """현재 유저의 템플릿 목록(최신순). agentId 로 워크플로우 필터."""
+    tpls = await store.list_templates(user_id=user.id, agent_id=agentId)
+    return {"templates": [_template_dict(t) for t in tpls]}
+
+
+@router.delete("/templates/{template_id}")
+async def delete_template(template_id: str, user: CurrentUser):
+    """소유자 스코프 삭제. 대상이 없거나 소유자 불일치면 404."""
+    ok = await store.delete_template(template_id, user_id=user.id)
+    if not ok:
+        return JSONResponse({"error": "템플릿을 찾을 수 없습니다."}, status_code=404)
+    return {"ok": True}
+
+
+# ── 실행 이력(run history) 목록/상세 ────────────────────────────────────────
+@router.get("")
+async def list_runs(
+    user: CurrentUser,
+    agentId: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우 필터.
+
+    스코프: logs:read(관리자)는 전체 유저의 run 을, 그 외는 본인 것만 본다(감사와 달리
+    로깅은 관리자가 전체를 봐야 보완 가능)."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    # 관리자(logs:read)는 전체 조회(user_id=None), 일반 사용자는 소유 스코프.
+    scope_user_id = None if user_has_permission(user, LOGS_READ) else user.id
+    runs = await store.list_runs(
+        user_id=scope_user_id, agent_id=agentId, limit=limit, offset=offset
+    )
+    return {"runs": [_run_summary(r) for r in runs]}
+
+
+@router.get("/{run_id}")
+async def get_run_detail(run_id: str, user: CurrentUser):
+    """실행 상세(결과·inputs·steps·로그). 소유자 또는 logs:read 관리자만(로깅 뷰 일관성).
+    그 외 사용자의 런은 404."""
+    run = await store.get_run(run_id)
+    if run is None:
+        return JSONResponse({"error": "런을 찾을 수 없습니다."}, status_code=404)
+    if str(run.user_id) != str(user.id) and not user_has_permission(user, LOGS_READ):
+        return JSONResponse({"error": "런을 찾을 수 없습니다."}, status_code=404)
+    return _run_detail(run)

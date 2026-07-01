@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Uuid, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONVariant
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 class AgentRun(Base):
@@ -40,6 +44,9 @@ class AgentRun(Base):
     result: Mapped[dict | list | str | None] = mapped_column(JSONVariant, nullable=True)
     # 런 로그 라인 배열([{ts,level,message}, ...]).
     logs: Mapped[list | None] = mapped_column(JSONVariant, nullable=True, default=list)
+
+    # 실행자(요약의 userDisplayName 조인용). 단방향·eager — 로깅 뷰에서 누가 실행했는지.
+    user: Mapped[User] = relationship("User", lazy="selectin")
 
     def __repr__(self) -> str:
         return f"<AgentRun id={self.id} status={self.status}>"

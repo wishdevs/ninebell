@@ -97,7 +97,11 @@ class LiveSession:
                 if "error" in ev:
                     self._final_status, self._final_note = "failed", str(ev["error"])[:500]
                 elif "result" in ev:
-                    self._final_status, self._final_note = "succeeded", str(ev["result"])[:500]
+                    res = ev["result"]
+                    # 구조(dict/list) 결과는 그대로 보존(대화형 selections 를 run.result 로 회수).
+                    # 문자열 결과만 안전 상한.
+                    self._final_status = "succeeded"
+                    self._final_note = res if not isinstance(res, str) else res[:500]
                 await self._push(ev)
         except asyncio.CancelledError:
             raise  # 리퍼/종료에 의한 취소 → finally 에서 agen.aclose()
@@ -131,6 +135,19 @@ class LiveSession:
             except Exception:
                 logger.debug("pump 종료 예외 무시: %s", self.key, exc_info=True)
 
+    async def cancel(self) -> None:
+        """사용자 요청 즉시 종료 — 'cancelled' 로 확정하고 세션을 정리(브라우저 즉시 반납).
+
+        close()(리퍼/셧다운)와 달리 최종 상태를 'cancelled' 로 고정한 뒤 펌프를 취소한다.
+        펌프의 finally 가 agen.aclose(러너·스크린캐스트 취소 + 브라우저 close) 후
+        on_terminal(status='cancelled') 로 agent_runs 를 확정한다. 이미 종료된 세션은
+        멱등(추가 작업 없음)."""
+        if self.terminal:
+            return
+        self._final_status = "cancelled"
+        self._final_note = "사용자가 실행을 종료했습니다."
+        await self.close()
+
     # ── 이벤트 누적/전달 ──────────────────────────────────────────────────
     async def _push(self, ev: dict) -> None:
         async with self._cond:
@@ -163,6 +180,9 @@ class LiveSession:
                     "ts": int(time.time() * 1000),
                     "level": lvl,
                     "message": f"{mark} {ev['step']} ({ev['status']})",
+                    # 구조 필드도 함께 남긴다 — 실행 이력 상세가 step/실패지점을 견고하게 파싱.
+                    "step": ev["step"],
+                    "status": ev["status"],
                 }
             )
 
@@ -226,6 +246,22 @@ def create_session(
     _SESSIONS[sess_key] = sess
     sess.start()
     return sess
+
+
+async def cancel_session(key: str | None) -> bool:
+    """키로 세션을 찾아 즉시 cancel(브라우저 반납)하고 레지스트리에서 제거한다.
+
+    세션이 없으면 False(멱등 — 호출자가 200 처리). 있으면 cancel 후 True.
+    리퍼 grace 를 기다리지 않고 즉시 정리하므로 화면 이탈 시 큐가 바로 반납된다.
+    """
+    sess = _SESSIONS.get(key) if key else None
+    if sess is None:
+        return False
+    try:
+        await sess.cancel()
+    finally:
+        _SESSIONS.pop(key, None)
+    return True
 
 
 async def _reap_once(now: float | None = None) -> None:

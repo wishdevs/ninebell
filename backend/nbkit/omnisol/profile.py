@@ -20,11 +20,21 @@ async def read_profile(page: Any) -> dict:
 
     우상단 아바타를 눌러 사용자 패널을 연 뒤(부서/사용자유형 노출) best-effort 로 긁는다.
     패널을 못 열거나 셀렉터가 바뀌어도 빈 값으로 진행한다.
+
+    JS `.click()` 은 Kendo 열기 핸들러를 못 깨워 패널이 안 열리는 경우가 있어(= 부서 빈값의
+    원인), ninebell-bak `erp/graph.py:_open_user_panel` 처럼 실제 page.click 을 먼저 시도하고
+    실패 시에만 JS 로 폴백한다.
     """
     try:
-        await page.evaluate(js_lib.AVATAR_CLICK_JS)
-        await page.wait_for_timeout(1_200)
-    except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
+        await page.click("img[src*=profile_circle]", timeout=4_000)
+    except Exception:  # noqa: BLE001 — 실제 클릭 실패 시 JS 폴백
+        try:
+            await page.evaluate(js_lib.AVATAR_CLICK_JS)
+        except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
+            pass
+    try:
+        await page.wait_for_timeout(1_500)
+    except Exception:  # noqa: BLE001
         pass
     raw = await safe_evaluate(page, js_lib.PROFILE_JS, default={})
     if not raw:

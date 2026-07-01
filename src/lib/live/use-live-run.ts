@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { cancelRun } from './runs-api';
 import type {
   ChatMessage,
   HitlPayload,
@@ -192,6 +193,12 @@ export interface UseLiveRunOptions {
   enabled?: boolean;
   /** 워크플로우 파라미터(그래프 state.params 로 주입). */
   params?: Record<string, unknown>;
+  /**
+   * 템플릿 재생(회수) — 지정하면 `/runs/collect` 에 templateId 를 실어 AUTO 재생을
+   * 시작한다(대화 없이 저장된 selections 를 순서대로 적용). 새 흐름이므로 재생 시작마다
+   * 새 runId 와 함께 넘긴다.
+   */
+  templateId?: string;
 }
 
 type Outcome = 'terminal' | 'dropped' | 'gone' | 'fatal' | 'aborted';
@@ -202,21 +209,36 @@ type Outcome = 'terminal' | 'dropped' | 'gone' | 'fatal' | 'aborted';
  * fetch 를 abort 해 스트림을 놓는다(브라우저 큐 슬롯 반납 신호).
  */
 export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): UseLiveRunReturn {
-  const { runId: runIdProp, enabled = false, params } = options;
+  const { runId: runIdProp, enabled = false, params, templateId } = options;
   const [state, dispatch] = useReducer(reducer, initialState);
 
   // 콜백이 항상 현재 runId 를 읽도록 ref 로 보관(콜백은 안정적으로 유지).
   const runIdRef = useRef<string | null>(null);
   const userSeqRef = useRef(0);
-  // params 는 매 렌더 새 참조일 수 있어 effect 재실행 트리거로 쓰지 않는다(ref 로 캡처).
+  // params/templateId 는 매 렌더 새 참조일 수 있어 effect 재실행 트리거로 쓰지 않는다(ref 로 캡처).
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const templateIdRef = useRef(templateId);
+  templateIdRef.current = templateId;
+  // 언마운트/종료 시 예약한 즉시-cancel(StrictMode 재마운트면 다음 setup 이 취소한다).
+  const pendingCancelRef = useRef<{ runId: string; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!enabled || !agentId) return;
 
     const runId = runIdProp ?? newRunId();
     runIdRef.current = runId;
+
+    // StrictMode 재마운트(같은 runId): 직전 cleanup 이 예약한 즉시-cancel 을 취소해 세션을
+    // 유지한다. runId 가 다르면(=다시 실행) 취소하지 않으므로 옛 세션 cancel 이 그대로 발사된다.
+    const pending = pendingCancelRef.current;
+    if (pending && pending.runId === runId) {
+      clearTimeout(pending.timer);
+      pendingCancelRef.current = null;
+    }
+
     dispatch({ type: 'start', runId });
 
     let aborted = false;
@@ -254,6 +276,7 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
             runId,
             agentId,
             cursor, // >0 이면 기존 세션 재부착(새 흐름 시작 안 함)
+            ...(templateIdRef.current ? { templateId: templateIdRef.current } : {}),
             ...(paramsRef.current ? { params: paramsRef.current } : {}),
           }),
         });
@@ -303,6 +326,13 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
       return terminal ? 'terminal' : aborted ? 'aborted' : 'dropped';
     };
 
+    // 탭 종료/새로고침(pagehide)에도 진행 중 세션을 반납한다 — 리액트 cleanup 이 못 도는
+    // 실 언로드 경로를 keepalive fetch 로 보완한다(SPA 이탈은 아래 cleanup 이 담당).
+    const onPageHide = (): void => {
+      if (!terminal) cancelRun(runId);
+    };
+    if (typeof window !== 'undefined') window.addEventListener('pagehide', onPageHide);
+
     void (async () => {
       let attempt = 0;
       for (;;) {
@@ -331,6 +361,17 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
       controller?.abort();
       runIdRef.current = null;
       dispatch({ type: 'detach' });
+      if (typeof window !== 'undefined') window.removeEventListener('pagehide', onPageHide);
+      // 즉시 큐 반납 — 진행 중 세션이면 cancel 을 예약한다. setTimeout(0) 으로 한 틱 미뤄
+      // StrictMode 재마운트(setup 이 예약을 취소)와 실제 종료/이탈을 구분한다. 이미 종료된
+      // 런은 세션이 없으니 굳이 보내지 않는다(백엔드도 멱등이라 보내도 무해).
+      if (!terminal) {
+        const timer = setTimeout(() => {
+          pendingCancelRef.current = null;
+          cancelRun(runId);
+        }, 0);
+        pendingCancelRef.current = { runId, timer };
+      }
     };
   }, [enabled, agentId, runIdProp]);
 

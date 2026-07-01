@@ -1,8 +1,15 @@
-"""더존 기본정보(이름·부서) best-effort 추출 (ninebell-bak `auth/profile.py` 이식).
+"""더존 기본정보(이름·부서) best-effort 추출 (ninebell-bak 이식).
 
 ★ 셀렉터는 더존 UI 변경 시 깨질 수 있다. 추출 실패해도 예외를 던지지 않고 빈 값으로 반환한다
   — 로그인/계정 생성은 userid(권위)로 가능해야 하기 때문. email 은 옴니솔 프로필에서
   안정적으로 얻기 어려워 현재 항상 None(향후 셀렉터 확보 시 채움).
+
+부서(department)는 로그인 직후 화면엔 없다. **우상단 아바타를 눌러야 뜨는 사용자 패널**에
+회계/인사 사용자유형 select 가 있고, **그 바로 아래에 부서**가 표시된다. 따라서
+(1) 아바타를 실제 마우스 클릭으로 눌러 패널을 연 뒤(부서 노출), (2) 사용자유형 정보 근처
+(패널)에서 부서 토큰을 읽는다. JS `.click()` 은 Kendo 열기 핸들러를 못 깨워 패널이 안 열리는
+경우가 있어(= 부서 빈값의 원인), ninebell-bak `erp/graph.py:_open_user_panel` 의 검증된
+'실제 클릭 우선 + JS 폴백' 패턴을 그대로 쓴다.
 """
 
 from __future__ import annotations
@@ -11,17 +18,38 @@ import logging
 
 logger = logging.getLogger("app.erp.profile")
 
-# 우상단 아바타 클릭 → 사용자 패널 열기(부서 노출).
+# 우상단 아바타 클릭(JS 폴백) — 실제 page.click 이 실패할 때만 사용.
 _AVATAR_CLICK_JS = (
     "() => { const a = document.querySelector('img[src*=profile_circle]') "
     "|| [...document.querySelectorAll('header img, img[alt]')].pop(); if (a) a.click(); }"
 )
 
+# 사용자유형(회계/인사) select 를 기준점으로, 그 아래/근처(패널)에서 부서를 우선 탐색하고,
+# 못 찾으면 본문 전체 첫 매치로 폴백(ninebell-bak 기존 동작). 이름은 헤더/패널 사용자명 후보.
 _PROFILE_JS = r"""() => {
   const out = { display_name: "", department: "" };
-  const body = document.body ? (document.body.innerText || '') : '';
-  const dept = body.match(/([가-힣A-Za-z0-9]+(?:팀|부서|부|실|본부|센터|그룹|TF))/);
-  if (dept) out.department = dept[1];
+  const deptRe = /([가-힣A-Za-z0-9]+(?:팀|부서|부|실|본부|센터|그룹|TF))/;
+
+  // 사용자유형 select: 옵션 텍스트에 '사용자'(회계사용자/인사사용자 등)가 들어가는 select.
+  const utSel = [...document.querySelectorAll('select')]
+    .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
+  // 1) 사용자유형 정보가 든 패널에서 부서 토큰 우선 탐색(부서는 사용자유형 바로 아래).
+  if (utSel) {
+    let node = utSel.closest('.k-window, [role=dialog], .k-animation-container, .k-popup')
+      || utSel.parentElement;
+    for (let i = 0; i < 4 && node; i++) {
+      const m = (node.innerText || '').match(deptRe);
+      if (m) { out.department = m[1]; break; }
+      node = node.parentElement;
+    }
+  }
+  // 2) 폴백: 패널에서 못 찾으면 본문 전체 첫 매치.
+  if (!out.department) {
+    const body = document.body ? (document.body.innerText || '') : '';
+    const m = body.match(deptRe);
+    if (m) out.department = m[1];
+  }
+
   const nameEl = document.querySelector(
     '[class*="user"] [class*="name"], .user-name, .username, header [class*="name"]'
   );
@@ -30,11 +58,27 @@ _PROFILE_JS = r"""() => {
 }"""
 
 
+async def _open_user_panel(page) -> None:
+    """우상단 아바타를 실제 클릭해 사용자 패널(회계/인사 사용자유형 + 부서)을 연다.
+
+    이식 출처: ninebell-bak `erp/graph.py:_open_user_panel`. JS click 은 Kendo 열기
+    핸들러를 못 깨워 패널이 안 열리는 경우가 있어 실제 page.click 을 먼저 시도하고,
+    실패하면 JS 로 폴백한다. 셀렉터 변경 대비로 전부 예외 가드(못 열어도 계속).
+    """
+    try:
+        await page.click("img[src*=profile_circle]", timeout=4_000)
+    except Exception:  # noqa: BLE001 — 실제 클릭 실패 시 JS 폴백
+        try:
+            await page.evaluate(_AVATAR_CLICK_JS)
+        except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
+            pass
+    await page.wait_for_timeout(1_500)
+
+
 async def read_profile(page) -> dict:
     """로그인된 page 에서 더존 기본정보 추출. 항상 ``{display_name, department, email}`` 반환."""
     try:
-        await page.evaluate(_AVATAR_CLICK_JS)
-        await page.wait_for_timeout(1_200)
+        await _open_user_panel(page)
     except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
         pass
     try:

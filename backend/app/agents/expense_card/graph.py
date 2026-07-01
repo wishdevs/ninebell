@@ -37,7 +37,9 @@ class ExpenseCardState(TypedDict, total=False):
     userid: str | None
     password: str | None
     params: dict
-    result: str  # 완료 결과(→ succeeded)
+    # 완료 결과(→ succeeded). 대화형은 {"summary","selections"} 구조(템플릿 저장용),
+    # AUTO 재생은 요약 문자열. 러너가 그대로 result 프레임으로 흘리고 run.result 로 영속.
+    result: str | dict
     error: str  # 실패 사유(→ failed)
 
 
