@@ -6,20 +6,37 @@ import {
   RiBugLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiCloseLine,
+  RiPlayLine,
   RiRestartLine,
   RiSkipBackLine,
   RiStopLine,
 } from '@remixicon/react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
+import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
 import { AgentSidePanel } from './agent-side-panel';
 import { AgentWorkflow } from './agent-workflow';
 import { BrowserStage } from './browser-stage';
+import { LiveBrowserStage } from './live-browser-stage';
+import { LiveSidePanel } from './live-side-panel';
 import { SessionTimer } from './session-timer';
 
 /** 디버그 단계 이동 바 노출 여부. 필요할 때 true로. */
 const SHOW_DEBUG = false;
+
+/**
+ * 상세 에이전트 id → 엔진에 등록된 라이브 워크플로우 id.
+ * 현재 등록분: `demo-echo`(P2, 자격증명 불필요) · `expense-card-chat`(P3, 실 옴니솔/Gemini 필요).
+ * 매핑 없으면 라이브 레이어를 검증할 수 있게 demo-echo 로 폴백한다.
+ */
+const WORKFLOW_BY_AGENT: Record<string, string> = {
+  'card-chat': 'expense-card-chat',
+};
+
+function resolveWorkflow(agentId: string): string {
+  return WORKFLOW_BY_AGENT[agentId] ?? 'demo-echo';
+}
 
 function statusAt(pos: number, current: number): StepStatus {
   return pos < current ? 'done' : pos === current ? 'active' : 'pending';
@@ -74,6 +91,26 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 디버그가 꺼져 있으면 픽스처 그대로(원래 currentAction 유지), 켜져 있으면 단계 파생.
   const view = useMemo(() => (SHOW_DEBUG ? deriveAgentAtStep(agent, step) : agent), [agent, step]);
 
+  // 라이브 세션 — 실행 컨트롤(시작/종료)로 enabled 를 토글한다. 카드에 머무는 동안만
+  // 세션(헤드리스 브라우저 슬롯)을 점유하고, 언마운트/종료 시 useLiveRun 이 abort 로 반납한다.
+  const defaultWorkflow = useMemo(() => resolveWorkflow(agent.id), [agent.id]);
+  // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
+  // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
+  const [session, setSession] = useState<{ workflowId: string; runId: string; enabled: boolean }>({
+    workflowId: defaultWorkflow,
+    runId: '',
+    enabled: false,
+  });
+  const run = useLiveRun(session.workflowId, {
+    runId: session.enabled ? session.runId : undefined,
+    enabled: session.enabled,
+  });
+  const startRun = (workflowId: string) =>
+    setSession({ workflowId, runId: newRunId(), enabled: true });
+  const stopRun = () => setSession((s) => ({ ...s, enabled: false }));
+  const isLive = session.enabled;
+  const terminal = run.status === 'succeeded' || run.status === 'failed';
+
   return (
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
       {/* 헤더 */}
@@ -95,7 +132,15 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
             <SessionTimer agent={agent} />
-            <Controls agent={agent} />
+            <LiveControls
+              enabled={isLive}
+              terminal={terminal}
+              showRealStart={defaultWorkflow !== 'demo-echo'}
+              onStartReal={() => startRun(defaultWorkflow)}
+              onStartDemo={() => startRun('demo-echo')}
+              onRestart={() => startRun(session.workflowId)}
+              onStop={stopRun}
+            />
           </div>
         </div>
       </div>
@@ -119,8 +164,18 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
       {/* 하단: 브라우저 열 폭을 16:9(높이 기준)로 잡고, 남는 가로는 우측 패널이 흡수해 넓어진다.
           브라우저 열 ≈ (가용 높이 − 크롬·푸터) × 16/9. 패널 최소 360px. */}
       <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[clamp(320px,calc((100dvh-416px)*16/9),calc(100%-376px))_minmax(360px,1fr)] lg:items-stretch">
-        <BrowserStage agent={view} />
-        <AgentSidePanel agent={view} />
+        {isLive ? (
+          <LiveBrowserStage
+            targetUrl={agent.targetUrl}
+            status={run.status}
+            steps={run.steps}
+            screenshot={run.screenshot}
+            connected={run.connected}
+          />
+        ) : (
+          <BrowserStage agent={view} />
+        )}
+        {isLive ? <LiveSidePanel run={run} /> : <AgentSidePanel agent={view} />}
       </div>
     </div>
   );
@@ -192,31 +247,70 @@ function DebugStepper({
   );
 }
 
-function Controls({ agent }: { agent: Agent }) {
-  // 브라우저 큐(헤드리스 세션 슬롯)가 한정돼 있어 일시정지는 허용하지 않는다.
-  // 라이브 세션을 점유한 상태에서는 "종료"만 — 세션을 닫고 큐를 반납한다.
-  // 강하게 강조하지 않도록(빨강 채움 대신) 차분한 아웃라인 danger 톤으로 둔다.
-  const isLive =
-    agent.status === 'running' || agent.status === 'waiting_input' || agent.status === 'paused';
-  if (isLive) {
+interface LiveControlsProps {
+  enabled: boolean;
+  terminal: boolean;
+  /** demo-echo 외에 매핑된 실 워크플로우가 있으면 별도 "실행" 버튼을 노출. */
+  showRealStart: boolean;
+  onStartReal: () => void;
+  onStartDemo: () => void;
+  onRestart: () => void;
+  onStop: () => void;
+}
+
+/**
+ * 라이브 실행 컨트롤. 브라우저 큐(헤드리스 세션 슬롯)가 한정돼 일시정지는 없다 —
+ * 진행 중에는 "종료"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 시 실 워크플로우가
+ * 있으면 "실행"과 함께, demo-echo 로 라이브 레이어를 검증할 "데모 실행"을 항상 제공한다.
+ */
+function LiveControls({
+  enabled,
+  terminal,
+  showRealStart,
+  onStartReal,
+  onStartDemo,
+  onRestart,
+  onStop,
+}: LiveControlsProps) {
+  if (!enabled) {
     return (
-      <Button
-        size="sm"
-        variant="secondary"
-        className="text-danger border-danger/30 hover:bg-danger/10 hover:text-danger"
-        onClick={() =>
-          toast.warning('에이전트를 종료했습니다 — 세션을 닫고 브라우저 큐를 반납합니다.')
-        }
-      >
-        <RiStopLine size={13} aria-hidden />
-        종료
-      </Button>
+      <div className="flex items-center gap-2">
+        {showRealStart ? (
+          <Button size="sm" onClick={onStartReal}>
+            <RiPlayLine size={14} aria-hidden />
+            실행
+          </Button>
+        ) : null}
+        <Button size="sm" variant={showRealStart ? 'secondary' : 'primary'} onClick={onStartDemo}>
+          <RiPlayLine size={14} aria-hidden />
+          데모 실행
+        </Button>
+      </div>
+    );
+  }
+  if (terminal) {
+    return (
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={onStop}>
+          <RiCloseLine size={14} aria-hidden />
+          닫기
+        </Button>
+        <Button size="sm" onClick={onRestart}>
+          <RiRestartLine size={14} aria-hidden />
+          다시 실행
+        </Button>
+      </div>
     );
   }
   return (
-    <Button size="sm" onClick={() => toast.success('새 실시간 세션을 시작했습니다.')}>
-      <RiRestartLine size={14} aria-hidden />
-      다시 실행
+    <Button
+      size="sm"
+      variant="secondary"
+      className="text-danger border-danger/30 hover:bg-danger/10 hover:text-danger"
+      onClick={onStop}
+    >
+      <RiStopLine size={13} aria-hidden />
+      종료
     </Button>
   );
 }

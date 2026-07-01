@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright
 
+import app.agents  # noqa: F401 — import 시 실 워크플로우(expense-card-chat)를 registry 에 등록
 from app.config import get_settings
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache

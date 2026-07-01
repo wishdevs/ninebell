@@ -15,7 +15,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.core.deps import CurrentUser
+from app.core.deps import SESSION_COOKIE, CurrentUser
+from app.core.security import InvalidTokenError, decode_session_token
 from app.live import store
 from app.live.hitl import hitl_owner, resolve_hitl
 from app.live.registry import get_workflow
@@ -67,6 +68,30 @@ class HitlDecision(BaseModel):
     done: bool | None = None  # 대화형 폼 '선택 완료' 신호
 
 
+def _omnisol_password(request: Request) -> str | None:
+    """세션 쿠키 JWT 의 jti 로 CredCache 에서 옴니솔 비밀번호를 조회(없으면 None).
+
+    비밀번호는 로그인 시 서버 RAM(CredCache)에만 jti 키로 보관된다(디스크/DB 미저장).
+    실 옴니솔 워크플로우(expense-card-chat)의 로그인 노드가 이 값을 쓴다. demo-echo 는
+    비밀번호를 쓰지 않으므로 None 이어도 무해하다. 테스트(lifespan 미실행)에서는 cred_cache
+    가 없거나 쿠키가 없어 None 을 반환한다.
+    """
+    cache = getattr(request.app.state, "cred_cache", None)
+    if cache is None:
+        return None
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        jti = decode_session_token(token).get("jti")
+    except InvalidTokenError:
+        return None
+    if not jti:
+        return None
+    entry = cache.get(jti)
+    return entry.get("p") if entry else None
+
+
 def _browser_factory(request: Request):
     """fresh 헤드리스 브라우저를 여는 async 콜러블. 테스트는 app.state override 로 주입."""
     override = getattr(request.app.state, "browser_factory", None)
@@ -114,8 +139,9 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser):
 
     browser_factory = _browser_factory(request)
     semaphore = getattr(request.app.state, "erp_semaphore", None)
-    # P3 가 세션 자격증명(비밀번호)을 주입한다. P2 더미(demo-echo)는 자격증명을 쓰지 않는다.
-    creds = {"userid": user.omnisol_userid, "password": None}
+    # 세션 자격증명(비밀번호)을 CredCache(jti)에서 조회해 실 워크플로우(expense-card-chat)에
+    # 주입한다. demo-echo 는 비밀번호를 쓰지 않으므로 None 이어도 무해하다.
+    creds = {"userid": user.omnisol_userid, "password": _omnisol_password(request)}
     params = body.params or {}
 
     def producer():

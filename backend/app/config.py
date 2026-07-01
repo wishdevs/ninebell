@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     erp_base: str = "https://erp.ninebell.co.kr"
     max_concurrent_erp_logins: int = 3
 
+    # --- Gemini(대화형 법인카드 에이전트 P3) ---
+    gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
+    gemini_model: str = "gemini-2.0-flash"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+
     # --- 라이브 세션(run) / 스크린캐스트 ---
     # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).
     session_detach_grace_s: float = 120.0
