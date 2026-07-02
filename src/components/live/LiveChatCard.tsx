@@ -7,9 +7,48 @@ import {
   RiSendPlaneLine,
   RiSparkling2Line,
 } from '@remixicon/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
 import type { ChatMessage, LiveHitl } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
+
+/** 어시스턴트 메시지 마크다운 렌더(GFM 표 지원). 표는 가로 스크롤·컴팩트 스타일. */
+function AssistantMarkdown({ content }: { content: string }) {
+  return (
+    <div className="flex flex-col gap-2 [&_p]:m-0 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-4">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ children }) => (
+            <div className="border-border my-1 overflow-x-auto rounded-[var(--radius-sm)] border">
+              <table className="w-full border-collapse text-[11px]">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-muted/60">{children}</thead>,
+          th: ({ children }) => (
+            <th className="border-border/60 border-b px-2 py-1 text-left font-semibold whitespace-nowrap">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border-border/40 border-t px-2 py-1 align-top whitespace-nowrap tabular-nums">
+              {children}
+            </td>
+          ),
+          code: ({ children }) => (
+            <code className="bg-background/60 rounded px-1 py-0.5 font-mono text-[11px]">
+              {children}
+            </code>
+          ),
+          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 interface LiveChatCardProps {
   hitl: LiveHitl;
@@ -155,15 +194,16 @@ function Bubble({ message }: { message: ChatMessage }) {
       ) : null}
       <div
         className={cn(
-          'max-w-[80%] rounded-[var(--radius-md)] px-3 py-2 text-[length:var(--text-body-sm)] leading-relaxed',
+          'rounded-[var(--radius-md)] px-3 py-2 text-[length:var(--text-body-sm)] leading-relaxed',
           isUser
             ? message.error
-              ? 'bg-danger/10 text-danger rounded-tr-sm'
-              : 'bg-accent text-accent-foreground rounded-tr-sm'
-            : 'bg-muted text-foreground rounded-tl-sm',
+              ? 'bg-danger/10 text-danger max-w-[80%] rounded-tr-sm'
+              : 'bg-accent text-accent-foreground max-w-[80%] rounded-tr-sm'
+            : 'bg-muted text-foreground min-w-0 max-w-[92%] rounded-tl-sm',
         )}
       >
-        {message.content}
+        {/* 사용자 입력은 그대로, 어시스턴트는 마크다운(표) 렌더. */}
+        {isUser ? message.content : <AssistantMarkdown content={message.content} />}
         {message.streaming ? <span className="ml-0.5 inline-block animate-pulse">▍</span> : null}
         {isUser && message.error ? (
           <span className="mt-1 block text-[10px] opacity-80">전송 실패</span>

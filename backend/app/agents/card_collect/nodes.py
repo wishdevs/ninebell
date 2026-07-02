@@ -175,7 +175,81 @@ def make_query_node():
     return query
 
 
-# ── 행별 입력 루프(HITL) ─────────────────────────────────────────────────────────
+# ── 리스트 표 / 항목 지정 파서 ─────────────────────────────────────────────────
+def _md_cell(v: object) -> str:
+    """마크다운 표 셀 안전화(파이프·개행 제거)."""
+    return str(v or "").replace("|", "/").replace("\n", " ").strip()
+
+
+def _full_table(rows: list[dict], recs: dict[int, str]) -> str:
+    """전체 승인내역 마크다운 표(# · 승인일 · 가맹점명 · 승인액 · 추천 적요)."""
+    head = "| # | 승인일 | 가맹점명 | 승인액 | 추천 적요 |\n|---:|---|---|---:|---|"
+    lines = [head]
+    for r in rows:
+        i = r.get("i", 0)
+        lines.append(
+            f"| {i + 1} | {_md_cell(r.get('TRAN_DT'))} | {_md_cell(r.get('TRAN_NM'))} "
+            f"| {_md_cell(_fmt_won(r.get('TRAN_AMT')))} | {_md_cell(recs.get(i, ''))} |"
+        )
+    return "\n".join(lines)
+
+
+_STATUS_MARK = {"done": "✅ 반영", "skipped": "⏭️ 건너뜀", "pending": "· 대기"}
+
+
+def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str]) -> str:
+    """처리 현황 마크다운 표(# · 가맹점명 · 승인액 · 적요 · 상태)."""
+    head = "| # | 가맹점명 | 승인액 | 적요 | 상태 |\n|---:|---|---:|---|---|"
+    lines = [head]
+    for r in rows:
+        i = r.get("i", 0)
+        lines.append(
+            f"| {i + 1} | {_md_cell(r.get('TRAN_NM'))} | {_md_cell(_fmt_won(r.get('TRAN_AMT')))} "
+            f"| {_md_cell(notes.get(i, ''))} | {_STATUS_MARK.get(status.get(i, 'pending'))} |"
+        )
+    return "\n".join(lines)
+
+
+def _expand_item_nums(token: str, valid: set[int]) -> set[int]:
+    """'1', '3,4', '1~3', '2-5' → 0-based 행 인덱스 집합(valid 로 필터)."""
+    out: set[int] = set()
+    for part in re.split(r"[,\s]+", token.strip()):
+        if not part:
+            continue
+        m = re.match(r"^(\d+)\s*[-~]\s*(\d+)$", part)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            out.update(range(min(a, b), max(a, b) + 1))
+        elif part.isdigit():
+            out.add(int(part))
+    return {n - 1 for n in out if (n - 1) in valid}
+
+
+def _parse_instructions(msg: str, valid: set[int]) -> list[tuple[set[int], dict[str, str] | str]]:
+    """사용자 메시지를 (행인덱스집합, 필드dict | 'skip') 목록으로 파싱. 줄 단위, 앞선 번호 필수.
+
+    예: '1번 예산단위 경영, 계정 복리후생비, 프로젝트 공통' / '2,3번 건너뛰기' / '1번 적요 6월 회식'.
+    """
+    out: list[tuple[set[int], dict[str, str] | str]] = []
+    for raw in msg.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^\s*([0-9][0-9\s,~\-]*)\s*번?\s*[:.\-]?\s*(.*)$", line)
+        if not m:
+            continue
+        indices = _expand_item_nums(m.group(1), valid)
+        if not indices:
+            continue
+        rest = m.group(2).strip()
+        if not rest or "건너" in rest or rest.lower() in {"skip", "pass"}:
+            out.append((indices, "skip"))
+        else:
+            out.append((indices, _parse_fields(rest)))
+    return out
+
+
+# ── 항목 처리 루프(HITL): 전체 리스트 표 → 번호로 항목별 처리 ──────────────────────
 def make_collect_rows_node(timeout_s: int = 600):
     async def collect_rows(state: dict) -> dict:
         if state.get("error"):
@@ -189,87 +263,134 @@ def make_collect_rows_node(timeout_s: int = 600):
             await emit_step(events, "collect_rows", "done")
             return {"filled": 0}
 
+        valid = {r.get("i", idx) for idx, r in enumerate(rows_list)}
+        recs = {
+            r.get("i", idx): recommend_note(r.get("TRAN_NM") or "", r.get("TRAN_AMT") or "")
+            for idx, r in enumerate(rows_list)
+        }
+        status: dict[int, str] = dict.fromkeys(valid, "pending")
+        notes = dict(recs)  # 최종 적용/예정 적요(적요 override 반영).
+
+        # 1) 전체 리스트 표로 무엇이 있는지 먼저 보여준다.
+        await emit_chat(
+            events,
+            chat_id="cc-list",
+            role="assistant",
+            content=(
+                f"법인카드 승인내역 **{len(rows_list)}건**입니다. 각 항목을 어떻게 처리할지 번호로 지정하세요.\n\n"
+                + _full_table(rows_list, recs)
+            ),
+            streaming=False,
+        )
+        await emit_chat(
+            events,
+            chat_id="cc-howto",
+            role="assistant",
+            content=(
+                "지정 방법(여러 건 한 번에 가능, 한 줄에 하나씩):\n"
+                "- `1번 예산단위 경영, 계정 복리후생비, 프로젝트 공통`\n"
+                "- `2,3번 예산단위 영업, 계정 여비교통비, 프로젝트 공통`\n"
+                "- `4번 건너뛰기` · 적요 변경 `1번 적요 6월 팀 회식`\n"
+                "다 되면 **완료**라고 하세요."
+            ),
+            streaming=False,
+        )
+
         filled = 0
-        seq = 0
-        for row in rows_list:
-            i = row.get("i", 0)
-            nm = row.get("TRAN_NM") or ""
-            when = row.get("TRAN_DT") or ""
-            amt = _fmt_won(row.get("TRAN_AMT"))
-            rec = recommend_note(nm, row.get("TRAN_AMT") or "")
-            collected: dict[str, str] = {"적요": rec}
-            # 이 행이 완성될 때까지 대화(부족하면 재요청, '건너뛰기'면 skip).
-            while True:
-                seq += 1
+        turn = 0
+        while True:
+            try:
+                resp = await wait_hitl(
+                    events,
+                    kind="chat",
+                    title="항목 처리",
+                    prompt="번호로 처리할 값을 입력(예: '1번 예산단위 …, 계정 …, 프로젝트 …'). 완료 시 '완료'.",
+                    timeout_s=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                await emit_step(events, "collect_rows", "failed")
+                return {"error": f"입력 대기 시간 초과({timeout_s // 60}분). 지금까지 {filled}건 반영(저장 전)."}
+
+            if resp.get("done"):
+                break
+            msg = (resp.get("message") or "").strip()
+            if not msg:
+                continue
+            if msg in {"완료", "끝", "done"}:
+                break
+
+            turn += 1
+            instrs = _parse_instructions(msg, valid)
+            if not instrs:
                 await emit_chat(
                     events,
-                    chat_id=f"row-{i}-{seq}",
+                    chat_id="cc-hint",
                     role="assistant",
-                    content=(
-                        f"[{i + 1}/{len(rows_list)}] {when} · {nm} · {amt}\n"
-                        f"추천 적요: '{collected['적요']}'.\n"
-                        "예산단위·계정·프로젝트를 알려주세요(예: 예산단위 경영, 계정 복리후생비, 프로젝트 공통). "
-                        "적요를 바꾸려면 '적요 …'로, 이 건을 건너뛰려면 '건너뛰기'라고 하세요."
-                    ),
+                    content="항목 번호를 찾지 못했습니다. 예: `1번 예산단위 경영, 계정 복리후생비, 프로젝트 공통` 또는 `2번 건너뛰기`.",
                     streaming=False,
                 )
-                try:
-                    resp = await wait_hitl(
-                        events,
-                        kind="chat",
-                        title=f"행 {i + 1} 입력",
-                        prompt="예산단위·계정·프로젝트(필요시 적요)를 입력하세요.",
-                        extra={"row": {"index": i, "date": when, "merchant": nm, "amount": amt}},
-                        timeout_s=timeout_s,
-                    )
-                except asyncio.TimeoutError:
-                    await emit_step(events, "collect_rows", "failed")
-                    return {"error": f"행 입력 대기 시간 초과({timeout_s // 60}분). 지금까지 {filled}건 반영(저장 전). 다시 실행해 주세요."}
-                if resp.get("done"):
-                    await emit_log(events, "사용자 '완료' — 남은 행 처리를 종료합니다.", "info")
-                    await emit_step(events, "collect_rows", "done")
-                    return {"filled": filled}
-                msg = (resp.get("message") or "").strip()
-                if not msg:
-                    continue
-                if "건너" in msg or msg.lower() in {"skip", "pass"}:
-                    await emit_log(events, f"행 {i + 1} 건너뜀.", "info")
-                    break
-                parsed = _parse_fields(msg)
-                collected.update({k: v for k, v in parsed.items() if v})
-                missing = [f for f in ("예산단위", "계정", "프로젝트") if not collected.get(f)]
-                if missing:
-                    await emit_chat(
-                        events,
-                        chat_id=f"row-{i}-ask-{seq}",
-                        role="assistant",
-                        content=f"아직 {', '.join(missing)}이(가) 필요합니다. 알려주세요.",
-                        streaming=False,
-                    )
-                    continue
-                # 필수 3필드 확보 → 채우기.
-                ok, detail = await _apply_row_fields(page, events, i, collected)
-                if ok:
-                    filled += 1
-                    await emit_chat(
-                        events,
-                        chat_id=f"row-{i}-ok",
-                        role="assistant",
-                        content=f"행 {i + 1} 반영 완료 ({detail}).",
-                        note="action",
-                        streaming=False,
-                    )
-                    await emit_shot(events.put, page)
-                    break
-                # 실패 사유(무매칭·후보다건 등)를 그대로 보여주고, 해당 필드만 정정 입력받는다(리뷰 #1).
+                continue
+
+            for indices, action in instrs:
+                for ri in sorted(indices):
+                    if action == "skip":
+                        status[ri] = "skipped"
+                        await emit_chat(
+                            events, chat_id=f"cc-act-{turn}-{ri}", role="assistant",
+                            content=f"{ri + 1}번 건너뜀.", note="action", streaming=False,
+                        )
+                        continue
+                    fields = action  # dict
+                    if fields.get("적요"):
+                        notes[ri] = fields["적요"]
+                    missing = [f for f in ("예산단위", "계정", "프로젝트") if not fields.get(f)]
+                    if missing:
+                        # 적요만 준 경우: 적요만 갱신하고 넘어간다. 그 외 부분입력은 부족분 안내.
+                        if fields.get("적요") and set(missing) == {"예산단위", "계정", "프로젝트"}:
+                            await emit_chat(
+                                events, chat_id=f"cc-act-{turn}-{ri}", role="assistant",
+                                content=f"{ri + 1}번 적요 갱신: '{notes[ri]}' (예산단위·계정·프로젝트를 주면 반영합니다).",
+                                note="action", streaming=False,
+                            )
+                        else:
+                            await emit_chat(
+                                events, chat_id=f"cc-miss-{turn}-{ri}", role="assistant",
+                                content=f"{ri + 1}번: {', '.join(missing)}이(가) 더 필요합니다.",
+                                streaming=False,
+                            )
+                        continue
+                    collected = {
+                        "예산단위": fields["예산단위"],
+                        "계정": fields["계정"],
+                        "프로젝트": fields["프로젝트"],
+                        "적요": notes[ri],
+                    }
+                    ok, detail = await _apply_row_fields(page, events, ri, collected)
+                    if ok:
+                        filled += 1
+                        status[ri] = "done"
+                        await emit_chat(
+                            events, chat_id=f"cc-act-{turn}-{ri}", role="assistant",
+                            content=f"{ri + 1}번 반영 완료 ({detail}).", note="action", streaming=False,
+                        )
+                    else:
+                        await emit_chat(
+                            events, chat_id=f"cc-fail-{turn}-{ri}", role="assistant",
+                            content=f"{ri + 1}번 반영 실패: {detail}", streaming=False,
+                        )
+            await emit_shot(events.put, page)
+            # 현황 표를 같은 말풍선(cc-status)으로 갱신.
+            await emit_chat(
+                events, chat_id="cc-status", role="assistant",
+                content="처리 현황:\n\n" + _status_table(rows_list, status, notes), streaming=False,
+            )
+            if all(s != "pending" for s in status.values()):
                 await emit_chat(
-                    events,
-                    chat_id=f"row-{i}-retry-{seq}",
-                    role="assistant",
-                    content=f"반영 실패: {detail}\n해당 값을 다시 확인해 알려주세요(예: '프로젝트 정확한명').",
-                    streaming=False,
+                    events, chat_id="cc-alldone", role="assistant",
+                    content="모든 항목을 처리했습니다. **완료**로 마치거나 값을 수정하세요.", streaming=False,
                 )
-        await emit_log(events, f"행별 입력 완료 — {filled}건 반영(저장 전).", "ok")
+
+        await emit_log(events, f"항목 처리 완료 — {filled}건 반영(저장 전).", "ok")
         await emit_step(events, "collect_rows", "done")
         return {"filled": filled}
 
