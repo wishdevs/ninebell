@@ -81,6 +81,7 @@ READ_ROWS_JS = f"""(limit) => {{
     const out = [];
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({{
       i, TRAN_DT:v(i,'TRAN_DT'), TRAN_NM:v(i,'TRAN_NM'), TRAN_AMT:v(i,'TRAN_AMT'),
+      SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'),
       FINPRODUCT_NM:v(i,'FINPRODUCT_NM'), NOTE_DC:v(i,'NOTE_DC') }});
     return {{ rows:n, list: out }};
   }} catch(e) {{ return {{ rows:-1, err:String(e).slice(0,80) }}; }}
