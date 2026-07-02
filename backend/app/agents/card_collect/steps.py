@@ -171,6 +171,100 @@ async def fill_codepicker(
     return {"ok": True, "code": chosen["code"], "name": chosen["name"]}
 
 
+# ── 코드 카탈로그 덤프(코드피커 전량 읽기) ─────────────────────────────────────────
+async def _open_picker(page: Any, field_id: str) -> bool:
+    """코드피커 버튼 좌표 클릭 → 팝업 오픈 대기. 성공 True."""
+    box = await page.evaluate(js.picker_btn_js(field_id))
+    if not box:
+        return False
+    await page.mouse.click(box["x"], box["y"])
+    await page.wait_for_timeout(1_800)
+    return True
+
+
+async def _picker_search(page: Any, keyword: str) -> None:
+    """열린 코드피커 팝업에 keyword 를 넣고 Enter 로 서버 재조회."""
+    await page.evaluate(js.PICKER_SEARCH_JS, keyword)
+    await page.keyboard.press("Enter")
+    await page.wait_for_timeout(1_200)
+
+
+async def dump_budget_units(page: Any) -> list[dict]:
+    """예산단위(bg_cd) 코드피커 빈검색 전량 → 유니크 (BG_CD,BG_NM). 반환 [{code,name,deptNm}].
+
+    피커는 로그인 사용자 부서로 서버필터됨(DEPT_NM 동일). 중복행(BIZPLAN 조합만 다름)은
+    (BG_CD) 기준 최초 1건만 남긴다(첫 DEPT_NM 보존).
+    """
+    if not await _open_picker(page, "bg_cd"):
+        return []
+    await _picker_search(page, "")
+    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["BG_CD", "BG_NM", "DEPT_NM"], 0])
+    await page.evaluate(js.PICKER_CLOSE_JS)
+    await page.wait_for_timeout(400)
+    seen: set[str] = set()
+    out: list[dict] = []
+    for o in read.get("options") or []:
+        code = o.get("BG_CD")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        out.append({"code": code, "name": o.get("BG_NM") or "", "deptNm": o.get("DEPT_NM") or ""})
+    return out
+
+
+async def dump_projects(page: Any, keyword: str | None) -> list[dict]:
+    """프로젝트(pjt_cd) 코드피커 검색(빈검색=초기 500행) → (PJT_NO) 유니크. 반환 [{code,name,useYn}].
+
+    ⚠ 팝업 캡(500행). 전량 수집은 서비스에서 prefix sweep 으로 합집합한다.
+    """
+    if not await _open_picker(page, "pjt_cd"):
+        return []
+    await _picker_search(page, keyword or "")
+    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN"], 0])
+    await page.evaluate(js.PICKER_CLOSE_JS)
+    await page.wait_for_timeout(400)
+    return _dedupe_projects(read.get("options") or [])
+
+
+def _dedupe_projects(options: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for o in options:
+        code = o.get("PJT_NO")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        out.append({"code": code, "name": o.get("PJT_NM") or "", "useYn": o.get("USE_YN") or ""})
+    return out
+
+
+# 프로젝트 팝업 로드 캡(초기/검색당 최대 로드 행). 정확히 이 값이면 결과가 잘렸을 수 있음.
+PROJECT_PICKER_CAP = 500
+
+
+async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict], list[str]]:
+    """프로젝트(pjt_cd) 팝업을 **한 번만 열고** prefix 별로 in-popup 재검색해 합집합 수집.
+
+    팝업 캡(500)으로 빈검색만으론 전량이 안 되므로 접두 스윕으로 채운다. 팝업을 prefix 마다
+    다시 열지 않고(비용·상태), 같은 팝업의 검색창을 재질의한다. 반환 (합집합 [{code,name,useYn}],
+    정확히 캡(500)을 반환해 잘렸을 가능성이 있는 prefix 목록).
+    """
+    if not await _open_picker(page, "pjt_cd"):
+        return [], []
+    by_code: dict[str, dict] = {}
+    cap_hit: list[str] = []
+    for kw in prefixes:
+        await _picker_search(page, kw)
+        read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN"], 0])
+        if read.get("rows") == PROJECT_PICKER_CAP:
+            cap_hit.append(kw or "(빈검색)")
+        for row in _dedupe_projects(read.get("options") or []):
+            by_code.setdefault(row["code"], row)
+    await page.evaluate(js.PICKER_CLOSE_JS)
+    await page.wait_for_timeout(400)
+    return list(by_code.values()), cap_hit
+
+
 # ── 행 반영(일괄적용, 해당 행만 체크) / 저장(F7) ──────────────────────────────────
 async def apply_row(page: Any, row: int) -> dict:
     """그 행만 체크 후 '일괄적용' 클릭(그 행에 폼값 반영). ⚠ 저장 아님."""

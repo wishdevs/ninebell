@@ -26,7 +26,7 @@ from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, assistant, auth, logs, org_units, runs, users
+from app.routers import agents, assistant, auth, logs, me_codes, org_units, runs, users
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -107,6 +107,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="더존 옴니솔 대시보드 API", lifespan=lifespan)
     # 동기·순수 인메모리라 lifespan 을 타지 않는 컨텍스트(테스트 등)에서도 필요 — 즉시 생성.
     app.state.assistant_limiter = AssistantRateLimiter()
+    # 코드 카탈로그 동기화: 1슬롯 세마포어(동시 1건) + kind 별 진행/결과 상태.
+    app.state.catalog_sync_semaphore = asyncio.Semaphore(1)
+    app.state.catalog_sync_state = {}
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list(),
@@ -122,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(logs.router)
     app.include_router(runs.router)
     app.include_router(assistant.router)
+    app.include_router(me_codes.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:
