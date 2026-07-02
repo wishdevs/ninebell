@@ -40,6 +40,8 @@ class CardCollectState(TypedDict, total=False):
     userid: str | None
     password: str | None
     params: dict
+    owner: str | None  # HITL 소유자(세션 사용자 id) — 채널 오픈 시 바인딩(러너 주입)
+    run_id: str | None  # 세션/런 id — HITL 런바인딩(러너 주입)
     period: list[str]
     rows_list: list[dict]
     filled: int

@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 /** 어시스턴트 메시지 마크다운 렌더(GFM 표 지원). 표는 가로 스크롤·컴팩트 스타일. */
 function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <div className="flex flex-col gap-2 [&_p]:m-0 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-4">
+    <div className="flex flex-col gap-2 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:m-0 [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-4">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -73,7 +73,10 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
   // 마지막 어시스턴트 말풍선이 스트리밍 중이면 입력 잠금(턴 충돌 방지).
   const streaming = messages.some((m) => m.streaming);
   // 마지막이 사용자 말풍선이면 에이전트 응답 대기(채우는 중). 전송/완료 중에도 처리 중으로 본다.
-  const processing = busy || completing || messages[messages.length - 1]?.role === 'user';
+  // 단, 그 사용자 말풍선이 전송 실패(error)면 대기 중이 아니므로 처리 중으로 보지 않는다.
+  const lastMessage = messages[messages.length - 1];
+  const processing =
+    busy || completing || (lastMessage?.role === 'user' && !lastMessage.error);
 
   async function send() {
     const text = draft.trim();
@@ -199,7 +202,7 @@ function Bubble({ message }: { message: ChatMessage }) {
             ? message.error
               ? 'bg-danger/10 text-danger max-w-[80%] rounded-tr-sm'
               : 'bg-accent text-accent-foreground max-w-[80%] rounded-tr-sm'
-            : 'bg-muted text-foreground min-w-0 max-w-[92%] rounded-tl-sm',
+            : 'bg-muted text-foreground max-w-[92%] min-w-0 rounded-tl-sm',
         )}
       >
         {/* 사용자 입력은 그대로, 어시스턴트는 마크다운(표) 렌더. */}

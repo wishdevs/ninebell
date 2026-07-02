@@ -384,10 +384,20 @@ def make_chat_form_node(timeout_s: int | None = None):
             await emit_shot(events.put, page)
             return status
 
+        def _sig(name: str, args: dict) -> tuple:
+            """도구 호출 서명(중복 감지용) — card_collect.nodes 와 동일 형태. 리스트는 정렬 튜플로 고정."""
+            def freeze(v: Any) -> Any:
+                if isinstance(v, list):
+                    return tuple(sorted(v, key=str))
+                return v
+            return (name, tuple(sorted((k, freeze(v)) for k, v in args.items())))
+
         # chat HITL 오픈 — 하나의 decision_id 로 멀티턴(사용자 메시지 여러 번 + '선택 완료' 1번).
-        # 소유권은 LiveSession 이 이 hitl 프레임을 보며 등록한다(/runs/hitl 격리).
+        # 소유권은 채널 오픈 시점에 바인딩(open_hitl_channel owner/run_id) — /runs/hitl 격리.
         decision_id = uuid.uuid4().hex
-        q = open_hitl_channel(decision_id)
+        q = open_hitl_channel(
+            decision_id, owner=state.get("owner"), run_id=state.get("run_id")
+        )
         await emit_hitl(
             events,
             decision_id=decision_id,
@@ -466,6 +476,10 @@ def make_chat_form_node(timeout_s: int | None = None):
                         continue
 
                 # 한 사용자 턴 안에서 Gemini 가 ask/turn_done 을 낼 때까지 도구를 순차 실행.
+                # 실측(card_collect 와 동일): 같은 지시를 처리한 뒤 모델이 turn_done 대신 동일 도구를
+                # 반복 호출하는 경우가 있어(예: skip_rows 12회), 이번 턴 안에서 동일 (도구,인자)
+                # 서명이 재등장하면 재실행 없이 턴을 마친다.
+                seen_actions: set[tuple] = set()
                 for _t2 in range(_MAX_TOOLS_PER_TURN):
                     try:
                         b64: str | None = None
@@ -494,6 +508,13 @@ def make_chat_form_node(timeout_s: int | None = None):
                     if not name:
                         await _say("어떤 필드를 채울지 이해하지 못했어요. 다시 말씀해 주세요.")
                         break
+
+                    if name in {"set_expense", "read_transactions", "fill_search", "fill_dropdown", "fill_text"}:
+                        sig = _sig(name, args)
+                        if sig in seen_actions:
+                            history += f"어시스턴트: ({name} 반복 감지 — 이미 처리됨, 이번 턴 종료)\n"
+                            break
+                        seen_actions.add(sig)
 
                     if name == "ask":
                         question = args.get("question") or "추가 정보를 알려주세요."

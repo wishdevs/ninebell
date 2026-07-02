@@ -3,7 +3,8 @@
 POST /runs/collect: 워크플로우를 라이브 세션으로 실행하고 단계 이벤트를 SSE 로 스트리밍한다.
   세션이 SSE 연결과 분리돼 살아있으므로(app.live.session), 끊김 뒤 같은 runId+cursor 로
   재부착하면 흐름을 재시작하지 않고 커서 이후만 재생한다. 인증은 세션 쿠키(get_current_user).
-POST /runs/hitl: 라이브 흐름의 HITL 대기에 사용자 응답을 전달한다(소유자=현재 유저 검증).
+POST /runs/hitl: 라이브 흐름의 HITL 대기에 사용자 응답을 전달한다(소유자=현재 유저 +
+  채널이 바인딩한 run_id=요청 runId 교차검증).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from app.core.deps import (
 from app.core.permissions import AGENTS_RUN, LOGS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
 from app.core.security import InvalidTokenError, decode_session_token
 from app.live import store
-from app.live.hitl import hitl_owner, resolve_hitl
+from app.live.hitl import hitl_owner, hitl_run_id, resolve_hitl
 from app.live.registry import get_workflow
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
@@ -218,7 +219,15 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
         params["template"] = tpl.selections or []
 
     def producer():
-        return run_workflow(factory(), browser_factory, creds, params, semaphore=semaphore)
+        return run_workflow(
+            factory(),
+            browser_factory,
+            creds,
+            params,
+            semaphore=semaphore,
+            owner=owner,
+            run_id=tracked_run_id,
+        )
 
     async def on_terminal(status: str, note: object, logs: list) -> None:
         if tracked_run_id:
@@ -233,6 +242,13 @@ async def hitl(body: HitlDecision, user: CurrentUser):
     """라이브 흐름의 HITL 대기에 사용자 응답 전달. 세션이 소유한 HITL 은 같은 사용자만 가능."""
     owner = hitl_owner(body.decisionId)
     if owner is not None and owner != str(user.id):
+        return JSONResponse(
+            {"ok": False, "error": "이 HITL 에 대한 권한이 없습니다."}, status_code=403
+        )
+    # 런바인딩 교차검증: 채널이 특정 run_id 에 묶여 있으면 요청의 runId 와 일치해야 한다
+    # (다른 흐름의 decisionId 를 도용한 응답 주입 차단). 바인딩 없으면(스크립트/익명) 검사 생략.
+    bound_run = hitl_run_id(body.decisionId)
+    if bound_run is not None and bound_run != body.runId:
         return JSONResponse(
             {"ok": False, "error": "이 HITL 에 대한 권한이 없습니다."}, status_code=403
         )
@@ -432,7 +448,8 @@ async def list_runs(
     runs = await store.list_runs(
         user_id=scope_user_id, agent_id=agentId, limit=limit, offset=offset
     )
-    return {"runs": [_run_summary(r) for r in runs]}
+    total = await store.count_runs(user_id=scope_user_id, agent_id=agentId)
+    return {"runs": [_run_summary(r) for r in runs], "total": total}
 
 
 @router.get("/{run_id}")

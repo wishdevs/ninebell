@@ -38,6 +38,8 @@ class ExpenseCardState(TypedDict, total=False):
     userid: str | None
     password: str | None
     params: dict
+    owner: str | None  # HITL 소유자(세션 사용자 id) — 채널 오픈 시 바인딩(러너 주입)
+    run_id: str | None  # 세션/런 id — HITL 런바인딩(러너 주입)
     # 완료 결과(→ succeeded). 대화형은 {"summary","selections"} 구조(템플릿 저장용),
     # AUTO 재생은 요약 문자열. 러너가 그대로 result 프레임으로 흘리고 run.result 로 영속.
     result: str | dict

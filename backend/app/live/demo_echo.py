@@ -27,6 +27,8 @@ class DemoState(TypedDict, total=False):
     userid: str | None
     password: str | None
     params: dict
+    owner: str | None  # HITL 소유자(세션 사용자 id) — 채널 오픈 시 바인딩(러너 주입)
+    run_id: str | None  # 세션/런 id — HITL 런바인딩(러너 주입)
     result: str
     error: str
 
@@ -108,6 +110,8 @@ def _node_confirm():
                     {"value": "no", "label": "아니요"},
                 ],
                 timeout_s=s.hitl_timeout_s,
+                owner=state.get("owner"),
+                run_id=state.get("run_id"),
             )
         except asyncio.TimeoutError:
             await emit_step(events, "사용자 확인", "failed")

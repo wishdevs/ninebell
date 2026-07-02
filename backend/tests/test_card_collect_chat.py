@@ -14,10 +14,47 @@ import pytest
 from app.live.hitl import (
     close_hitl_channel,
     hitl_owner,
+    hitl_run_id,
     open_hitl_channel,
     resolve_hitl,
     set_hitl_owner,
 )
+
+
+def test_open_channel_binds_owner_and_run_id_at_open_time():
+    """채널 오픈 시 owner/run_id 를 바인딩해 레이스 창을 없앤다(세션 펌프 관찰 이전)."""
+    did = "dec-bind"
+    open_hitl_channel(did, owner="user-7", run_id="run-7")
+    try:
+        assert hitl_owner(did) == "user-7"
+        assert hitl_run_id(did) == "run-7"
+    finally:
+        close_hitl_channel(did)
+    # close 후 owner·run_id·큐 모두 정리.
+    assert hitl_owner(did) is None
+    assert hitl_run_id(did) is None
+
+
+def test_set_hitl_owner_does_not_override_channel_open_owner():
+    """오픈 시 바인딩된 소유자를 session 펌프의 set_hitl_owner 폴백이 덮어쓰지 않는다."""
+    did = "dec-noover"
+    open_hitl_channel(did, owner="opener")
+    try:
+        set_hitl_owner(did, "pump-observer")  # 폴백 시도 — 이미 바인딩됐으므로 무시.
+        assert hitl_owner(did) == "opener"
+    finally:
+        close_hitl_channel(did)
+
+
+def test_set_hitl_owner_fallback_registers_when_unbound():
+    """오픈 시 소유자 미바인딩(익명/스크립트)이면 펌프 폴백이 정상 등록한다."""
+    did = "dec-fallback"
+    open_hitl_channel(did)  # owner 미지정
+    try:
+        set_hitl_owner(did, "pump-observer")
+        assert hitl_owner(did) == "pump-observer"
+    finally:
+        close_hitl_channel(did)
 
 
 async def test_persistent_channel_buffers_messages_during_processing():

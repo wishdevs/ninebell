@@ -19,34 +19,56 @@ from app.config import get_settings
 _hitl_queues: dict[str, asyncio.Queue] = {}
 # decision_id → owner(세션 사용자 식별자). 값이 있으면 그 사용자만 resolve 가능.
 _hitl_owner: dict[str, str] = {}
+# decision_id → run_id(세션/런 id). 값이 있으면 `/runs/hitl` 의 runId 와 교차검증한다.
+_hitl_run_id: dict[str, str] = {}
 
 
-def open_hitl_channel(decision_id: str) -> asyncio.Queue:
+def open_hitl_channel(
+    decision_id: str,
+    *,
+    owner: str | None = None,
+    run_id: str | None = None,
+) -> asyncio.Queue:
     """지속(멀티턴) HITL 큐 등록 — 대화형 노드용.
 
     `wait_hitl`(단발)과 달리 노드 수명 동안 같은 decision_id 로 큐를 유지해, 도구 실행 등
     턴 사이 공백에도 사용자 메시지가 유실되지 않고 큐잉된다. 반드시 `close_hitl_channel` 로 정리.
-    소유권(`_hitl_owner`)은 LiveSession 이 hitl 프레임을 볼 때 자동 등록한다.
+    소유권(`owner`)·런바인딩(`run_id`)은 채널 오픈 시점에 등록해, LiveSession 이 hitl 프레임을
+    관찰하기 전 `/runs/hitl` 이 소유권 검사를 건너뛰던 레이스 창을 없앤다. falsy 면 미등록
+    (스크립트/익명 경로 — session 펌프가 프레임 관찰 시 폴백 등록).
     """
     q: asyncio.Queue = asyncio.Queue()
     _hitl_queues[decision_id] = q
+    if owner:
+        _hitl_owner[decision_id] = owner
+    if run_id:
+        _hitl_run_id[decision_id] = run_id
     return q
 
 
 def close_hitl_channel(decision_id: str) -> None:
-    """`open_hitl_channel` 로 연 채널 정리(큐·소유권 제거)."""
+    """`open_hitl_channel` 로 연 채널 정리(큐·소유권·런바인딩 제거)."""
     _hitl_queues.pop(decision_id, None)
     _hitl_owner.pop(decision_id, None)
+    _hitl_run_id.pop(decision_id, None)
 
 
 def set_hitl_owner(decision_id: str, owner: str | None) -> None:
-    """이 개입의 소유자를 등록(옵션 A 격리). owner 가 falsy 면 개방(스크립트 경로)."""
-    if owner:
+    """이 개입의 소유자를 등록(옵션 A 격리). owner 가 falsy 면 개방(스크립트 경로).
+
+    이미 채널 오픈 시점에 소유자가 바인딩됐으면 덮어쓰지 않는다(레이스 창은 오픈 시점에 이미
+    닫힘). 소유자 미바인딩(익명/스크립트) 세션에서만 LiveSession 이 프레임 관찰 시 폴백 등록한다.
+    """
+    if owner and decision_id not in _hitl_owner:
         _hitl_owner[decision_id] = owner
 
 
 def hitl_owner(decision_id: str) -> str | None:
     return _hitl_owner.get(decision_id)
+
+
+def hitl_run_id(decision_id: str) -> str | None:
+    return _hitl_run_id.get(decision_id)
 
 
 def resolve_hitl(decision_id: str, payload: dict) -> bool:
@@ -70,18 +92,24 @@ async def wait_hitl(
     options: list[dict] | None = None,
     extra: dict | None = None,
     timeout_s: int | None = None,
+    owner: str | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """hitl 이벤트를 방출하고 사용자 응답을 기다린다(최대 timeout_s).
 
-    소유권은 LiveSession 이 hitl 이벤트를 보며 등록하므로 여기서는 큐만 만든다.
-    타임아웃 시 asyncio.TimeoutError 를 던진다(호출 노드가 실패 이벤트로 변환).
-    timeout_s 미지정 시 config.hitl_timeout_s(단일 소스)를 쓴다.
+    소유권(`owner`)·런바인딩(`run_id`)은 큐 생성 시점에 등록해 레이스 창을 없앤다(falsy 면
+    미등록 — session 펌프 폴백). 타임아웃 시 asyncio.TimeoutError 를 던진다(호출 노드가 실패
+    이벤트로 변환). timeout_s 미지정 시 config.hitl_timeout_s(단일 소스)를 쓴다.
     """
     if timeout_s is None:
         timeout_s = get_settings().hitl_timeout_s
     decision_id = uuid.uuid4().hex
     q: asyncio.Queue = asyncio.Queue()
     _hitl_queues[decision_id] = q
+    if owner:
+        _hitl_owner[decision_id] = owner
+    if run_id:
+        _hitl_run_id[decision_id] = run_id
     frame: dict = {"id": decision_id, "kind": kind, "title": title, "prompt": prompt}
     if options:
         frame["options"] = options
@@ -93,3 +121,4 @@ async def wait_hitl(
     finally:
         _hitl_queues.pop(decision_id, None)
         _hitl_owner.pop(decision_id, None)
+        _hitl_run_id.pop(decision_id, None)

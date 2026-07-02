@@ -328,10 +328,12 @@ def make_collect_rows_node(timeout_s: int | None = None):
         history = ""  # 세션 전체 누적(턴을 넘어 유지) — 매 호출은 최근 40줄만 잘라 보낸다.
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다. 매 턴 새 wait_hitl 을
         # 만들던 이전 방식은 Gemini 판단·브라우저 조작 중(턴 사이)에 살아있는 큐가 없어 그때 온
-        # 사용자 메시지/'완료'가 유실됐다(P1-B). 큐잉으로 유실을 없앤다. 소유권은 session 이 이
-        # hitl 프레임(id)을 보고 자동 등록한다.
+        # 사용자 메시지/'완료'가 유실됐다(P1-B). 큐잉으로 유실을 없앤다. 소유권·런바인딩은
+        # 채널 오픈 시점(owner/run_id)에 등록해 /runs/hitl 격리의 레이스 창을 없앤다.
         decision_id = uuid.uuid4().hex
-        q = open_hitl_channel(decision_id)
+        q = open_hitl_channel(
+            decision_id, owner=state.get("owner"), run_id=state.get("run_id")
+        )
         await emit_hitl(
             events,
             decision_id=decision_id,
@@ -522,6 +524,8 @@ def make_save_node():
                     {"value": "save", "label": "저장", "description": "실제 결의서 저장(F7)"},
                     {"value": "cancel", "label": "저장 안 함", "description": "입력만 유지, 저장 취소"},
                 ],
+                owner=state.get("owner"),
+                run_id=state.get("run_id"),
             )
         except asyncio.TimeoutError:
             await emit_step(events, "save", "failed")

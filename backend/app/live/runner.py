@@ -40,6 +40,8 @@ async def run_workflow(
     *,
     semaphore: asyncio.Semaphore | None = None,
     screencast: bool = True,
+    owner: str | None = None,
+    run_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """그래프를 실행하며 노드 진행 이벤트를 스트리밍한다.
 
@@ -65,6 +67,10 @@ async def run_workflow(
             "userid": creds.get("userid"),
             "password": creds.get("password"),
             "params": params or {},
+            # HITL 소유권/런바인딩을 노드가 채널 오픈 시점에 등록하도록 주입(레이스 창 제거).
+            # owner=세션 사용자 id(str(user.id) — /runs/hitl 검증값과 동일), run_id=세션/런 id.
+            "owner": owner,
+            "run_id": run_id,
         }
 
         async def runner() -> None:

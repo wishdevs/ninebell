@@ -11,7 +11,12 @@ import asyncio
 import pytest
 
 from app.live import store
-from app.live.hitl import _hitl_queues, set_hitl_owner
+from app.live.hitl import (
+    _hitl_queues,
+    close_hitl_channel,
+    open_hitl_channel,
+    set_hitl_owner,
+)
 from app.live.registry import register_workflow
 from app.main import app as fastapi_app
 
@@ -121,6 +126,39 @@ async def test_hitl_resolves_owned_decision(client, make_user, auth_as):
 
 
 @pytest.mark.asyncio
+async def test_hitl_owner_bound_at_channel_open_forbidden(client, make_user, auth_as):
+    """채널 오픈 시점에 바인딩된 소유자(레이스 창 제거)를 /runs/hitl 이 존중한다 — 타인은 403."""
+    uid = await make_user("heidi", "user")
+    auth_as(uid)
+    open_hitl_channel("dec-open", owner="someone-else")
+    try:
+        r = await client.post("/runs/hitl", json={"decisionId": "dec-open"})
+        assert r.status_code == 403
+    finally:
+        close_hitl_channel("dec-open")
+
+
+@pytest.mark.asyncio
+async def test_hitl_run_id_mismatch_forbidden(client, make_user, auth_as):
+    """채널이 특정 run_id 에 묶여 있으면, 요청 runId 가 다를 때 403(불일치 흐름으로의 주입 차단)."""
+    uid = await make_user("ivan", "user")
+    auth_as(uid)
+    open_hitl_channel("dec-run", owner=str(uid), run_id="run-A")
+    try:
+        mismatch = await client.post(
+            "/runs/hitl", json={"decisionId": "dec-run", "runId": "run-B", "value": "yes"}
+        )
+        assert mismatch.status_code == 403
+        # 일치하는 runId 는 정상 통과(resolve True).
+        match = await client.post(
+            "/runs/hitl", json={"decisionId": "dec-run", "runId": "run-A", "value": "yes"}
+        )
+        assert match.json() == {"ok": True}
+    finally:
+        close_hitl_channel("dec-run")
+
+
+@pytest.mark.asyncio
 async def test_agent_run_persistence_roundtrip(make_user):
     uid = await make_user("grace", "user")
     await store.create_run(run_id="run-persist", agent_id="demo-echo", user_id=uid)
@@ -203,6 +241,26 @@ async def test_list_runs_owner_scoped_and_filtered(client, make_user, auth_as):
     # agentId 필터.
     r2 = await client.get("/runs", params={"agentId": "expense-card-chat"})
     assert [x["id"] for x in r2.json()["runs"]] == ["run-h2"]
+
+
+@pytest.mark.asyncio
+async def test_list_runs_total_reflects_scope_and_filter(client, make_user, auth_as):
+    """{runs, total} envelope — total 은 페이지가 아닌 스코프 전체 건수(필터 반영)."""
+    uid = await make_user("tara", "user")
+    other = await make_user("uma", "user")
+    for i in range(3):
+        await store.create_run(run_id=f"run-t{i}", agent_id="demo-echo", user_id=uid)
+    await store.create_run(run_id="run-t-exp", agent_id="expense-card-chat", user_id=uid)
+    await store.create_run(run_id="run-t-other", agent_id="demo-echo", user_id=other)
+
+    auth_as(uid)
+    # limit<보유 건수 라도 total 은 소유 스코프 전체(=4), 타인 것 미포함.
+    body = (await client.get("/runs", params={"limit": 2})).json()
+    assert body["total"] == 4
+    assert len(body["runs"]) == 2
+    # agentId 필터 시 total 도 필터 반영.
+    filtered = (await client.get("/runs", params={"agentId": "demo-echo"})).json()
+    assert filtered["total"] == 3
 
 
 @pytest.mark.asyncio
