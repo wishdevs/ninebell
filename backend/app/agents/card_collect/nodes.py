@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.agents.common.nodes import make_open_evdn_node, make_select_evdn_node
 from app.config import get_settings
 from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
@@ -176,7 +177,18 @@ def _md_cell(v: object) -> str:
     return str(v or "").replace("|", "/").replace("\n", " ").strip()
 
 
-_STATUS_MARK = {"done": "✅ 반영", "skipped": "⏭️ 건너뜀", "failed": "❌ 실패", "pending": "· 대기"}
+_STATUS_MARK = {
+    "done": "✅ 반영",
+    "skipped": "⏭️ 건너뜀",
+    "failed": "❌ 실패",
+    "pending": "· 대기",
+    "wait2": "🕓 2차(불공) 대기",
+}
+
+
+def _row_key(r: dict) -> str:
+    """거래 행 식별키 — 승인/취소 쌍이 같은 APRVL_NO 라(프로브 실측) 일자·금액까지 복합."""
+    return f"{r.get('APRVL_NO') or ''}|{r.get('TRAN_DT') or ''}|{r.get('TRAN_AMT') or ''}"
 
 
 def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str]) -> str:
@@ -336,7 +348,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 decision_id=decision_id,
                 kind="grid",
                 title="승인내역 정리",
-                prompt="행별로 예산단위·프로젝트·적요를 입력한 뒤 적용을 누르세요.",
+                prompt=(
+                    "행별로 예산단위·프로젝트·적요를 입력한 뒤 적용을 누르세요. "
+                    "부가세구분이 '과세'인 행은 법인카드(01)로 먼저, 나머지 행은 "
+                    "법인카드(불공)(02)으로 자동 전환해 2단계로 입력·저장합니다."
+                ),
                 rows=grid_rows,
                 budgetUnits=budget_units,
                 projects={"favorites": project_favs, "searchResults": search_results, "query": query},
@@ -383,7 +399,9 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 logger.debug("card-collect grid: 무시된 메시지 %r", resp)
                 continue
 
-            # ── 반영(apply) 단계 — 비스킵 행을 no 순으로 ERP 에 순차 반영 ─────────────
+            # ── 부가세구분 분할: 과세 → 1차(법인카드) 즉시 반영, 그 외 → 2차(불공) 대기 ──
+            # 사용자 입력은 이 그리드 1회가 전부 — 2차는 여기 보존한 입력을 재조회 행에
+            # (APRVL_NO+일자+금액) 키로 매칭해 자동 적용한다(재입력 없음).
             apply_rows = sorted((r for r in submitted if not r.get("skip")), key=lambda r: r["no"])
             skipped = 0
             for r in submitted:
@@ -391,45 +409,38 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     status[r["no"] - 1] = "skipped"
                     skipped += 1
 
-            filled = 0
-            failures: list[str] = []
-            total = len(apply_rows)
-            for pos, row in enumerate(apply_rows):
-                no = row["no"]
-                idx = no - 1
-                bu = row.get("budgetUnit") or {}
-                proj = row.get("project") or None
-                note = (row.get("note") or "").strip()
-                notes[idx] = note
-                await emit_log(events, f"{no}행 반영 중…", "info")
-                collected = {
-                    "예산단위": bu.get("name") or "",
-                    "계정": "",  # 계정은 예산단위로 자동 결정(비워 두면 자동 처리).
-                    "프로젝트": (proj.get("name") if proj else "") or "",
-                    "적요": note,
+            taxable_work: list[dict] = []
+            pending_nontax: list[dict] = []
+            for row in apply_rows:
+                idx = row["no"] - 1
+                src = rows_list[idx]
+                entry = {
+                    "idx": idx,
+                    "label": row["no"],
+                    "budgetUnit": row.get("budgetUnit") or {},
+                    "project": row.get("project") or None,
+                    "note": (row.get("note") or "").strip(),
                 }
-                ok, detail = await _apply_row_fields(page, events, idx, collected)
-                if ok:
-                    filled += 1
-                    status[idx] = "done"
+                if (src.get("VAT_TP") or "").strip() == "과세":
+                    taxable_work.append(entry)
                 else:
-                    status[idx] = "failed"  # 실패는 배치를 중단하지 않는다.
-                    failures.append(f"{no}행: {detail}")
-                # 진행 현황 표를 매 행 갱신(같은 chat_id 로 대체) + 2행마다·마지막에 스냅샷.
-                await emit_chat(
-                    events,
-                    chat_id="cc-status",
-                    role="assistant",
-                    content="처리 현황:\n\n" + _status_table(rows_list, status, notes),
-                    streaming=False,
-                )
-                if (pos + 1) % 2 == 0 or pos == total - 1:
-                    await emit_shot(events.put, page)
+                    pending_nontax.append(
+                        {**entry, "key": _row_key(src), "merchant": src.get("TRAN_NM") or ""}
+                    )
+                    status[idx] = "wait2"
+                    notes[idx] = entry["note"]
+
+            filled, failures = await _apply_batch(
+                page, events, rows_list, taxable_work, status, notes, chat_id="cc-status"
+            )
         finally:
             close_hitl_channel(decision_id)
 
-        # ── 요약 ──────────────────────────────────────────────────────────
-        summary = f"반영 {filled}건 · 건너뜀 {skipped}건 · 실패 {len(failures)}건"
+        # ── 요약(1차) ─────────────────────────────────────────────────────
+        summary = (
+            f"1차(법인카드·과세) 반영 {filled}건 · 2차(불공) 대기 {len(pending_nontax)}건 · "
+            f"건너뜀 {skipped}건 · 실패 {len(failures)}건"
+        )
         if failures:
             summary += "\n\n실패 상세:\n- " + "\n- ".join(failures)
         await emit_chat(
@@ -439,11 +450,60 @@ def make_collect_rows_node(timeout_s: int | None = None):
             content=summary + "\n\n" + _status_table(rows_list, status, notes),
             streaming=False,
         )
-        await emit_log(events, f"항목 처리 완료 — {filled}건 반영(저장 전).", "ok")
+        await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")
         await emit_step(events, "collect_rows", "done")
-        return {"filled": filled}
+        return {"filled": filled, "pending_nontax": pending_nontax}
 
     return collect_rows
+
+
+async def _apply_batch(
+    page: Any,
+    events: Any,
+    rows_view: list[dict],
+    work: list[dict],
+    status: dict[int, str],
+    notes: dict[int, str],
+    *,
+    chat_id: str,
+) -> tuple[int, list[str]]:
+    """행 배치를 순차 반영. work 항목 = {idx(현재 그리드 행 인덱스), label(표시 행번호),
+    budgetUnit, project, note}. 실패는 배치를 중단하지 않는다. 반환 (filled, failures)."""
+    filled = 0
+    failures: list[str] = []
+    total = len(work)
+    for pos, row in enumerate(work):
+        idx = row["idx"]
+        label = row["label"]
+        bu = row.get("budgetUnit") or {}
+        proj = row.get("project") or None
+        note = row["note"]
+        notes[idx] = note
+        await emit_log(events, f"{label}행 반영 중…", "info")
+        collected = {
+            "예산단위": bu.get("name") or "",
+            "계정": "",  # 계정은 예산단위로 자동 결정(비워 두면 자동 처리).
+            "프로젝트": (proj.get("name") if proj else "") or "",
+            "적요": note,
+        }
+        ok, detail = await _apply_row_fields(page, events, idx, collected)
+        if ok:
+            filled += 1
+            status[idx] = "done"
+        else:
+            status[idx] = "failed"
+            failures.append(f"{label}행: {detail}")
+        # 진행 현황 표를 매 행 갱신(같은 chat_id 로 대체) + 2행마다·마지막에 스냅샷.
+        await emit_chat(
+            events,
+            chat_id=chat_id,
+            role="assistant",
+            content="처리 현황:\n\n" + _status_table(rows_view, status, notes),
+            streaming=False,
+        )
+        if (pos + 1) % 2 == 0 or pos == total - 1:
+            await emit_shot(events.put, page)
+    return filled, failures
 
 
 async def _apply_row_fields(
@@ -479,46 +539,243 @@ async def _apply_row_fields(
     return True, " / ".join(applied) + f" / 적요 '{collected['적요']}'"
 
 
-# ── 저장(최종 HITL 확인 후에만) ───────────────────────────────────────────────────
+# ── 저장(최종 HITL 확인 후에만) — 1차(과세)/2차(불공) 공용 ─────────────────────────
+async def _confirm_and_save(state: dict, *, filled: int, label: str, step_key: str) -> dict:
+    """choice HITL 확인 후에만 save_document(F7). 반환 {"saved"|"cancelled"|"error": ...}."""
+    events = state["events"]
+    page = state["page"]
+    try:
+        resp = await wait_hitl(
+            events,
+            kind="choice",
+            title=f"결의서 저장 확인 — {label}",
+            prompt=(
+                f"{label} {filled}건이 입력되었습니다. 결의서를 저장(F7)할까요? "
+                "저장 시 실제 전표가 생성됩니다."
+            ),
+            options=[
+                {"value": "save", "label": "저장", "description": "실제 결의서 저장(F7)"},
+                {"value": "cancel", "label": "저장 안 함", "description": "입력만 유지, 저장 취소"},
+            ],
+            owner=state.get("owner"),
+            run_id=state.get("run_id"),
+        )
+    except asyncio.TimeoutError:
+        await emit_step(events, step_key, "failed")
+        return {"error": f"저장 확인 대기 시간 초과 — {label} {filled}건 입력됨(저장 안 함)."}
+    choice = (resp.get("value") or resp.get("message") or "").strip()
+    if choice != "save":
+        return {"cancelled": True}
+    r = await steps.save_document(page, confirm=True)
+    if not r.get("ok"):
+        await emit_step(events, step_key, "failed")
+        return {"error": f"{label} 저장 실패: {r}"}
+    await emit_log(events, f"{label} 결의서 저장 완료(F7, via {r.get('via')}).", "ok")
+    await emit_shot(events.put, page)
+    return {"saved": True}
+
+
 def make_save_node():
+    """1차(법인카드·과세) 저장. 취소 시 save_cancelled 플래그 → 2차 진행도 중단(전표 정합성)."""
+
     async def save(state: dict) -> dict:
         if state.get("error"):
             return {"result": f"오류로 저장하지 않음: {state.get('error')}"}
         events = state["events"]
-        page = state["page"]
         filled = state.get("filled", 0)
         await emit_step(events, "save", "running")
         if not filled:
+            # 과세 0건 — 사용자 규칙대로 저장 없이 닫고 2차(불공)로 진행한다.
             await emit_step(events, "save", "done")  # 스텝을 'pending' 에 멈추지 않는다(리뷰 #13).
-            return {"result": "반영된 건이 없어 저장하지 않았습니다."}
-        # 실 회계 반영이라 반드시 사용자 확인(choice) 후에만 F7.
-        try:
-            resp = await wait_hitl(
-                events,
-                kind="choice",
-                title="결의서 저장 확인",
-                prompt=f"{filled}건이 입력되었습니다. 결의서를 저장(F7)할까요? 저장 시 실제 전표가 생성됩니다.",
-                options=[
-                    {"value": "save", "label": "저장", "description": "실제 결의서 저장(F7)"},
-                    {"value": "cancel", "label": "저장 안 함", "description": "입력만 유지, 저장 취소"},
-                ],
-                owner=state.get("owner"),
-                run_id=state.get("run_id"),
-            )
-        except asyncio.TimeoutError:
-            await emit_step(events, "save", "failed")
-            return {"error": f"저장 확인 대기 시간 초과 — {filled}건 입력됨(저장 안 함)."}
-        choice = (resp.get("value") or resp.get("message") or "").strip()
-        if choice != "save":
-            await emit_step(events, "save", "done")
-            return {"result": f"{filled}건 입력 완료 — 사용자 선택으로 저장하지 않았습니다."}
-        r = await steps.save_document(page, confirm=True)
-        if not r.get("ok"):
-            await emit_step(events, "save", "failed")
-            return {"error": f"저장 실패: {r}"}
-        await emit_log(events, f"결의서 저장 완료(F7, via {r.get('via')}).", "ok")
-        await emit_shot(events.put, page)
+            await emit_log(events, "1차(과세) 반영 건이 없어 저장 없이 2차로 진행합니다.", "info")
+            return {"result": "1차(과세) 반영 0건 — 저장 생략."}
+        out = await _confirm_and_save(state, filled=filled, label="법인카드(과세분)", step_key="save")
+        if out.get("error"):
+            return {"error": out["error"]}
         await emit_step(events, "save", "done")
-        return {"result": f"{filled}건 입력·저장 완료."}
+        if out.get("cancelled"):
+            return {
+                "result": f"과세 {filled}건 입력 완료 — 사용자 선택으로 저장하지 않았습니다(2차 중단).",
+                "save_cancelled": True,
+            }
+        return {"result": f"과세 {filled}건 입력·저장 완료."}
 
     return save
+
+
+# ── 2차: 증빙유형 전환(법인카드(불공)) → 재조회·매칭 ───────────────────────────────
+def make_switch_evdn_node():
+    """카드 팝업 닫기 → 증빙유형 02 재선택 → 카드/기간/조회 재실행 → 1차 입력값 행 매칭.
+
+    프로브 실측(2026-07-02): 팝업 '닫기' 후 같은 행에서 open_evdn→select_evdn("02") 이
+    F3 없이 동작. 매칭 키 = (APRVL_NO, TRAN_DT, TRAN_AMT) — 승인/취소 쌍 구분.
+    """
+
+    async def switch_evdn(state: dict) -> dict:
+        if state.get("error"):
+            return {}
+        events = state["events"]
+        page = state["page"]
+        pending: list[dict] = state.get("pending_nontax") or []
+        await emit_step(events, "switch_evdn", "running")
+        if state.get("save_cancelled"):
+            await emit_log(events, "1차 저장이 취소되어 2차(불공)를 진행하지 않습니다.", "warn")
+            await emit_step(events, "switch_evdn", "done")
+            return {"pass2_work": []}
+        if not pending:
+            await emit_log(events, "불공(비과세) 대상이 없어 2차를 생략합니다.", "info")
+            await emit_step(events, "switch_evdn", "done")
+            return {"pass2_work": []}
+
+        r = await steps.close_card_popup(page)
+        if not r.get("ok"):
+            await emit_step(events, "switch_evdn", "failed")
+            return {"error": f"카드 팝업 닫기 실패: {r.get('reason')}"}
+        # 증빙유형 재선택 — 진입 공용 노드 재사용(state error 규약 공유, 스텝은 자체 방출).
+        for node in (make_open_evdn_node(), make_select_evdn_node("02")):
+            out = await node(state)
+            state.update(out or {})
+            if state.get("error"):
+                await emit_step(events, "switch_evdn", "failed")
+                return {"error": state["error"]}
+
+        r = await steps.select_all_cards(page)
+        if not r.get("ok"):
+            await emit_step(events, "switch_evdn", "failed")
+            return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}
+        period = state.get("period") or list(steps.compute_period(date.today()))
+        pr = await steps.set_period(page, period[0], period[1])
+        if not pr.get("ok"):
+            await emit_step(events, "switch_evdn", "failed")
+            return {"error": f"2차 승인일 기간 설정 실패: {pr}"}
+        rows2 = await steps.run_query(page)
+        if not isinstance(rows2, int) or rows2 < 0:
+            await emit_step(events, "switch_evdn", "failed")
+            return {"error": "2차 조회에 실패했습니다(그리드 로딩 실패)."}
+        lst2 = await steps.read_rows(page, limit=500)
+
+        # 키당 후보 큐 — 동일 복합키(같은 승인번호·일자·금액) 행이 여러 건이어도 각 pending 이
+        # 서로 다른 실제 행을 1:1 소비한다. setdefault(단일 보관)면 두 입력이 같은 행에 이중
+        # 반영되고 다른 행은 조용히 누락된다(리뷰 HIGH #1).
+        by_key: dict[str, list[dict]] = {}
+        for r2 in lst2:
+            by_key.setdefault(_row_key(r2), []).append(r2)
+        work: list[dict] = []
+        unmatched: list[str] = []
+        for p in pending:
+            queue = by_key.get(p["key"]) or []
+            # 재조회에서 사라졌거나(큐 소진) 과세로 재분류된 행은 배제(안전) — 실패로 기록.
+            hit = queue.pop(0) if queue else None
+            if hit is None or (hit.get("VAT_TP") or "").strip() == "과세":
+                unmatched.append(f"{p['label']}행({p.get('merchant', '')})")
+                continue
+            work.append(
+                {
+                    "idx": hit.get("i"),
+                    "label": p["label"],
+                    "budgetUnit": p["budgetUnit"],
+                    "project": p["project"],
+                    "note": p["note"],
+                }
+            )
+        if unmatched:
+            await emit_log(
+                events,
+                f"2차 재조회 매칭 실패 {len(unmatched)}건(반영 제외): {', '.join(unmatched[:5])}",
+                "warn",
+            )
+        await emit_log(
+            events, f"증빙유형 '법인카드(불공)' 전환 완료 — 2차 대상 {len(work)}건.", "ok"
+        )
+        await emit_shot(events.put, page)
+        await emit_step(events, "switch_evdn", "done")
+        return {
+            "rows2_list": lst2,
+            "pass2_work": work,
+            "pass2_unmatched": len(unmatched),
+            "pass2_unmatched_desc": ", ".join(unmatched[:5]),
+        }
+
+    return switch_evdn
+
+
+def make_apply_pass2_node():
+    """2차(불공) 반영 — 1차 그리드에서 보존한 입력값을 매칭 행에 순차 적용(재입력 없음)."""
+
+    async def apply_pass2(state: dict) -> dict:
+        if state.get("error"):
+            return {}
+        events = state["events"]
+        page = state["page"]
+        work: list[dict] = state.get("pass2_work") or []
+        await emit_step(events, "apply_pass2", "running")
+        if not work:
+            await emit_step(events, "apply_pass2", "done")
+            return {"pass2_filled": 0}
+        rows2: list[dict] = state.get("rows2_list") or []
+        target_idx = {w["idx"] for w in work}
+        rows_view = [r for r in rows2 if r.get("i") in target_idx]
+        status2: dict[int, str] = {r.get("i"): "pending" for r in rows_view}
+        notes2: dict[int, str] = {w["idx"]: w["note"] for w in work}
+        filled2, failures2 = await _apply_batch(
+            page, events, rows_view, work, status2, notes2, chat_id="cc-status2"
+        )
+        unmatched_n = state.get("pass2_unmatched", 0)
+        summary = (
+            f"2차(법인카드·불공) 반영 {filled2}건 · 매칭 실패 {unmatched_n}건 · "
+            f"실패 {len(failures2)}건"
+        )
+        if unmatched_n:
+            # 재조회에서 못 찾은 거래는 반영이 누락된 것 — 요약에 반드시 노출(리뷰 HIGH #2).
+            summary += f"\n\n⚠ 매칭 실패(수동 확인 필요): {state.get('pass2_unmatched_desc', '')}"
+        if failures2:
+            summary += "\n\n실패 상세:\n- " + "\n- ".join(failures2)
+        await emit_chat(
+            events,
+            chat_id="cc-summary2",
+            role="assistant",
+            content=summary + "\n\n" + _status_table(rows_view, status2, notes2),
+            streaming=False,
+        )
+        await emit_log(events, f"2차(불공) 처리 완료 — {filled2}건 반영(저장 전).", "ok")
+        await emit_step(events, "apply_pass2", "done")
+        return {"pass2_filled": filled2}
+
+    return apply_pass2
+
+
+def make_save_pass2_node():
+    """2차(불공) 저장 + 전체 요약. 2차 대상이 없으면 요약만 남긴다."""
+
+    async def save_pass2(state: dict) -> dict:
+        if state.get("error"):
+            return {"result": f"오류로 저장하지 않음: {state.get('error')}"}
+        events = state["events"]
+        filled1 = state.get("filled", 0)
+        filled2 = state.get("pass2_filled", 0)
+        unmatched_n = state.get("pass2_unmatched", 0)
+        # 매칭 실패(반영 누락)는 최종 결과에 반드시 노출한다(리뷰 HIGH #2).
+        tail = f" · ⚠ 매칭 실패 {unmatched_n}건(수동 확인 필요)" if unmatched_n else ""
+        await emit_step(events, "save_pass2", "running")
+        if not filled2:
+            await emit_step(events, "save_pass2", "done")
+            if state.get("save_cancelled"):
+                return {}  # 1차 취소 결과 메시지를 유지한다.
+            no2 = "불공 대상 없음" if not unmatched_n else "불공 반영 0건"
+            return {"result": f"처리 완료 — 과세 {filled1}건 저장 · {no2}{tail}."}
+        out = await _confirm_and_save(
+            state, filled=filled2, label="법인카드(불공분)", step_key="save_pass2"
+        )
+        if out.get("error"):
+            return {"error": out["error"]}
+        await emit_step(events, "save_pass2", "done")
+        if out.get("cancelled"):
+            return {
+                "result": (
+                    f"처리 완료 — 과세 {filled1}건 저장 · 불공 {filled2}건 입력"
+                    f"(저장 안 함, 사용자 취소){tail}."
+                )
+            }
+        return {"result": f"처리 완료 — 과세 {filled1}건 · 불공 {filled2}건 입력·저장{tail}."}
+
+    return save_pass2

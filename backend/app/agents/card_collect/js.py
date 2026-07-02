@@ -83,10 +83,12 @@ READ_ROWS_JS = f"""(limit) => {{
       return o && o[f] != null ? String(o[f]) : v(i,f); }} catch(e) {{ return v(i,f); }} }};
     const out = [];
     // 거래시각(TRAN_TM '00:00:00')·승인여부(APRVL_YN '승인'/'승인취소')는 display value 로 읽는다.
+    // APRVL_NO(승인번호)는 2패스(불공) 재조회 행 매칭 키 — 승인/취소 쌍이 같은 번호라 단독으론
+    // 유니크하지 않다(프로브 실측). 매칭은 (APRVL_NO, TRAN_DT, TRAN_AMT) 복합키로 한다.
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({{
       i, TRAN_DT:v(i,'TRAN_DT'), TRAN_TM:dv(i,'TRAN_TM'), TRAN_NM:v(i,'TRAN_NM'),
       TRAN_AMT:v(i,'TRAN_AMT'), SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'),
-      VAT_TP:dv(i,'VAT_TP'), APRVL_YN:dv(i,'APRVL_YN'),
+      VAT_TP:dv(i,'VAT_TP'), APRVL_YN:dv(i,'APRVL_YN'), APRVL_NO:v(i,'APRVL_NO'),
       FINPRODUCT_NM:v(i,'FINPRODUCT_NM'), NOTE_DC:v(i,'NOTE_DC') }});
     return {{ rows:n, list: out }};
   }} catch(e) {{ return {{ rows:-1, err:String(e).slice(0,80) }}; }}
@@ -249,3 +251,7 @@ def document_button_box_js(text: str) -> str:
       if (!b) return null; const r = b.getBoundingClientRect();
       return {{ x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }};
     }}"""
+
+
+# 법인카드 카드 팝업 존재 여부(닫기 검증용).
+CARD_WIN_EXISTS_JS = f"""() => !!({CARD_WIN})"""

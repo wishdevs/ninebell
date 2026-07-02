@@ -266,6 +266,25 @@ async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict
     return list(by_code.values()), cap_hit
 
 
+# ── 카드 팝업 닫기(2패스 증빙유형 전환용) ─────────────────────────────────────────
+async def close_card_popup(page: Any) -> dict:
+    """법인카드 카드 팝업의 '닫기' 버튼 클릭 후 닫힘 검증. 반환 {ok} | {ok:False, reason}.
+
+    프로브 실측(2026-07-02): 팝업 하단 '닫기' 버튼 클릭으로 정상 닫힘, 이후 같은 행에서
+    증빙유형 재선택(open_evdn→select_evdn) 이 F3 없이 동작한다.
+    """
+    if not await page.evaluate(js.CARD_WIN_EXISTS_JS):
+        return {"ok": True, "already": True}  # 이미 닫혀 있음.
+    box = await page.evaluate(js.card_button_box_js("닫기"))
+    if not box:
+        return {"ok": False, "reason": "'닫기' 버튼 없음"}
+    await page.mouse.click(box["x"], box["y"])
+    await page.wait_for_timeout(1_500)
+    if await page.evaluate(js.CARD_WIN_EXISTS_JS):
+        return {"ok": False, "reason": "닫기 클릭 후에도 팝업이 남아 있음"}
+    return {"ok": True}
+
+
 # ── 행 반영(일괄적용, 해당 행만 체크) / 저장(F7) ──────────────────────────────────
 async def apply_row(page: Any, row: int) -> dict:
     """그 행만 체크 후 '일괄적용' 클릭(그 행에 폼값 반영). ⚠ 저장 아님."""

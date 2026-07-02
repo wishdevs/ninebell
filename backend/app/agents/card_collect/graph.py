@@ -1,11 +1,12 @@
 """법인카드 승인내역 정리(card-collect) — LangGraph StateGraph 조립.
 
 진입 앞단(login→user_type(회계)→menu_nav(결의서입력)→set_gubun(카드)→add_row(F3)
-→open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후
-(select_all_cards→set_period→query→collect_rows→save)는 card_collect.nodes 로 잇는다.
+→open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후는
+부가세구분 2패스: select_all_cards→set_period→query→collect_rows(그리드 1회 입력·과세 반영)
+→save(1차 저장)→switch_evdn(불공 전환·재조회·매칭)→apply_pass2(불공 반영)→save_pass2.
 
-state 계약(러너 주입): page/browser/events/userid/password/params. 종료는 save 가 result 로.
-⚠ 저장(F7)은 save 노드가 사용자 HITL '저장' 선택 시에만 실행(그 외 절대 금지).
+state 계약(러너 주입): page/browser/events/userid/password/params. 종료는 save_pass2 가 result 로.
+⚠ 저장(F7)은 save/save_pass2 노드가 사용자 HITL '저장' 선택 시에만 실행(그 외 절대 금지).
 """
 
 from __future__ import annotations
@@ -25,11 +26,14 @@ from app.agents.common.nodes import (
 )
 
 from .nodes import (
+    make_apply_pass2_node,
     make_collect_rows_node,
     make_query_node,
     make_save_node,
+    make_save_pass2_node,
     make_select_all_cards_node,
     make_set_period_node,
+    make_switch_evdn_node,
 )
 
 
@@ -45,6 +49,13 @@ class CardCollectState(TypedDict, total=False):
     period: list[str]
     rows_list: list[dict]
     filled: int
+    # 부가세구분 2패스 — 1차 그리드 입력 중 불공 대기분(입력값+복합키)과 2차 산출물.
+    pending_nontax: list[dict]
+    save_cancelled: bool
+    rows2_list: list[dict]
+    pass2_work: list[dict]
+    pass2_unmatched: int
+    pass2_filled: int
     result: str | dict
     error: str
 
@@ -66,6 +77,10 @@ def build_card_collect_graph():
     g.add_node("query", make_query_node())
     g.add_node("collect_rows", make_collect_rows_node())
     g.add_node("save", make_save_node())
+    # 2차(불공) — 증빙유형 전환·재조회·매칭 → 반영 → 저장.
+    g.add_node("switch_evdn", make_switch_evdn_node())
+    g.add_node("apply_pass2", make_apply_pass2_node())
+    g.add_node("save_pass2", make_save_pass2_node())
 
     g.set_entry_point("login")
     for a, b in [
@@ -80,7 +95,10 @@ def build_card_collect_graph():
         ("set_period", "query"),
         ("query", "collect_rows"),
         ("collect_rows", "save"),
+        ("save", "switch_evdn"),
+        ("switch_evdn", "apply_pass2"),
+        ("apply_pass2", "save_pass2"),
     ]:
         g.add_edge(a, b)
-    g.add_edge("save", END)
+    g.add_edge("save_pass2", END)
     return g.compile()

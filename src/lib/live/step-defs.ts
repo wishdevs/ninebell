@@ -115,11 +115,34 @@ export const WORKFLOW_STEP_DEFS: Record<string, readonly WorkflowStepDef[]> = {
     { id: 'query', label: '조회', skill: '그리드 읽기', detail: '승인내역 조회 → 리스트 보고' },
     {
       id: 'collect_rows',
-      label: '건별 입력',
-      skill: '대화형 입력',
-      detail: '건별 예산단위/계정/프로젝트/적요 입력(적요 추천)',
+      label: '건별 입력(그리드)',
+      skill: '그리드 입력',
+      detail: '전 행 예산단위/프로젝트/적요 입력 → 과세분(법인카드) 먼저 반영',
     },
-    { id: 'save', label: '저장', skill: '저장', detail: '사용자 확인 후 결의서 저장(F7)' },
+    {
+      id: 'save',
+      label: '1차 저장(과세)',
+      skill: '저장',
+      detail: '사용자 확인 후 과세분 결의서 저장(F7)',
+    },
+    {
+      id: 'switch_evdn',
+      label: '불공 전환',
+      skill: '코드피커',
+      detail: '팝업 닫기 → 증빙유형 법인카드(불공) 재선택 → 재조회·행 매칭',
+    },
+    {
+      id: 'apply_pass2',
+      label: '불공분 반영',
+      skill: '그리드 입력',
+      detail: '1차에 입력해둔 값을 불공 행에 자동 적용(재입력 없음)',
+    },
+    {
+      id: 'save_pass2',
+      label: '2차 저장(불공)',
+      skill: '저장',
+      detail: '사용자 확인 후 불공분 결의서 저장(F7)',
+    },
   ],
   'demo-echo': [
     { id: 'open', label: '시작' },

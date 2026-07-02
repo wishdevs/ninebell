@@ -142,7 +142,7 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
 
     # 전부 skip 제출로 노드를 정상 종료시킨다.
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
 
 
 async def test_grid_query_message_reemits_with_search_results(monkeypatch):
@@ -159,7 +159,7 @@ async def test_grid_query_message_reemits_with_search_results(monkeypatch):
     assert second["projects"]["searchResults"] == [{"code": "SP1", "name": "SPARES-1"}]
 
     resolve_hitl(second["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
 
 
 async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkeypatch):
@@ -190,14 +190,15 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
         },
     )
     out = await asyncio.wait_for(task, timeout=2)
-    assert out == {"filled": 1}  # 1행 성공, 2행 실패, 3행 skip
+    # 전 행 과세 → 1차에서 처리, 불공 대기 없음. 1행 성공, 2행 실패, 3행 skip.
+    assert out == {"filled": 1, "pending_nontax": []}
     assert calls == [0, 1]  # skip 아닌 두 행만, no 순(idx 0,1)
 
     frames = []
     while not events.empty():
         frames.append(events.get_nowait())
     summary = [f["chat"]["content"] for f in frames if isinstance(f.get("chat"), dict)]
-    assert any("반영 1건 · 건너뜀 1건 · 실패 1건" in c for c in summary)
+    assert any("1차(법인카드·과세) 반영 1건" in c and "건너뜀 1건 · 실패 1건" in c for c in summary)
     assert any("2행: 예산단위 무매칭" in c for c in summary)
 
 
@@ -223,7 +224,7 @@ async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
     assert applied == []  # 무효 제출은 반영하지 않는다
 
     resolve_hitl(reemit["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
 
 
 async def test_grid_timeout_returns_error(monkeypatch):
@@ -232,3 +233,222 @@ async def test_grid_timeout_returns_error(monkeypatch):
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
     out = await make_collect_rows_node(timeout_s=0.05)(state)
     assert "error" in out and "시간 초과" in out["error"]
+
+
+# ── 부가세구분 2패스(과세=1차 / 그 외=2차 불공) ────────────────────────────────────
+from app.agents.card_collect.nodes import (  # noqa: E402
+    _row_key,
+    make_apply_pass2_node,
+    make_save_node,
+    make_save_pass2_node,
+    make_switch_evdn_node,
+)
+
+
+def _mixed_rows() -> list[dict]:
+    """과세 1건(no=1) + 빈칸 1건(no=2) + 비과세 1건(no=3)."""
+    base = _rows(3)
+    base[0]["APRVL_NO"] = "A1"
+    base[1]["APRVL_NO"] = "A2"
+    base[1]["VAT_TP"] = ""
+    base[2]["APRVL_NO"] = "A3"
+    base[2]["VAT_TP"] = "비과세"
+    return base
+
+
+async def test_grid_submit_partitions_taxable_vs_nontax(monkeypatch):
+    """과세 행만 1차 반영, 나머지는 pending_nontax(입력값+복합키) 로 보존된다."""
+    _stub_dumps(monkeypatch, units=[])
+    calls: list[int] = []
+
+    async def _fake_apply(page, events, row, collected):
+        calls.append(row)
+        return True, "ok"
+
+    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+
+    events: asyncio.Queue = asyncio.Queue()
+    rows = _mixed_rows()
+    state = {"events": events, "page": object(), "rows_list": rows, "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    resolve_hitl(
+        frame["id"],
+        {
+            "rows": [
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식"},
+                {"no": 2, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "소모품"},
+                {"no": 3, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "주차"},
+            ]
+        },
+    )
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out["filled"] == 1 and calls == [0]  # 과세(no=1)만 1차 반영
+    pend = out["pending_nontax"]
+    assert [p["label"] for p in pend] == [2, 3]
+    assert pend[0]["key"] == _row_key(rows[1]) and pend[0]["note"] == "소모품"
+    assert pend[1]["budgetUnit"]["name"] == "영업본부"
+
+
+async def test_save_zero_taxable_skips_confirm_and_proceeds():
+    """과세 0건 → 확인 없이 저장 생략(2차 진행 허용, save_cancelled 없음)."""
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_node()({"events": events, "page": object(), "filled": 0})
+    assert "저장 생략" in out["result"] and "save_cancelled" not in out
+
+
+async def test_save_cancel_sets_flag_and_switch_aborts_pass2(monkeypatch):
+    """1차 저장 취소 → save_cancelled → switch_evdn 이 2차를 진행하지 않는다."""
+    events: asyncio.Queue = asyncio.Queue()
+    state = {
+        "events": events,
+        "page": object(),
+        "filled": 2,
+        "owner": None,
+        "run_id": None,
+        "pending_nontax": [{"label": 2, "key": "k", "budgetUnit": {}, "project": None, "note": "n", "merchant": "m"}],
+    }
+    task = asyncio.create_task(make_save_node()(state))
+    hitl = await _next_hitl(events)
+    resolve_hitl(hitl["id"], {"value": "cancel"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out.get("save_cancelled") is True
+
+    state.update(out)
+    out2 = await make_switch_evdn_node()(state)
+    assert out2 == {"pass2_work": []}
+
+
+async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
+    """2차 재조회 행을 (APRVL_NO,일자,금액) 키로 매칭 — 미매칭·과세 재분류 행은 제외."""
+
+    async def _ok_close(page):
+        return {"ok": True}
+
+    async def _ok_cards(page):
+        return {"ok": True, "n": 5, "checked": 5}
+
+    async def _ok_period(page, s, e):
+        return {"ok": True}
+
+    async def _q(page, timeout_polls=20):
+        return 3
+
+    rows2 = _mixed_rows()  # 같은 거래가 재조회됨(인덱스 동일)
+    rows2[2]["i"] = 2
+
+    async def _read(page, limit=200):
+        return rows2
+
+    monkeypatch.setattr(steps, "close_card_popup", _ok_close)
+    monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
+    monkeypatch.setattr(steps, "set_period", _ok_period)
+    monkeypatch.setattr(steps, "run_query", _q)
+    monkeypatch.setattr(steps, "read_rows", _read)
+
+    async def _noop_node(state):
+        return {}
+
+    monkeypatch.setattr(cc_nodes, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(cc_nodes, "make_select_evdn_node", lambda code="01": _noop_node)
+
+    events: asyncio.Queue = asyncio.Queue()
+    pending = [
+        # rows2[1](빈칸) 매칭 성공 / 존재하지 않는 키 1건은 미매칭.
+        {"label": 2, "key": _row_key(rows2[1]), "budgetUnit": {"code": "2000", "name": "경영본부"},
+         "project": None, "note": "소모품", "merchant": "가맹점1"},
+        {"label": 9, "key": "없음|x|y", "budgetUnit": {}, "project": None, "note": "n", "merchant": "유령"},
+    ]
+    state = {
+        "events": events, "page": object(), "owner": None, "run_id": None,
+        "pending_nontax": pending, "period": ["2026-06-01", "2026-06-30"],
+    }
+    out = await make_switch_evdn_node()(state)
+    assert out["pass2_unmatched"] == 1
+    assert [w["label"] for w in out["pass2_work"]] == [2]
+    assert out["pass2_work"][0]["idx"] == rows2[1]["i"]
+
+
+async def test_apply_pass2_applies_matched_work(monkeypatch):
+    calls: list[int] = []
+
+    async def _fake_apply(page, events, row, collected):
+        calls.append(row)
+        return True, "ok"
+
+    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+    events: asyncio.Queue = asyncio.Queue()
+    rows2 = _mixed_rows()
+    state = {
+        "events": events, "page": object(),
+        "rows2_list": rows2,
+        "pass2_work": [
+            {"idx": 1, "label": 2, "budgetUnit": {"code": "2000", "name": "경영본부"},
+             "project": None, "note": "소모품"},
+        ],
+    }
+    out = await make_apply_pass2_node()(state)
+    assert out == {"pass2_filled": 1} and calls == [1]
+
+
+async def test_save_pass2_composes_final_summary_without_pass2():
+    """불공 대상 0건이면 확인 없이 전체 요약 result 만 남긴다."""
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_pass2_node()(
+        {"events": events, "page": object(), "filled": 3, "pass2_filled": 0}
+    )
+    assert "과세 3건" in out["result"] and "불공 대상 없음" in out["result"]
+
+
+async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkeypatch):
+    """동일 복합키 2행 — 각 pending 이 서로 다른 실제 행을 1:1 소비(이중반영/누락 금지)."""
+
+    async def _ok_close(page):
+        return {"ok": True}
+
+    async def _ok_cards(page):
+        return {"ok": True}
+
+    async def _ok_period(page, s, e):
+        return {"ok": True}
+
+    async def _q(page, timeout_polls=20):
+        return 2
+
+    # 같은 승인번호·일자·금액(복합키 충돌) 2행 — 그리드 인덱스만 다름.
+    dup = {
+        "APRVL_NO": "D1", "TRAN_DT": "2026-06-22", "TRAN_AMT": "1000",
+        "TRAN_NM": "중복가맹", "VAT_TP": "", "FINPRODUCT_NM": "카드",
+    }
+    rows2 = [{**dup, "i": 0}, {**dup, "i": 1}]
+
+    async def _read(page, limit=200):
+        return rows2
+
+    monkeypatch.setattr(steps, "close_card_popup", _ok_close)
+    monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
+    monkeypatch.setattr(steps, "set_period", _ok_period)
+    monkeypatch.setattr(steps, "run_query", _q)
+    monkeypatch.setattr(steps, "read_rows", _read)
+
+    async def _noop_node(state):
+        return {}
+
+    monkeypatch.setattr(cc_nodes, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(cc_nodes, "make_select_evdn_node", lambda code="01": _noop_node)
+
+    key = _row_key(rows2[0])
+    pending = [
+        {"label": 1, "key": key, "budgetUnit": {"code": "1", "name": "a"}, "project": None, "note": "n1", "merchant": "중복가맹"},
+        {"label": 2, "key": key, "budgetUnit": {"code": "2", "name": "b"}, "project": None, "note": "n2", "merchant": "중복가맹"},
+        {"label": 3, "key": key, "budgetUnit": {"code": "3", "name": "c"}, "project": None, "note": "n3", "merchant": "중복가맹"},
+    ]
+    events: asyncio.Queue = asyncio.Queue()
+    state = {
+        "events": events, "page": object(), "owner": None, "run_id": None,
+        "pending_nontax": pending, "period": ["2026-06-01", "2026-06-30"],
+    }
+    out = await cc_nodes.make_switch_evdn_node()(state)
+    # 2행뿐이므로 앞선 2건이 서로 다른 idx(0,1)를 소비, 3번째는 매칭 실패.
+    assert [w["idx"] for w in out["pass2_work"]] == [0, 1]
+    assert out["pass2_unmatched"] == 1
