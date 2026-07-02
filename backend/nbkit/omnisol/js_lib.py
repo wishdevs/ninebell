@@ -182,12 +182,17 @@ KENDO_SET_DROPDOWN_BY_TEXT_JS = """({ selector, text }) => {
 }"""
 
 # 디테일 그리드(인덱스 1) 증빙 셀 에디터 열기: setCurrent + showEditor(캔버스 → DOM 오버레이).
+# ⚠ 항상 '마지막 행'을 연다 — F3 신규 행은 맨 아래에 추가된다(실측). itemIndex 0 고정이던
+#   시절, 2패스 플로우에서 기존(1차 적용) 행의 증빙을 열어 불공(02)이 과세 행에 덮어써지는
+#   실전 사고가 있었다(2026-07-02). 반환 {ok, idx, rows} | false.
 OPEN_EVDN_EDITOR_JS = """() => {
   try {
     const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
-    g.setCurrent({ itemIndex: 0, fieldName: 'EVDN_TP_NM' });
+    const n = g.getDataSource().getRowCount();
+    const idx = Math.max(0, n - 1);
+    g.setCurrent({ itemIndex: idx, fieldName: 'EVDN_TP_NM' });
     g.showEditor();
-    return true;
+    return { ok: true, idx: idx, rows: n };
   } catch (e) { return false; }
 }"""
 

@@ -179,7 +179,13 @@ def make_open_evdn_node():
         if not opened:
             await emit_step(emit, "open_evdn", "failed")
             return {"error": "증빙유형 팝업이 열리지 않았습니다(돋보기 클릭 3회 실패). 잠시 후 다시 실행해 주세요."}
-        await emit_log(emit, "증빙 돋보기 → 증빙유형 팝업 오픈.", "ok")
+        # 대상 행 로깅 — 2패스 사고(기존 행 증빙 오픈) 재발 진단용. shown 은 {ok, idx, rows}.
+        target = (
+            f"(대상 {shown['idx'] + 1}행/총 {shown['rows']}행)"
+            if isinstance(shown, dict) and "idx" in shown
+            else ""
+        )
+        await emit_log(emit, f"증빙 돋보기 → 증빙유형 팝업 오픈{target}.", "ok")
         await emit_shot(emit, page)
         await emit_step(emit, "open_evdn", "done", _ms(t0))
         return {}
