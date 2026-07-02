@@ -48,6 +48,8 @@ def _issue_session(
 ) -> None:
     """세션 JWT 쿠키를 발급하고 id/pw 를 CredCache 에 jti 키로 보관."""
     token, jti = create_session_token(str(user_id))
+    # 재로그인 고아 정리: 같은 계정의 이전 jti 자격증명을 먼저 무효화(last-login-wins).
+    request.app.state.cred_cache.evict_user(userid)
     request.app.state.cred_cache.put(jti, userid, password, settings.session_ttl_seconds)
     response.set_cookie(
         SESSION_COOKIE,

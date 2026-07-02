@@ -44,6 +44,17 @@ class CredCache:
     def delete(self, jti: str) -> None:
         self._store.pop(jti, None)
 
+    def evict_user(self, userid: str) -> int:
+        """이 userid 의 기존 엔트리 전부 제거(재로그인 시 이전 세션 고아 정리). 제거 수 반환.
+
+        단일워커 last-login-wins: 같은 계정으로 새로 로그인하면 이전 jti 자격증명을 무효화해
+        무한 누적·유령 세션을 막는다. get_current_user 의 CredCache 검사와 맞물려 이전 세션 종료.
+        """
+        stale = [jti for jti, e in self._store.items() if e.data.get("u") == userid]
+        for jti in stale:
+            self._store.pop(jti, None)
+        return len(stale)
+
     def sweep(self) -> None:
         """만료 엔트리 전체 청소(1회)."""
         self._sweep()

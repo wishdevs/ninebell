@@ -52,6 +52,15 @@ async def get_current_user(request: Request, db: DbSession) -> User:
     except InvalidTokenError as exc:
         raise _unauthorized("세션이 유효하지 않습니다.") from exc
 
+    # 세션 무효화: jti 가 CredCache 에 없으면(로그아웃/TTL 만료/서버 재시작) 거부한다.
+    # JWT 는 무상태라 이 검사 없이는 로그아웃해도 토큰이 살아있다. cred_cache 미존재
+    # (테스트/lifespan 미실행)면 스킵 — 런타임엔 lifespan 이 항상 생성한다.
+    cache = getattr(request.app.state, "cred_cache", None)
+    if cache is not None:
+        jti = payload.get("jti")
+        if not jti or cache.get(jti) is None:
+            raise _unauthorized("세션이 만료되었거나 로그아웃되었습니다.")
+
     subject = payload.get("sub")
     if not isinstance(subject, str):
         raise _unauthorized("세션이 유효하지 않습니다.")
