@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db import get_sessionmaker
 from app.models import AgentRun, AgentTemplate
@@ -70,6 +70,21 @@ async def list_runs(
             stmt = stmt.where(AgentRun.agent_id == agent_id)
         stmt = stmt.order_by(AgentRun.started_at.desc()).limit(limit).offset(offset)
         return list((await s.execute(stmt)).scalars().all())
+
+
+async def count_runs(
+    *,
+    user_id: uuid.UUID | None,
+    agent_id: str | None = None,
+) -> int:
+    """list_runs 와 동일 필터의 전체 건수(페이지네이션 total 용). LIMIT/OFFSET 없음."""
+    async with get_sessionmaker()() as s:
+        stmt = select(func.count()).select_from(AgentRun)
+        if user_id is not None:
+            stmt = stmt.where(AgentRun.user_id == user_id)
+        if agent_id:
+            stmt = stmt.where(AgentRun.agent_id == agent_id)
+        return (await s.execute(stmt)).scalar_one()
 
 
 # ── AgentTemplate(대화형 selections 저장·재생) ─────────────────────────────

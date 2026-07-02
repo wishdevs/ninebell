@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { StatusPill } from '@/components/ui/status-pill';
+import { Pagination } from '@/components/ui/pagination';
 import { ApiError, api, toApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
 import { PERMISSIONS, type Role } from '@/lib/auth/permissions';
@@ -33,28 +34,32 @@ interface AccessLog {
 
 const PAGE_SIZE = 50;
 
-type Phase = 'loading' | 'ready' | 'loadingMore' | 'error';
+type Phase = 'loading' | 'ready' | 'error';
 
 /**
  * 감사 로그 테이블 — 사용자 접속(로그인) 감시. logs:read(admin+) 권한이 없으면 접근 불가
  * 상태를 보여주고 fetch 자체를 하지 않는다. 권한이 있으면 `GET /logs?limit&offset`로
- * 최신순 페이지를 불러오고 "더 보기"로 이어서 적재한다.
+ * 최신순 페이지를 불러오고 번호형 페이지네이션으로 페이지를 이동한다.
  */
 export function AuditClient() {
   const canRead = useCan(PERMISSIONS.LOGS_READ);
   const [rows, setRows] = useState<AccessLog[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<ApiError | null>(null);
-  const [hasMore, setHasMore] = useState(false);
 
-  const loadPage = useCallback(async (offset: number) => {
-    const isFirst = offset === 0;
-    setPhase(isFirst ? 'loading' : 'loadingMore');
+  const loadPage = useCallback(async (target: number) => {
+    setPhase('loading');
     setError(null);
     try {
-      const page = await api.get<AccessLog[]>(`/logs?limit=${PAGE_SIZE}&offset=${offset}`);
-      setRows((prev) => (isFirst ? page : [...prev, ...page]));
-      setHasMore(page.length === PAGE_SIZE);
+      const offset = (target - 1) * PAGE_SIZE;
+      const res = await api.get<{ logs: AccessLog[]; total: number }>(
+        `/logs?limit=${PAGE_SIZE}&offset=${offset}`,
+      );
+      setRows(res.logs);
+      setTotal(res.total);
+      setPage(target);
       setPhase('ready');
     } catch (err: unknown) {
       setError(toApiError(err));
@@ -63,7 +68,7 @@ export function AuditClient() {
   }, []);
 
   useEffect(() => {
-    if (canRead) loadPage(0);
+    if (canRead) loadPage(1);
   }, [canRead, loadPage]);
 
   return (
@@ -91,7 +96,7 @@ export function AuditClient() {
           title="접속 기록을 불러오지 못했습니다"
           description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
           action={
-            <Button variant="secondary" size="sm" onClick={() => loadPage(0)}>
+            <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
               다시 시도
             </Button>
           }
@@ -104,11 +109,6 @@ export function AuditClient() {
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
-            총 <span className="text-foreground font-medium tabular-nums">{rows.length}</span>건
-            {hasMore ? ' 이상' : ''}
-          </p>
-
           <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
             <table className="w-full min-w-[820px] text-left text-sm">
               <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
@@ -169,28 +169,9 @@ export function AuditClient() {
             </table>
           </div>
 
-          {hasMore ? (
-            <div className="flex justify-center pt-1">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => loadPage(rows.length)}
-                disabled={phase === 'loadingMore'}
-              >
-                {phase === 'loadingMore' ? (
-                  <>
-                    <Spinner size={14} />
-                    불러오는 중…
-                  </>
-                ) : (
-                  '더 보기'
-                )}
-              </Button>
-            </div>
-          ) : null}
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
         </div>
       )}
     </div>
   );
 }
-

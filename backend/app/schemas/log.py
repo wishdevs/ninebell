@@ -18,3 +18,8 @@ class AccessLogOut(CamelModel):
     ip: str | None
     user_agent: str | None
     logged_at: datetime | None
+
+
+class AccessLogPage(CamelModel):
+    logs: list[AccessLogOut]
+    total: int

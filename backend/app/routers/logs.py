@@ -6,23 +6,24 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.deps import DbSession, require_permission
 from app.core.permissions import LOGS_READ
 from app.models import AccessLog, User
-from app.schemas.log import AccessLogOut
+from app.schemas.log import AccessLogOut, AccessLogPage
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 
-@router.get("", response_model=list[AccessLogOut])
+@router.get("", response_model=AccessLogPage)
 async def list_access_logs(
     db: DbSession,
     _actor: Annotated[User, Depends(require_permission(LOGS_READ))],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[AccessLogOut]:
+) -> AccessLogPage:
+    total = (await db.execute(select(func.count()).select_from(AccessLog))).scalar_one()
     rows = (
         (
             await db.execute(
@@ -60,4 +61,4 @@ async def list_access_logs(
                 logged_at=r.logged_at,
             )
         )
-    return out
+    return AccessLogPage(logs=out, total=total)

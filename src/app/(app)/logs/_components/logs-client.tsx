@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Pagination } from '@/components/ui/pagination';
 import { cn } from '@/lib/utils';
 import { ApiError, toApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
@@ -32,7 +33,7 @@ import {
 
 const PAGE_SIZE = 50;
 
-type Phase = 'loading' | 'ready' | 'loadingMore' | 'error';
+type Phase = 'loading' | 'ready' | 'error';
 
 /** 워크플로우 id → 사람이 읽는 라벨(없으면 raw id). */
 const WORKFLOW_LABEL: Record<string, string> = {
@@ -52,18 +53,19 @@ function agentLabel(agentId: string): string {
 export function LogsClient() {
   const canRead = useCan(PERMISSIONS.LOGS_READ);
   const [rows, setRows] = useState<RunSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<ApiError | null>(null);
-  const [hasMore, setHasMore] = useState(false);
 
-  const loadPage = useCallback(async (offset: number) => {
-    const isFirst = offset === 0;
-    setPhase(isFirst ? 'loading' : 'loadingMore');
+  const loadPage = useCallback(async (target: number) => {
+    setPhase('loading');
     setError(null);
     try {
-      const page = await fetchRuns({ limit: PAGE_SIZE, offset });
-      setRows((prev) => (isFirst ? page : [...prev, ...page]));
-      setHasMore(page.length === PAGE_SIZE);
+      const res = await fetchRuns({ limit: PAGE_SIZE, offset: (target - 1) * PAGE_SIZE });
+      setRows(res.runs);
+      setTotal(res.total);
+      setPage(target);
       setPhase('ready');
     } catch (err: unknown) {
       setError(toApiError(err));
@@ -72,7 +74,7 @@ export function LogsClient() {
   }, []);
 
   useEffect(() => {
-    if (canRead) loadPage(0);
+    if (canRead) loadPage(1);
   }, [canRead, loadPage]);
 
   return (
@@ -100,7 +102,7 @@ export function LogsClient() {
           title="실행 내역을 불러오지 못했습니다"
           description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
           action={
-            <Button variant="secondary" size="sm" onClick={() => loadPage(0)}>
+            <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
               다시 시도
             </Button>
           }
@@ -113,11 +115,6 @@ export function LogsClient() {
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
-            총 <span className="text-foreground font-medium tabular-nums">{rows.length}</span>건
-            {hasMore ? ' 이상' : ''}
-          </p>
-
           <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
             <table className="w-full min-w-[900px] text-left text-sm">
               <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
@@ -141,25 +138,7 @@ export function LogsClient() {
             </table>
           </div>
 
-          {hasMore ? (
-            <div className="flex justify-center pt-1">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => loadPage(rows.length)}
-                disabled={phase === 'loadingMore'}
-              >
-                {phase === 'loadingMore' ? (
-                  <>
-                    <Spinner size={14} />
-                    불러오는 중…
-                  </>
-                ) : (
-                  '더 보기'
-                )}
-              </Button>
-            </div>
-          ) : null}
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
         </div>
       )}
     </div>
@@ -436,4 +415,3 @@ function RunStatusBadge({ status }: { status: RunStatus }) {
     </span>
   );
 }
-

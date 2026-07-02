@@ -144,23 +144,28 @@ export interface RunsQuery {
   offset?: number;
 }
 
+/** 실행 목록 페이지 — 행 + 스코프 전체 건수(번호형 페이지네이션용). */
+export interface RunsPage {
+  runs: RunSummary[];
+  total: number;
+}
+
 /**
- * `GET /runs` — 실행 목록(최신순). `agentId` 를 주면 그 워크플로우로 스코프한다.
+ * `GET /runs` — 실행 목록(최신순) + 전체 건수. `agentId` 를 주면 그 워크플로우로 스코프한다.
  * 소유자 스코프는 백엔드가 처리(관리자=전체, 그 외=본인 것).
  *
- * 백엔드는 `{"runs": RunSummary[]}` envelope 로 감싸 반환하므로 언랩한다(그냥 배열을
- * 기대하면 `.map` 에서 크래시). 혹시 배열을 그대로 받아도 견디도록 방어적으로 좁힌다.
+ * 백엔드는 `{"runs": RunSummary[], "total": number}` envelope 로 반환한다.
  */
-export async function fetchRuns(query: RunsQuery = {}): Promise<RunSummary[]> {
+export async function fetchRuns(query: RunsQuery = {}): Promise<RunsPage> {
   const qs = new URLSearchParams();
   if (query.agentId) qs.set('agentId', query.agentId);
   if (query.limit != null) qs.set('limit', String(query.limit));
   if (query.offset != null) qs.set('offset', String(query.offset));
   const suffix = qs.toString();
-  const res = await api.get<{ runs?: RunSummary[] } | RunSummary[]>(
+  const res = await api.get<{ runs: RunSummary[]; total: number }>(
     suffix ? `/runs?${suffix}` : '/runs',
   );
-  return Array.isArray(res) ? res : (res?.runs ?? []);
+  return { runs: res.runs ?? [], total: res.total ?? 0 };
 }
 
 /** 백엔드 저장 로그 한 줄을 {@link RunLogEntry} 로 정규화(문자열/객체 모두 수용). */
