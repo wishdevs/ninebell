@@ -31,6 +31,15 @@ class SignupBody(BaseModel):
     agreed_terms: bool = Field(alias="agreedTerms")
 
 
+class AuthMeUpdate(CamelModel):
+    """PATCH /auth/me — 본인 프로필(이름/부서/이메일) 수정. 로그인 식별자·롤은 변경 불가."""
+
+    display_name: str = Field(min_length=1, max_length=255)
+    department: str | None = Field(default=None, max_length=255)
+    # 빈 문자열은 "이메일 지움"으로 취급(None 정규화는 라우터에서).
+    email: str | None = Field(default=None, max_length=320)
+
+
 class AuthMe(CamelModel):
     """GET /auth/me — 현재 사용자 + 평탄화된 권한."""
 

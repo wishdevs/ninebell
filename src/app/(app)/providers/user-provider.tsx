@@ -11,7 +11,13 @@ type UserState =
   | { status: 'authenticated'; user: CurrentUser }
   | { status: 'unauthenticated'; user: null };
 
-const UserContext = createContext<UserState | null>(null);
+interface UserContextValue {
+  state: UserState;
+  /** 프로필 수정(PATCH /auth/me) 성공 응답 등으로 캐시된 사용자를 갱신한다. */
+  setUser: (user: CurrentUser) => void;
+}
+
+const UserContext = createContext<UserContextValue | null>(null);
 
 /**
  * 현재 사용자 컨텍스트 제공자.
@@ -76,7 +82,9 @@ export function UserProvider({
     return null;
   }
 
-  return <UserContext.Provider value={state}>{children}</UserContext.Provider>;
+  const setUser = (user: CurrentUser) => setState({ status: 'authenticated', user });
+
+  return <UserContext.Provider value={{ state, setUser }}>{children}</UserContext.Provider>;
 }
 
 /**
@@ -85,12 +93,21 @@ export function UserProvider({
  * 항상 사용자를 안전하게 반환한다.
  */
 export function useCurrentUser(): CurrentUser {
-  const state = useContext(UserContext);
-  if (!state) {
+  const ctx = useContext(UserContext);
+  if (!ctx) {
     throw new Error('useCurrentUser must be used inside <UserProvider>');
   }
-  if (state.status !== 'authenticated') {
+  if (ctx.state.status !== 'authenticated') {
     throw new Error('useCurrentUser called before the current user was loaded');
   }
-  return state.user;
+  return ctx.state.user;
+}
+
+/** 프로필 수정 등으로 캐시된 현재 사용자를 갱신하는 setter. */
+export function useSetCurrentUser(): (user: CurrentUser) => void {
+  const ctx = useContext(UserContext);
+  if (!ctx) {
+    throw new Error('useSetCurrentUser must be used inside <UserProvider>');
+  }
+  return ctx.setUser;
 }

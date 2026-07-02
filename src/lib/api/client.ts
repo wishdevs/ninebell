@@ -91,3 +91,14 @@ export const api = {
 export function getMe(): Promise<CurrentUser> {
   return api.get<CurrentUser>('/auth/me');
 }
+
+export interface UpdateMeInput {
+  displayName: string;
+  department: string | null;
+  email: string | null;
+}
+
+/** `PATCH /auth/me` — 본인 프로필(이름/부서/이메일) 수정. 로그인 식별자·롤은 불변. */
+export function updateMe(input: UpdateMeInput): Promise<CurrentUser> {
+  return api.patch<CurrentUser>('/auth/me', { ...input });
+}

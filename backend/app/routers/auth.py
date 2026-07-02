@@ -36,7 +36,7 @@ from app.core.security import (
 )
 from app.erp.login import ErpAuthError
 from app.models import User
-from app.schemas.auth import AuthMe, LoginBody, SignupBody
+from app.schemas.auth import AuthMe, AuthMeUpdate, LoginBody, SignupBody
 from app.services.access_log import record_access
 
 logger = logging.getLogger("app.auth")
@@ -239,6 +239,26 @@ async def logout(request: Request, response: Response) -> dict:
 
 @router.get("/me", response_model=AuthMe)
 async def me(user: CurrentUser) -> AuthMe:
+    return AuthMe(
+        id=str(user.id),
+        omnisol_userid=user.omnisol_userid,
+        display_name=user.display_name,
+        department=user.department,
+        email=user.email,
+        role=user.role.code if user.role is not None else ROLE_USER,
+        permissions=sorted(collect_user_permissions(user)),
+        last_login_at=user.last_login_at,
+    )
+
+
+@router.patch("/me", response_model=AuthMe)
+async def update_me(body: AuthMeUpdate, user: CurrentUser, db: DbSession) -> AuthMe:
+    """본인 프로필(이름/부서/이메일) 수정 — 로그인 식별자(omnisol_userid)·롤·상태는 불변."""
+    user.display_name = body.display_name.strip()
+    user.department = (body.department or "").strip() or None
+    user.email = (body.email or "").strip() or None
+    await db.commit()
+    await db.refresh(user)
     return AuthMe(
         id=str(user.id),
         omnisol_userid=user.omnisol_userid,

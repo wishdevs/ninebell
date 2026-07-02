@@ -87,7 +87,7 @@ export function SidebarUserCard() {
           className="border-border bg-surface absolute right-3 bottom-full left-3 z-30 mb-2 flex flex-col overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-overlay)]"
         >
           <Link
-            href="/settings"
+            href="/account"
             role="menuitem"
             onClick={() => setOpen(false)}
             className="text-foreground hover:bg-muted flex items-center gap-2.5 px-3 py-2 text-[length:var(--text-body)] transition-colors duration-[var(--duration-fast)]"
