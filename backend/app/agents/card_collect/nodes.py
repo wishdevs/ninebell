@@ -818,7 +818,8 @@ def make_save_node():
                 "result": f"과세 {filled}건 입력 완료 — 사용자 선택으로 저장하지 않았습니다(2차 중단).",
                 "save_cancelled": True,
             }
-        return {"result": f"과세 {filled}건 입력·저장 완료."}
+        # 저장이 실제 실행됨 — 2차는 새 상세행 추가(F3)부터 다시 플로우를 탄다(사용자 업무 규칙).
+        return {"result": f"과세 {filled}건 입력·저장 완료.", "pass1_saved": True}
 
     return save
 
@@ -852,11 +853,19 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"카드 팝업 닫기 실패: {r.get('reason')}"}
         # 증빙유형 재선택 — 진입 공용 노드 재사용(state error 규약 공유, 스텝은 자체 방출).
-        # 1차 저장(F7) 후 문서가 초기화되면 디테일 행이 없어 증빙 에디터가 안 열릴 수 있다
-        # → 실패 시 새 행 추가(F3) 후 1회 재시도(저장 전 닫기 경로는 F3 불필요 — 프로브 실측).
+        # 업무 규칙(사용자 확정): 1차를 실제 **저장(F7)했다면 새 상세행 추가(F3) 후** 다시
+        # 증빙유형부터 플로우를 탄다. 저장을 생략한 경우(과세 0건)는 기존 행에서 재선택
+        # (프로브 실측: F3 불필요). 재선택 실패 시 F3 1회 폴백은 안전망으로 유지.
+        if state.get("pass1_saved"):
+            await emit_log(events, "1차 저장 완료 — 새 상세행(F3) 추가 후 불공 플로우를 진행합니다.", "info")
+            out = await make_add_row_node()(state)
+            state.update(out or {})
+            if state.get("error"):
+                await emit_step(events, "switch_evdn", "failed")
+                return {"error": state["error"]}
         out = await make_open_evdn_node()(state)
         state.update(out or {})
-        if state.get("error"):
+        if state.get("error") and not state.get("pass1_saved"):
             await emit_log(events, "증빙 에디터 재오픈 실패 — 새 행(F3) 추가 후 재시도합니다.", "warn")
             state.pop("error", None)
             out = await make_add_row_node()(state)
@@ -864,9 +873,9 @@ def make_switch_evdn_node():
             if not state.get("error"):
                 out = await make_open_evdn_node()(state)
                 state.update(out or {})
-            if state.get("error"):
-                await emit_step(events, "switch_evdn", "failed")
-                return {"error": state["error"]}
+        if state.get("error"):
+            await emit_step(events, "switch_evdn", "failed")
+            return {"error": state["error"]}
         out = await make_select_evdn_node("02")(state)
         state.update(out or {})
         if state.get("error"):
