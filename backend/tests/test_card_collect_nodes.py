@@ -373,11 +373,15 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     async def _read(page, limit=200):
         return rows2
 
+    async def _no_modals(page, rounds=3):
+        return []
+
     monkeypatch.setattr(steps, "close_card_popup", _ok_close)
     monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
     monkeypatch.setattr(steps, "set_period", _ok_period)
     monkeypatch.setattr(steps, "run_query", _q)
     monkeypatch.setattr(steps, "read_rows", _read)
+    monkeypatch.setattr(steps, "dismiss_blocking_modals", _no_modals)
 
     async def _noop_node(state):
         return {}
@@ -499,11 +503,15 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     async def _read(page, limit=200):
         return rows2
 
+    async def _no_modals(page, rounds=3):
+        return []
+
     monkeypatch.setattr(steps, "close_card_popup", _ok_close)
     monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
     monkeypatch.setattr(steps, "set_period", _ok_period)
     monkeypatch.setattr(steps, "run_query", _q)
     monkeypatch.setattr(steps, "read_rows", _read)
+    monkeypatch.setattr(steps, "dismiss_blocking_modals", _no_modals)
 
     async def _noop_node(state):
         return {}

@@ -523,6 +523,33 @@ async def apply_row(page: Any, row: int) -> dict:
     return {"ok": True, "budget_confirm": cf.get("clicked")}
 
 
+async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
+    """화면을 막는 잔여 확인 모달('예산현황' 등)을 '확인'/'예'로 닫는다.
+
+    실전 실측(2026-07-02 2차 런): 카드팝업 '적용' 후 팝업 닫힘보다 **늦게** '예산현황'
+    모달이 떠서, 다음 단계(F3·증빙 코드피커)가 막혀 TypeError 로 실패했다. 확인 계열만
+    클릭(취소/아니오 금지). 빈 폴링 2회 연속이면 종료. 닫은 모달 스냅샷 목록 반환.
+    """
+    seen: list[dict] = []
+    empty = 0
+    for _ in range(rounds):
+        await page.wait_for_timeout(1_500)
+        modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
+        if not modals:
+            empty += 1
+            if empty >= 2:
+                break
+            continue
+        empty = 0
+        seen.extend(modals)
+        for label in ("확인", "예"):
+            btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
+            if btn:
+                await page.mouse.click(btn["x"], btn["y"])
+                break
+    return seen
+
+
 async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
     """처리한 행들을 체크 → 카드팝업 '적용' → 확인 모달 처리 → 팝업 닫힘·문서 반영.
 
@@ -555,7 +582,10 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
             await page.mouse.click(ok_btn["x"], ok_btn["y"])
             continue
         if not await page.evaluate(js.CARD_WIN_EXISTS_JS):
-            return {"ok": True, "checked": chk.get("checked")}
+            # '예산현황' 모달이 팝업 닫힘 이후 지연되어 뜨는 케이스(실측) — 즉시 반환하지
+            # 말고 잔여 모달을 정리한 뒤 반환해야 다음 단계가 막히지 않는다.
+            dismissed = await dismiss_blocking_modals(page)
+            return {"ok": True, "checked": chk.get("checked"), "late_modals": dismissed[:4]}
     modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
     return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals}
 
@@ -572,6 +602,8 @@ async def save_document(page: Any, confirm: bool) -> dict:
         return {"ok": False, "skipped": True, "reason": "SAVE 게이트 닫힘(테스트 모드)"}
     if await page.evaluate(js.CARD_WIN_EXISTS_JS):
         return {"ok": False, "reason": "카드팝업이 열려 있어 저장 불가(적용 단계 누락)"}
+    # 잔여 확인 모달이 남아 있으면 F7 이 삼켜져 미저장인데도 ok 로 오판한다 — 먼저 정리.
+    pre = await dismiss_blocking_modals(page, rounds=3)
     await page.keyboard.press("F7")
     modals_seen: list[dict] = []
     for _ in range(8):
@@ -586,4 +618,4 @@ async def save_document(page: Any, confirm: bool) -> dict:
                     break
             continue
         break  # 모달 없음 — 저장 시퀀스 종료로 판단.
-    return {"ok": True, "via": "F7", "modals_seen": modals_seen[:6]}
+    return {"ok": True, "via": "F7", "modals_seen": modals_seen[:6], "pre_modals": pre[:4]}

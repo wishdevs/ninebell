@@ -798,6 +798,12 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "done")
             return {"pass2_work": []}
 
+        # 잔여 확인 모달('예산현황' 등)이 남아 있으면 F3/코드피커가 막힌다 — 방어적 정리.
+        # (실측: 적용 후 지연 모달이 화면을 덮은 채 02 선택 시도 → TypeError 실패)
+        cleared = await steps.dismiss_blocking_modals(page, rounds=3)
+        if cleared:
+            await emit_log(events, f"잔여 확인 모달 {len(cleared)}건을 닫고 진행합니다.", "info")
+
         r = await steps.close_card_popup(page)
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
