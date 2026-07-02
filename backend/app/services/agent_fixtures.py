@@ -1,6 +1,6 @@
 """에이전트 시드 픽스처 — 프론트 `src/lib/data/agents.ts`·`flows.ts` 이식.
 
-사용자 요청으로 **card-chat(법인카드 지결 — 대화형 폼 채움, workflow=expense-card-chat)**
+사용자 요청으로 **card-chat(결의서 입력 - 카드, workflow=card-collect)**
 1개만 남긴다(나머지 4개 outbound-test·card-expense·card-md·bom-lookup 제거).
 
 타임스탬프는 프론트와 동일 앵커(NOW_ANCHOR = 2026-06-30T14:00:00+09:00 = 05:00Z)에서
@@ -77,7 +77,7 @@ AGENT_FIXTURES: list[dict] = [
     {
         "id": "card-chat",
         "workflow_id": "card-collect",  # 실행 레지스트리 워크플로우 id(유일 실동작).
-        "name": "법인카드 지결 — 대화형 폼 채움",
+        "name": "결의서 입력 - 카드",
         "description": "증빙·프로젝트 다음의 상세 필드를 자연어 한 문장으로 채운다. 부족하면 되묻는다.",
         "drive": "browser",
         "interaction": "conversational",
