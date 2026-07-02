@@ -27,6 +27,25 @@ export function MarkdownText({ content }: { content: string }) {
               {children}
             </td>
           ),
+          h1: ({ children }) => (
+            <h1 className="text-foreground mt-1 text-[13px] font-bold">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-foreground mt-1 text-[12.5px] font-bold">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-foreground mt-1 text-[12px] font-semibold">{children}</h3>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-accent/40 text-muted-foreground border-l-2 pl-2">
+              {children}
+            </blockquote>
+          ),
+          pre: ({ children }) => (
+            <pre className="bg-background/60 border-border/60 my-1 overflow-x-auto rounded-[var(--radius-sm)] border p-2 font-mono text-[11px] leading-snug [&_code]:bg-transparent [&_code]:p-0">
+              {children}
+            </pre>
+          ),
           strong: ({ children }) => (
             <strong className="text-foreground font-semibold">{children}</strong>
           ),
