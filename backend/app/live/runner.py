@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # 브라우저 팩토리: fresh 헤드리스 브라우저를 반환하는 async 콜러블(playwright chromium 등).
 BrowserFactory = Callable[[], Awaitable[Any]]
 
+# 라이브 워크플로우 페이지 뷰포트. Playwright 기본값(1280×720)은 옴니솔 그리드형 UI에 좁아
+# 셀렉터가 화면 밖으로 밀릴 수 있어, 탐색 단계에서 검증된 크기(1440×900)로 고정한다.
+LIVE_VIEWPORT: dict[str, int] = {"width": 1440, "height": 900}
+
 
 async def run_workflow(
     graph: Any,
@@ -49,7 +53,7 @@ async def run_workflow(
     async with limiter:
         browser = await browser_factory()
         try:
-            page = await browser.new_page()
+            page = await browser.new_page(viewport=LIVE_VIEWPORT)
         except Exception:
             logger.warning("run_workflow: new_page 실패 — 페이지 없이 진행")
             page = None
