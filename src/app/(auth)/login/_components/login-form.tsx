@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -121,24 +120,6 @@ export function LoginForm() {
           '로그인'
         )}
       </Button>
-
-      <p className="text-foreground-tertiary mt-1 text-center text-[length:var(--text-caption)] leading-relaxed">
-        로그인 시{' '}
-        <Link
-          href="/"
-          className="text-foreground hover:text-accent underline-offset-4 hover:underline"
-        >
-          서비스 약관
-        </Link>
-        과{' '}
-        <Link
-          href="/"
-          className="text-foreground hover:text-accent underline-offset-4 hover:underline"
-        >
-          개인정보 보호정책
-        </Link>
-        에 동의한 것으로 간주됩니다.
-      </p>
     </form>
   );
 }
