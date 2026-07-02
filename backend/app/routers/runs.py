@@ -87,6 +87,20 @@ class TemplateCreate(BaseModel):
     selections: list[dict] = Field(default_factory=list)
 
 
+class GridCodeRef(BaseModel):
+    code: str = Field(max_length=64)
+    name: str = Field(max_length=255)
+
+
+class GridRowIn(BaseModel):
+    # 그리드 HITL 일괄 제출 1행. 행 번호(no)는 프레임의 # 컬럼(1-based).
+    no: int = Field(ge=1)
+    budgetUnit: GridCodeRef | None = None
+    project: GridCodeRef | None = None
+    note: str = Field(default="", max_length=200)
+    skip: bool = False
+
+
 class HitlDecision(BaseModel):
     runId: str | None = Field(default=None, max_length=40)
     decisionId: str = Field(min_length=1, max_length=64)
@@ -96,6 +110,8 @@ class HitlDecision(BaseModel):
     query: str | None = Field(default=None, max_length=200)
     message: str | None = Field(default=None, max_length=2000)  # 대화형 HITL 한 턴 자연어
     done: bool | None = None  # 대화형 폼 '선택 완료' 신호
+    # 그리드 HITL 일괄 제출 — 행별 예산단위·프로젝트·적요·건너뜀(최대 500행).
+    rows: list[GridRowIn] | None = Field(default=None, max_length=500)
 
 
 def _omnisol_password(request: Request) -> str | None:
@@ -262,6 +278,8 @@ async def hitl(body: HitlDecision, user: CurrentUser):
         "query": body.query,
         "message": body.message,
         "done": body.done,
+        # 그리드 일괄 제출은 plain dict 목록으로 채널에 전달(노드가 서버검증 후 반영).
+        "rows": [r.model_dump() for r in body.rows] if body.rows is not None else None,
     }
     return {"ok": resolve_hitl(body.decisionId, payload)}
 

@@ -1,15 +1,15 @@
 """법인카드 승인내역 정리(card-collect) — 카드팝업 이후 노드(진입 앞단은 expense_card 재사용).
 
 체인: (login→user_type→menu_nav→set_gubun→add_row→open_evdn→select_evdn = expense_card 재사용)
-→ select_all_cards → set_period(D2) → query(리스트 조회·표 보고) → collect_rows(항목 처리, Gemini
-function-calling 대화) → save(최종 HITL 확인 후에만 F7).
+→ select_all_cards → set_period(D2) → query(리스트 조회·표 보고) → collect_rows(그리드 HITL 로
+행별 예산단위·프로젝트·적요 일괄 입력) → save(최종 HITL 확인 후에만 F7).
 
 state 계약: page/browser/events/userid/password/params(러너 주입). 실패는 {"error"} 로 남긴다.
 ⚠ 저장(F7)은 collect 완료 후 사용자가 HITL 로 '저장'을 택했을 때만. 그 외 저장 절대 금지.
 
-collect_rows 는 ninebell-bak/expense_card.chat_form 과 동일한 패턴(사용자 자연어 → Gemini
-function-calling → 도구 디스패치)을 쓴다 — 정규식 파서가 아니라 app.agents.common.gemini.
-gemini_chat_decide 가 사용자 의도를 판단한다(도구 스키마는 .tools.CARD_COLLECT_TOOLS).
+collect_rows 는 kind="grid" HITL 프레임을 방출한다 — 프론트가 행 그리드 + 예산단위/프로젝트
+피커 UI 를 그리고, 사용자가 값을 채워 한 번에 제출(`rows`)하거나 프로젝트 검색(`query`)을 보낸다.
+Gemini 대화 루프는 제거됐다(그리드 채널로 대체).
 """
 
 from __future__ import annotations
@@ -21,20 +21,23 @@ import uuid
 from datetime import date
 from typing import Any
 
-import httpx
+from sqlalchemy import select
 
-from app.agents.common.gemini import gemini_chat_decide
 from app.config import get_settings
+from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 from app.live.hitl import close_hitl_channel, open_hitl_channel, wait_hitl
+from app.models import UserCodeFavorite
 from nbkit.patterns import emit_shot
 
 from . import steps
-from .tools import CARD_COLLECT_TOOLS
 
 logger = logging.getLogger("app.agents.card_collect.nodes")
 
-_MAX_TOOLS_PER_TURN = 12  # 한 사용자 턴 안에서 순차 실행할 도구 상한(expense_card.chat_form 과 동일).
+# 그리드 프레임 크기 가드(프론트 페이로드 비대 방지).
+_MAX_BUDGET_UNITS = 200
+_MAX_PROJECT_RESULTS = 25
+_MAX_FAVORITES = 100
 
 # 코드피커 필드 스펙: 폼 id → (팝업 code 컬럼, name 컬럼). probe5~8 실측.
 # ⚠ 순서 의존: 계정(acct_cd)은 예산단위 선택 후에야 목록이 채워진다(예산계정 연동). → 반드시
@@ -172,21 +175,7 @@ def _md_cell(v: object) -> str:
     return str(v or "").replace("|", "/").replace("\n", " ").strip()
 
 
-def _full_table(rows: list[dict], recs: dict[int, str]) -> str:
-    """전체 승인내역 마크다운 표(# · 승인일 · 가맹점명 · 승인액 · 부가세구분 · 추천 적요)."""
-    head = "| # | 승인일 | 가맹점명 | 승인액 | 부가세구분 | 추천 적요 |\n|---:|---|---|---:|---|---|"
-    lines = [head]
-    for r in rows:
-        i = r.get("i", 0)
-        lines.append(
-            f"| {i + 1} | {_md_cell(r.get('TRAN_DT'))} | {_md_cell(r.get('TRAN_NM'))} "
-            f"| {_md_cell(_fmt_won(r.get('TRAN_AMT')))} | {_md_cell(r.get('VAT_TP') or '-')} "
-            f"| {_md_cell(recs.get(i, ''))} |"
-        )
-    return "\n".join(lines)
-
-
-_STATUS_MARK = {"done": "✅ 반영", "skipped": "⏭️ 건너뜀", "pending": "· 대기"}
+_STATUS_MARK = {"done": "✅ 반영", "skipped": "⏭️ 건너뜀", "failed": "❌ 실패", "pending": "· 대기"}
 
 
 def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str]) -> str:
@@ -202,35 +191,66 @@ def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str
     return "\n".join(lines)
 
 
-# ── Gemini 시스템 프롬프트(ninebell-bak/expense_card.chat_form 과 동일 스타일) ────────────
-# 행별 현재 상태(날짜·가맹점·상태·적요)는 시스템 프롬프트가 아니라 매 호출 "컨텍스트 데이터"로
-# 넘긴다(gemini_chat_decide 의 context 인자) — 매 턴 바뀌는 값을 정적 프롬프트에 넣지 않는다.
-_CC_SYSTEM = """당신은 더존 ERP 법인카드 승인내역을 정리하는 대화형 에이전트입니다.
-사용자에게 이미 전체 승인내역 표(#·승인일·가맹점명·승인액·부가세구분·추천 적요)를 보여줬습니다.
-사용자가 자연어로 특정 행(들)에 처리 지시를 내리면, 함께 전달되는 컨텍스트 데이터(행별 현재
-상태)를 참고해 도구를 호출하세요.
+async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict]]:
+    """사용자 즐겨찾기(예산단위/프로젝트)를 DB 에서 로드. owner=None(스크립트) → 빈 목록.
 
-[도구 사용 규칙]
-- 행 번호는 표의 # 컬럼(1-based)입니다. 여러 행에 같은 값을 적용하려면 row_numbers 배열에 여러 번호를 담으세요.
-- 예산단위·프로젝트를 말했으면(계정 언급 여부 무관) **apply_fields**. 계정은 보통 예산단위로
-  자동 결정되니 사용자가 명시하지 않으면 account 를 비워 두세요(자동 처리됨) — 계정을 묻지 마세요.
-- 적요만 바꾸고 싶다는 요청(예산단위/프로젝트 언급 없음)이면 **update_note**.
-- '건너뛰어/스킵/제외/빼줘' 같은 표현은 **skip_rows**.
-- '표/현황 다시 보여줘'는 **show_status**.
-- 한 메시지에 여러 지시가 있으면(예: "1번은 예산단위 경영 프로젝트 공통, 3번은 건너뛰기") **도구를
-  순서대로 여러 번 호출**해 그 메시지의 모든 지시를 처리한 뒤 turn_done 으로 마무리하세요.
-- **하나의 지시를 도구로 한 번 처리했으면 그걸로 끝입니다.** 같은 지시에 대해 같은 도구를
-  반복 호출하지 말고, 그 메시지의 모든 지시를 처리했으면 즉시 turn_done 을 호출하세요.
-- 값이 불명확하거나 존재하지 않는 행 번호를 말하면 추측하지 말고 **ask** 로 되물으세요.
-- **절대 대화를 스스로 종료하지 마세요.** 종료(저장 단계로 진행)는 사용자가 화면의 '선택 완료'
-  버튼으로만 합니다(그런 종료용 도구는 없습니다).
+    반환 (budget_favs [{code,name,deptNm}], project_favs [{code,name}]) — sort_order 순.
+    라우터 밖(세션 펌프)이므로 store.py 처럼 get_sessionmaker() 로 자체 세션을 연다.
+    """
+    if not owner:
+        return [], []
+    try:
+        user_id = uuid.UUID(str(owner))
+    except (ValueError, TypeError):
+        return [], []
+    async with get_sessionmaker()() as s:
+        rows = (
+            await s.execute(
+                select(UserCodeFavorite)
+                .where(UserCodeFavorite.user_id == user_id)
+                .order_by(UserCodeFavorite.sort_order)
+            )
+        ).scalars().all()
+    budget_favs: list[dict] = []
+    project_favs: list[dict] = []
+    for f in rows:
+        if f.kind == "budget_unit":
+            budget_favs.append(
+                {"code": f.code, "name": f.name, "deptNm": (f.extra or {}).get("deptNm", "")}
+            )
+        elif f.kind == "project":
+            project_favs.append({"code": f.code, "name": f.name})
+    return budget_favs, project_favs
 
-[절대 금지]
-- 저장(F7)·상신·전표생성·확정 액션은 이 대화에서 수행하지 않습니다(저장은 별도 확인 단계에서만).
-"""
+
+def _validate_grid_submit(rows_in: list[dict], n: int) -> tuple[bool, str]:
+    """제출 rows 서버검증. 비스킵 행은 예산단위(code·name)·적요 필수, 행번호는 1..n.
+
+    행 집합은 정확히 {1..n}(중복·누락 불허) — 부분 제출을 허용하면 빠진 행이 조용히 pending
+    으로 남고, 중복 no 는 같은 ERP 행을 이중 반영한다(리뷰 MEDIUM #3). (ok, reason) 반환.
+    """
+    seen: set[int] = set()
+    for row in rows_in:
+        no = row.get("no")
+        if not isinstance(no, int) or not (1 <= no <= n):
+            return False, f"행 번호가 올바르지 않습니다: {no!r}"
+        if no in seen:
+            return False, f"행 번호가 중복됐습니다: {no}"
+        seen.add(no)
+        if row.get("skip"):
+            continue
+        bu = row.get("budgetUnit") or {}
+        if not (bu.get("code") and bu.get("name")):
+            return False, f"{no}행 예산단위를 선택해 주세요."
+        if not (row.get("note") or "").strip():
+            return False, f"{no}행 적요를 입력해 주세요."
+    if len(seen) != n:
+        missing = sorted(set(range(1, n + 1)) - seen)[:5]
+        return False, f"모든 행이 포함돼야 합니다(누락: {missing} …)."
+    return True, ""
 
 
-# ── 항목 처리(Gemini function-calling 대화): 전체 리스트 표 → 자연어로 항목별 처리 ────────
+# ── 항목 처리(그리드 HITL): 행 그리드 방출 → 일괄 제출(rows) 을 순차 반영 ──────────────
 def make_collect_rows_node(timeout_s: int | None = None):
     async def collect_rows(state: dict) -> dict:
         if state.get("error"):
@@ -256,225 +276,163 @@ def make_collect_rows_node(timeout_s: int | None = None):
             return {"filled": 0}
 
         settings = get_settings()
-        if not settings.gemini_api_key:
-            await emit_step(events, "collect_rows", "failed")
-            return {"error": "GEMINI_API_KEY 가 설정되지 않아 대화형 처리를 실행할 수 없습니다."}
         wait_timeout = timeout_s if timeout_s is not None else settings.hitl_timeout_s
-
         n = len(rows_list)
+
+        # 행별 추천 적요(prefill) + 처리 현황(status)·적요(notes) 트래킹. status/notes 는
+        # r.get("i", idx)(=행 인덱스, 제출행 no-1 과 동일)를 키로 쓴다(_status_table 과 같은 규칙).
         recs = {r.get("i", idx): recommend_note(r.get("TRAN_NM") or "", r.get("TRAN_AMT") or "")
                 for idx, r in enumerate(rows_list)}
         status: dict[int, str] = {r.get("i", idx): "pending" for idx, r in enumerate(rows_list)}
-        notes = dict(recs)  # 최종 적용/예정 적요(적요 override 반영).
+        notes = dict(recs)
 
-        def _context() -> dict:
-            return {
-                "rows": [
-                    {
-                        "no": r.get("i", idx) + 1,
-                        "date": r.get("TRAN_DT"),
-                        "merchant": r.get("TRAN_NM"),
-                        "amount": _fmt_won(r.get("TRAN_AMT")),
-                        "vatType": r.get("VAT_TP"),
-                        "status": status[r.get("i", idx)],
-                        "note": notes[r.get("i", idx)],
-                    }
-                    for idx, r in enumerate(rows_list)
-                ]
+        # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note).
+        grid_rows = [
+            {
+                "no": idx + 1,
+                "card": r.get("FINPRODUCT_NM") or "",
+                "merchant": r.get("TRAN_NM") or "",
+                "amount": _fmt_won(r.get("TRAN_AMT")),
+                "date": r.get("TRAN_DT") or "",
+                "time": r.get("TRAN_TM") or "",
+                "approved": r.get("APRVL_YN") or "",
+                "vatType": r.get("VAT_TP") or "",
+                "note": recs[r.get("i", idx)],
             }
+            for idx, r in enumerate(rows_list)
+        ]
 
-        # 1) 전체 리스트 표로 무엇이 있는지 먼저 보여준다.
-        await emit_chat(
-            events,
-            chat_id="cc-list",
-            role="assistant",
-            content=(
-                f"법인카드 승인내역 **{n}건**입니다. 자연어로 편하게 처리 방법을 말씀해 주세요.\n\n"
-                + _full_table(rows_list, recs)
-            ),
-            streaming=False,
-        )
-        await emit_chat(
-            events,
-            chat_id="cc-howto",
-            role="assistant",
-            content=(
-                "예: `1번 예산단위 경영, 프로젝트 공통으로 처리해줘` · `2,3번은 영업 예산에 프로젝트는 공통` · "
-                "`4번은 건너뛰어` · `1번 적요는 6월 팀 회식으로 바꿔줘`\n다 되면 **선택 완료** 버튼을 눌러주세요."
-            ),
-            streaming=False,
-        )
+        # 즐겨찾기(DB) + 예산단위 라이브 덤프(ERP). 실패는 경고 후 빈 목록으로 진행(런 유지).
+        budget_favs, project_favs = await _load_user_favorites(state.get("owner"))
+        try:
+            all_units = await steps.dump_budget_units(page)
+        except Exception:  # noqa: BLE001 — 덤프 실패로 런을 죽이지 않는다.
+            logger.exception("card-collect dump_budget_units failed")
+            all_units = []
+        if not all_units:
+            await emit_log(events, "예산단위 목록을 불러오지 못했습니다(즐겨찾기·검색으로 진행).", "warn")
 
-        filled = 0
-        seq = 0
+        budget_units = {
+            "favorites": budget_favs[:_MAX_FAVORITES],
+            "all": all_units[:_MAX_BUDGET_UNITS],
+        }
+        project_favs = project_favs[:_MAX_FAVORITES]
 
-        async def _say(content: str, *, note: str | None = None, chat_id: str | None = None) -> None:
-            nonlocal seq
-            seq += 1
-            await emit_chat(
+        # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
+        # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
+        decision_id = uuid.uuid4().hex
+        q = open_hitl_channel(decision_id, owner=state.get("owner"), run_id=state.get("run_id"))
+
+        async def _emit_frame(search_results: list | None, query: str | None) -> None:
+            # 프론트는 run.hitl 을 통째로 교체하므로, 재방출 시 rows/budgetUnits/favorites 를 매번 싣는다.
+            await emit_hitl(
                 events,
-                chat_id=chat_id or f"cc-turn-{seq}",
-                role="assistant",
-                content=content,
-                streaming=False,
-                note=note,
+                decision_id=decision_id,
+                kind="grid",
+                title="승인내역 정리",
+                prompt="행별로 예산단위·프로젝트·적요를 입력한 뒤 적용을 누르세요.",
+                rows=grid_rows,
+                budgetUnits=budget_units,
+                projects={"favorites": project_favs, "searchResults": search_results, "query": query},
             )
 
-        def _row_numbers(args: dict) -> list[int]:
-            """1-based row_numbers → 유효한 0-based 인덱스 목록(정렬·중복제거)."""
-            nums = args.get("row_numbers") or []
-            idxs = {int(v) - 1 for v in nums if isinstance(v, (int, float)) and 0 <= int(v) - 1 < n}
-            return sorted(idxs)
-
-        def _sig(name: str, args: dict) -> tuple:
-            """도구 호출 서명(중복 감지용) — 리스트는 정렬된 튜플로 고정."""
-            def freeze(v: Any) -> Any:
-                if isinstance(v, list):
-                    return tuple(sorted(v, key=str))
-                return v
-            return (name, tuple(sorted((k, freeze(v)) for k, v in args.items())))
-
-        http = httpx.AsyncClient(timeout=60.0)
-        history = ""  # 세션 전체 누적(턴을 넘어 유지) — 매 호출은 최근 40줄만 잘라 보낸다.
-        # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다. 매 턴 새 wait_hitl 을
-        # 만들던 이전 방식은 Gemini 판단·브라우저 조작 중(턴 사이)에 살아있는 큐가 없어 그때 온
-        # 사용자 메시지/'완료'가 유실됐다(P1-B). 큐잉으로 유실을 없앤다. 소유권·런바인딩은
-        # 채널 오픈 시점(owner/run_id)에 등록해 /runs/hitl 격리의 레이스 창을 없앤다.
-        decision_id = uuid.uuid4().hex
-        q = open_hitl_channel(
-            decision_id, owner=state.get("owner"), run_id=state.get("run_id")
-        )
-        await emit_hitl(
-            events,
-            decision_id=decision_id,
-            kind="chat",
-            title="항목 처리",
-            prompt="자연어로 처리 방법을 입력하세요. 완료되면 화면의 '선택 완료' 버튼을 누르세요.",
-        )
+        last_results: list | None = None  # 마지막 프로젝트 검색 결과(무효 제출 시 프레임 유지용).
+        last_query: str | None = None
+        submitted: list[dict] | None = None
+        await _emit_frame(None, None)
         try:
             while True:
                 try:
                     resp = await asyncio.wait_for(q.get(), timeout=wait_timeout)
                 except asyncio.TimeoutError:
                     await emit_step(events, "collect_rows", "failed")
-                    return {"error": f"입력 대기 시간 초과({wait_timeout // 60}분). 지금까지 {filled}건 반영(저장 전)."}
+                    return {"error": f"입력 대기 시간 초과({wait_timeout // 60}분). 저장 전 반영 0건."}
 
-                if resp.get("done"):
-                    break
-                msg = (resp.get("message") or "").strip()
-                if not msg:
+                query = resp.get("query")
+                if isinstance(query, str) and query.strip():
+                    kw = query.strip()[:50]
+                    try:
+                        found = await steps.dump_projects(page, kw)
+                    except Exception:  # noqa: BLE001 — 검색 실패로 런을 죽이지 않는다.
+                        logger.exception("card-collect dump_projects failed")
+                        found = []
+                    last_results = [
+                        {"code": p.get("code"), "name": p.get("name")} for p in found
+                    ][:_MAX_PROJECT_RESULTS]
+                    last_query = kw
+                    await _emit_frame(last_results, last_query)
                     continue
 
-                history += f"\n사용자: {msg}"
-                # 실측(라이브 Gemini): 같은 지시를 도구로 처리한 뒤 모델이 turn_done 대신 같은 도구를
-                # 반복 호출하는 경우가 있었다(예: skip_rows 를 12회 연속). 프롬프트 지시만으론 신뢰할
-                # 수 없어, 이번 턴 안에서 동일 (도구,인자) 서명이 재등장하면 재실행 없이 턴을 마친다.
-                seen_actions: set[tuple] = set()
-                for _ in range(_MAX_TOOLS_PER_TURN):
-                    try:
-                        name, args = await gemini_chat_decide(
-                            http,
-                            settings.gemini_api_key,
-                            settings.gemini_model,
-                            settings.gemini_base_url,
-                            _CC_SYSTEM,
-                            "\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
-                            _context(),
-                            None,  # 스크린샷 불필요 — 구조화 데이터만으로 판단.
-                            CARD_COLLECT_TOOLS,
-                        )
-                    except Exception:  # noqa: BLE001 — graceful(노드가 죽지 않게)
-                        logger.exception("card-collect gemini decide failed")
-                        await _say("판단 호출에 실패했어요. 다시 한 번 말씀해 주세요.")
-                        break
-
-                    if not name:
-                        await _say("이해하지 못했어요. 다시 말씀해 주세요.")
-                        break
-
-                    if name in {"skip_rows", "update_note", "apply_fields", "show_status"}:
-                        sig = _sig(name, args)
-                        if sig in seen_actions:
-                            history += f"\n어시스턴트: ({name} 반복 감지 — 이미 처리됨, 이번 턴 종료)"
-                            break
-                        seen_actions.add(sig)
-
-                    if name == "ask":
-                        question = args.get("question") or "추가 정보를 알려주세요."
-                        history += f"\n어시스턴트(ask): {question}"
-                        await _say(question)
-                        break
-
-                    if name == "turn_done":
-                        note_msg = args.get("message") or "처리했어요. 더 있으면 말씀하시고, 끝나면 완료 버튼을 눌러주세요."
-                        history += f"\n어시스턴트(turn_done): {note_msg}"
-                        await _say(note_msg)
-                        break
-
-                    if name == "show_status":
-                        await _say("처리 현황:\n\n" + _status_table(rows_list, status, notes))
-                        history += "\n어시스턴트(show_status): 표시함"
+                rows_in = resp.get("rows")
+                if isinstance(rows_in, list):
+                    ok, reason = _validate_grid_submit(rows_in, n)
+                    if not ok:
+                        await emit_log(events, f"입력값을 확인해 주세요: {reason}", "warn")
+                        await _emit_frame(last_results, last_query)  # 프레임 유지 — 재제출 유도.
                         continue
-
-                    if name == "skip_rows":
-                        idxs = _row_numbers(args)
-                        for ri in idxs:
-                            status[ri] = "skipped"
-                        msg_out = f"{', '.join(str(i + 1) for i in idxs)}번 건너뜀." if idxs else "유효한 행 번호를 찾지 못했습니다."
-                        await _say(msg_out, note="action" if idxs else None)
-                        history += f"\n어시스턴트(skip_rows {idxs}): 처리"
-                        continue
-
-                    if name == "update_note":
-                        idxs = _row_numbers(args)
-                        note = (args.get("note") or "").strip()
-                        if not idxs or not note:
-                            await _say("적요와 대상 행 번호를 확인해 주세요.")
-                        else:
-                            for ri in idxs:
-                                notes[ri] = note
-                            await _say(f"{', '.join(str(i + 1) for i in idxs)}번 적요 → '{note}'.", note="action")
-                        history += f"\n어시스턴트(update_note {idxs}): 처리"
-                        continue
-
-                    if name == "apply_fields":
-                        idxs = _row_numbers(args)
-                        bg = (args.get("budget_unit") or "").strip()
-                        acct = (args.get("account") or "").strip()
-                        proj = (args.get("project") or "").strip()
-                        note_override = (args.get("note") or "").strip()
-                        if not idxs or not bg or not proj:
-                            await _say("행 번호·예산단위·프로젝트를 확인해 주세요.")
-                            history += "\n어시스턴트(apply_fields): 필수값 부족"
-                            continue
-                        for ri in idxs:
-                            if note_override:
-                                notes[ri] = note_override
-                            collected = {"예산단위": bg, "계정": acct, "프로젝트": proj, "적요": notes[ri]}
-                            ok, detail = await _apply_row_fields(page, events, ri, collected)
-                            if ok:
-                                filled += 1
-                                status[ri] = "done"
-                                await _say(f"{ri + 1}번 반영 완료 ({detail}).", note="action")
-                            else:
-                                await _say(f"{ri + 1}번 반영 실패: {detail}")
-                            history += f"\n어시스턴트(apply_fields row={ri + 1}): {'ok' if ok else 'fail: ' + detail}"
-                        await emit_shot(events.put, page)
-                        continue
-
-                    # 알 수 없는 도구명(모델 이탈) — graceful 처리.
-                    await _say("처리할 수 없는 요청이에요. 다시 말씀해 주세요.")
+                    submitted = rows_in
                     break
-                else:
-                    await _say("요청하신 내용을 처리했어요. 더 있으면 말씀하시고, 끝나면 완료 버튼을 눌러주세요.")
 
-                await _say("처리 현황:\n\n" + _status_table(rows_list, status, notes), chat_id="cc-status")
-                if all(s != "pending" for s in status.values()):
-                    await _say("모든 항목을 처리했습니다. **선택 완료** 버튼을 누르거나 값을 수정하세요.", chat_id="cc-alldone")
+                # done/기타 — 그리드에선 사용하지 않는다(무시하고 계속 대기).
+                logger.debug("card-collect grid: 무시된 메시지 %r", resp)
+                continue
+
+            # ── 반영(apply) 단계 — 비스킵 행을 no 순으로 ERP 에 순차 반영 ─────────────
+            apply_rows = sorted((r for r in submitted if not r.get("skip")), key=lambda r: r["no"])
+            skipped = 0
+            for r in submitted:
+                if r.get("skip"):
+                    status[r["no"] - 1] = "skipped"
+                    skipped += 1
+
+            filled = 0
+            failures: list[str] = []
+            total = len(apply_rows)
+            for pos, row in enumerate(apply_rows):
+                no = row["no"]
+                idx = no - 1
+                bu = row.get("budgetUnit") or {}
+                proj = row.get("project") or None
+                note = (row.get("note") or "").strip()
+                notes[idx] = note
+                await emit_log(events, f"{no}행 반영 중…", "info")
+                collected = {
+                    "예산단위": bu.get("name") or "",
+                    "계정": "",  # 계정은 예산단위로 자동 결정(비워 두면 자동 처리).
+                    "프로젝트": (proj.get("name") if proj else "") or "",
+                    "적요": note,
+                }
+                ok, detail = await _apply_row_fields(page, events, idx, collected)
+                if ok:
+                    filled += 1
+                    status[idx] = "done"
+                else:
+                    status[idx] = "failed"  # 실패는 배치를 중단하지 않는다.
+                    failures.append(f"{no}행: {detail}")
+                # 진행 현황 표를 매 행 갱신(같은 chat_id 로 대체) + 2행마다·마지막에 스냅샷.
+                await emit_chat(
+                    events,
+                    chat_id="cc-status",
+                    role="assistant",
+                    content="처리 현황:\n\n" + _status_table(rows_list, status, notes),
+                    streaming=False,
+                )
+                if (pos + 1) % 2 == 0 or pos == total - 1:
+                    await emit_shot(events.put, page)
         finally:
             close_hitl_channel(decision_id)
-            await http.aclose()
 
+        # ── 요약 ──────────────────────────────────────────────────────────
+        summary = f"반영 {filled}건 · 건너뜀 {skipped}건 · 실패 {len(failures)}건"
+        if failures:
+            summary += "\n\n실패 상세:\n- " + "\n- ".join(failures)
+        await emit_chat(
+            events,
+            chat_id="cc-summary",
+            role="assistant",
+            content=summary + "\n\n" + _status_table(rows_list, status, notes),
+            streaming=False,
+        )
         await emit_log(events, f"항목 처리 완료 — {filled}건 반영(저장 전).", "ok")
         await emit_step(events, "collect_rows", "done")
         return {"filled": filled}
@@ -496,6 +454,10 @@ async def _apply_row_fields(
         return False, f"적요 세팅 실패: {note_res.get('err') or note_res.get('reason')}"
     applied: list[str] = []
     for field in ("예산단위", "계정", "프로젝트"):
+        # 프로젝트는 그리드에서 선택하지 않을 수 있다(옵션) — 값이 없으면 건너뛴다.
+        # (계정은 값 없이도 예산단위 연동 자동축소를 태워야 하므로 건너뛰지 않는다.)
+        if field == "프로젝트" and not (collected.get("프로젝트") or "").strip():
+            continue
         spec = FIELD_SPEC[field]
         r = await steps.fill_codepicker(
             page, spec["id"], collected[field], spec["code"], spec["name"],

@@ -12,6 +12,7 @@ from datetime import date
 
 import pytest
 
+from app.agents.card_collect import nodes as cc_nodes
 from app.agents.card_collect import steps
 from app.agents.card_collect.nodes import _fmt_won, make_collect_rows_node, recommend_note
 
@@ -62,3 +63,159 @@ async def test_collect_rows_empty_list_announces_and_returns_zero():
         frames.append(await events.get())
     chat = [f for f in frames if isinstance(f.get("chat"), dict)]
     assert any("0건" in (c["chat"].get("content") or "") for c in chat)
+
+
+# ── 그리드 HITL 흐름(kind="grid") ──────────────────────────────────────────────
+from app.live.hitl import resolve_hitl  # noqa: E402
+
+
+def _rows(n: int) -> list[dict]:
+    """조회 노드가 넘기는 rows_list 형태의 가짜 승인내역 n건."""
+    return [
+        {
+            "i": i,
+            "FINPRODUCT_NM": f"하나법인카드-{i}",
+            "TRAN_NM": f"가맹점{i}",
+            "TRAN_AMT": str((i + 1) * 1000),
+            "TRAN_DT": "2026-06-22",
+            "TRAN_TM": "00:00:00",
+            "APRVL_YN": "승인",
+            "VAT_TP": "과세",
+        }
+        for i in range(n)
+    ]
+
+
+async def _next_hitl(events: asyncio.Queue, timeout: float = 2.0) -> dict:
+    """events 큐를 소진하며 다음 hitl 프레임(dict)을 돌려준다."""
+    while True:
+        ev = await asyncio.wait_for(events.get(), timeout=timeout)
+        if isinstance(ev.get("hitl"), dict):
+            return ev["hitl"]
+
+
+def _stub_dumps(monkeypatch, *, units=None, projects=None) -> None:
+    async def _fake_units(page):
+        return list(units or [])
+
+    async def _fake_projects(page, keyword):
+        return list(projects or [])
+
+    monkeypatch.setattr(steps, "dump_budget_units", _fake_units)
+    monkeypatch.setattr(steps, "dump_projects", _fake_projects)
+
+
+async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypatch):
+    _stub_dumps(monkeypatch, units=[{"code": "2000", "name": "경영본부", "deptNm": "경영"}])
+
+    async def _fake_favs(owner):
+        return ([{"code": "1000", "name": "영업본부", "deptNm": "영업"}], [{"code": "P1", "name": "공통"}])
+
+    monkeypatch.setattr(cc_nodes, "_load_user_favorites", _fake_favs)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+
+    assert frame["kind"] == "grid"
+    assert len(frame["rows"]) == 2
+    assert frame["rows"][0]["merchant"] == "가맹점0"
+    assert frame["rows"][0]["time"] == "00:00:00" and frame["rows"][0]["approved"] == "승인"
+    assert frame["budgetUnits"]["all"] == [{"code": "2000", "name": "경영본부", "deptNm": "경영"}]
+    assert frame["budgetUnits"]["favorites"] == [{"code": "1000", "name": "영업본부", "deptNm": "영업"}]
+    assert frame["projects"]["favorites"] == [{"code": "P1", "name": "공통"}]
+    assert frame["projects"]["searchResults"] is None and frame["projects"]["query"] is None
+
+    # 전부 skip 제출로 노드를 정상 종료시킨다.
+    resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+
+
+async def test_grid_query_message_reemits_with_search_results(monkeypatch):
+    _stub_dumps(monkeypatch, units=[], projects=[{"code": "SP1", "name": "SPARES-1"}])
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    first = await _next_hitl(events)
+
+    resolve_hitl(first["id"], {"query": "SPARES"})
+    second = await _next_hitl(events)
+    assert second["id"] == first["id"]  # 같은 decision id 로 재방출
+    assert second["projects"]["query"] == "SPARES"
+    assert second["projects"]["searchResults"] == [{"code": "SP1", "name": "SPARES-1"}]
+
+    resolve_hitl(second["id"], {"rows": [{"no": 1, "skip": True}]})
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+
+
+async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkeypatch):
+    _stub_dumps(monkeypatch, units=[])
+    calls: list[int] = []
+
+    async def _fake_apply(page, events, row, collected):
+        calls.append(row)
+        if row == 1:  # 2행(no=2, idx=1)만 실패로 만든다.
+            return False, "예산단위 무매칭"
+        return True, f"예산단위 {collected['예산단위']}"
+
+    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+
+    resolve_hitl(
+        frame["id"],
+        {
+            "rows": [
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식"},
+                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "소모품"},
+                {"no": 3, "skip": True},
+            ]
+        },
+    )
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out == {"filled": 1}  # 1행 성공, 2행 실패, 3행 skip
+    assert calls == [0, 1]  # skip 아닌 두 행만, no 순(idx 0,1)
+
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    summary = [f["chat"]["content"] for f in frames if isinstance(f.get("chat"), dict)]
+    assert any("반영 1건 · 건너뜀 1건 · 실패 1건" in c for c in summary)
+    assert any("2행: 예산단위 무매칭" in c for c in summary)
+
+
+async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
+    _stub_dumps(monkeypatch, units=[])
+    applied: list[int] = []
+
+    async def _fake_apply(page, events, row, collected):
+        applied.append(row)
+        return True, "ok"
+
+    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    first = await _next_hitl(events)
+
+    # 예산단위 없는 비스킵 행 → 서버검증 실패 → 경고 + 프레임 재방출(적용 안 함).
+    resolve_hitl(first["id"], {"rows": [{"no": 1, "note": "적요만"}]})
+    reemit = await _next_hitl(events)
+    assert reemit["id"] == first["id"]
+    assert applied == []  # 무효 제출은 반영하지 않는다
+
+    resolve_hitl(reemit["id"], {"rows": [{"no": 1, "skip": True}]})
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0}
+
+
+async def test_grid_timeout_returns_error(monkeypatch):
+    _stub_dumps(monkeypatch, units=[])
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
+    out = await make_collect_rows_node(timeout_s=0.05)(state)
+    assert "error" in out and "시간 초과" in out["error"]

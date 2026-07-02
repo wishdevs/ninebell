@@ -13,11 +13,12 @@
   파라미터로 받도록 일반화(기존엔 `expense_card.tools.CHAT_TOOLS` 에 하드코딩). `chat_form.py`·
   `card_collect/nodes.py` 둘 다 이 함수를 재사용(중복 없음). `context` 파라미터명도
   "현재 모달 폼 스키마" 같은 expense_card 전용 문구에서 범용 "컨텍스트 데이터"로 일반화.
-- **card_collect 전용**: `app/agents/card_collect/tools.py::CARD_COLLECT_TOOLS`
-  (apply_fields·update_note·skip_rows·show_status·ask·turn_done). `collect_rows` 는 매 사용자
-  메시지마다 `gemini_chat_decide` 를 최대 `_MAX_TOOLS_PER_TURN=12`회 순차 호출해 도구를 디스패치
-  (chat_form 과 동일 루프 구조). 스크린샷은 안 보낸다 — 승인내역이 이미 구조화 데이터(JSON)라
-  비전 불필요, 텍스트 컨텍스트(`_context()`: 행별 번호·날짜·가맹점·금액·현재상태·적요)만으로 판단.
+- **card_collect 전용**: ~~`tools.py::CARD_COLLECT_TOOLS` Gemini 대화 디스패치~~ →
+  **2026-07-02 그리드 HITL 로 교체**(사용자 확정). `collect_rows` 는 `kind="grid"` HITL 프레임
+  (행 데이터 + 예산단위 후보(라이브 팝업 덤프, 부서필터) + 사용자 즐겨찾기)을 방출하고, 프론트
+  그리드에서 행별 예산단위/프로젝트/적요를 채워 일괄 제출(`rows`)하거나 프로젝트 검색(`query`)을
+  보낸다. tools.py 는 `.recycles/` 로 이동(미사용). 즐겨찾기/카탈로그는 `user_code_favorites`·
+  `erp_code_catalog`(마이그레이션 0009) + `/me/favorites`·`/me/catalog`(동기화 포함) 참조.
 - **정규식 파서 제거**: `_parse_fields`/`_expand_item_nums`/`_parse_instructions` 삭제(전량 미사용).
 - **history 버그 수정**: 최초 구현 시 사용자 턴마다 `history` 를 초기화하는 실수가 있었다(멀티턴 맥락
   유실). chat_form 처럼 **세션 전체 누적**(최근 40줄만 잘라 전송)으로 수정 — 유닛테스트로 검증.

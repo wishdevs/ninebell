@@ -159,6 +159,54 @@ async def test_hitl_run_id_mismatch_forbidden(client, make_user, auth_as):
 
 
 @pytest.mark.asyncio
+async def test_hitl_grid_rows_pass_through_to_channel(client, make_user, auth_as):
+    """그리드 일괄 제출(rows)이 plain dict 목록으로 채널에 전달된다(노드가 서버검증)."""
+    uid = await make_user("judy", "user")
+    auth_as(uid)
+    q = open_hitl_channel("dec-grid", owner=str(uid))
+    try:
+        r = await client.post(
+            "/runs/hitl",
+            json={
+                "decisionId": "dec-grid",
+                "rows": [
+                    {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식"},
+                    {"no": 2, "skip": True},
+                ],
+            },
+        )
+        assert r.json() == {"ok": True}
+        payload = q.get_nowait()
+        assert payload["rows"][0]["budgetUnit"] == {"code": "2000", "name": "경영본부"}
+        assert payload["rows"][1] == {"no": 2, "budgetUnit": None, "project": None, "note": "", "skip": True}
+    finally:
+        close_hitl_channel("dec-grid")
+
+
+@pytest.mark.asyncio
+async def test_hitl_grid_rows_over_limit_422(client, make_user, auth_as):
+    uid = await make_user("mallory", "user")
+    auth_as(uid)
+    rows = [{"no": i + 1, "skip": True} for i in range(501)]  # max_length=500 초과
+    r = await client.post("/runs/hitl", json={"decisionId": "d", "rows": rows})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_hitl_grid_row_bad_shape_422(client, make_user, auth_as):
+    uid = await make_user("oscar", "user")
+    auth_as(uid)
+    # no<1 (ge=1 위반) + budgetUnit.code 초과 → 검증 실패.
+    bad_no = await client.post("/runs/hitl", json={"decisionId": "d", "rows": [{"no": 0}]})
+    assert bad_no.status_code == 422
+    bad_code = await client.post(
+        "/runs/hitl",
+        json={"decisionId": "d", "rows": [{"no": 1, "budgetUnit": {"code": "x" * 65, "name": "n"}}]},
+    )
+    assert bad_code.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_agent_run_persistence_roundtrip(make_user):
     uid = await make_user("grace", "user")
     await store.create_run(run_id="run-persist", agent_id="demo-echo", user_id=uid)

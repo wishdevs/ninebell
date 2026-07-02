@@ -82,9 +82,11 @@ READ_ROWS_JS = f"""(limit) => {{
     const dv = (i,f) => {{ try {{ const o = g.getDisplayValuesOfRow(i);
       return o && o[f] != null ? String(o[f]) : v(i,f); }} catch(e) {{ return v(i,f); }} }};
     const out = [];
+    // 거래시각(TRAN_TM '00:00:00')·승인여부(APRVL_YN '승인'/'승인취소')는 display value 로 읽는다.
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({{
-      i, TRAN_DT:v(i,'TRAN_DT'), TRAN_NM:v(i,'TRAN_NM'), TRAN_AMT:v(i,'TRAN_AMT'),
-      SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'), VAT_TP:dv(i,'VAT_TP'),
+      i, TRAN_DT:v(i,'TRAN_DT'), TRAN_TM:dv(i,'TRAN_TM'), TRAN_NM:v(i,'TRAN_NM'),
+      TRAN_AMT:v(i,'TRAN_AMT'), SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'),
+      VAT_TP:dv(i,'VAT_TP'), APRVL_YN:dv(i,'APRVL_YN'),
       FINPRODUCT_NM:v(i,'FINPRODUCT_NM'), NOTE_DC:v(i,'NOTE_DC') }});
     return {{ rows:n, list: out }};
   }} catch(e) {{ return {{ rows:-1, err:String(e).slice(0,80) }}; }}
@@ -152,6 +154,25 @@ PICKER_READ_JS = """([codeField, nameField, limit]) => {
       i, code: String(g.getValue(i, codeField)), name: String(g.getValue(i, nameField)) });
     return { rows:n, options: out };
   } catch(e) { return { rows:-1, err:String(e).slice(0,60) }; }
+}"""
+
+# 코드피커 팝업 다중필드 전량 읽기(인자 [fields, limit]). limit 0/null = 전량.
+# getJsonRows(0, n-1) 로 로드분 전량을 읽는다(예산단위 2천여행/프로젝트 500행 캡). 반환
+# {rows, options:[{i, <field>: str|null,...}]}. '법인카드' 창 제외 필터는 PICKER_READ_JS 와 동일.
+PICKER_READ_MULTI_JS = """([fields, limit]) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return { rows:-1, reason:'no-pop' };
+  try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const rows = ds.getJsonRows(0, n-1);
+    const cap = limit || rows.length;
+    const out = rows.slice(0, Math.min(rows.length, cap)).map((r,i)=>{
+      const o = { i }; for (const f of fields) o[f] = r[f]==null?null:String(r[f]); return o; });
+    return { rows:n, options: out };
+  } catch(e) { return { rows:-1, err:String(e).slice(0,80) }; }
 }"""
 
 # 코드피커 팝업 행 선택(인자 rowIndex). setCurrent + setSelection.
