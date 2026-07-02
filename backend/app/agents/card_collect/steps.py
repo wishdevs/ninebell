@@ -137,10 +137,16 @@ async def fill_codepicker(
         k = _norm(keyword)
         matches = [o for o in opts if k and k in _norm(o.get("name"))]
         uniq_codes = {o.get("code") for o in matches}
+        # 포함 매칭이 다건이어도 **이름 완전일치**가 단일 코드로 수렴하면 그것을 선택 —
+        # 'SPARES_ACM' 이 'SPARES_ACM KOREA' 에도 포함돼 ambiguous 로 실패하던 문제(실전 런).
+        exact = [o for o in matches if _norm(o.get("name")) == k]
+        exact_codes = {o.get("code") for o in exact}
         if len(uniq_codes) == 1:
             # 1건 또는 동일 코드로 수렴하는 중복 후보(예: 예산단위 '경영 본부' 7행 모두 code 2000
             # — BIZPLAN 조합만 다르고 BG_CD 는 동일) → 사실상 단일 선택이므로 확정(임의선택 아님).
             chosen = matches[0]
+        elif len(exact_codes) == 1:
+            chosen = exact[0]
         elif len(matches) > 1:
             cands = ", ".join(sorted({o.get("name", "") for o in matches})[:6])
             return await _fail(f"'{keyword}' 후보 여러 건({cands}) — 더 구체적으로", ambiguous=True)

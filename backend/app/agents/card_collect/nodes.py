@@ -656,6 +656,8 @@ async def _apply_batch(
         else:
             status[idx] = "failed"
             failures.append(f"{label}행: {detail}")
+            # 실패 사유를 실행 로그에도 남긴다 — 현황표(chat)만으론 종료 후 진단 불가(실전 런 교훈).
+            await emit_log(events, f"{label}행 반영 실패: {detail}", "warn")
         # 진행 현황 표를 매 행 갱신(같은 chat_id 로 대체) + 2행마다·마지막에 스냅샷.
         await emit_chat(
             events,
