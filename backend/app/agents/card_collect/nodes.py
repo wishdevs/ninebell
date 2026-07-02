@@ -27,7 +27,8 @@ from app.config import get_settings
 from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 from app.live.hitl import close_hitl_channel, open_hitl_channel, wait_hitl
-from app.models import UserCodeFavorite
+from app.models import User, UserCodeFavorite
+from app.services.code_sync import dept_matches_budget_name
 from nbkit.patterns import emit_shot
 
 from . import steps
@@ -191,18 +192,19 @@ def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str
     return "\n".join(lines)
 
 
-async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict]]:
-    """사용자 즐겨찾기(예산단위/프로젝트)를 DB 에서 로드. owner=None(스크립트) → 빈 목록.
+async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict], str | None]:
+    """사용자 즐겨찾기(예산단위/프로젝트) + 소속부서를 DB 에서 로드. owner=None(스크립트) → 빈 값.
 
-    반환 (budget_favs [{code,name,deptNm}], project_favs [{code,name}]) — sort_order 순.
+    반환 (budget_favs [{code,name}], project_favs [{code,name}], department) — sort_order 순.
+    department 는 '내 부서' 예산단위 그룹(이름 정규화 매칭)에 쓴다.
     라우터 밖(세션 펌프)이므로 store.py 처럼 get_sessionmaker() 로 자체 세션을 연다.
     """
     if not owner:
-        return [], []
+        return [], [], None
     try:
         user_id = uuid.UUID(str(owner))
     except (ValueError, TypeError):
-        return [], []
+        return [], [], None
     async with get_sessionmaker()() as s:
         rows = (
             await s.execute(
@@ -211,16 +213,17 @@ async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict
                 .order_by(UserCodeFavorite.sort_order)
             )
         ).scalars().all()
+        department = (
+            await s.execute(select(User.department).where(User.id == user_id))
+        ).scalar()
     budget_favs: list[dict] = []
     project_favs: list[dict] = []
     for f in rows:
         if f.kind == "budget_unit":
-            budget_favs.append(
-                {"code": f.code, "name": f.name, "deptNm": (f.extra or {}).get("deptNm", "")}
-            )
+            budget_favs.append({"code": f.code, "name": f.name})
         elif f.kind == "project":
             project_favs.append({"code": f.code, "name": f.name})
-    return budget_favs, project_favs
+    return budget_favs, project_favs, department
 
 
 def _validate_grid_submit(rows_in: list[dict], n: int) -> tuple[bool, str]:
@@ -302,8 +305,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
             for idx, r in enumerate(rows_list)
         ]
 
-        # 즐겨찾기(DB) + 예산단위 라이브 덤프(ERP). 실패는 경고 후 빈 목록으로 진행(런 유지).
-        budget_favs, project_favs = await _load_user_favorites(state.get("owner"))
+        # 즐겨찾기·부서(DB) + 예산단위 라이브 덤프(ERP). 실패는 경고 후 빈 목록으로 진행(런 유지).
+        budget_favs, project_favs, department = await _load_user_favorites(state.get("owner"))
         try:
             all_units = await steps.dump_budget_units(page)
         except Exception:  # noqa: BLE001 — 덤프 실패로 런을 죽이지 않는다.
@@ -312,8 +315,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
         if not all_units:
             await emit_log(events, "예산단위 목록을 불러오지 못했습니다(즐겨찾기·검색으로 진행).", "warn")
 
+        # '내 부서' = 예산단위명 ↔ 소속부서 정규화 매칭('인사/기획팀' ↔ '인사기획팀').
+        mine_units = [u for u in all_units if dept_matches_budget_name(department, u["name"])]
         budget_units = {
             "favorites": budget_favs[:_MAX_FAVORITES],
+            "mine": mine_units[:_MAX_BUDGET_UNITS],
             "all": all_units[:_MAX_BUDGET_UNITS],
         }
         project_favs = project_favs[:_MAX_FAVORITES]

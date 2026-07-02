@@ -190,15 +190,16 @@ async def _picker_search(page: Any, keyword: str) -> None:
 
 
 async def dump_budget_units(page: Any) -> list[dict]:
-    """예산단위(bg_cd) 코드피커 빈검색 전량 → 유니크 (BG_CD,BG_NM). 반환 [{code,name,deptNm}].
+    """예산단위(bg_cd) 코드피커 빈검색 전량 → 유니크 (BG_CD,BG_NM). 반환 [{code,name}].
 
-    피커는 로그인 사용자 부서로 서버필터됨(DEPT_NM 동일). 중복행(BIZPLAN 조합만 다름)은
-    (BG_CD) 기준 최초 1건만 남긴다(첫 DEPT_NM 보존).
+    목록은 **전사 예산단위**(이름이 곧 부서: 임원실·경영 본부·인사기획팀…)다. 그리드의 DEPT_NM
+    은 행별 소속이 아니라 로그인 사용자 부서가 전 행 반복이라 읽지 않는다(초기 구현 오해 정정).
+    중복행(BIZPLAN 조합만 다름)은 (BG_CD) 기준 최초 1건만 남긴다.
     """
     if not await _open_picker(page, "bg_cd"):
         return []
     await _picker_search(page, "")
-    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["BG_CD", "BG_NM", "DEPT_NM"], 0])
+    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["BG_CD", "BG_NM"], 0])
     await page.evaluate(js.PICKER_CLOSE_JS)
     await page.wait_for_timeout(400)
     seen: set[str] = set()
@@ -208,7 +209,7 @@ async def dump_budget_units(page: Any) -> list[dict]:
         if not code or code in seen:
             continue
         seen.add(code)
-        out.append({"code": code, "name": o.get("BG_NM") or "", "deptNm": o.get("DEPT_NM") or ""})
+        out.append({"code": code, "name": o.get("BG_NM") or ""})
     return out
 
 

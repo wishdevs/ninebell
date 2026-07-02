@@ -23,7 +23,7 @@ import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
 from app.core.security import InvalidTokenError, decode_session_token
 from app.models import ErpCodeCatalog, UserCodeFavorite
-from app.services.code_sync import sync_catalog
+from app.services.code_sync import dept_matches_budget_name, sync_catalog
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["me-codes"])
@@ -161,21 +161,6 @@ async def reorder_favorites(body: ReorderIn, user: CurrentUser, db: DbSession) -
 
 
 # ── 코드 카탈로그 조회 ──────────────────────────────────────────────────────────
-def _dept_scope(kind: str, user_department: str | None, dept_param: str | None) -> str | None:
-    """카탈로그 dept 필터 값. None = 필터 없음(전체 부서).
-
-    - 프로젝트: 항상 전사('').
-    - 예산단위: dept='all' → 필터 없음, 명시 dept → 그 값, 없으면 사용자 부서(부서 없으면 전체).
-    """
-    if kind == "project":
-        return ""
-    if dept_param == "all":
-        return None
-    if dept_param:
-        return dept_param
-    return user_department or None
-
-
 @router.get("/catalog")
 async def get_catalog(
     user: CurrentUser,
@@ -186,44 +171,51 @@ async def get_catalog(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    """공용 코드 카탈로그 조회. kind 필수. q=name/code ILIKE, dept 스코프, 페이지네이션."""
+    """공용 코드 카탈로그 조회. kind 필수. q=name/code 검색, 페이지네이션.
+
+    예산단위의 '내 부서' 필터는 dept 컬럼이 아니라 **예산단위명 ↔ 부서명 정규화 매칭**
+    (dept_matches_budget_name: '인사/기획팀' ↔ '인사기획팀')이다 — ERP 예산단위 목록은 전사
+    공통이고 이름이 곧 부서라서다. dept 파라미터: 없음=내 부서 매칭(부서 없으면 전체),
+    'all'=전체, 그 외 값=그 부서명으로 매칭.
+    """
     if kind not in _VALID_KINDS:
         return JSONResponse({"error": f"알 수 없는 kind: {kind}"}, status_code=422)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    dept_val = _dept_scope(kind, user.department, dept)
 
     conds = [ErpCodeCatalog.kind == kind]
-    if dept_val is not None:
-        conds.append(ErpCodeCatalog.dept == dept_val)
     if q:
         like = f"%{q}%"
         conds.append(or_(ErpCodeCatalog.name.ilike(like), ErpCodeCatalog.code.ilike(like)))
 
-    total = (
-        await db.execute(select(func.count()).select_from(ErpCodeCatalog).where(*conds))
-    ).scalar() or 0
     rows = (
         (
             await db.execute(
                 select(ErpCodeCatalog)
                 .where(*conds)
                 .order_by(ErpCodeCatalog.name.asc(), ErpCodeCatalog.code.asc())
-                .limit(limit)
-                .offset(offset)
             )
         )
         .scalars()
         .all()
     )
-    # syncedAt 은 q 무관하게 (kind+dept 스코프)의 최신 동기화 시각.
-    scope_conds = [ErpCodeCatalog.kind == kind]
-    if dept_val is not None:
-        scope_conds.append(ErpCodeCatalog.dept == dept_val)
+
+    # 예산단위 '내 부서' 필터 — 이름 정규화 매칭(행 수가 수십 건이라 파이썬 필터로 충분).
+    if kind == "budget_unit" and dept != "all":
+        match_dept = dept or user.department
+        if match_dept:
+            rows = [r for r in rows if dept_matches_budget_name(match_dept, r.name)]
+
+    total = len(rows)
+    page_rows = rows[offset : offset + limit]
+
+    # syncedAt 은 q/필터 무관하게 kind 전체의 최신 동기화 시각.
     synced_at = (
-        await db.execute(select(func.max(ErpCodeCatalog.synced_at)).where(*scope_conds))
+        await db.execute(
+            select(func.max(ErpCodeCatalog.synced_at)).where(ErpCodeCatalog.kind == kind)
+        )
     ).scalar()
-    items = [{"code": r.code, "name": r.name, "extra": r.extra} for r in rows]
+    items = [{"code": r.code, "name": r.name, "extra": r.extra} for r in page_rows]
     return {
         "items": items,
         "total": total,
@@ -324,15 +316,12 @@ async def trigger_sync(body: SyncIn, request: Request, user: CurrentUser):
 
 @router.get("/catalog/sync-status")
 async def sync_status(request: Request, user: CurrentUser, db: DbSession, kind: str) -> dict:
-    """동기화 상태(진행/마지막 결과) + DB 상의 syncedAt/count(kind+dept 스코프)."""
+    """동기화 상태(진행/마지막 결과) + DB 상의 syncedAt/count(kind 전체 — 카탈로그는 전사 공용)."""
     if kind not in _VALID_KINDS:
         return JSONResponse({"error": f"알 수 없는 kind: {kind}"}, status_code=422)
     sync_state = getattr(request.app.state, "catalog_sync_state", {})
     base = dict(sync_state.get(kind) or {"running": False})
-    dept_val = _dept_scope(kind, user.department, None)
     conds = [ErpCodeCatalog.kind == kind]
-    if dept_val is not None:
-        conds.append(ErpCodeCatalog.dept == dept_val)
     synced_at = (
         await db.execute(select(func.max(ErpCodeCatalog.synced_at)).where(*conds))
     ).scalar()

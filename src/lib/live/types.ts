@@ -74,9 +74,11 @@ export interface ProjectOption {
   name: string;
 }
 
-/** 그리드 개입의 예산단위 보기 — 자주쓰는(먼저) + 전체(부서). */
+/** 그리드 개입의 예산단위 보기 — 자주쓰는 → 내 부서(이름 정규화 매칭) → 전사 전체. */
 export interface HitlBudgetUnits {
   favorites?: BudgetUnitOption[];
+  /** 내 부서 매칭(예: 소속 '인사/기획팀' ↔ 예산단위 '인사기획팀'). */
+  mine?: BudgetUnitOption[];
   all?: BudgetUnitOption[];
 }
 

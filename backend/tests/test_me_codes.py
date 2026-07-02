@@ -151,6 +151,10 @@ async def test_catalog_query_and_envelope(client, make_user, auth_as, sm):
 
 
 async def test_catalog_dept_default_and_all(client, make_user, auth_as, sm):
+    """예산단위 '내 부서' 필터 = dept 컬럼이 아니라 **이름 정규화 매칭**.
+
+    소속 '인사/기획팀' ↔ 예산단위명 '인사기획팀'(슬래시 없음)이 매칭돼야 한다(실 ERP 사례).
+    """
     uid = await make_user("cat-dept", "user")
     await _set_department(sm, uid, "인사/기획팀")
     auth_as(uid)
@@ -158,18 +162,18 @@ async def test_catalog_dept_default_and_all(client, make_user, auth_as, sm):
     await _seed_catalog(
         sm,
         [
-            {"kind": "budget_unit", "dept": "인사/기획팀", "code": "B1", "name": "인사예산", "synced_at": now},
-            {"kind": "budget_unit", "dept": "영업팀", "code": "B2", "name": "영업예산", "synced_at": now},
+            {"kind": "budget_unit", "dept": "", "code": "B1", "name": "인사기획팀", "synced_at": now},
+            {"kind": "budget_unit", "dept": "", "code": "B2", "name": "영업 본부", "synced_at": now},
         ],
     )
-    # 기본 = 사용자 부서 스코프.
+    # 기본 = 소속부서 정규화 매칭('인사/기획팀' → '인사기획팀').
     default = await client.get("/me/catalog?kind=budget_unit")
     assert [i["code"] for i in default.json()["items"]] == ["B1"]
-    # dept=all → 필터 해제.
+    # dept=all → 필터 해제(전사 전체).
     all_dept = await client.get("/me/catalog?kind=budget_unit&dept=all")
     assert {i["code"] for i in all_dept.json()["items"]} == {"B1", "B2"}
-    # 명시 dept.
-    explicit = await client.get("/me/catalog?kind=budget_unit&dept=영업팀")
+    # 명시 dept → 그 부서명으로 정규화 매칭('영업본부' ↔ '영업 본부').
+    explicit = await client.get("/me/catalog?kind=budget_unit&dept=영업본부")
     assert [i["code"] for i in explicit.json()["items"]] == ["B2"]
 
 

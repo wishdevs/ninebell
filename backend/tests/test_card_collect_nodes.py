@@ -106,10 +106,18 @@ def _stub_dumps(monkeypatch, *, units=None, projects=None) -> None:
 
 
 async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypatch):
-    _stub_dumps(monkeypatch, units=[{"code": "2000", "name": "경영본부", "deptNm": "경영"}])
+    # 전사 목록 2건 중 '인사기획팀'만 사용자 부서('인사/기획팀')와 정규화 매칭 → mine 그룹.
+    _stub_dumps(
+        monkeypatch,
+        units=[{"code": "2000", "name": "경영 본부"}, {"code": "2101", "name": "인사기획팀"}],
+    )
 
     async def _fake_favs(owner):
-        return ([{"code": "1000", "name": "영업본부", "deptNm": "영업"}], [{"code": "P1", "name": "공통"}])
+        return (
+            [{"code": "1000", "name": "영업본부"}],
+            [{"code": "P1", "name": "공통"}],
+            "인사/기획팀",
+        )
 
     monkeypatch.setattr(cc_nodes, "_load_user_favorites", _fake_favs)
 
@@ -122,8 +130,13 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
     assert len(frame["rows"]) == 2
     assert frame["rows"][0]["merchant"] == "가맹점0"
     assert frame["rows"][0]["time"] == "00:00:00" and frame["rows"][0]["approved"] == "승인"
-    assert frame["budgetUnits"]["all"] == [{"code": "2000", "name": "경영본부", "deptNm": "경영"}]
-    assert frame["budgetUnits"]["favorites"] == [{"code": "1000", "name": "영업본부", "deptNm": "영업"}]
+    assert frame["budgetUnits"]["all"] == [
+        {"code": "2000", "name": "경영 본부"},
+        {"code": "2101", "name": "인사기획팀"},
+    ]
+    # 내 부서 그룹 = 소속 '인사/기획팀' ↔ 예산단위명 '인사기획팀' 정규화 매칭.
+    assert frame["budgetUnits"]["mine"] == [{"code": "2101", "name": "인사기획팀"}]
+    assert frame["budgetUnits"]["favorites"] == [{"code": "1000", "name": "영업본부"}]
     assert frame["projects"]["favorites"] == [{"code": "P1", "name": "공통"}]
     assert frame["projects"]["searchResults"] is None and frame["projects"]["query"] is None
 

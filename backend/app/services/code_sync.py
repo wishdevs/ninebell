@@ -3,7 +3,10 @@
 fresh 헤드리스 브라우저로 카드결의 진입 체인(로그인→…→증빙유형 선택)을 태운 뒤 예산단위(bg_cd)
 /프로젝트(pjt_cd) 코드피커를 전량 읽어 upsert 한다. ⚠ 저장(F7)은 하지 않는다(읽기 전용 수집).
 
-- 예산단위(budget_unit): 부서 스코프(피커가 로그인 사용자 부서로 서버필터). dept=DEPT_NM.
+- 예산단위(budget_unit): **전사 공용(dept='')** — 팝업 목록 자체가 전사 예산단위(=부서 단위:
+  임원실·경영 본부·인사기획팀…)다. 팝업 그리드의 DEPT_NM 은 행별 소속이 아니라 로그인 사용자
+  부서가 전 행 반복되는 값이라 스코프 키로 쓰지 않는다(초기 구현 오류 정정). "내 부서" 필터는
+  조회 시 예산단위명 ↔ 사용자 department 정규화 매칭(norm_code_name)으로 한다.
 - 프로젝트(project): 전사 공용(dept=''). 팝업 캡(500)으로 접두 스윕 합집합. 부분 스윕이 카탈로그를
   날리지 않도록, 새 집계 건수가 기존 건수 이상일 때만 stale 삭제.
 """
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
@@ -30,6 +34,23 @@ from app.agents.common.nodes import (
 from app.models import ErpCodeCatalog
 
 logger = logging.getLogger(__name__)
+
+# 이름 정규화에서 제거할 문자 — 공백·구분기호·괄호(ninebell _norm_item 검증 노하우).
+_NORM_STRIP_RE = re.compile(r"[\s_\-/()\[\]]+")
+
+
+def norm_code_name(s: object) -> str:
+    """예산단위명/부서명 정규화 — '인사/기획팀'↔'인사기획팀', '경영 본부'↔'경영본부' 매칭용."""
+    return _NORM_STRIP_RE.sub("", str(s or "")).lower()
+
+
+def dept_matches_budget_name(department: str | None, bg_name: str | None) -> bool:
+    """사용자 소속(department)이 예산단위명(bg_name)과 같은 부서인지 — 정규화 후 상호 포함."""
+    d, b = norm_code_name(department), norm_code_name(bg_name)
+    if not d or not b:
+        return False
+    return d in b or b in d
+
 
 # 프로젝트 접두 스윕 — 빈검색(초기 500) + 영숫자 + 한글 음절 대표 접두. 팝업 캡을 채우는 접두는 로그.
 _PROJECT_PREFIXES: tuple[str, ...] = (
@@ -72,7 +93,6 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
     rows = await steps.dump_budget_units(page)
     if not rows:
         return 0
-    dept = rows[0]["deptNm"] or ""
     now = datetime.now(timezone.utc)
     codes = {r["code"] for r in rows}
     async with sessionmaker() as s:
@@ -80,18 +100,19 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
             await s.merge(
                 ErpCodeCatalog(
                     kind="budget_unit",
-                    dept=dept,
+                    dept="",  # 전사 공용 — 부서 매칭은 조회 시 이름 정규화로.
                     code=r["code"],
                     name=r["name"],
-                    extra={"deptNm": r["deptNm"]},
+                    extra=None,
                     synced_at=now,
                 )
             )
+        # 전량 덤프이므로 kind 전체에서 stale 제거. 과거 dept 스코프로 저장된 잔여 행
+        # (dept != '')은 코드가 같아도 중복이므로 함께 정리한다(초기 구현 정정 마이그레이션 겸용).
         await s.execute(
             delete(ErpCodeCatalog).where(
                 ErpCodeCatalog.kind == "budget_unit",
-                ErpCodeCatalog.dept == dept,
-                ErpCodeCatalog.code.notin_(codes),
+                (ErpCodeCatalog.code.notin_(codes)) | (ErpCodeCatalog.dept != ""),
             )
         )
         await s.commit()

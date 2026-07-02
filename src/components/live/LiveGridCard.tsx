@@ -132,6 +132,7 @@ const TX_COLUMNS: { key: keyof LiveGridRow; header: string; align?: 'right' }[] 
 export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const rows = hitl.rows ?? [];
   const bFavList = hitl.budgetUnits?.favorites ?? [];
+  const bMineList = hitl.budgetUnits?.mine ?? [];
   const bAllList = hitl.budgetUnits?.all ?? [];
   const pFavList = hitl.projects?.favorites ?? [];
   const searchResults = hitl.projects?.searchResults ?? null;
@@ -162,13 +163,19 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선.
   const budgetByCode = useMemo(() => {
     const m = new Map<string, BudgetUnitOption>();
-    for (const o of [...bFavList, ...bAllList]) if (!m.has(o.code)) m.set(o.code, o);
+    for (const o of [...bFavList, ...bMineList, ...bAllList]) if (!m.has(o.code)) m.set(o.code, o);
     return m;
   }, [hitl.budgetUnits]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const bAllExclFav = useMemo(() => {
+  // 그룹 간 중복 제거: 자주쓰는 → 내 부서 → 전체 순으로 앞 그룹에 나온 코드는 뒤에서 제외.
+  const bMineExclFav = useMemo(() => {
     const favCodes = new Set(bFavList.map((o) => o.code));
-    return bAllList.filter((o) => !favCodes.has(o.code));
+    return bMineList.filter((o) => !favCodes.has(o.code));
+  }, [hitl.budgetUnits]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const bAllExclFav = useMemo(() => {
+    const shown = new Set([...bFavList, ...bMineList].map((o) => o.code));
+    return bAllList.filter((o) => !shown.has(o.code));
   }, [hitl.budgetUnits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const disabled = busy || submitted;
@@ -245,6 +252,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
       {/* 일괄 지정 — 비제외 행 전체에 같은 예산단위·프로젝트를 한 번에 채운다(이후 개별 수정 가능). */}
       <BulkBar
         budgetFavs={bFavList}
+        budgetMineExclFav={bMineExclFav}
         budgetAllExclFav={bAllExclFav}
         projectFavs={pFavList}
         disabled={disabled}
@@ -306,6 +314,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                       <BudgetSelect
                         value={e.budgetUnitCode}
                         favorites={bFavList}
+                        mineExclFav={bMineExclFav}
                         allExclFav={bAllExclFav}
                         disabled={e.skip || disabled}
                         invalid={rowInvalid && e.budgetUnitCode === ''}
@@ -451,6 +460,7 @@ function GridHeader({ title, prompt }: { title: string; prompt?: string }) {
 
 function BulkBar({
   budgetFavs,
+  budgetMineExclFav,
   budgetAllExclFav,
   projectFavs,
   disabled,
@@ -458,6 +468,7 @@ function BulkBar({
   onBulkProject,
 }: {
   budgetFavs: BudgetUnitOption[];
+  budgetMineExclFav: BudgetUnitOption[];
   budgetAllExclFav: BudgetUnitOption[];
   projectFavs: ProjectOption[];
   disabled: boolean;
@@ -472,6 +483,7 @@ function BulkBar({
       <BudgetSelect
         value=""
         favorites={budgetFavs}
+        mineExclFav={budgetMineExclFav}
         allExclFav={budgetAllExclFav}
         disabled={disabled}
         placeholder="예산단위 전체 적용"
@@ -503,6 +515,7 @@ function BulkBar({
 function BudgetSelect({
   value,
   favorites,
+  mineExclFav = [],
   allExclFav,
   disabled,
   invalid,
@@ -512,6 +525,8 @@ function BudgetSelect({
 }: {
   value: string;
   favorites: BudgetUnitOption[];
+  /** 내 부서 매칭(자주쓰는 제외분). */
+  mineExclFav?: BudgetUnitOption[];
   allExclFav: BudgetUnitOption[];
   disabled?: boolean;
   invalid?: boolean;
@@ -544,8 +559,17 @@ function BudgetSelect({
           ))}
         </optgroup>
       ) : null}
+      {mineExclFav.length > 0 ? (
+        <optgroup label="내 부서">
+          {mineExclFav.map((o) => (
+            <option key={`m-${o.code}`} value={o.code}>
+              {label(o)}
+            </option>
+          ))}
+        </optgroup>
+      ) : null}
       {allExclFav.length > 0 ? (
-        <optgroup label="전체(부서)">
+        <optgroup label="전체">
           {allExclFav.map((o) => (
             <option key={`a-${o.code}`} value={o.code}>
               {label(o)}
