@@ -18,7 +18,8 @@ export type NavIconKey =
   | 'settings'
   | 'design'
   | 'audit'
-  | 'logging';
+  | 'logging'
+  | 'org';
 
 export interface NavItem {
   href: string;
@@ -51,6 +52,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members', permission: 'users:read' },
+      // 조직구분별 에이전트 사용 권한 관리(관리자+).
+      { href: '/organizations', label: '조직구분 관리', icon: 'org', minRole: 'admin' },
       // 감사 = 사용자 접속/행동 감시(로그인 access_logs). 로깅 = 에이전트 사용 내역(runs).
       { href: '/audit', label: '감사', icon: 'audit', permission: 'logs:read' },
       { href: '/logs', label: '로깅', icon: 'logging', permission: 'logs:read' },
