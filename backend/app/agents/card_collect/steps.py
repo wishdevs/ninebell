@@ -6,12 +6,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import calendar
+import logging
 import re
 from datetime import date
 from typing import Any
 
 from . import js
+
+logger = logging.getLogger(__name__)
 
 # ── D2: 승인일 기간 계산 ─────────────────────────────────────────────────────────
 # 오늘이 매월 10일 이전이면 전월(1일~말일), 10일 이후(포함)면 당월(1일~오늘).
@@ -267,6 +271,75 @@ def _dedupe_projects(options: list[dict]) -> list[dict]:
 
 # 프로젝트 팝업 로드 캡(초기/검색당 최대 로드 행). 정확히 이 값이면 결과가 잘렸을 수 있음.
 PROJECT_PICKER_CAP = 500
+
+
+async def dump_projects_scroll(
+    page: Any, *, max_rounds: int = 60
+) -> tuple[list[dict], int | None, int]:
+    """프로젝트(pjt_cd) 팝업 서버 페이징을 **끝행 포커스+ArrowDown** 으로 전량 로드해 수집.
+
+    팝업 그리드는 서버 페이징(500/페이지)이다. 프로브(2026-07-02): DOM 스크롤/페이징
+    API/End 키는 무효, **setCurrent(마지막 행)+ArrowDown 연타가 라운드당 +500 결정적**.
+    조회 XHR 응답의 total 을 캡처해 목표치로 삼는다. ⚠ total(실측 2,358)은 WBS 하위행
+    포함 **원시 행 수**이고, PJT_NO 중복 제거 후 고유 프로젝트는 그보다 적다(실측 1,318)
+    — 완결 판정은 원시 로드 행 수(raw_loaded)로만 한다.
+    반환 (dedupe된 rows, server_total|None, raw_loaded).
+    """
+    server_total: int | None = None
+
+    def _on_response(resp):
+        nonlocal server_total
+        if "H_PS_WBS_MST_C_search_list" not in resp.url:
+            return
+
+        async def _read():
+            nonlocal server_total
+            try:
+                body = await resp.json()
+                t = int(body.get("total") or 0)
+                if t > 0:
+                    server_total = t
+            except Exception:  # noqa: BLE001 — total 캡처 실패는 무해(무증가 판정 폴백)
+                pass
+
+        asyncio.ensure_future(_read())
+
+    page.on("response", _on_response)
+    try:
+        if not await _open_picker(page, "pjt_cd"):
+            return [], None, 0
+        await _picker_search(page, "")
+        prev = await page.evaluate(js.PICKER_ROWCOUNT_JS)
+        stable = 0
+        for rnd in range(1, max_rounds + 1):
+            if server_total and prev >= server_total:
+                break  # 전량 로드 완료.
+            f = await page.evaluate(js.PICKER_FOCUS_LAST_JS)
+            if not f.get("ok"):
+                logger.warning("프로젝트 스크롤 r%d — 끝행 포커스 실패: %s", rnd, f)
+                break
+            for _ in range(30):
+                await page.keyboard.press("ArrowDown", delay=30)
+            await page.wait_for_timeout(3_000)
+            cur = await page.evaluate(js.PICKER_ROWCOUNT_JS)
+            logger.info("프로젝트 스크롤 r%d — rows=%s total=%s stable=%d", rnd, cur, server_total, stable)
+            if cur <= prev:
+                stable += 1
+                if stable >= 3:
+                    break
+                await page.wait_for_timeout(2_000)
+            else:
+                stable = 0
+            prev = max(prev, cur)
+        read = await page.evaluate(
+            js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
+        )
+        await page.evaluate(js.PICKER_CLOSE_JS)
+        await page.wait_for_timeout(400)
+        raw_loaded = read.get("rows") if isinstance(read.get("rows"), int) else prev
+        return _dedupe_projects(read.get("options") or []), server_total, raw_loaded
+    finally:
+        page.remove_listener("response", _on_response)
 
 
 async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict], list[str]]:

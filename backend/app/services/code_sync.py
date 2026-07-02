@@ -125,9 +125,29 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
 
 
 async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
-    rows, cap_hit = await steps.dump_projects_sweep(page, list(_PROJECT_PREFIXES))
-    if cap_hit:
-        logger.warning("프로젝트 스윕 캡(500) 도달 접두 — 누락 가능: %s", ", ".join(cap_hit))
+    # 1순위: 끝행 포커스+ArrowDown 페이지 로딩으로 전량 수집(스크롤 더보기 실측 대응).
+    rows: list[dict] = []
+    server_total: int | None = None
+    raw_loaded = 0
+    try:
+        rows, server_total, raw_loaded = await steps.dump_projects_scroll(page)
+    except Exception:  # noqa: BLE001 — 스크롤 수집 실패는 스윕 폴백으로.
+        logger.exception("프로젝트 스크롤 수집 실패 — 접두 스윕으로 폴백")
+    logger.info(
+        "프로젝트 스크롤 수집 — 원시 %d행 로드(서버 total=%s), 고유 프로젝트 %d건",
+        raw_loaded, server_total, len(rows),
+    )
+    # 완결 판정은 원시 행 수 기준 — total(2,358)은 WBS 하위행 포함이라 dedupe 건수(1,318)와
+    # 다르다. 원시 로드가 total 에 못 미쳤을 때만 접두 스윕으로 보강한다.
+    if raw_loaded < (server_total or steps.PROJECT_PICKER_CAP + 1):
+        logger.warning("프로젝트 로드 미달(%d/%s) — 접두 스윕 보강", raw_loaded, server_total)
+        sweep_rows, cap_hit = await steps.dump_projects_sweep(page, list(_PROJECT_PREFIXES))
+        if cap_hit:
+            logger.warning("프로젝트 스윕 캡(500) 도달 접두 — 누락 가능: %s", ", ".join(cap_hit))
+        by_code = {r["code"]: r for r in rows}
+        for r in sweep_rows:
+            by_code.setdefault(r["code"], r)
+        rows = list(by_code.values())
     if not rows:
         return 0
     now = datetime.now(timezone.utc)

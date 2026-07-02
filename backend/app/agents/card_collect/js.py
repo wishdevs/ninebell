@@ -255,3 +255,45 @@ def document_button_box_js(text: str) -> str:
 
 # 법인카드 카드 팝업 존재 여부(닫기 검증용).
 CARD_WIN_EXISTS_JS = f"""() => !!({CARD_WIN})"""
+
+
+# 코드피커 팝업 그리드의 중심 좌표(휠 스크롤 로딩용). 반환 {x,y} | null.
+PICKER_GRID_RECT_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return null;
+  const g = p.querySelector('.dews-ui-grid'); if (!g) return null;
+  const r = g.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+}"""
+
+# 코드피커 팝업 그리드 행 수(스크롤 로딩 진행 판정).
+PICKER_ROWCOUNT_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return -1;
+  try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+    return g.getDataSource().getRowCount(); } catch(e) { return -2; }
+}"""
+
+
+# 코드피커 팝업 그리드 마지막 행 setCurrent + 포커스 — ArrowDown 으로 다음 페이지 로드 트리거.
+# (프로브 2026-07-02: 휠은 1,318행 정체, setCurrent(끝행)+ArrowDown 은 라운드당 +500 결정적.)
+PICKER_FOCUS_LAST_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return { ok:false, reason:'no-pop' };
+  try { const gridEl = p.querySelector('.dews-ui-grid');
+    const g = window.jQuery(gridEl).data('dewsControl')._grid;
+    const n = g.getDataSource().getRowCount();
+    const cols = g.getColumns();
+    const f = (cols.find(x=>x.visible) || cols[1] || cols[0]).fieldName;
+    g.setCurrent({ itemIndex: n-1, fieldName: f });
+    const focusable = gridEl.querySelector('[tabindex], canvas, .k-grid-content') || gridEl;
+    focusable.focus && focusable.focus();
+    return { ok:true, row: n-1 };
+  } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }
+}"""
