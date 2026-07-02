@@ -199,7 +199,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
         await store.create_run(run_id=tracked_run_id, agent_id=body.agentId, user_id=user.id)
 
     browser_factory = _browser_factory(request)
-    semaphore = getattr(request.app.state, "erp_semaphore", None)
+    semaphore = getattr(request.app.state, "run_semaphore", None)
     # 세션 자격증명(비밀번호)을 CredCache(jti)에서 조회해 실 워크플로우(expense-card-chat)에
     # 주입한다. demo-echo 는 비밀번호를 쓰지 않으므로 None 이어도 무해하다.
     creds = {"userid": user.omnisol_userid, "password": _omnisol_password(request)}

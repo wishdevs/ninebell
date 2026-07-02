@@ -51,7 +51,9 @@ def create_app() -> FastAPI:
         pw = await async_playwright().start()
         app.state.playwright = pw
         app.state.erp_browser = await pw.chromium.launch(headless=True)
-        app.state.erp_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_logins)
+        # 로그인/실행 세마포어 분리 — 장기 실행이 짧은 로그인을 막지 않도록 격리(P3-5).
+        app.state.login_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_logins)
+        app.state.run_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_runs)
 
         # --- 라이브 실행(run): run 당 fresh 헤드리스 브라우저 팩토리 + 세션 리퍼 ---
         # 라우터(runs.py)가 이 팩토리로 run 당 새 브라우저를 열고 finally 에서 닫는다.

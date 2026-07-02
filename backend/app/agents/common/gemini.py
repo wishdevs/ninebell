@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger("app.agents.expense_card.gemini")
+logger = logging.getLogger("app.agents.common.gemini")
 
 # 재시도 대상 상태코드(일시 오류). 404 는 '빈 바디'일 때만 일시로 보고 재시도한다
 # (폐기 모델은 바디에 사유가 있어 → 즉시 실패). 429=rate-limit, 5xx=서버 일시 오류.

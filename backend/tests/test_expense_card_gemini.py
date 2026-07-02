@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-import app.agents.expense_card.gemini as GM
+import app.agents.common.gemini as GM
 
 
 def _resp(status: int, payload: dict | None = None, text: str = "") -> httpx.Response:

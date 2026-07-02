@@ -34,7 +34,7 @@ from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.patterns import emit_shot
 
 from .domain import remark_for, use_item_from_remark
-from .gemini import gemini_chat_decide
+from app.agents.common.gemini import gemini_chat_decide
 from .tools import (
     CHAT_TOOLS,
     SCAFFOLD_DROPDOWN_FIELDS,

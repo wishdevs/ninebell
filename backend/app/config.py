@@ -26,7 +26,11 @@ class Settings(BaseSettings):
 
     # --- 더존 옴니솔 ERP ---
     erp_base: str = "https://erp.ninebell.co.kr"
+    # 로그인 검증(단발·짧음)과 워크플로우 실행(브라우저 전 구간·HITL 대기로 길다)의 동시성을
+    # 분리한다. 단일 세마포어 공유 시 장기 실행이 세마포어를 점유해 짧은 로그인이 최대 hitl_timeout
+    # 만큼 블로킹됐다(역커플링). 실행은 헤드리스 브라우저 슬롯이라 더 낮게 잡는다.
     max_concurrent_erp_logins: int = 3
+    max_concurrent_erp_runs: int = 2
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.

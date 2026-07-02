@@ -141,7 +141,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
 
     # 2) 옴니솔 계정: 헤드리스 검증.
     try:
-        async with request.app.state.erp_semaphore:
+        async with request.app.state.login_semaphore:
             profile = await erp_login.authenticate(
                 request.app.state.erp_browser, body.userid, body.password, settings.erp_base
             )

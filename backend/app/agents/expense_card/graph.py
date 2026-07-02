@@ -16,8 +16,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from .chat_form import make_chat_form_node
-from .nodes import (
+from app.agents.common.nodes import (
     make_add_row_node,
     make_login_node,
     make_menu_nav_node,
@@ -26,6 +25,8 @@ from .nodes import (
     make_set_gubun_node,
     make_user_type_node,
 )
+
+from .chat_form import make_chat_form_node
 
 
 class ExpenseCardState(TypedDict, total=False):

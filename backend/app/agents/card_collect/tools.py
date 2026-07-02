@@ -1,6 +1,6 @@
 """Gemini function-calling 도구 스키마 — 법인카드 승인내역 항목 처리(대화형).
 
-expense_card.tools.CHAT_TOOLS 와 같은 스타일(app.agents.expense_card.gemini.gemini_chat_decide
+expense_card.tools.CHAT_TOOLS 와 같은 스타일(app.agents.common.gemini.gemini_chat_decide
 가 어느 에이전트든 재사용하도록 tools 를 파라미터로 받게 일반화됨 — 여기서 그 도구 목록만 정의).
 행 번호는 사용자에게 보여준 전체 리스트 표의 # 컬럼(1-based)이다.
 """

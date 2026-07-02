@@ -1,7 +1,7 @@
 """법인카드 승인내역 정리(card-collect) — LangGraph StateGraph 조립.
 
 진입 앞단(login→user_type(회계)→menu_nav(결의서입력)→set_gubun(카드)→add_row(F3)
-→open_evdn→select_evdn(01))은 expense_card.nodes 를 그대로 재사용하고, 카드팝업 이후
+→open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후
 (select_all_cards→set_period→query→collect_rows→save)는 card_collect.nodes 로 잇는다.
 
 state 계약(러너 주입): page/browser/events/userid/password/params. 종료는 save 가 result 로.
@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app.agents.expense_card.nodes import (
+from app.agents.common.nodes import (
     make_add_row_node,
     make_login_node,
     make_menu_nav_node,

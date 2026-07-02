@@ -25,7 +25,7 @@ async def _fake_authenticate(browser, userid, password, base):
 
 def _wire_state(monkeypatch):
     monkeypatch.setattr(erp_login, "authenticate", _fake_authenticate)
-    fastapi_app.state.erp_semaphore = asyncio.Semaphore(1)
+    fastapi_app.state.login_semaphore = asyncio.Semaphore(1)
     fastapi_app.state.erp_browser = object()
     fastapi_app.state.cred_cache = CredCache()
     fastapi_app.state.signup_cache = SignupCache()

@@ -19,4 +19,4 @@
 - 기존 `app/agents/expense_card/`(expense-card-chat)는 **카드 단건 대화형 폼 채움**(증빙유형→상세필드).
   신규 `card_collect`는 **카드 다건 리스트 정리형**(돋보기 전체선택→기간→조회→건별 입력→일괄적용→저장).
 - 공유 프리미티브: `nbkit.omnisol`(js_lib/selectors), `nbkit.patterns`(login/user_type/menu),
-  `expense_card.tools`(프로젝트/계정/예산단위/적요 코드피커 채움), `expense_card.nodes`(진입 앞단).
+  `expense_card.tools`(프로젝트/계정/예산단위/적요 코드피커 채움), `app.agents.common.nodes`(진입 앞단).

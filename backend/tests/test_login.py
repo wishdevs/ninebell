@@ -26,7 +26,7 @@ async def _fake_authenticate(browser, userid, password, base):
 
 def _wire_state(monkeypatch, fake):
     monkeypatch.setattr(erp_login, "authenticate", fake)
-    fastapi_app.state.erp_semaphore = asyncio.Semaphore(1)
+    fastapi_app.state.login_semaphore = asyncio.Semaphore(1)
     fastapi_app.state.erp_browser = object()  # 모킹된 authenticate 가 사용하지 않음
     fastapi_app.state.cred_cache = CredCache()
     fastapi_app.state.signup_cache = SignupCache()
@@ -50,6 +50,23 @@ async def test_local_admin_login_succeeds_without_omnisol(client, sm, monkeypatc
         u = (await s.execute(select(User).where(User.omnisol_userid == "admin"))).scalar_one()
         assert u.role.code == "super_admin"
         assert u.last_login_at is not None
+
+
+async def test_login_not_blocked_by_exhausted_run_semaphore(client, monkeypatch):
+    """세마포어 분리(P3-5): 실행 세마포어가 완전히 점유돼도 로그인은 login_semaphore 로 통과.
+
+    분리 전에는 단일 세마포어를 공유해 장기 실행이 로그인을 막았다. run_semaphore 를 0 permit
+    으로 소진시켜도 로그인이 200 이면 두 경로가 격리됐다는 증거."""
+    async def _fake(browser, userid, password, base):
+        raise AssertionError("로컬 admin 은 옴니솔 미호출")
+
+    _wire_state(monkeypatch, _fake)
+    fastapi_app.state.run_semaphore = asyncio.Semaphore(0)  # 실행 슬롯 전부 점유 상태
+    try:
+        resp = await client.post("/auth/login", json={"userid": "admin", "password": "1111"})
+        assert resp.status_code == 200
+    finally:
+        del fastapi_app.state.run_semaphore
 
 
 async def test_local_admin_wrong_password_401_and_logs_failed(client, sm, monkeypatch):
