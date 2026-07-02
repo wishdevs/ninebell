@@ -16,12 +16,7 @@ export default function ProjectsManagePage() {
         title="프로젝트 관리"
         description="자주쓰는 프로젝트와 기본값을 지정합니다. 에이전트가 카드내역 입력에 활용합니다."
       />
-      <CodeCatalogManager
-        kind="project"
-        caption="코드"
-        title="프로젝트 카탈로그"
-        description=""
-      />
+      <CodeCatalogManager kind="project" caption="코드" title="프로젝트 카탈로그" description="" />
     </div>
   );
 }

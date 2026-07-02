@@ -443,9 +443,7 @@ function AgentAccessTab({
                 </span>
                 <button
                   type="button"
-                  onClick={() =>
-                    setSelection(agent.agentId, allOn ? [] : options.map((o) => o.id))
-                  }
+                  onClick={() => setSelection(agent.agentId, allOn ? [] : options.map((o) => o.id))}
                   className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
                 >
                   {allOn ? '모두 해제' : '모두 선택'}

@@ -112,7 +112,6 @@ export function AccountClient() {
           </Button>
         </div>
       </SectionCard>
-
     </div>
   );
 }

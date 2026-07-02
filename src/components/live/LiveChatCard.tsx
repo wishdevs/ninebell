@@ -75,8 +75,7 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
   // 마지막이 사용자 말풍선이면 에이전트 응답 대기(채우는 중). 전송/완료 중에도 처리 중으로 본다.
   // 단, 그 사용자 말풍선이 전송 실패(error)면 대기 중이 아니므로 처리 중으로 보지 않는다.
   const lastMessage = messages[messages.length - 1];
-  const processing =
-    busy || completing || (lastMessage?.role === 'user' && !lastMessage.error);
+  const processing = busy || completing || (lastMessage?.role === 'user' && !lastMessage.error);
 
   async function send() {
     const text = draft.trim();
