@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -37,6 +37,9 @@ class AgentOrgAccess(Base):
     """에이전트 × 조직구분 허용 매핑. 행 존재 = 허용."""
 
     __tablename__ = "agent_org_access"
+    # 조직구분 기준 역조회(어떤 에이전트가 이 조직에 허용됐나) 대비 인덱스. (agent_id,org_unit_id)
+    # 순서 PK 는 org_unit_id 선두 조회를 못 타므로 별도 인덱스.
+    __table_args__ = (Index("ix_agent_org_access_org_unit_id", "org_unit_id"),)
 
     agent_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True

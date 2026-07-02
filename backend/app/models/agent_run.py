@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONVariant
@@ -23,9 +23,11 @@ if TYPE_CHECKING:
 
 class AgentRun(Base):
     __tablename__ = "agent_runs"
+    # 로깅 목록은 소유자 스코프 + started_at 최신순 조회가 잦다 → 복합 인덱스로 정렬 스캔 회피.
+    __table_args__ = (Index("ix_agent_runs_user_started", "user_id", "started_at"),)
 
-    # 클라이언트가 만든 런 id(세션 키와 동일). 예: 'run-<hex>'.
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    # 클라이언트가 만든 런 id(세션 키와 동일). 예: 'run-<hex>'. 64로 경계 여유(이전 40).
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     # 워크플로우 식별자(FK 아님 — demo-echo 등 미등록 워크플로우 허용).
     agent_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(
