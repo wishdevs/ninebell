@@ -230,6 +230,17 @@ def make_collect_rows_node(timeout_s: int = 600):
         rows_list: list[dict] = state.get("rows_list") or []
         await emit_step(events, "collect_rows", "running")
         if not rows_list:
+            period = state.get("period") or []
+            period_txt = f"{period[0]} ~ {period[1]}" if len(period) == 2 else "이번 조회 기간"
+            # 조회는 정상 실행됐지만 결과가 0건인 경우 — 채팅에 명확히 알린다(조용히 끝나면
+            # 사용자가 '먹통'으로 오해하기 쉽다). 로그 탭 warn 만으론 부족(리뷰).
+            await emit_chat(
+                events,
+                chat_id="cc-empty",
+                role="assistant",
+                content=f"{period_txt} 기간에 해당하는 법인카드 승인내역이 0건입니다. 처리할 항목이 없어 이대로 종료합니다.",
+                streaming=False,
+            )
             await emit_log(events, "처리할 승인내역이 없습니다.", "warn")
             await emit_step(events, "collect_rows", "done")
             return {"filled": 0}
