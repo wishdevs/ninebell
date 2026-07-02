@@ -63,6 +63,18 @@ def test_close_channel_cleans_up_queue_and_owner():
     assert hitl_owner(did) is None
 
 
+async def test_wait_hitl_times_out_without_response():
+    """응답이 오지 않으면 wait_hitl 은 asyncio.TimeoutError 를 던진다(노드가 실패로 변환)."""
+    import app.live.hitl as hitl_mod
+
+    events: asyncio.Queue = asyncio.Queue()
+    with pytest.raises(asyncio.TimeoutError):
+        await hitl_mod.wait_hitl(events, kind="chat", title="t", prompt="p", timeout_s=0.05)
+    # 타임아웃 후 큐·소유권이 정리됐는지(finally) — hitl 프레임의 id 로 확인.
+    frame = (await events.get())["hitl"]
+    assert hitl_mod.resolve_hitl(frame["id"], {"done": True}) is False  # 이미 정리됨
+
+
 async def test_wait_hitl_uses_config_timeout_when_none(monkeypatch):
     """wait_hitl(timeout_s=None) 은 config.hitl_timeout_s(단일 소스)를 쓴다."""
     import app.live.hitl as hitl_mod
