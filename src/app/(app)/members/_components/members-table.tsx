@@ -163,10 +163,7 @@ export function MembersTable({
                           onOrgUnitChange(member, value === ORG_NONE ? null : value)
                         }
                       >
-                        <SelectTrigger
-                          aria-label={`${member.name} 조직구분`}
-                          className="w-[9rem]"
-                        >
+                        <SelectTrigger aria-label={`${member.name} 조직구분`} className="w-[9rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { API_BASE } from '@/lib/api/client';
 import { cancelRun } from './runs-api';
 import type {
   ChatMessage,
@@ -23,8 +24,6 @@ import type {
   LiveStepState,
   UseLiveRunReturn,
 } from './types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
 // 재연결 정책 — 끊김 시 지수 백오프로 조용히 재시도(흐름은 서버에서 살아있다).
 const RECONNECT_MAX = 6;

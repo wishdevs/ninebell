@@ -2,7 +2,7 @@
   "name": "dashboard-design",
   "version": "0.1.0",
   "private": true,
-  "description": "ETRIBE AX — 프론트엔드 디자인 기본형 (더미데이터, 백엔드 없음)",
+  "description": "나인벨(NINEBELL) — 더존 옴니솔 업무 자동화 대시보드 (Next.js 프론트 + FastAPI 백엔드)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -29,7 +29,6 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@remixicon/react": "^4.9.0",
-    "@xyflow/react": "^12.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "next": "16.2.6",

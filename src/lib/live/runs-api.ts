@@ -16,10 +16,8 @@
  *   DELETE /runs/templates/{id}                                 → 204
  */
 
-import { api } from '@/lib/api/client';
+import { API_BASE, api } from '@/lib/api/client';
 import type { LiveLogLevel } from './types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
 
 // ── 도메인 타입 ──────────────────────────────────────────────────────
 

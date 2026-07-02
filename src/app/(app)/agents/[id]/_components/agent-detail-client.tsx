@@ -31,11 +31,10 @@ function statusAt(pos: number, current: number): StepStatus {
 
 /**
  * 디버그용 — 현재 단계를 `current`로 두었을 때의 에이전트 뷰를 만든다.
- * steps와 flowGraph 노드 상태(완료/진행/대기)·진행률·현재 동작을 함께 재계산해
- * 모든 화면(간략 스텝퍼·그래프·브라우저·사이드패널)이 같이 움직이게 한다.
+ * steps 노드 상태(완료/진행/대기)·진행률·현재 동작을 함께 재계산해
+ * 모든 화면(간략 스텝퍼·브라우저·사이드패널)이 같이 움직이게 한다.
  */
 function deriveAgentAtStep(agent: Agent, current: number): Agent {
-  const idxById = new Map(agent.steps.map((s, i) => [s.id, i] as const));
   const steps = agent.steps.map((s, i) => {
     const st = statusAt(i, current);
     return {
@@ -44,22 +43,12 @@ function deriveAgentAtStep(agent: Agent, current: number): Agent {
       substeps: s.substeps?.map((ss) => ({ ...ss, status: st === 'active' ? ss.status : st })),
     };
   });
-  const flowGraph = agent.flowGraph
-    ? {
-        ...agent.flowGraph,
-        nodes: agent.flowGraph.nodes.map((n) => ({
-          ...n,
-          status: statusAt(idxById.get(n.id) ?? 0, current),
-        })),
-      }
-    : undefined;
   const total = agent.steps.length;
   const progress = total <= 1 ? 100 : Math.round((current / (total - 1)) * 100);
   const label = agent.steps[current]?.label ?? '';
   return {
     ...agent,
     steps,
-    flowGraph,
     progress,
     currentAction: `[디버그] ${label} 단계로 이동 (${current + 1}/${total})`,
   };

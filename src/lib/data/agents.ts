@@ -15,7 +15,6 @@
  */
 
 import { relativeFromNow } from './format';
-import { CORPORATE_CARD_FLOW, type FlowGraph } from './flows';
 
 /** 동시에 떠 있을 수 있는 라이브(헤드리스 브라우저) 세션 한도. */
 export const CONCURRENCY_LIMIT = 4;
@@ -165,11 +164,6 @@ export interface Agent {
   steps: readonly WorkflowStep[];
   logs: readonly LogEntry[];
   intervention?: Intervention | null;
-  /**
-   * 분기·루프를 포함한 상세 플로우 그래프. 지정되면 "단계 진행" 펼치기에서
-   * 기본 선형 React Flow 대신 이 그래프(React Flow)를 보여준다.
-   */
-  flowGraph?: FlowGraph;
 }
 
 // 공통 단계 라벨(공용 스킬 기반)
@@ -422,10 +416,8 @@ export const AGENTS: readonly Agent[] = [
     successRate: 89.1,
     avgSeconds: 124,
     lastRunAt: relativeFromNow({ minutes: 6 }),
-    flowGraph: CORPORATE_CARD_FLOW,
     // steps = 실제 워크플로우(expense-card-chat) 노드 순서. 미실행 시 상단 스텝퍼가 이 목록을
     // 중립으로 노출하고, 라이브 실행 시 run.steps 가 진행상태를 오버레이한다.
-    // (flowGraph 는 현재 상세에서 렌더하지 않는 레거시 필드.)
     steps: [
       {
         id: 'login',

@@ -3,14 +3,18 @@
  *
  * 세션은 백엔드가 발급한 httpOnly 쿠키 `session`으로 유지되므로 모든 요청에
  * `credentials: 'include'`를 붙인다(브라우저가 쿠키를 자동 첨부/수신).
- * 베이스 URL은 `NEXT_PUBLIC_API_BASE`(기본 http://localhost:8000).
+ * 베이스 URL은 `NEXT_PUBLIC_API_BASE`(기본 http://localhost:8010 — 로컬 백엔드 포트).
  *
  * 토큰을 코드에서 직접 다루지 않는다 — 쿠키는 브라우저가 관리한다.
  */
 
 import type { CurrentUser } from '@/lib/auth/types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
+/**
+ * 백엔드 베이스 URL(단일 소스). REST/SSE 클라이언트가 모두 이 상수를 import 한다
+ * (이전엔 3개 파일에 중복 정의·기본값 8000 오폴백이었다).
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8010';
 
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
 

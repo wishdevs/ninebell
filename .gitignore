@@ -21,7 +21,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files
-.env*.local
+.env
+.env.*
+!.env.example
+
+# archives(비밀 유출 방지 — backend/.env.zip 등)
+*.zip
 
 # typescript
 *.tsbuildinfo
