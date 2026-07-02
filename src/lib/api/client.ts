@@ -30,6 +30,28 @@ export class ApiError extends Error {
 }
 
 /**
+ * 임의 예외를 ApiError 로 정규화한다. fetch 자체 실패(네트워크/CORS)는 status=0.
+ * (이전엔 use-api-resource·logs·audit 3곳에 동일 복제돼 있었다.)
+ */
+export function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err;
+  return new ApiError(0, err instanceof Error ? err.message : '네트워크 오류');
+}
+
+/**
+ * 사용자 표시용 에러 메시지 매핑(권한/네트워크 공통 처리). ApiError 가 아니면 fallback.
+ * (이전엔 members·organizations·account 3곳에 복제돼 있었다.)
+ */
+export function errorMessage(err: unknown, fallback = '요청을 처리하지 못했습니다.'): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) return '이 작업을 수행할 권한이 없습니다.';
+    if (err.status === 0) return '서버에 연결할 수 없습니다.';
+    return err.message;
+  }
+  return fallback;
+}
+
+/**
  * FastAPI는 `detail`을 문자열(HTTPException) 또는
  * `{type, loc, msg, ...}` 배열(pydantic 422)로 반환한다.
  * 배열을 그대로 문자열화하면 "[object Object]"가 되므로 첫 msg를 추출한다.

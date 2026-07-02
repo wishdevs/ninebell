@@ -13,7 +13,8 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/utils';
-import { ApiError } from '@/lib/api/client';
+import { ApiError, toApiError } from '@/lib/api/client';
+import { Td, Th } from '@/components/ui/table-cell';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { formatDateTime } from '@/lib/data/format';
@@ -41,11 +42,6 @@ const WORKFLOW_LABEL: Record<string, string> = {
 
 function agentLabel(agentId: string): string {
   return WORKFLOW_LABEL[agentId] ?? agentId;
-}
-
-function toApiError(err: unknown): ApiError {
-  if (err instanceof ApiError) return err;
-  return new ApiError(0, err instanceof Error ? err.message : '네트워크 오류');
 }
 
 /**
@@ -441,16 +437,3 @@ function RunStatusBadge({ status }: { status: RunStatus }) {
   );
 }
 
-// ── 셀 ───────────────────────────────────────────────────────────────
-
-function Th({ children, className, ...rest }: React.ThHTMLAttributes<HTMLTableCellElement>) {
-  return (
-    <th className={cn('px-4 py-3 font-medium whitespace-nowrap', className)} {...rest}>
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn('px-4 py-3 align-middle', className)}>{children}</td>;
-}

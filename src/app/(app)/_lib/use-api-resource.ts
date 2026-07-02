@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, api } from '@/lib/api/client';
+import { ApiError, api, toApiError } from '@/lib/api/client';
 
 /**
  * 단일 GET 리소스를 클라이언트에서 로드하는 경량 훅.
@@ -26,15 +26,6 @@ interface UseApiResourceResult<T> {
   error: ApiError | null;
   /** 동일 경로를 다시 가져온다(에러 후 재시도). */
   reload: () => void;
-}
-
-function toApiError(err: unknown): ApiError {
-  if (err instanceof ApiError) {
-    return err;
-  }
-  // fetch 자체 실패(네트워크/CORS)는 status를 0으로 정규화한다.
-  const message = err instanceof Error ? err.message : '네트워크 오류';
-  return new ApiError(0, message);
 }
 
 export function useApiResource<T>(path: string | null): UseApiResourceResult<T> {

@@ -8,16 +8,8 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { useCurrentUser, useSetCurrentUser } from '@/app/(app)/providers/user-provider';
-import { ApiError, updateMe } from '@/lib/api/client';
+import { errorMessage, updateMe } from '@/lib/api/client';
 import { MEMBER_ROLE_LABEL } from '@/lib/data/members';
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 0) return '서버에 연결할 수 없습니다.';
-    return err.message;
-  }
-  return '저장하지 못했습니다.';
-}
 
 /**
  * 계정 설정 폼 — 본인의 이름·부서·이메일을 수정한다(`PATCH /auth/me`).
@@ -56,7 +48,7 @@ export function AccountClient() {
       setEmail(updated.email ?? '');
       toast.success('저장했습니다');
     } catch (err) {
-      toast.error(errorMessage(err));
+      toast.error(errorMessage(err, '저장하지 못했습니다.'));
     } finally {
       setSaving(false);
     }

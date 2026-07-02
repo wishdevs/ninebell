@@ -7,8 +7,8 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { StatusPill } from '@/components/ui/status-pill';
-import { cn } from '@/lib/utils';
-import { ApiError, api } from '@/lib/api/client';
+import { ApiError, api, toApiError } from '@/lib/api/client';
+import { Td, Th } from '@/components/ui/table-cell';
 import { PERMISSIONS, type Role } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { MEMBER_ROLE_LABEL } from '@/lib/data/members';
@@ -34,11 +34,6 @@ interface AccessLog {
 const PAGE_SIZE = 50;
 
 type Phase = 'loading' | 'ready' | 'loadingMore' | 'error';
-
-function toApiError(err: unknown): ApiError {
-  if (err instanceof ApiError) return err;
-  return new ApiError(0, err instanceof Error ? err.message : '네트워크 오류');
-}
 
 /**
  * 감사 로그 테이블 — 사용자 접속(로그인) 감시. logs:read(admin+) 권한이 없으면 접근 불가
@@ -199,10 +194,3 @@ export function AuditClient() {
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-4 py-3 font-medium whitespace-nowrap">{children}</th>;
-}
-
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn('px-4 py-3 align-middle', className)}>{children}</td>;
-}

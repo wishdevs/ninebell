@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { ApiError, api } from '@/lib/api/client';
+import { api, errorMessage } from '@/lib/api/client';
 import { PERMISSIONS, type Role } from '@/lib/auth/permissions';
 import { usePermissions } from '@/hooks/use-permissions';
 import { useCurrentUser } from '@/app/(app)/providers/user-provider';
@@ -25,15 +25,6 @@ export interface MemberCaps {
   canWrite: boolean;
   /** 멤버 삭제(users:delete). */
   canDelete: boolean;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 403) return '이 작업을 수행할 권한이 없습니다.';
-    if (err.status === 0) return '서버에 연결할 수 없습니다.';
-    return err.message;
-  }
-  return '요청을 처리하지 못했습니다.';
 }
 
 /**

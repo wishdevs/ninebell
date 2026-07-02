@@ -18,18 +18,9 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
-import { ApiError, api } from '@/lib/api/client';
+import { ApiError, api, errorMessage } from '@/lib/api/client';
 import type { AgentAccess, OrgUnit } from '@/lib/data/org-units';
 import { cn } from '@/lib/utils';
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 403) return '이 작업을 수행할 권한이 없습니다.';
-    if (err.status === 0) return '서버에 연결할 수 없습니다.';
-    return err.message;
-  }
-  return '요청을 처리하지 못했습니다.';
-}
 
 /**
  * 조직구분 관리 — 두 탭.

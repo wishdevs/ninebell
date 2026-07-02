@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
+import { Td, Th } from '@/components/ui/table-cell';
 import type { Role } from '@/lib/auth/permissions';
 import {
   MEMBER_ROLE_LABEL,
@@ -243,10 +244,3 @@ function RoleBadge({ role }: { role: Role }) {
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-4 py-3 font-medium whitespace-nowrap">{children}</th>;
-}
-
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn('px-4 py-3 align-middle', className)}>{children}</td>;
-}
