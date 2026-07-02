@@ -466,7 +466,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           {submitted ? (
             <>
               <Spinner size={14} />
-              반영 중…
+              반영·저장 진행 중…
             </>
           ) : busy ? (
             <>
@@ -476,7 +476,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           ) : (
             <>
               <RiCheckLine size={14} aria-hidden />
-              적용
+              입력 완료
             </>
           )}
         </Button>

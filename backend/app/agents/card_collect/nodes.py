@@ -494,9 +494,9 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 kind="grid",
                 title="승인내역 정리",
                 prompt=(
-                    "행별로 예산단위·프로젝트·적요를 입력한 뒤 적용을 누르세요. "
-                    "부가세구분이 '과세'인 행은 법인카드(01)로 먼저, 나머지 행은 "
-                    "법인카드(불공)(02)으로 자동 전환해 2단계로 입력·저장합니다."
+                    "행별로 예산단위·프로젝트·적요를 입력한 뒤 '입력 완료'를 누르세요. "
+                    "과세 행은 법인카드(01), 나머지는 법인카드(불공)(02)으로 자동 전환해 "
+                    "반영하고, 마지막에 저장(F7)까지 자동 진행합니다."
                 ),
                 rows=grid_rows,
                 budgetUnits=budget_units,
@@ -721,43 +721,15 @@ async def _apply_row_fields(
     return True, " / ".join(applied) + f" / 적요 '{collected['적요']}'"
 
 
-# ── 저장(최종 HITL 확인 후에만) — 1차(과세)/2차(불공) 공용 ─────────────────────────
-async def _confirm_and_save(
-    state: dict, *, filled: int, label: str, step_key: str, applied_idx: list[int]
-) -> dict:
-    """choice HITL 확인 → 카드팝업 '적용'(체크→확인모달) → F7 저장. 실측 수순(2026-07-02):
-
-    1. 처리 행 체크 → 팝업 '적용' → '선택' 모달(부가세0 포함? → 예) → '예산현황' 확인
-       → 팝업 닫힘·문서 반영 (steps.apply_rows_to_document)
-    2. 본문 F7 → 확인 모달 처리 (steps.save_document — 팝업 열린 채 F7 은 무전달이었음)
-    실패 시 관찰한 모달 텍스트를 그대로 노출한다(필수값 경고 등 조용한 멈춤 방지).
-    반환 {"saved"|"cancelled"|"error": ...}.
-    """
+# ── 문서 반영(적용) / 최종 저장(F7 은 마지막 1회, HITL 확인 후) ─────────────────────
+# 업무 규칙(사용자 확정 2026-07-02): 과세 적용 → (저장 없이) F3 새 행 → 불공 진행·적용 →
+# **마지막에만 저장(F7) 1회**. 적용은 draft(문서 반영, 전표 미생성)라 확인 없이 자동 진행.
+async def _apply_doc(state: dict, *, label: str, step_key: str, applied_idx: list[int]) -> dict:
+    """처리 행 체크 → 카드팝업 '적용' → '선택'(부가세0 포함? 예) → '예산현황' 확인 →
+    팝업 닫힘·문서 반영(steps.apply_rows_to_document). 실패 시 화면 모달 텍스트 노출.
+    반환 {"applied": True} | {"error": ...}."""
     events = state["events"]
     page = state["page"]
-    try:
-        resp = await wait_hitl(
-            events,
-            kind="choice",
-            title=f"결의서 저장 확인 — {label}",
-            prompt=(
-                f"{label} {filled}건이 입력되었습니다. 결의서에 반영(적용) 후 저장(F7)할까요? "
-                "저장 시 실제 전표가 생성됩니다."
-            ),
-            options=[
-                {"value": "save", "label": "저장", "description": "적용 → 실제 결의서 저장(F7)"},
-                {"value": "cancel", "label": "저장 안 함", "description": "입력만 유지, 저장 취소"},
-            ],
-            owner=state.get("owner"),
-            run_id=state.get("run_id"),
-        )
-    except asyncio.TimeoutError:
-        await emit_step(events, step_key, "failed")
-        return {"error": f"저장 확인 대기 시간 초과 — {label} {filled}건 입력됨(저장 안 함)."}
-    choice = (resp.get("value") or resp.get("message") or "").strip()
-    if choice != "save":
-        return {"cancelled": True}
-
     ap = await steps.apply_rows_to_document(page, applied_idx)
     if not ap.get("ok"):
         modal_txt = "; ".join(
@@ -771,55 +743,37 @@ async def _confirm_and_save(
                 + (f" — 화면 메시지: {modal_txt}" if modal_txt else "")
             )
         }
-    await emit_log(events, f"{label} {len(applied_idx)}건 결의서 반영(적용) 완료 — 저장 진행.", "ok")
-
-    r = await steps.save_document(page, confirm=True)
-    if not r.get("ok"):
-        await emit_step(events, step_key, "failed")
-        return {"error": f"{label} 저장 실패: {r.get('reason') or r}"}
-    seen = r.get("modals_seen") or []
-    if seen:
-        await emit_log(
-            events,
-            "저장 중 확인창: " + " / ".join(f"[{m.get('title')}] {m.get('text', '')[:60]}" for m in seen[:3]),
-            "info",
-        )
-    await emit_log(events, f"{label} 결의서 저장 시퀀스 완료(F7).", "ok")
+    await emit_log(events, f"{label} {len(applied_idx)}건 결의서 반영(적용) 완료(저장 전).", "ok")
     await emit_shot(events.put, page)
-    return {"saved": True}
+    return {"applied": True}
 
 
-def make_save_node():
-    """1차(법인카드·과세) 저장. 취소 시 save_cancelled 플래그 → 2차 진행도 중단(전표 정합성)."""
+def make_apply_doc_node():
+    """1차(과세) 문서 반영(적용) — HITL 없음(draft). 0건이면 스킵하고 2차로."""
 
-    async def save(state: dict) -> dict:
+    async def apply_doc(state: dict) -> dict:
         if state.get("error"):
-            return {"result": f"오류로 저장하지 않음: {state.get('error')}"}
+            return {"result": f"오류로 반영하지 않음: {state.get('error')}"}
         events = state["events"]
         filled = state.get("filled", 0)
-        await emit_step(events, "save", "running")
+        await emit_step(events, "apply_doc", "running")
         if not filled:
-            # 과세 0건 — 사용자 규칙대로 저장 없이 닫고 2차(불공)로 진행한다.
-            await emit_step(events, "save", "done")  # 스텝을 'pending' 에 멈추지 않는다(리뷰 #13).
-            await emit_log(events, "1차(과세) 반영 건이 없어 저장 없이 2차로 진행합니다.", "info")
-            return {"result": "1차(과세) 반영 0건 — 저장 생략."}
-        out = await _confirm_and_save(
+            await emit_step(events, "apply_doc", "done")
+            await emit_log(events, "1차(과세) 반영 건이 없어 적용 없이 2차로 진행합니다.", "info")
+            return {}
+        out = await _apply_doc(
             state,
-            filled=filled,
             label="법인카드(과세분)",
-            step_key="save",
+            step_key="apply_doc",
             applied_idx=state.get("pass1_applied_idx") or [],
         )
         if out.get("error"):
             return {"error": out["error"]}
-        await emit_step(events, "save", "done")
-        if out.get("cancelled"):
-            return {
-                "result": f"과세 {filled}건 입력 완료 — 사용자 선택으로 저장하지 않았습니다(2차 중단).",
-                "save_cancelled": True,
-            }
-        # 저장이 실제 실행됨 — 2차는 새 상세행 추가(F3)부터 다시 플로우를 탄다(사용자 업무 규칙).
-        return {"result": f"과세 {filled}건 입력·저장 완료.", "pass1_saved": True}
+        await emit_step(events, "apply_doc", "done")
+        # 적용으로 팝업이 닫힘 — 2차는 새 상세행 추가(F3)부터 다시 플로우를 탄다(사용자 업무 규칙).
+        return {"pass1_doc_applied": True}
+
+    return apply_doc
 
     return save
 
@@ -839,10 +793,6 @@ def make_switch_evdn_node():
         page = state["page"]
         pending: list[dict] = state.get("pending_nontax") or []
         await emit_step(events, "switch_evdn", "running")
-        if state.get("save_cancelled"):
-            await emit_log(events, "1차 저장이 취소되어 2차(불공)를 진행하지 않습니다.", "warn")
-            await emit_step(events, "switch_evdn", "done")
-            return {"pass2_work": []}
         if not pending:
             await emit_log(events, "불공(비과세) 대상이 없어 2차를 생략합니다.", "info")
             await emit_step(events, "switch_evdn", "done")
@@ -853,11 +803,11 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"카드 팝업 닫기 실패: {r.get('reason')}"}
         # 증빙유형 재선택 — 진입 공용 노드 재사용(state error 규약 공유, 스텝은 자체 방출).
-        # 업무 규칙(사용자 확정): 1차를 실제 **저장(F7)했다면 새 상세행 추가(F3) 후** 다시
-        # 증빙유형부터 플로우를 탄다. 저장을 생략한 경우(과세 0건)는 기존 행에서 재선택
-        # (프로브 실측: F3 불필요). 재선택 실패 시 F3 1회 폴백은 안전망으로 유지.
-        if state.get("pass1_saved"):
-            await emit_log(events, "1차 저장 완료 — 새 상세행(F3) 추가 후 불공 플로우를 진행합니다.", "info")
+        # 업무 규칙(사용자 확정): 1차 적용('적용' 클릭·문서 반영)을 했다면 **새 상세행 추가(F3)
+        # 후** 다시 증빙유형부터 플로우를 탄다. 적용을 생략한 경우(과세 0건)는 기존 행에서
+        # 재선택(프로브 실측: F3 불필요). 재선택 실패 시 F3 1회 폴백은 안전망으로 유지.
+        if state.get("pass1_doc_applied"):
+            await emit_log(events, "1차 적용 완료 — 새 상세행(F3) 추가 후 불공 플로우를 진행합니다.", "info")
             out = await make_add_row_node()(state)
             state.update(out or {})
             if state.get("error"):
@@ -865,7 +815,7 @@ def make_switch_evdn_node():
                 return {"error": state["error"]}
         out = await make_open_evdn_node()(state)
         state.update(out or {})
-        if state.get("error") and not state.get("pass1_saved"):
+        if state.get("error") and not state.get("pass1_doc_applied"):
             await emit_log(events, "증빙 에디터 재오픈 실패 — 새 행(F3) 추가 후 재시도합니다.", "warn")
             state.pop("error", None)
             out = await make_add_row_node()(state)
@@ -981,48 +931,54 @@ def make_apply_pass2_node():
             streaming=False,
         )
         await emit_log(events, f"2차(불공) 처리 완료 — {filled2}건 반영(저장 전).", "ok")
+        # 불공분도 문서에 반영(적용) — 저장(F7)은 마지막 save_final 에서 1회만.
+        if applied2_idx:
+            out = await _apply_doc(
+                state, label="법인카드(불공분)", step_key="apply_pass2", applied_idx=applied2_idx
+            )
+            if out.get("error"):
+                return {"error": out["error"]}
         await emit_step(events, "apply_pass2", "done")
         return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx}
 
     return apply_pass2
 
 
-def make_save_pass2_node():
-    """2차(불공) 저장 + 전체 요약. 2차 대상이 없으면 요약만 남긴다."""
+def make_save_final_node():
+    """최종 저장(F7) 1회 — 별도 확인 없음(사용자 업무 규칙: 그리드 '입력 완료' 제출이 곧
+    저장까지의 승인이다). 반영 0건이면 저장하지 않는다."""
 
-    async def save_pass2(state: dict) -> dict:
+    async def save_final(state: dict) -> dict:
         if state.get("error"):
             return {"result": f"오류로 저장하지 않음: {state.get('error')}"}
         events = state["events"]
+        page = state["page"]
         filled1 = state.get("filled", 0)
         filled2 = state.get("pass2_filled", 0)
         unmatched_n = state.get("pass2_unmatched", 0)
         # 매칭 실패(반영 누락)는 최종 결과에 반드시 노출한다(리뷰 HIGH #2).
         tail = f" · ⚠ 매칭 실패 {unmatched_n}건(수동 확인 필요)" if unmatched_n else ""
-        await emit_step(events, "save_pass2", "running")
-        if not filled2:
-            await emit_step(events, "save_pass2", "done")
-            if state.get("save_cancelled"):
-                return {}  # 1차 취소 결과 메시지를 유지한다.
-            no2 = "불공 대상 없음" if not unmatched_n else "불공 반영 0건"
-            return {"result": f"처리 완료 — 과세 {filled1}건 저장 · {no2}{tail}."}
-        out = await _confirm_and_save(
-            state,
-            filled=filled2,
-            label="법인카드(불공분)",
-            step_key="save_pass2",
-            applied_idx=state.get("pass2_applied_idx") or [],
-        )
-        if out.get("error"):
-            return {"error": out["error"]}
-        await emit_step(events, "save_pass2", "done")
-        if out.get("cancelled"):
-            return {
-                "result": (
-                    f"처리 완료 — 과세 {filled1}건 저장 · 불공 {filled2}건 입력"
-                    f"(저장 안 함, 사용자 취소){tail}."
-                )
-            }
+        total = filled1 + filled2
+        await emit_step(events, "save_final", "running")
+        if not total:
+            await emit_step(events, "save_final", "done")
+            return {"result": f"처리 완료 — 반영 0건(저장할 내용 없음){tail}."}
+        await emit_log(events, f"과세 {filled1}건 · 불공 {filled2}건 반영 완료 — 저장(F7)을 진행합니다.", "info")
+        r = await steps.save_document(page, confirm=True)
+        if not r.get("ok"):
+            await emit_step(events, "save_final", "failed")
+            return {"error": f"저장 실패: {r.get('reason') or r}"}
+        seen = r.get("modals_seen") or []
+        if seen:
+            await emit_log(
+                events,
+                "저장 중 확인창: "
+                + " / ".join(f"[{m.get('title')}] {m.get('text', '')[:60]}" for m in seen[:3]),
+                "info",
+            )
+        await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")
+        await emit_shot(events.put, page)
+        await emit_step(events, "save_final", "done")
         return {"result": f"처리 완료 — 과세 {filled1}건 · 불공 {filled2}건 입력·저장{tail}."}
 
-    return save_pass2
+    return save_final

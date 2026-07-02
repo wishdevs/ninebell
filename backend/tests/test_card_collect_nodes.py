@@ -259,9 +259,9 @@ async def test_grid_timeout_returns_error(monkeypatch):
 # ── 부가세구분 2패스(과세=1차 / 그 외=2차 불공) ────────────────────────────────────
 from app.agents.card_collect.nodes import (  # noqa: E402
     _row_key,
+    make_apply_doc_node,
     make_apply_pass2_node,
-    make_save_node,
-    make_save_pass2_node,
+    make_save_final_node,
     make_switch_evdn_node,
 )
 
@@ -311,33 +311,45 @@ async def test_grid_submit_partitions_taxable_vs_nontax(monkeypatch):
     assert pend[1]["budgetUnit"]["name"] == "영업본부"
 
 
-async def test_save_zero_taxable_skips_confirm_and_proceeds():
-    """과세 0건 → 확인 없이 저장 생략(2차 진행 허용, save_cancelled 없음)."""
+async def test_apply_doc_zero_taxable_skips_and_proceeds():
+    """과세 0건 → 적용 없이 2차로(플래그 없음 — switch 는 기존 행 재선택 경로)."""
     events: asyncio.Queue = asyncio.Queue()
-    out = await make_save_node()({"events": events, "page": object(), "filled": 0})
-    assert "저장 생략" in out["result"] and "save_cancelled" not in out
+    out = await make_apply_doc_node()({"events": events, "page": object(), "filled": 0})
+    assert out == {} and "pass1_doc_applied" not in out
 
 
-async def test_save_cancel_sets_flag_and_switch_aborts_pass2(monkeypatch):
-    """1차 저장 취소 → save_cancelled → switch_evdn 이 2차를 진행하지 않는다."""
+async def test_apply_doc_sets_flag_for_f3_path(monkeypatch):
+    """1차 적용 성공 → pass1_doc_applied — switch 가 F3(새 행)부터 진행하는 근거 플래그."""
+
+    async def _ok_apply(page, idx):
+        return {"ok": True, "checked": len(idx)}
+
+    monkeypatch.setattr(steps, "apply_rows_to_document", _ok_apply)
     events: asyncio.Queue = asyncio.Queue()
-    state = {
-        "events": events,
-        "page": object(),
-        "filled": 2,
-        "owner": None,
-        "run_id": None,
-        "pending_nontax": [{"label": 2, "key": "k", "budgetUnit": {}, "project": None, "note": "n", "merchant": "m"}],
-    }
-    task = asyncio.create_task(make_save_node()(state))
-    hitl = await _next_hitl(events)
-    resolve_hitl(hitl["id"], {"value": "cancel"})
-    out = await asyncio.wait_for(task, timeout=2)
-    assert out.get("save_cancelled") is True
+    out = await make_apply_doc_node()(
+        {"events": events, "page": object(), "filled": 2, "pass1_applied_idx": [0, 1]}
+    )
+    assert out == {"pass1_doc_applied": True}
 
-    state.update(out)
-    out2 = await make_switch_evdn_node()(state)
-    assert out2 == {"pass2_work": []}
+
+async def test_apply_doc_failure_surfaces_modal_text(monkeypatch):
+    """적용 실패 시 화면 모달 텍스트를 에러에 노출(조용한 멈춤 방지)."""
+
+    async def _fail_apply(page, idx):
+        return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음",
+                "modals": [{"title": "선택", "text": "프로젝트를 입력하세요."}]}
+
+    monkeypatch.setattr(steps, "apply_rows_to_document", _fail_apply)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_apply_doc_node()(
+        {"events": events, "page": object(), "filled": 1, "pass1_applied_idx": [0]}
+    )
+    assert "error" in out and "프로젝트를 입력하세요" in out["error"]
 
 
 async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
@@ -398,6 +410,19 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
         return True, "ok"
 
     monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+
+    doc_applied: list[list[int]] = []
+
+    async def _ok_doc_apply(page, idx):
+        doc_applied.append(list(idx))
+        return {"ok": True, "checked": len(idx)}
+
+    monkeypatch.setattr(steps, "apply_rows_to_document", _ok_doc_apply)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
     rows2 = _mixed_rows()
     state = {
@@ -410,15 +435,43 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
     }
     out = await make_apply_pass2_node()(state)
     assert out == {"pass2_filled": 1, "pass2_applied_idx": [1]} and calls == [1]
+    assert doc_applied == [[1]]  # 불공분도 문서 적용까지 자동(저장은 save_final 1회)
 
 
-async def test_save_pass2_composes_final_summary_without_pass2():
-    """불공 대상 0건이면 확인 없이 전체 요약 result 만 남긴다."""
+async def test_save_final_saves_without_confirmation(monkeypatch):
+    """그리드 '입력 완료'가 곧 승인 — 확인 HITL 없이 F7 저장을 진행한다(사용자 업무 규칙)."""
+
+    async def _ok_save(page, confirm):
+        assert confirm is True
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
-    out = await make_save_pass2_node()(
-        {"events": events, "page": object(), "filled": 3, "pass2_filled": 0}
+    out = await make_save_final_node()(
+        {"events": events, "page": object(), "filled": 3, "pass2_filled": 1}
     )
-    assert "과세 3건" in out["result"] and "불공 대상 없음" in out["result"]
+    assert out == {"result": "처리 완료 — 과세 3건 · 불공 1건 입력·저장."}
+
+
+async def test_save_final_zero_total_skips_save(monkeypatch):
+    """반영 0건이면 저장하지 않는다."""
+    called = []
+
+    async def _save(page, confirm):
+        called.append(1)
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "save_document", _save)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_final_node()(
+        {"events": events, "page": object(), "filled": 0, "pass2_filled": 0}
+    )
+    assert "반영 0건" in out["result"] and not called
 
 
 async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkeypatch):
@@ -485,7 +538,7 @@ def test_graph_state_declares_all_node_output_keys():
 
     node_output_keys = {
         "period", "rows_list", "filled", "pending_nontax", "pass1_applied_idx",
-        "pass1_saved", "save_cancelled", "rows2_list", "pass2_work",
+        "pass1_doc_applied", "rows2_list", "pass2_work",
         "pass2_unmatched", "pass2_unmatched_desc", "pass2_filled", "pass2_applied_idx",
         "result", "error",
     }

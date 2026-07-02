@@ -3,10 +3,11 @@
 진입 앞단(login→user_type(회계)→menu_nav(결의서입력)→set_gubun(카드)→add_row(F3)
 →open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후는
 부가세구분 2패스: select_all_cards→set_period→query→collect_rows(그리드 1회 입력·과세 반영)
-→save(1차 저장)→switch_evdn(불공 전환·재조회·매칭)→apply_pass2(불공 반영)→save_pass2.
+→apply_doc(과세 적용)→switch_evdn(F3·불공 전환·재조회·매칭)→apply_pass2(불공 반영·적용)
+→save_final(최종 저장 F7 — 마지막 1회, 사용자 업무 규칙).
 
-state 계약(러너 주입): page/browser/events/userid/password/params. 종료는 save_pass2 가 result 로.
-⚠ 저장(F7)은 save/save_pass2 노드가 사용자 HITL '저장' 선택 시에만 실행(그 외 절대 금지).
+state 계약(러너 주입): page/browser/events/userid/password/params. 종료는 save_final 이 result 로.
+⚠ 저장(F7)은 save_final 노드가 사용자 HITL '저장' 선택 시에만 1회 실행(그 외 절대 금지).
 """
 
 from __future__ import annotations
@@ -26,11 +27,11 @@ from app.agents.common.nodes import (
 )
 
 from .nodes import (
+    make_apply_doc_node,
     make_apply_pass2_node,
     make_collect_rows_node,
     make_query_node,
-    make_save_node,
-    make_save_pass2_node,
+    make_save_final_node,
     make_select_all_cards_node,
     make_set_period_node,
     make_switch_evdn_node,
@@ -54,8 +55,7 @@ class CardCollectState(TypedDict, total=False):
     #   조용히 누락 — 실전 런 '적용할 행이 없습니다' 원인).
     pending_nontax: list[dict]
     pass1_applied_idx: list[int]  # 1차 반영 성공 행 인덱스(카드팝업 '적용' 체크 대상)
-    pass1_saved: bool  # 1차 F7 실행됨 → 2차는 F3(새 행)부터
-    save_cancelled: bool
+    pass1_doc_applied: bool  # 1차 적용('적용' 클릭·문서 반영) 실행됨 → 2차는 F3(새 행)부터
     rows2_list: list[dict]
     pass2_work: list[dict]
     pass2_unmatched: int
@@ -82,11 +82,11 @@ def build_card_collect_graph():
     g.add_node("set_period", make_set_period_node())
     g.add_node("query", make_query_node())
     g.add_node("collect_rows", make_collect_rows_node())
-    g.add_node("save", make_save_node())
-    # 2차(불공) — 증빙유형 전환·재조회·매칭 → 반영 → 저장.
+    # 저장(F7)은 마지막 1회 — 1차는 적용(문서 반영)만 하고 F3 새 행으로 2차 진행.
+    g.add_node("apply_doc", make_apply_doc_node())
     g.add_node("switch_evdn", make_switch_evdn_node())
     g.add_node("apply_pass2", make_apply_pass2_node())
-    g.add_node("save_pass2", make_save_pass2_node())
+    g.add_node("save_final", make_save_final_node())
 
     g.set_entry_point("login")
     for a, b in [
@@ -100,11 +100,11 @@ def build_card_collect_graph():
         ("select_all_cards", "set_period"),
         ("set_period", "query"),
         ("query", "collect_rows"),
-        ("collect_rows", "save"),
-        ("save", "switch_evdn"),
+        ("collect_rows", "apply_doc"),
+        ("apply_doc", "switch_evdn"),
         ("switch_evdn", "apply_pass2"),
-        ("apply_pass2", "save_pass2"),
+        ("apply_pass2", "save_final"),
     ]:
         g.add_edge(a, b)
-    g.add_edge("save_pass2", END)
+    g.add_edge("save_final", END)
     return g.compile()
