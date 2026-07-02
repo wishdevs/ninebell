@@ -283,7 +283,9 @@ export function CodeCatalogManager({
                   </p>
                   <p className="text-foreground-tertiary truncate font-mono text-[11px]">
                     {f.code}
-                    {f.extra ? <span className="ml-1.5 font-sans">· {f.extra}</span> : null}
+                    {f.extra?.deptNm ? (
+                      <span className="ml-1.5 font-sans">· {f.extra.deptNm}</span>
+                    ) : null}
                   </p>
                 </div>
                 <div className="flex items-center gap-0.5">
@@ -381,7 +383,9 @@ export function CodeCatalogManager({
                     </p>
                     <p className="text-foreground-tertiary truncate font-mono text-[11px]">
                       {item.code}
-                      {item.extra ? <span className="ml-1.5 font-sans">· {item.extra}</span> : null}
+                      {item.extra?.deptNm ? (
+                        <span className="ml-1.5 font-sans">· {item.extra.deptNm}</span>
+                      ) : null}
                     </p>
                   </div>
                   <StarButton active={fav} disabled={busy} onClick={() => toggleFav(item)} />

@@ -70,7 +70,7 @@ function useFavorites(kind: CatalogKind) {
   const has = useCallback((code: string) => code in ids, [ids]);
 
   const toggle = useCallback(
-    async (code: string, name: string, extra?: string) => {
+    async (code: string, name: string, deptNm?: string) => {
       if (!code) return;
       if (code in ids) {
         const prevId = ids[code];
@@ -93,7 +93,7 @@ function useFavorites(kind: CatalogKind) {
       } else {
         setIds((p) => ({ ...p, [code]: '' }));
         try {
-          const fav = await addFavorite({ kind, code, name, extra });
+          const fav = await addFavorite({ kind, code, name, extra: deptNm ? { deptNm } : null });
           setIds((p) => ({ ...p, [code]: fav.id }));
         } catch (err) {
           setIds((p) => {

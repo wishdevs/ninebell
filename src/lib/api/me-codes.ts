@@ -20,13 +20,19 @@ import { api } from './client';
 /** 코드 종류 — 예산단위 / 프로젝트. */
 export type CatalogKind = 'budget_unit' | 'project';
 
+/** 부가 데이터 — 백엔드 JSON 객체(예산단위={deptNm}, 프로젝트={useYn}). */
+export interface CodeExtra {
+  deptNm?: string;
+  useYn?: string;
+}
+
 /** 자주쓰는(즐겨찾기) 한 항목. extra 는 부서명 등 부가 표시(예산단위=deptNm). */
 export interface Favorite {
   id: string;
   kind: CatalogKind;
   code: string;
   name: string;
-  extra: string | null;
+  extra: CodeExtra | null;
   sortOrder: number;
 }
 
@@ -34,7 +40,7 @@ export interface Favorite {
 export interface CatalogItem {
   code: string;
   name: string;
-  extra: string | null;
+  extra: CodeExtra | null;
 }
 
 /** 카탈로그 페이지 — 행 + 스코프 전체 건수 + 마지막 동기화 시각. */
@@ -57,7 +63,7 @@ export interface AddFavoriteInput {
   kind: CatalogKind;
   code: string;
   name: string;
-  extra?: string | null;
+  extra?: CodeExtra | null;
 }
 
 export interface CatalogQuery {
