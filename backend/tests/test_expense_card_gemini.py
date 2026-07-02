@@ -41,7 +41,7 @@ async def test_retries_on_429_then_succeeds(monkeypatch):
     monkeypatch.setattr(GM, "_BASE_BACKOFF_S", 0.0)
     monkeypatch.setattr(GM, "_MAX_BACKOFF_S", 0.0)
     http = FakeHttp([_resp(429, text="rate limit"), _resp(200, _FC_OK)])
-    name, args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None)
+    name, args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None, [])
     assert name == "ask"
     assert args == {"question": "q"}
     assert http.calls == 2  # 429 1회 후 재시도 성공
@@ -52,7 +52,7 @@ async def test_retries_exhaust_then_raises(monkeypatch):
     monkeypatch.setattr(GM, "_MAX_BACKOFF_S", 0.0)
     http = FakeHttp([_resp(429), _resp(429), _resp(429)])
     with pytest.raises(httpx.HTTPStatusError):
-        await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None)
+        await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None, [])
     assert http.calls == GM._MAX_ATTEMPTS  # 최대 시도까지 소진
 
 
@@ -61,7 +61,7 @@ async def test_404_with_body_fails_fast_no_retry(monkeypatch):
     # 폐기 모델: 404 + 바디('no longer available') → 재시도 무의미, 즉시 실패.
     http = FakeHttp([_resp(404, text="models/gemini-2.0-flash is no longer available")])
     with pytest.raises(httpx.HTTPStatusError):
-        await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None)
+        await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None, [])
     assert http.calls == 1  # 재시도 없음
 
 
@@ -80,13 +80,13 @@ async def test_network_error_retried_then_succeeds(monkeypatch):
             return _resp(200, _FC_OK)
 
     http = FlakyHttp()
-    name, _args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None)
+    name, _args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None, [])
     assert name == "ask"
     assert http.calls == 2
 
 
 async def test_no_function_call_returns_none(monkeypatch):
     http = FakeHttp([_resp(200, {"candidates": [{"content": {"parts": [{"text": "no tool"}]}}]})])
-    name, args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None)
+    name, args = await GM.gemini_chat_decide(http, "k", "m", "http://b", "sys", "hist", {}, None, [])
     assert name is None
     assert args == {}

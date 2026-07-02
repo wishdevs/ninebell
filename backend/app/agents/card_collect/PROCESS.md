@@ -1,7 +1,41 @@
 # 법인카드 승인내역 정리 — 프로세스 정의 (card-collect)
 
 > 결의서입력 문서 종류 중 **'카드'** 형태. 패밀리 인덱스: [../RESOLUTIONS.md](../RESOLUTIONS.md).
-> 상태: **v2 — 헤드리스 검증 완료 + 업무결정 확정(2026-07-01, 이트라이브2 실측)**.
+> 상태: **v3 — collect_rows 를 Gemini function-calling 대화로 전환(2026-07-02)**, 이전 v2(헤드리스
+> 검증 + 업무결정 확정, 2026-07-01, 이트라이브2 실측) 위에 구축.
+
+## v3 — Gemini 의도파악(ninebell-bak/expense_card.chat_form 패턴 이식)
+
+- **배경**: v2 의 `collect_rows`는 정규식 파서(`_parse_instructions`/`_parse_fields`, `"1번 예산단위 …"`
+  형식만 인식)였다. 사용자 요청으로 `ninebell-bak`(`api/app/erp/graph.py`)·기존
+  `app/agents/expense_card/chat_form.py`와 동일한 **Gemini function-calling 대화** 패턴으로 교체.
+- **공용화**: `app/agents/expense_card/gemini.py::gemini_chat_decide` 가 `tools`(함수선언 목록)를
+  파라미터로 받도록 일반화(기존엔 `expense_card.tools.CHAT_TOOLS` 에 하드코딩). `chat_form.py`·
+  `card_collect/nodes.py` 둘 다 이 함수를 재사용(중복 없음). `context` 파라미터명도
+  "현재 모달 폼 스키마" 같은 expense_card 전용 문구에서 범용 "컨텍스트 데이터"로 일반화.
+- **card_collect 전용**: `app/agents/card_collect/tools.py::CARD_COLLECT_TOOLS`
+  (apply_fields·update_note·skip_rows·show_status·ask·turn_done). `collect_rows` 는 매 사용자
+  메시지마다 `gemini_chat_decide` 를 최대 `_MAX_TOOLS_PER_TURN=12`회 순차 호출해 도구를 디스패치
+  (chat_form 과 동일 루프 구조). 스크린샷은 안 보낸다 — 승인내역이 이미 구조화 데이터(JSON)라
+  비전 불필요, 텍스트 컨텍스트(`_context()`: 행별 번호·날짜·가맹점·금액·현재상태·적요)만으로 판단.
+- **정규식 파서 제거**: `_parse_fields`/`_expand_item_nums`/`_parse_instructions` 삭제(전량 미사용).
+- **history 버그 수정**: 최초 구현 시 사용자 턴마다 `history` 를 초기화하는 실수가 있었다(멀티턴 맥락
+  유실). chat_form 처럼 **세션 전체 누적**(최근 40줄만 잘라 전송)으로 수정 — 유닛테스트로 검증.
+- **⚠ 라이브 Gemini 테스트로 발견·수정한 실이슈**: 의미 매핑(행 지정·필드 추출·존재하지 않는 행→ask)은
+  실 API 테스트에서 정확했으나, **같은 지시를 처리한 뒤 모델이 turn_done 대신 같은 도구를 반복 호출**
+  하는 경우가 관측됨(예: skip_rows 를 `_MAX_TOOLS_PER_TURN` 한도(12회)까지 연속 재호출 — 결과는
+  틀리지 않았지만 API 호출 낭비). 프롬프트 지시("반복 호출 금지")만으론 신뢰 불가 → **코드 레벨
+  가드** 추가: 이번 턴 안에서 동일 (도구,인자) 서명(`_sig`)이 재등장하면 재실행 없이 턴 종료. 수정
+  후 재검증(라이브) — 각 지시 정확히 1회만 실행됨 확인.
+- **검증**: 유닛(모킹, 도구 디스패치·행번호 해석·멀티턴 history 누적) + 라이브 API(실 Gemini, 자연어→
+  올바른 도구/필드 매핑 확인, 반복호출 수정 재검증) + 백엔드 전체 테스트 스위트 84개 통과(기존
+  `tests/test_expense_card_gemini.py` 는 신 시그니처(`tools` 추가 인자)로 갱신) + 양쪽 그래프
+  (`card-collect`/`expense-card-chat`) 컴파일 확인.
+- **알려진 기존 한계(v2부터, 이번 변경으로 도입된 것 아님 — 참고용)**: (1) 이미 `apply_fields` 로
+  반영(done)된 행에 대해 `update_note` 만 다시 호출하면 로컬 상태(`notes`)와 처리 현황 표는
+  갱신되지만 **브라우저 DOM(그리드 NOTE_DC)에는 재반영되지 않는다**(재적용은 `apply_fields` 재호출로만
+  실제 반영됨). (2) 이미 done 인 행을 `apply_fields` 로 다시 처리하면 `filled` 카운트가 중복 증가할
+  수 있다(표시용 카운트 이슈, 실제 저장 게이트에는 영향 없음 — 저장은 문서 단위 F7이지 행 단위가 아님).
 
 ## 확정된 업무 결정(사용자, 2026-07-01)
 

@@ -36,6 +36,7 @@ from nbkit.patterns import emit_shot
 from .domain import remark_for, use_item_from_remark
 from .gemini import gemini_chat_decide
 from .tools import (
+    CHAT_TOOLS,
     SCAFFOLD_DROPDOWN_FIELDS,
     SCAFFOLD_SEARCH_FIELDS,
     SCAFFOLD_TEXT_FIELDS,
@@ -482,6 +483,7 @@ def make_chat_form_node(timeout_s: int = 600):
                             "\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
                             schema,
                             b64,
+                            CHAT_TOOLS,
                         )
                     except Exception:  # noqa: BLE001
                         logger.exception("chat gemini decide failed")
