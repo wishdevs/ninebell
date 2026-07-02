@@ -14,13 +14,13 @@ export default function BudgetUnitsPage() {
       <PageHeader
         caption="관리"
         title="예산단위 관리"
-        description="자주쓰는 예산단위를 지정하고 기본값을 정해 두면, 결의서 입력 에이전트가 카드내역에 자동으로 채워 줍니다. 목록은 ERP에서 동기화합니다."
+        description="자주쓰는 예산단위와 기본값을 지정합니다. 에이전트가 카드내역 입력에 활용합니다."
       />
       <CodeCatalogManager
         kind="budget_unit"
         caption="코드"
         title="예산단위 카탈로그"
-        description="기본은 내 부서 기준으로 보여줍니다. 예산계정명·사업계획명으로 검색할 수 있습니다."
+        description=""
         supportsDept
       />
     </div>

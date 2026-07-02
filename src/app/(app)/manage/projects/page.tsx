@@ -14,13 +14,13 @@ export default function ProjectsManagePage() {
       <PageHeader
         caption="관리"
         title="프로젝트 관리"
-        description="자주쓰는 프로젝트를 지정하고 기본값을 정해 두면, 결의서 입력 에이전트가 카드내역에 자동으로 채워 줍니다. 목록은 ERP에서 동기화합니다."
+        description="자주쓰는 프로젝트와 기본값을 지정합니다. 에이전트가 카드내역 입력에 활용합니다."
       />
       <CodeCatalogManager
         kind="project"
         caption="코드"
         title="프로젝트 카탈로그"
-        description="프로젝트명·번호, WBS요소, 위치로 검색할 수 있습니다."
+        description=""
       />
     </div>
   );

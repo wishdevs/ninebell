@@ -268,6 +268,16 @@ async def get_catalog(
             or ql in str((r.extra or {}).get("pjtNo", "")).lower()
         ]
 
+    if kind == "project":
+        # 프로젝트는 프로젝트번호(→WBS요소 번호) 순으로 정렬(이름순 아님 — 사용자 지정).
+        rows = sorted(
+            rows,
+            key=lambda r: (
+                str((r.extra or {}).get("pjtNo", "")),
+                str((r.extra or {}).get("wbsNo", "")),
+            ),
+        )
+
     total = len(rows)
     page_rows = rows[offset : offset + limit]
 
