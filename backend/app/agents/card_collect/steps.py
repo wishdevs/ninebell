@@ -517,22 +517,67 @@ async def apply_row(page: Any, row: int) -> dict:
     return {"ok": True, "budget_confirm": cf.get("clicked")}
 
 
-async def save_document(page: Any, confirm: bool) -> dict:
-    """결의서 저장(F7). ⚠ confirm=True 일 때만 실제 클릭(테스트는 항상 False).
+async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
+    """처리한 행들을 체크 → 카드팝업 '적용' → 확인 모달 처리 → 팝업 닫힘·문서 반영.
 
-    ⚠ 저장 경로는 아직 라이브 미검증(테스트가 저장 전까지만) — 카드팝업 내 '저장'이 없으면 결의서
-    본화면의 '저장'을 문서 전역에서 찾고, 그래도 없으면 F7. 실제 저장 검증 시 이 경로를 확정해야 한다.
+    프로브 실측(2026-07-02) 수순:
+    1. 행 체크(CHECK_ROWS) → '적용' 클릭
+    2. '선택' 모달("부가세금액 0 포함하시겠습니까?") → '예' (그리드에서 사용자가 이미 선택한
+       행들이므로 포함이 맞다)
+    3. 카드팝업 닫힘 + '예산현황' 모달 → '확인' → 결의서 마스터/디테일에 행 반영(문서 미저장)
+    반환 {ok, checked} | {ok:False, reason, modals}.
+    """
+    if not row_indices:
+        return {"ok": False, "reason": "적용할 행이 없습니다"}
+    chk = await page.evaluate(js.CHECK_ROWS_JS, row_indices)
+    if not chk.get("ok") or chk.get("checked") != len(row_indices):
+        return {"ok": False, "reason": f"행 체크 실패(요청 {len(row_indices)}·체크 {chk.get('checked')})"}
+    box = await page.evaluate(js.card_button_box_js("적용"))
+    if not box:
+        return {"ok": False, "reason": "카드팝업 '적용' 버튼 없음"}
+    await page.mouse.click(box["x"], box["y"])
+
+    # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. 최대 ~20초.
+    for _ in range(10):
+        await page.wait_for_timeout(2_000)
+        yes = await page.evaluate(js.MODAL_BTN_BOX_JS, "예")
+        if yes:
+            await page.mouse.click(yes["x"], yes["y"])
+            continue
+        ok_btn = await page.evaluate(js.MODAL_BTN_BOX_JS, "확인")
+        if ok_btn and "예산" in (ok_btn.get("title") or ""):
+            await page.mouse.click(ok_btn["x"], ok_btn["y"])
+            continue
+        if not await page.evaluate(js.CARD_WIN_EXISTS_JS):
+            return {"ok": True, "checked": chk.get("checked")}
+    modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
+    return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals}
+
+
+async def save_document(page: Any, confirm: bool) -> dict:
+    """결의서 저장(F7) + 확인 모달 처리 + 관찰 결과 반환. confirm=True 일 때만 실행.
+
+    ⚠ 반드시 apply_rows_to_document 로 카드팝업을 닫고 문서에 반영한 뒤 호출한다 —
+    팝업(모달)이 열려 있으면 F7 이 본문에 전달되지 않는다(첫 실전 런 실측 실패 원인).
+    F7 후 뜨는 모달은 '확인/예' 계열을 클릭하며 텍스트를 수집한다. 저장 성공의 확정
+    신호는 아직 미실측 — 관찰 데이터(modals_seen)를 함께 반환하고 verified 로 표시한다.
     """
     if not confirm:
         return {"ok": False, "skipped": True, "reason": "SAVE 게이트 닫힘(테스트 모드)"}
-    # 팝업 내 → 문서 전역 순으로 '저장' 버튼 탐색.
-    box = await page.evaluate(js.card_button_box_js("저장")) or await page.evaluate(
-        js.document_button_box_js("저장")
-    )
-    if box:
-        await page.mouse.click(box["x"], box["y"])
-        await page.wait_for_timeout(1_500)
-        return {"ok": True, "via": "button"}
+    if await page.evaluate(js.CARD_WIN_EXISTS_JS):
+        return {"ok": False, "reason": "카드팝업이 열려 있어 저장 불가(적용 단계 누락)"}
     await page.keyboard.press("F7")
-    await page.wait_for_timeout(1_500)
-    return {"ok": True, "via": "F7"}
+    modals_seen: list[dict] = []
+    for _ in range(8):
+        await page.wait_for_timeout(2_000)
+        modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
+        if modals:
+            modals_seen.extend(modals)
+            for label in ("예", "확인"):
+                btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
+                if btn:
+                    await page.mouse.click(btn["x"], btn["y"])
+                    break
+            continue
+        break  # 모달 없음 — 저장 시퀀스 종료로 판단.
+    return {"ok": True, "via": "F7", "modals_seen": modals_seen[:6]}

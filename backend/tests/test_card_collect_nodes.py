@@ -154,7 +154,7 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
 
     # 전부 skip 제출로 노드를 정상 종료시킨다.
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
 
 
 async def test_grid_query_message_reemits_with_search_results(monkeypatch):
@@ -180,7 +180,7 @@ async def test_grid_query_message_reemits_with_search_results(monkeypatch):
     ]
 
     resolve_hitl(second["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
 
 
 async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkeypatch):
@@ -212,7 +212,7 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
     )
     out = await asyncio.wait_for(task, timeout=2)
     # 전 행 과세 → 1차에서 처리, 불공 대기 없음. 1행 성공, 2행 실패, 3행 skip.
-    assert out == {"filled": 1, "pending_nontax": []}
+    assert out == {"filled": 1, "pending_nontax": [], "pass1_applied_idx": [0]}
     assert calls == [0, 1]  # skip 아닌 두 행만, no 순(idx 0,1)
 
     frames = []
@@ -245,7 +245,7 @@ async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
     assert applied == []  # 무효 제출은 반영하지 않는다
 
     resolve_hitl(reemit["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
 
 
 async def test_grid_timeout_returns_error(monkeypatch):
@@ -409,7 +409,7 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
         ],
     }
     out = await make_apply_pass2_node()(state)
-    assert out == {"pass2_filled": 1} and calls == [1]
+    assert out == {"pass2_filled": 1, "pass2_applied_idx": [1]} and calls == [1]
 
 
 async def test_save_pass2_composes_final_summary_without_pass2():

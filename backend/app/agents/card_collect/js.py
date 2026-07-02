@@ -297,3 +297,42 @@ PICKER_FOCUS_LAST_JS = """() => {
     return { ok:true, row: n-1 };
   } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }
 }"""
+
+
+# 여러 행 체크(카드팝업 '적용' 대상 지정). 인자 indices 배열. 반환 {ok, checked}.
+CHECK_ROWS_JS = f"""(indices) => {{
+  const win = {CARD_WIN}; if (!win) return {{ ok:false, reason:'no-win' }};
+  try {{ const g = window.jQuery(win.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+    try {{ g.checkAll(false); }} catch(e) {{}}
+    for (const i of indices) {{
+      g.setChecked ? g.setChecked(i, true) : g.checkRow && g.checkRow(i, true);
+    }}
+    let checked=-1; try {{ checked=(g.getCheckedRows()||[]).length; }} catch(e) {{}}
+    return {{ ok:true, checked }};
+  }} catch(e) {{ return {{ ok:false, err:String(e).slice(0,60) }}; }}
+}}"""
+
+# 최상단 보이는 k-window 모달들의 (제목/본문/버튼) 관찰 — 저장/적용 확인창 폴링용.
+MODALS_SNAPSHOT_JS = """() => [...document.querySelectorAll('.k-window')]
+  .filter(w => w.offsetParent !== null)
+  .map(w => {
+    const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+    return { title: c((w.querySelector('.k-window-title')||{}).innerText),
+             text: c(w.innerText).slice(0, 160),
+             buttons: [...w.querySelectorAll('button')].filter(b=>b.offsetParent!==null)
+               .map(b=>c(b.innerText)).filter(Boolean) };
+  })"""
+
+# 보이는 k-window 중 버튼 텍스트가 정확히 일치하는 첫 버튼 좌표. 인자 btnText.
+MODAL_BTN_BOX_JS = """(btnText) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const wins = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null);
+  for (const w of wins.reverse()) {  // 최근(위) 모달 우선
+    const b = [...w.querySelectorAll('button')].filter(x=>x.offsetParent!==null)
+      .find(x => c(x.innerText) === btnText);
+    if (b) { const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2),
+               title: c((w.querySelector('.k-window-title')||{}).innerText) }; }
+  }
+  return null;
+}"""
