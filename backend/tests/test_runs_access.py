@@ -98,6 +98,22 @@ async def test_configured_agent_allowed_org_passes(
 
 
 @pytest.mark.asyncio
+async def test_configured_agent_allow_unassigned_passes(client, make_user, make_agent, auth_as):
+    """'미지정' 허용(allow_unassigned=True)이면 org_unit 미지정 user 도 실행(200)."""
+    uid = await make_user("u-noorg-ok", "user")
+    auth_as(uid)
+    await make_agent(
+        "a-cfg-none",
+        workflow_id="gated-wf",
+        access_configured=True,
+        allowed_org_units=("sales",),
+        allow_unassigned=True,
+    )
+    r = await client.post("/runs/collect", json={"agentId": "gated-wf"})
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_admin_bypasses_org_gate(client, make_user, make_agent, auth_as):
     """admin 은 org_unit 미지정이라도 조직 게이트를 우회한다."""
     uid = await make_user("u-admin", "admin")

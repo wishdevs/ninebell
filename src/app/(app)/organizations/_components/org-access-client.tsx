@@ -325,6 +325,9 @@ interface AgentAccessTabProps {
 /** 토글 병합 디바운스(ms) — rapid 클릭을 최종 상태 1회 PATCH로 합친다. */
 const PERSIST_DEBOUNCE_MS = 400;
 
+/** '미지정'(조직 미배정 사용자 허용) wire 센티널 — 백엔드 ORG_NONE_SENTINEL·멤버 화면과 동일. */
+const ORG_NONE = '__none__';
+
 function AgentAccessTab({
   orgUnits,
   orgStatus,
@@ -358,6 +361,12 @@ function AgentAccessTab({
     return <LoadState error={accessError ?? orgError} onReload={onReload} />;
   }
 
+  // 체크 옵션 = 실 조직구분 + '미지정'(조직 미배정 사용자 허용, 항상 마지막).
+  const options: { id: string; label: string }[] = [
+    ...orgUnits.map((o) => ({ id: o.id, label: o.label })),
+    { id: ORG_NONE, label: '미지정' },
+  ];
+
   // 해당 에이전트만 최신 로컬 상태로 PATCH(디바운스). 실패 시 그 에이전트만 서버 스냅샷으로 롤백(리뷰 #1·#6·#8).
   const schedulePersist = (agentId: string) => {
     const existing = timers.current[agentId];
@@ -387,7 +396,7 @@ function AgentAccessTab({
       const current = new Set(prev[agentId] ?? []);
       if (current.has(orgId)) current.delete(orgId);
       else current.add(orgId);
-      const next = orgUnits.filter((o) => current.has(o.id)).map((o) => o.id);
+      const next = options.filter((o) => current.has(o.id)).map((o) => o.id);
       return { ...prev, [agentId]: next };
     });
     schedulePersist(agentId);
@@ -408,7 +417,7 @@ function AgentAccessTab({
       {accessData.map((agent) => {
         const selected = new Set(local[agent.agentId] ?? []);
         const count = selected.size;
-        const total = orgUnits.length;
+        const total = options.length;
         const allOn = total > 0 && count === total;
         return (
           <section
@@ -435,7 +444,7 @@ function AgentAccessTab({
                 <button
                   type="button"
                   onClick={() =>
-                    setSelection(agent.agentId, allOn ? [] : orgUnits.map((o) => o.id))
+                    setSelection(agent.agentId, allOn ? [] : options.map((o) => o.id))
                   }
                   className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
                 >
@@ -445,7 +454,7 @@ function AgentAccessTab({
             </header>
 
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {orgUnits.map((org) => {
+              {options.map((org) => {
                 const on = selected.has(org.id);
                 return (
                   <button

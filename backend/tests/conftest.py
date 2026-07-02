@@ -78,6 +78,7 @@ def make_agent(sm):
         workflow_id: str,
         access_configured: bool = False,
         allowed_org_units: tuple[str, ...] = (),
+        allow_unassigned: bool = False,
     ):
         from app.models import Agent, AgentOrgAccess
 
@@ -92,6 +93,7 @@ def make_agent(sm):
                     interaction="autonomous",
                     status="idle",
                     access_configured=access_configured,
+                    allow_unassigned=allow_unassigned,
                 )
             )
             for ou in allowed_org_units:

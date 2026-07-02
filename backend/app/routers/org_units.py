@@ -23,6 +23,10 @@ router = APIRouter(tags=["org-units"])
 
 RequireAdmin = Annotated[User, Depends(require_role_min(role_rank(ROLE_ADMIN)))]
 
+# '미지정'(org_unit_id IS NULL 사용자) 을 orgUnitIds 목록에서 표현하는 wire 센티널.
+# 프론트 멤버 화면의 ORG_NONE 과 동일 문자열 — 실 OrgUnit id 와 충돌하지 않는다.
+ORG_NONE_SENTINEL = "__none__"
+
 
 # ── 스키마 ────────────────────────────────────────────────────────────────────
 class OrgUnitCreate(BaseModel):
@@ -118,7 +122,8 @@ async def reorder_org_units(body: ReorderIn, db: DbSession, _actor: RequireAdmin
 async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
     """실 에이전트(백엔드 agents 테이블 = card-chat 등)별 사용 가능 조직구분.
 
-    access_configured=false 면 '최초 모두 선택'으로 전체 조직구분 id 를 반환한다.
+    access_configured=false 면 '최초 모두 선택'으로 전체 조직구분 id(+미지정)를 반환한다.
+    '미지정'(조직 미배정 사용자 허용)은 ORG_NONE_SENTINEL 로 orgUnitIds 끝에 표현한다.
     """
     all_org_ids = list(
         (
@@ -136,8 +141,11 @@ async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
     for a in agents:
         if a.access_configured:
             allowed = [oid for oid in all_org_ids if oid in set(by_agent.get(a.id, []))]
+            if a.allow_unassigned:
+                allowed.append(ORG_NONE_SENTINEL)
         else:
-            allowed = list(all_org_ids)  # 최초 = 모두 선택.
+            # 최초 = 모두 선택(미지정 포함 — 게이트도 미설정 상태에선 검사하지 않는다).
+            allowed = [*all_org_ids, ORG_NONE_SENTINEL]
         out.append({"agentId": a.id, "agentName": a.name, "orgUnitIds": allowed})
     return out
 
@@ -155,9 +163,10 @@ async def set_agent_access(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
     valid_ids = set((await db.execute(select(OrgUnit.id))).scalars())
+    allow_unassigned = ORG_NONE_SENTINEL in body.orgUnitIds
     requested = [oid for oid in dict.fromkeys(body.orgUnitIds) if oid in valid_ids]
-    # 비어있지 않은 요청인데 전부 무효 = 클라 목록이 오래됨 → 조용히 전체 해제하지 말고 거부(리뷰 #4).
-    if body.orgUnitIds and not requested:
+    # 비어있지 않은 요청인데 전부 무효(미지정 센티널도 없음) = 클라 목록이 오래됨 → 조용히 전체 해제하지 말고 거부(리뷰 #4).
+    if body.orgUnitIds and not requested and not allow_unassigned:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="요청한 조직구분이 모두 유효하지 않습니다. 목록을 새로고침해 주세요.",
@@ -166,8 +175,9 @@ async def set_agent_access(
     for oid in requested:
         db.add(AgentOrgAccess(agent_id=agent_id, org_unit_id=oid))
     agent.access_configured = True
+    agent.allow_unassigned = allow_unassigned
     await db.commit()
-    # 정의 순서대로 정렬해 반환.
+    # 정의 순서대로 정렬해 반환(미지정은 끝).
     ordered = list(
         (
             await db.execute(
@@ -177,4 +187,6 @@ async def set_agent_access(
             )
         ).scalars()
     )
+    if allow_unassigned:
+        ordered.append(ORG_NONE_SENTINEL)
     return {"agentId": agent_id, "orgUnitIds": ordered}

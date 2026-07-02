@@ -167,23 +167,26 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     role_code = user.role.code if user.role is not None else None
     if agent_row.access_configured and role_rank(role_code) < ROLE_RANK[ROLE_ADMIN]:
         if not user.org_unit_id:
-            return JSONResponse(
-                {"error": "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."},
-                status_code=403,
-            )
-        allowed = (
-            await db.execute(
-                select(AgentOrgAccess.agent_id).where(
-                    AgentOrgAccess.agent_id == agent_row.id,
-                    AgentOrgAccess.org_unit_id == user.org_unit_id,
+            # 미지정 사용자는 에이전트 접근 설정의 '미지정' 체크(allow_unassigned)로 허용 가능.
+            if not agent_row.allow_unassigned:
+                return JSONResponse(
+                    {"error": "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."},
+                    status_code=403,
                 )
-            )
-        ).first()
-        if allowed is None:
-            return JSONResponse(
-                {"error": "이 에이전트를 실행할 권한이 없습니다(조직구분 접근 제한)."},
-                status_code=403,
-            )
+        else:
+            allowed = (
+                await db.execute(
+                    select(AgentOrgAccess.agent_id).where(
+                        AgentOrgAccess.agent_id == agent_row.id,
+                        AgentOrgAccess.org_unit_id == user.org_unit_id,
+                    )
+                )
+            ).first()
+            if allowed is None:
+                return JSONResponse(
+                    {"error": "이 에이전트를 실행할 권한이 없습니다(조직구분 접근 제한)."},
+                    status_code=403,
+                )
 
     factory = get_workflow(body.agentId)
     if factory is None:

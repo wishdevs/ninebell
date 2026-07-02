@@ -53,6 +53,11 @@ class Agent(Base):
     access_configured: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # 조직구분 미지정(users.org_unit_id IS NULL) 사용자의 실행 허용 여부.
+    # access_configured=true 일 때만 의미(최초 전체 허용 상태는 미지정도 허용).
+    allow_unassigned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
