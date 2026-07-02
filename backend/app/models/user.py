@@ -36,6 +36,14 @@ class User(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    # 소속 조직구분 — 에이전트 조직접근 게이트(runs.collect)에서 user 롤의 실행 허용 판정 기준.
+    # 관리자가 멤버 화면에서 지정(department 문자열 매칭은 보안 게이트로 부적합해 채택 안 함).
+    org_unit_id: Mapped[str | None] = mapped_column(
+        String(40),
+        ForeignKey("org_units.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     role: Mapped[Role | None] = relationship(back_populates="users", lazy="selectin")

@@ -136,6 +136,11 @@ export interface Intervention {
 
 export interface Agent {
   id: string;
+  /**
+   * 엔진에 등록된 실행 워크플로우 id(서버 agents.workflow_id). 실행 게이트의 단일 소스 —
+   * 지정된 에이전트만 라이브 실행 가능하고, 없으면 실행 컨트롤이 비활성화된다.
+   */
+  workflowId?: string;
   name: string;
   description: string;
   drive: AgentDrive;

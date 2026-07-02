@@ -25,19 +25,6 @@ import { SessionStatus } from './session-status';
 /** 디버그 단계 이동 바 노출 여부. 필요할 때 true로. */
 const SHOW_DEBUG = false;
 
-/**
- * 상세 에이전트 id → 엔진에 등록된 라이브 워크플로우 id.
- * 현재 등록분: `demo-echo`(P2, 자격증명 불필요) · `expense-card-chat`(P3, 실 옴니솔/Gemini 필요).
- * 매핑 없으면 라이브 레이어를 검증할 수 있게 demo-echo 로 폴백한다.
- */
-const WORKFLOW_BY_AGENT: Record<string, string> = {
-  'card-chat': 'card-collect',
-};
-
-function resolveWorkflow(agentId: string): string {
-  return WORKFLOW_BY_AGENT[agentId] ?? 'demo-echo';
-}
-
 function statusAt(pos: number, current: number): StepStatus {
   return pos < current ? 'done' : pos === current ? 'active' : 'pending';
 }
@@ -93,7 +80,10 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
   // 라이브 세션 — 실행 컨트롤(시작/종료)로 enabled 를 토글한다. 카드에 머무는 동안만
   // 세션(헤드리스 브라우저 슬롯)을 점유하고, 언마운트/종료 시 useLiveRun 이 abort 로 반납한다.
-  const defaultWorkflow = useMemo(() => resolveWorkflow(agent.id), [agent.id]);
+  // 실행 워크플로우 id 는 서버가 내려주는 agent.workflowId(단일 소스). 없으면 이 에이전트는
+  // 실행 불가(하드코딩 매핑·demo-echo 폴백 제거) → 실행 컨트롤을 비활성화한다.
+  const defaultWorkflow = agent.workflowId;
+  const canRun = !!defaultWorkflow;
   // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
   // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
   const [session, setSession] = useState<{
@@ -103,7 +93,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     /** 지정되면 이 런은 템플릿 AUTO 재생(대화 없이 저장된 selections 적용). */
     templateId?: string;
   }>({
-    workflowId: defaultWorkflow,
+    workflowId: defaultWorkflow ?? '',
     runId: '',
     enabled: false,
   });
@@ -131,10 +121,10 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
   // 실행 이력·템플릿 — 우측 사이드 패널의 탭으로 주입(하단 별도 패널에서 이동).
   const runsPanel: RunsPanelProps = {
-    agentId: defaultWorkflow,
+    agentId: defaultWorkflow ?? '',
     refreshKey,
-    onReplay: (templateId) => startRun(defaultWorkflow, templateId),
-    replayDisabled: isLive && !terminal,
+    onReplay: (templateId) => defaultWorkflow && startRun(defaultWorkflow, templateId),
+    replayDisabled: (isLive && !terminal) || !canRun,
   };
 
   return (
@@ -161,7 +151,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             <LiveControls
               enabled={isLive}
               terminal={terminal}
-              onStartReal={() => startRun(defaultWorkflow)}
+              canRun={canRun}
+              onStartReal={() => defaultWorkflow && startRun(defaultWorkflow)}
               onRestart={() => startRun(session.workflowId)}
               onStop={stopRun}
             />
@@ -206,7 +197,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
               canSaveTemplate && run.runId ? (
                 <SaveTemplateButton
                   runId={run.runId}
-                  agentId={defaultWorkflow}
+                  agentId={session.workflowId}
                   onSaved={bumpRefresh}
                 />
               ) : undefined
@@ -289,6 +280,8 @@ function DebugStepper({
 interface LiveControlsProps {
   enabled: boolean;
   terminal: boolean;
+  /** 실행 워크플로우가 매핑돼 있는지. false 면 '실행' 비활성화(이 에이전트는 실행 불가). */
+  canRun: boolean;
   onStartReal: () => void;
   onRestart: () => void;
   onStop: () => void;
@@ -298,10 +291,22 @@ interface LiveControlsProps {
  * 라이브 실행 컨트롤. 브라우저 큐(헤드리스 세션 슬롯)가 한정돼 일시정지는 없다 —
  * 진행 중에는 "종료"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 전에는 "실행".
  */
-function LiveControls({ enabled, terminal, onStartReal, onRestart, onStop }: LiveControlsProps) {
+function LiveControls({
+  enabled,
+  terminal,
+  canRun,
+  onStartReal,
+  onRestart,
+  onStop,
+}: LiveControlsProps) {
   if (!enabled) {
     return (
-      <Button size="sm" onClick={onStartReal}>
+      <Button
+        size="sm"
+        onClick={onStartReal}
+        disabled={!canRun}
+        title={canRun ? undefined : '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'}
+      >
         <RiPlayLine size={14} aria-hidden />
         실행
       </Button>

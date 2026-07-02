@@ -65,9 +65,11 @@ async def test_collect_resume_gone_returns_410(client, make_user, auth_as):
 
 
 @pytest.mark.asyncio
-async def test_collect_sse_happy_path(client, make_user, auth_as):
+async def test_collect_sse_happy_path(client, make_user, make_agent, auth_as):
     uid = await make_user("carol", "user")
     auth_as(uid)
+    # 실행 allowlist: workflow_id=test-echo 로 매핑된 Agent 필요(access_configured=False → 조직게이트 없음).
+    await make_agent("echo-agent", workflow_id="test-echo")
     register_workflow("test-echo", lambda: _FakeGraph())
     fastapi_app.state.browser_factory = _fake_browser_factory
     # runId 없음 → 익명 세션(DB 영속 없이 SSE 형태만 검증).

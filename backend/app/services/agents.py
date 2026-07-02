@@ -47,6 +47,7 @@ def _serialize_intervention(iv: AgentIntervention) -> dict:
 def serialize_agent(agent: Agent, *, include_flow: bool = False) -> dict:
     out: dict = {
         "id": agent.id,
+        "workflowId": agent.workflow_id,  # 실행 워크플로우 id(없으면 실행 불가) — 프론트 게이트.
         "name": agent.name,
         "description": agent.description,
         "drive": agent.drive,

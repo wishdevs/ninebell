@@ -101,12 +101,17 @@ async def seed_roles(db: AsyncSession, permissions: dict[str, Permission]) -> No
 
 
 async def seed_agents(db: AsyncSession) -> None:
-    existing_ids = set((await db.execute(select(Agent.id))).scalars())
+    existing = {a.id: a for a in (await db.execute(select(Agent))).scalars()}
     for fx in AGENT_FIXTURES:
-        if fx["id"] in existing_ids:
+        if fx["id"] in existing:
+            # 기존 행 멱등 보강: workflow_id 미설정(0006 이전 시드 등)이면 픽스처 값으로 채운다.
+            row = existing[fx["id"]]
+            if row.workflow_id is None and fx.get("workflow_id"):
+                row.workflow_id = fx["workflow_id"]
             continue
         agent = Agent(
             id=fx["id"],
+            workflow_id=fx.get("workflow_id"),
             name=fx["name"],
             description=fx["description"],
             drive=fx["drive"],

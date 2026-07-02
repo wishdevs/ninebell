@@ -33,4 +33,6 @@ export interface WorkspaceMember {
   emailVerified: boolean;
   lastActiveAt: string;
   joinedAt: string;
+  /** 소속 조직구분 id(에이전트 실행 조직접근 게이트 기준). 미지정이면 null. */
+  orgUnitId: string | null;
 }

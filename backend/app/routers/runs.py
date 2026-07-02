@@ -12,22 +12,34 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
-from app.core.deps import SESSION_COOKIE, CurrentUser, user_has_permission
-from app.core.permissions import LOGS_READ
+from app.core.deps import (
+    SESSION_COOKIE,
+    CurrentUser,
+    DbSession,
+    require_permission,
+    user_has_permission,
+)
+from app.core.permissions import AGENTS_RUN, LOGS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
 from app.core.security import InvalidTokenError, decode_session_token
 from app.live import store
 from app.live.hitl import hitl_owner, resolve_hitl
 from app.live.registry import get_workflow
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
-from app.models import AgentRun, AgentTemplate
+from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/runs", tags=["runs"])
+# 전 엔드포인트 AGENTS_RUN 강제(라우터 레벨) — 인증 + 실행 권한. 조직구분 접근은 collect 에서 추가.
+router = APIRouter(
+    prefix="/runs",
+    tags=["runs"],
+    dependencies=[Depends(require_permission(AGENTS_RUN))],
+)
 
 
 def _sse(events) -> StreamingResponse:
@@ -53,7 +65,7 @@ def _sse(events) -> StreamingResponse:
 class CollectRequest(BaseModel):
     # 서버 세션/런 id(세션 사용자 소유). 있으면 재연결·런 추적, 없으면 익명(1회성).
     runId: str | None = Field(default=None, max_length=40)
-    agentId: str = Field(default="demo-echo", max_length=64)
+    agentId: str = Field(min_length=1, max_length=64)
     # 재연결(resume) 커서 — 이미 받은 이벤트 수. >0 이면 기존 세션 재부착(새 흐름 시작 안 함).
     cursor: int = Field(default=0, ge=0)
     # 워크플로우 파라미터(그래프 state["params"] 로 주입).
@@ -123,11 +135,12 @@ def _browser_factory(request: Request):
 
 
 @router.post("/collect")
-async def collect(body: CollectRequest, request: Request, user: CurrentUser):
+async def collect(body: CollectRequest, request: Request, user: CurrentUser, db: DbSession):
     """워크플로우를 라이브 세션으로 실행하고 단계 이벤트를 SSE 로 스트리밍(재연결 지원)."""
     owner = str(user.id)
 
     # 재연결(resume): 같은 runId 세션이 살아있으면 흐름을 재시작하지 않고 커서 이후만 재생.
+    # 진행 중 흐름 유지를 위해 재연결 경로는 조직접근을 재검사하지 않는다(소유자 검증만).
     sess = get_session(body.runId)
     if sess is not None:
         if sess.owner and sess.owner != owner:
@@ -139,6 +152,37 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser):
         return JSONResponse(
             {"error": "흐름이 종료되었습니다. 다시 실행해 주세요."}, status_code=410
         )
+
+    # 실행 allowlist + 조직접근 게이트(신규 세션 경로만). workflow_id 로 Agent 역조회 →
+    # 없으면 404(=워크플로우 매핑된 에이전트만 실행 가능, demo-echo 등 미매핑 자동 차단).
+    agent_row = (
+        await db.execute(select(Agent).where(Agent.workflow_id == body.agentId))
+    ).scalar_one_or_none()
+    if agent_row is None:
+        return JSONResponse(
+            {"error": f"실행할 수 없는 에이전트입니다: {body.agentId}"}, status_code=404
+        )
+    # 조직구분 접근제어: 명시 설정된 에이전트는 user 롤에 한해 소속 조직구분을 검사(admin+ 우회).
+    role_code = user.role.code if user.role is not None else None
+    if agent_row.access_configured and role_rank(role_code) < ROLE_RANK[ROLE_ADMIN]:
+        if not user.org_unit_id:
+            return JSONResponse(
+                {"error": "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."},
+                status_code=403,
+            )
+        allowed = (
+            await db.execute(
+                select(AgentOrgAccess.agent_id).where(
+                    AgentOrgAccess.agent_id == agent_row.id,
+                    AgentOrgAccess.org_unit_id == user.org_unit_id,
+                )
+            )
+        ).first()
+        if allowed is None:
+            return JSONResponse(
+                {"error": "이 에이전트를 실행할 권한이 없습니다(조직구분 접근 제한)."},
+                status_code=403,
+            )
 
     factory = get_workflow(body.agentId)
     if factory is None:

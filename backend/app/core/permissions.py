@@ -22,6 +22,7 @@ ROLES_ASSIGN: Final = "roles:assign"
 AGENTS_READ: Final = "agents:read"
 AGENTS_WRITE: Final = "agents:write"
 AGENTS_DELETE: Final = "agents:delete"
+AGENTS_RUN: Final = "agents:run"
 
 LOGS_READ: Final = "logs:read"
 
@@ -35,6 +36,7 @@ ALL_PERMISSIONS: Final[dict[str, str]] = {
     AGENTS_READ: "에이전트 조회",
     AGENTS_WRITE: "에이전트 생성/수정",
     AGENTS_DELETE: "에이전트 삭제",
+    AGENTS_RUN: "에이전트 실행(라이브 워크플로우)",
     LOGS_READ: "접속 로그 조회",
 }
 
@@ -70,8 +72,8 @@ DEFAULT_ROLES: Final[dict[str, tuple[str, str, tuple[str, ...]]]] = {
     ),
     ROLE_USER: (
         "사용자",
-        "에이전트 읽기 전용 — 사용자/로그 관리 불가",
-        (AGENTS_READ,),
+        "에이전트 조회·실행 — 사용자/로그 관리 불가(실행은 조직구분 접근 범위 내)",
+        (AGENTS_READ, AGENTS_RUN),
     ),
 }
 

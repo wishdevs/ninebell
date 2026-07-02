@@ -25,6 +25,11 @@ class Agent(Base):
     __tablename__ = "agents"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 실행 레지스트리(app.live.registry) 워크플로우 id. DB agent id(슬러그)와 실행 id 를
+    # 잇는 서버측 단일 소스 — 프론트 하드코딩 매핑(WORKFLOW_BY_AGENT) 대체. 없으면 실행 불가.
+    workflow_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # browser | api | hybrid

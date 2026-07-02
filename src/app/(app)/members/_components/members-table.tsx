@@ -19,23 +19,30 @@ import {
   type MemberStatus,
   type WorkspaceMember,
 } from '@/lib/data/members';
+import type { OrgUnit } from '@/lib/data/org-units';
 import { formatDate, formatRelativeKorean } from '@/lib/data/format';
 import { MemberRowActions } from './member-row-actions';
 import type { MemberCaps } from './members-client';
 
 interface MembersTableProps {
   members: readonly WorkspaceMember[];
+  /** 배정 가능한 조직구분 목록(에이전트 실행 조직접근 게이트 기준). */
+  orgUnits: readonly OrgUnit[];
   /** 현재 로그인한 사용자 id — 본인 행은 역할 변경/액션을 잠근다. */
   currentUserId: string;
   /** 현재 사용자의 멤버 변경 권한 — 어포던스 노출을 게이팅한다. */
   caps: MemberCaps;
   onRoleChange: (member: WorkspaceMember, role: Role) => void;
+  onOrgUnitChange: (member: WorkspaceMember, orgUnitId: string | null) => void;
   onToggleStatus: (member: WorkspaceMember) => void;
   onRequestRemove: (member: WorkspaceMember) => void;
 }
 
 /** 모든 역할 옵션 — 인라인 역할 셀렉트에서 사용. */
 const ROLE_OPTIONS: readonly Role[] = ['super_admin', 'admin', 'user'];
+
+/** 조직구분 셀렉트의 '미지정' 센티넬(Select 값은 문자열이라야 하므로 null 대체). */
+const ORG_NONE = '__none__';
 
 /** 상태 → StatusPill 톤 매핑. */
 const STATUS_VARIANT: Record<MemberStatus, 'success' | 'info' | 'danger'> = {
@@ -53,12 +60,16 @@ const ROLE_BADGE: Record<Role, string> = {
 
 export function MembersTable({
   members,
+  orgUnits,
   currentUserId,
   caps,
   onRoleChange,
+  onOrgUnitChange,
   onToggleStatus,
   onRequestRemove,
 }: MembersTableProps) {
+  const orgLabel = (id: string | null): string =>
+    (id && orgUnits.find((o) => o.id === id)?.label) || '미지정';
   if (members.length === 0) {
     return (
       <EmptyState
@@ -76,11 +87,12 @@ export function MembersTable({
       </p>
 
       <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-        <table className="w-full min-w-[860px] text-left text-sm">
+        <table className="w-full min-w-[960px] text-left text-sm">
           <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
             <tr>
               <Th>이름</Th>
               <Th>역할</Th>
+              <Th>조직구분</Th>
               <Th>상태</Th>
               <Th>이메일 인증</Th>
               <Th>마지막 활동</Th>
@@ -140,6 +152,36 @@ export function MembersTable({
                       </Select>
                     ) : (
                       <RoleBadge role={member.role} />
+                    )}
+                  </Td>
+
+                  <Td>
+                    {caps.canWrite ? (
+                      <Select
+                        value={member.orgUnitId ?? ORG_NONE}
+                        onValueChange={(value) =>
+                          onOrgUnitChange(member, value === ORG_NONE ? null : value)
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label={`${member.name} 조직구분`}
+                          className="w-[9rem]"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ORG_NONE}>미지정</SelectItem>
+                          {orgUnits.map((ou) => (
+                            <SelectItem key={ou.id} value={ou.id}>
+                              {ou.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">
+                        {orgLabel(member.orgUnitId)}
+                      </span>
                     )}
                   </Td>
 

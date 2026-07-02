@@ -16,7 +16,7 @@ from app.core.permissions import (
     USERS_WRITE,
     ROLES_ASSIGN,
 )
-from app.models import User
+from app.models import OrgUnit, User
 from app.schemas.user import RoleUpdate, UserOut, UserPatch
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -32,6 +32,7 @@ def _to_user_out(user: User) -> UserOut:
         email_verified=user.email is not None,
         last_active_at=user.last_login_at,
         joined_at=user.created_at,
+        org_unit_id=user.org_unit_id,
     )
 
 
@@ -77,6 +78,14 @@ async def update_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다.")
     if payload.status is not None:
         user.status = payload.status
+    if "org_unit_id" in payload.model_fields_set:
+        # null/"" = 해제, 값 = 존재 검증 후 지정.
+        new_org = payload.org_unit_id or None
+        if new_org is not None and (await db.get(OrgUnit, new_org)) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="알 수 없는 조직구분입니다."
+            )
+        user.org_unit_id = new_org
     await db.commit()
     await db.refresh(user)
     return _to_user_out(user)

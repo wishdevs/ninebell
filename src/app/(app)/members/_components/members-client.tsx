@@ -13,6 +13,7 @@ import { PERMISSIONS, type Role } from '@/lib/auth/permissions';
 import { usePermissions } from '@/hooks/use-permissions';
 import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { MEMBER_ROLE_LABEL, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
+import type { OrgUnit } from '@/lib/data/org-units';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { MembersTable } from './members-table';
 
@@ -50,6 +51,9 @@ export function MembersClient() {
   };
 
   const { status, data, error, reload } = useApiResource<WorkspaceMember[]>('/users');
+  // 조직구분 배정 셀렉트용 목록(GET /org-units, 관리자 전용). 실패 시 빈 목록으로 무해히 강등.
+  const { data: orgUnitsData } = useApiResource<OrgUnit[]>('/org-units');
+  const orgUnits = orgUnitsData ?? [];
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<WorkspaceMember | null>(null);
 
@@ -66,6 +70,25 @@ export function MembersClient() {
       const updated = await api.patch<WorkspaceMember>(`/users/${member.id}/role`, { role });
       setMembers((prev) => prev.map((m) => (m.id === member.id ? updated : m)));
       toast.success(`${member.name} 님의 역할을 ${MEMBER_ROLE_LABEL[role]}(으)로 변경했습니다`);
+    } catch (err: unknown) {
+      setMembers(snapshot);
+      toast.error(errorMessage(err));
+    }
+  }
+
+  async function handleOrgUnitChange(member: WorkspaceMember, orgUnitId: string | null) {
+    if ((member.orgUnitId ?? null) === orgUnitId) return;
+    const snapshot = members;
+    setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, orgUnitId } : m)));
+    try {
+      const updated = await api.patch<WorkspaceMember>(`/users/${member.id}`, { orgUnitId });
+      setMembers((prev) => prev.map((m) => (m.id === member.id ? updated : m)));
+      const label = orgUnitId ? orgUnits.find((o) => o.id === orgUnitId)?.label : null;
+      toast.success(
+        label
+          ? `${member.name} 님의 조직구분을 ${label}(으)로 설정했습니다`
+          : `${member.name} 님의 조직구분을 해제했습니다`,
+      );
     } catch (err: unknown) {
       setMembers(snapshot);
       toast.error(errorMessage(err));
@@ -128,9 +151,11 @@ export function MembersClient() {
       ) : (
         <MembersTable
           members={members}
+          orgUnits={orgUnits}
           currentUserId={me.id}
           caps={caps}
           onRoleChange={handleRoleChange}
+          onOrgUnitChange={handleOrgUnitChange}
           onToggleStatus={handleToggleStatus}
           onRequestRemove={setPendingRemoval}
         />

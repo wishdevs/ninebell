@@ -69,6 +69,53 @@ def make_user(sm):
 
 
 @pytest.fixture
+def make_agent(sm):
+    """실행 게이트 테스트용 Agent 를 생성. workflow_id·access_configured·허용 조직구분 지정."""
+
+    async def _make(
+        agent_id: str,
+        *,
+        workflow_id: str,
+        access_configured: bool = False,
+        allowed_org_units: tuple[str, ...] = (),
+    ):
+        from app.models import Agent, AgentOrgAccess
+
+        async with sm() as s:
+            s.add(
+                Agent(
+                    id=agent_id,
+                    workflow_id=workflow_id,
+                    name=agent_id,
+                    description="",
+                    drive="browser",
+                    interaction="autonomous",
+                    status="idle",
+                    access_configured=access_configured,
+                )
+            )
+            for ou in allowed_org_units:
+                s.add(AgentOrgAccess(agent_id=agent_id, org_unit_id=ou))
+            await s.commit()
+        return agent_id
+
+    return _make
+
+
+@pytest.fixture
+def set_user_org(sm):
+    """사용자의 org_unit_id 를 지정하는 async 헬퍼(실행 조직접근 테스트용)."""
+
+    async def _set(user_id, org_unit_id):
+        async with sm() as s:
+            u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
+            u.org_unit_id = org_unit_id
+            await s.commit()
+
+    return _set
+
+
+@pytest.fixture
 def auth_as(sm):
     """get_current_user 를 주어진 user_id 로 오버라이드한다."""
 

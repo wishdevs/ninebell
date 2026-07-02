@@ -21,7 +21,7 @@ async def test_me_user_role_minimal_permissions(client, make_user, auth_as):
     auth_as(uid)
     resp = await client.get("/auth/me")
     assert resp.status_code == 200
-    assert resp.json()["permissions"] == ["agents:read"]
+    assert resp.json()["permissions"] == ["agents:read", "agents:run"]
 
 
 async def test_me_unauthenticated_returns_401(client):

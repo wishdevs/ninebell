@@ -35,4 +35,4 @@ async def test_super_admin_and_admin_have_identical_full_permissions(sm):
 
     assert sa_codes == set(ALL_PERMISSIONS)
     assert admin_codes == set(ALL_PERMISSIONS)
-    assert user_codes == {"agents:read"}
+    assert user_codes == {"agents:read", "agents:run"}

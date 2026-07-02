@@ -76,6 +76,7 @@ CORPORATE_CARD_FLOW: dict = {
 AGENT_FIXTURES: list[dict] = [
     {
         "id": "card-chat",
+        "workflow_id": "card-collect",  # 실행 레지스트리 워크플로우 id(유일 실동작).
         "name": "법인카드 지결 — 대화형 폼 채움",
         "description": "증빙·프로젝트 다음의 상세 필드를 자연어 한 문장으로 채운다. 부족하면 되묻는다.",
         "drive": "browser",
