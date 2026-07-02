@@ -23,7 +23,7 @@ from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, auth, logs, runs, users
+from app.routers import agents, auth, logs, org_units, runs, users
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(agents.router)
+    app.include_router(org_units.router)
     app.include_router(logs.router)
     app.include_router(runs.router)
 

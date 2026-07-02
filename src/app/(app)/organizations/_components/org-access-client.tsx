@@ -1,169 +1,462 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { RiCheckLine } from '@remixicon/react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  RiAddLine,
+  RiArrowDownSLine,
+  RiArrowUpSLine,
+  RiCheckLine,
+  RiDeleteBinLine,
+  RiErrorWarningLine,
+  RiPencilLine,
+} from '@remixicon/react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
-import { AGENTS } from '@/lib/data/agents';
-import { ALL_ORG_UNIT_IDS, ORG_UNITS } from '@/lib/data/org-units';
+import { Spinner } from '@/components/ui/spinner';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
+import { ApiError, api } from '@/lib/api/client';
+import type { AgentAccess, OrgUnit } from '@/lib/data/org-units';
 import { cn } from '@/lib/utils';
 
-/** agentId → 사용 가능한 조직구분 id 배열. */
-type AccessMap = Record<string, string[]>;
+function errorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) return '이 작업을 수행할 권한이 없습니다.';
+    if (err.status === 0) return '서버에 연결할 수 없습니다.';
+    return err.message;
+  }
+  return '요청을 처리하지 못했습니다.';
+}
 
 /**
- * 조직구분 관리 — 조직구분 단위로 각 에이전트의 사용 권한을 켜고 끈다.
- *
- * 최초 설정은 모두 선택. 에이전트마다 7개 조직구분을 체크박스로 선택/해제한다. 백엔드가
- * 없으므로 members 화면과 동일하게 클라이언트 로컬 state로 다룬다(세션 한정, 새로고침 시 초기화).
+ * 조직구분 관리 — 두 탭.
+ * - 조직구분: 조직구분 CRUD(추가·이름변경·순서변경·삭제). 백엔드 `/org-units`.
+ * - 에이전트 접근: 실 에이전트별 사용 가능 조직구분을 체크박스로 관리. 백엔드 `/agent-access`.
+ * 최초 설정은 모두 선택(백엔드 access_configured=false → 전체 반환).
  */
 export function OrgAccessClient() {
-  const [access, setAccess] = useState<AccessMap>(() =>
-    Object.fromEntries(AGENTS.map((a) => [a.id, [...ALL_ORG_UNIT_IDS]])),
-  );
+  const orgs = useApiResource<OrgUnit[]>('/org-units');
+  const access = useApiResource<AgentAccess[]>('/agent-access');
 
-  const toggle = (agentId: string, orgId: string) =>
-    setAccess((prev) => {
-      const current = new Set(prev[agentId] ?? []);
-      if (current.has(orgId)) current.delete(orgId);
-      else current.add(orgId);
-      // 조직구분 정의 순서를 유지해 저장한다.
-      return { ...prev, [agentId]: ORG_UNITS.filter((o) => current.has(o.id)).map((o) => o.id) };
-    });
-
-  const setAll = (agentId: string, on: boolean) =>
-    setAccess((prev) => ({ ...prev, [agentId]: on ? [...ALL_ORG_UNIT_IDS] : [] }));
+  const reloadAll = () => {
+    orgs.reload();
+    access.reload();
+  };
 
   return (
     <div className="animate-page-enter flex flex-col gap-8">
       <PageHeader
         caption="운영"
         title="조직구분 관리"
-        description="조직구분 단위로 각 에이전트의 사용 권한을 관리합니다. 최초 설정은 모두 선택이며, 체크박스로 조직구분을 선택·해제할 수 있습니다."
+        description="조직구분을 관리하고, 조직구분별로 각 에이전트의 사용 권한을 설정합니다. 최초 설정은 모두 선택입니다."
       />
 
-      <OrgLegend />
+      <Tabs defaultValue="org" className="flex flex-col gap-6">
+        <TabsList>
+          <TabsTrigger value="org">조직구분</TabsTrigger>
+          <TabsTrigger value="access">에이전트 접근</TabsTrigger>
+        </TabsList>
 
-      <div className="flex flex-col gap-4">
-        {AGENTS.map((agent) => (
-          <AgentAccessCard
-            key={agent.id}
-            name={agent.name}
-            meta={`${agent.targetSystem} · ${INTERACTION_LABEL[agent.interaction] ?? agent.interaction}`}
-            selected={access[agent.id] ?? []}
-            onToggle={(orgId) => toggle(agent.id, orgId)}
-            onSetAll={(on) => setAll(agent.id, on)}
+        <TabsContent value="org">
+          <OrgUnitsTab
+            status={orgs.status}
+            error={orgs.error}
+            orgUnits={orgs.data ?? []}
+            onReload={orgs.reload}
+            onOrgsChanged={reloadAll}
           />
-        ))}
+        </TabsContent>
+
+        <TabsContent value="access">
+          <AgentAccessTab
+            orgUnits={orgs.data ?? []}
+            accessStatus={access.status}
+            accessError={access.error}
+            accessData={access.data ?? []}
+            onReload={access.reload}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ── 로딩/에러 공통 ───────────────────────────────────────────────────────────
+function LoadState({ error, onReload }: { error: ApiError | null; onReload: () => void }) {
+  if (error) {
+    return (
+      <EmptyState
+        icon={<RiErrorWarningLine size={18} aria-hidden />}
+        title="불러오지 못했습니다"
+        description={errorMessage(error)}
+        action={
+          <Button variant="secondary" size="sm" onClick={onReload}>
+            다시 시도
+          </Button>
+        }
+      />
+    );
+  }
+  return (
+    <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
+      <Spinner size={18} label="불러오는 중" />
+      불러오는 중…
+    </div>
+  );
+}
+
+// ── 조직구분 CRUD 탭 ─────────────────────────────────────────────────────────
+interface OrgUnitsTabProps {
+  status: 'loading' | 'success' | 'error';
+  error: ApiError | null;
+  orgUnits: OrgUnit[];
+  onReload: () => void;
+  onOrgsChanged: () => void;
+}
+
+function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUnitsTabProps) {
+  const [newLabel, setNewLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; label: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<OrgUnit | null>(null);
+
+  if (status === 'loading' || status === 'error') {
+    return <LoadState error={error} onReload={onReload} />;
+  }
+
+  const runMutation = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      onOrgsChanged();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addOrg = async () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    await runMutation(async () => {
+      await api.post('/org-units', { label });
+      setNewLabel('');
+    });
+  };
+
+  const saveRename = async () => {
+    if (!editing) return;
+    const label = editing.label.trim();
+    if (!label) return;
+    const id = editing.id;
+    await runMutation(async () => {
+      await api.patch(`/org-units/${id}`, { label });
+      setEditing(null);
+    });
+  };
+
+  const move = async (index: number, dir: -1 | 1) => {
+    const next = index + dir;
+    if (next < 0 || next >= orgUnits.length) return;
+    const orderedIds = orgUnits.map((o) => o.id);
+    [orderedIds[index], orderedIds[next]] = [orderedIds[next], orderedIds[index]];
+    await runMutation(() => api.post('/org-units/reorder', { orderedIds }));
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="border-border bg-surface flex items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
+        <input
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void addOrg();
+          }}
+          placeholder="새 조직구분 이름"
+          maxLength={120}
+          className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+        />
+        <Button size="sm" onClick={() => void addOrg()} disabled={busy || !newLabel.trim()}>
+          <RiAddLine size={15} aria-hidden className="mr-1" />
+          추가
+        </Button>
       </div>
-    </div>
-  );
-}
 
-const INTERACTION_LABEL: Record<string, string> = {
-  readonly: '읽기 전용',
-  conversational: '대화형',
-  autonomous: '자율',
-  hybrid: '하이브리드',
-};
-
-/** 상단 조직구분 범례 — 관리 대상 7개 조직구분을 한눈에. */
-function OrgLegend() {
-  return (
-    <div className="border-border bg-surface flex flex-wrap items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
-      <span className="text-foreground-tertiary mr-1 text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
-        조직구분 {ORG_UNITS.length}
-      </span>
-      {ORG_UNITS.map((o) => (
-        <span
-          key={o.id}
-          className="border-border-subtle bg-muted/40 text-foreground-secondary rounded-full border px-2.5 py-1 text-[length:var(--text-body-sm)] font-medium"
-        >
-          {o.label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-interface AgentAccessCardProps {
-  name: string;
-  meta: string;
-  selected: readonly string[];
-  onToggle: (orgId: string) => void;
-  onSetAll: (on: boolean) => void;
-}
-
-function AgentAccessCard({ name, meta, selected, onToggle, onSetAll }: AgentAccessCardProps) {
-  const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const count = selectedSet.size;
-  const total = ORG_UNITS.length;
-  const allOn = count === total;
-
-  return (
-    <section className="border-border bg-surface flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)]">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid gap-0.5">
-          <h2 className="text-foreground text-base font-semibold tracking-tight">{name}</h2>
-          <p className="text-foreground-tertiary text-[length:var(--text-body-sm)]">{meta}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              'rounded-full px-2 py-0.5 text-[length:var(--text-body-sm)] font-semibold tabular-nums',
-              count === 0 ? 'bg-danger/10 text-danger' : allOn ? 'bg-success/10 text-success' : 'bg-muted text-foreground-secondary',
-            )}
-          >
-            {count}/{total}
-          </span>
-          <button
-            type="button"
-            onClick={() => onSetAll(!allOn)}
-            className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
-          >
-            {allOn ? '모두 해제' : '모두 선택'}
-          </button>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-        {ORG_UNITS.map((org) => {
-          const on = selectedSet.has(org.id);
-          return (
-            <button
-              key={org.id}
-              type="button"
-              role="checkbox"
-              aria-checked={on}
-              onClick={() => onToggle(org.id)}
-              className={cn(
-                'group flex items-center gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors',
-                'focus-visible:ring-accent/50 focus-visible:ring-2 focus-visible:outline-none',
-                on
-                  ? 'border-accent/50 bg-accent/5'
-                  : 'border-border bg-surface hover:border-border-strong hover:bg-muted/40',
+      {orgUnits.length === 0 ? (
+        <EmptyState
+          icon={<RiErrorWarningLine size={18} aria-hidden />}
+          title="조직구분이 없습니다"
+          description="위에서 조직구분을 추가하세요."
+        />
+      ) : (
+        <ul className="border-border bg-surface flex flex-col divide-y divide-[var(--color-border-subtle)] overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
+          {orgUnits.map((org, i) => (
+            <li key={org.id} className="flex items-center gap-3 px-4 py-3">
+              <span className="text-foreground-tertiary w-6 text-center text-[length:var(--text-body-sm)] tabular-nums">
+                {i + 1}
+              </span>
+              {editing?.id === org.id ? (
+                <input
+                  autoFocus
+                  value={editing.label}
+                  onChange={(e) => setEditing({ id: org.id, label: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveRename();
+                    if (e.key === 'Escape') setEditing(null);
+                  }}
+                  maxLength={120}
+                  className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-2 py-1 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                />
+              ) : (
+                <span className="text-foreground min-w-0 flex-1 truncate text-sm font-medium">
+                  {org.label}
+                </span>
               )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
-                  on ? 'border-accent bg-accent text-white' : 'border-border-strong bg-surface',
+              <div className="flex items-center gap-1">
+                {editing?.id === org.id ? (
+                  <>
+                    <Button size="sm" onClick={() => void saveRename()} disabled={busy}>
+                      저장
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                      취소
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <IconBtn
+                      label="위로"
+                      onClick={() => void move(i, -1)}
+                      disabled={busy || i === 0}
+                    >
+                      <RiArrowUpSLine size={16} aria-hidden />
+                    </IconBtn>
+                    <IconBtn
+                      label="아래로"
+                      onClick={() => void move(i, 1)}
+                      disabled={busy || i === orgUnits.length - 1}
+                    >
+                      <RiArrowDownSLine size={16} aria-hidden />
+                    </IconBtn>
+                    <IconBtn
+                      label="이름 변경"
+                      onClick={() => setEditing({ id: org.id, label: org.label })}
+                      disabled={busy}
+                    >
+                      <RiPencilLine size={15} aria-hidden />
+                    </IconBtn>
+                    <IconBtn
+                      label="삭제"
+                      onClick={() => setPendingDelete(org)}
+                      disabled={busy}
+                      danger
+                    >
+                      <RiDeleteBinLine size={15} aria-hidden />
+                    </IconBtn>
+                  </>
                 )}
-              >
-                {on ? <RiCheckLine size={13} /> : null}
-              </span>
-              <span
-                className={cn(
-                  'text-[length:var(--text-body-sm)] font-medium',
-                  on ? 'text-foreground' : 'text-foreground-secondary',
-                )}
-              >
-                {org.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="조직구분 삭제"
+        message={
+          pendingDelete
+            ? `'${pendingDelete.label}'을(를) 삭제하면 각 에이전트의 이 조직구분 접근 설정도 함께 제거됩니다.`
+            : ''
+        }
+        confirmLabel="삭제"
+        variant="danger"
+        onConfirm={async () => {
+          if (!pendingDelete) return;
+          const id = pendingDelete.id;
+          setPendingDelete(null);
+          await runMutation(() => api.delete(`/org-units/${id}`));
+        }}
+      />
+    </div>
+  );
+}
+
+function IconBtn({
+  label,
+  onClick,
+  disabled,
+  danger,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'text-foreground-tertiary hover:bg-muted flex size-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+        danger ? 'hover:text-danger' : 'hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── 에이전트 접근 탭 ─────────────────────────────────────────────────────────
+interface AgentAccessTabProps {
+  orgUnits: OrgUnit[];
+  accessStatus: 'loading' | 'success' | 'error';
+  accessError: ApiError | null;
+  accessData: AgentAccess[];
+  onReload: () => void;
+}
+
+function AgentAccessTab({
+  orgUnits,
+  accessStatus,
+  accessError,
+  accessData,
+  onReload,
+}: AgentAccessTabProps) {
+  // 낙관적 로컬 미러(agentId → 선택된 org id 집합).
+  const [local, setLocal] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    setLocal(Object.fromEntries(accessData.map((a) => [a.agentId, a.orgUnitIds])));
+  }, [accessData]);
+
+  if (accessStatus === 'loading' || accessStatus === 'error') {
+    return <LoadState error={accessError} onReload={onReload} />;
+  }
+
+  const persist = async (agentId: string, orgUnitIds: string[]) => {
+    try {
+      await api.patch(`/agent-access/${agentId}`, { orgUnitIds });
+    } catch (err) {
+      toast.error(errorMessage(err));
+      onReload(); // 실패 시 서버 상태로 롤백.
+    }
+  };
+
+  const setSelection = (agentId: string, orgUnitIds: string[]) => {
+    setLocal((prev) => ({ ...prev, [agentId]: orgUnitIds }));
+    void persist(agentId, orgUnitIds);
+  };
+
+  const toggle = (agentId: string, orgId: string) => {
+    const current = new Set(local[agentId] ?? []);
+    if (current.has(orgId)) current.delete(orgId);
+    else current.add(orgId);
+    setSelection(agentId, orgUnits.filter((o) => current.has(o.id)).map((o) => o.id));
+  };
+
+  if (accessData.length === 0) {
+    return (
+      <EmptyState
+        icon={<RiErrorWarningLine size={18} aria-hidden />}
+        title="에이전트가 없습니다"
+        description="사용 권한을 관리할 실 에이전트가 없습니다."
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {accessData.map((agent) => {
+        const selected = new Set(local[agent.agentId] ?? []);
+        const count = selected.size;
+        const total = orgUnits.length;
+        const allOn = total > 0 && count === total;
+        return (
+          <section
+            key={agent.agentId}
+            className="border-border bg-surface flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)]"
+          >
+            <header className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-foreground text-base font-semibold tracking-tight">
+                {agent.agentName}
+              </h2>
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    'rounded-full px-2 py-0.5 text-[length:var(--text-body-sm)] font-semibold tabular-nums',
+                    count === 0
+                      ? 'bg-danger/10 text-danger'
+                      : allOn
+                        ? 'bg-success/10 text-success'
+                        : 'bg-muted text-foreground-secondary',
+                  )}
+                >
+                  {count}/{total}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelection(agent.agentId, allOn ? [] : orgUnits.map((o) => o.id))
+                  }
+                  className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
+                >
+                  {allOn ? '모두 해제' : '모두 선택'}
+                </button>
+              </div>
+            </header>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+              {orgUnits.map((org) => {
+                const on = selected.has(org.id);
+                return (
+                  <button
+                    key={org.id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={on}
+                    onClick={() => toggle(agent.agentId, org.id)}
+                    className={cn(
+                      'group flex items-center gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors',
+                      'focus-visible:ring-accent/50 focus-visible:ring-2 focus-visible:outline-none',
+                      on
+                        ? 'border-accent/50 bg-accent/5'
+                        : 'border-border bg-surface hover:border-border-strong hover:bg-muted/40',
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
+                        on ? 'border-accent bg-accent text-white' : 'border-border-strong bg-surface',
+                      )}
+                    >
+                      {on ? <RiCheckLine size={13} /> : null}
+                    </span>
+                    <span
+                      className={cn(
+                        'text-[length:var(--text-body-sm)] font-medium',
+                        on ? 'text-foreground' : 'text-foreground-secondary',
+                      )}
+                    >
+                      {org.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }

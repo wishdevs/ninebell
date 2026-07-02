@@ -10,6 +10,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_step import AgentStep
 from app.models.agent_template import AgentTemplate
 from app.models.base import Base
+from app.models.org_unit import AgentOrgAccess, OrgUnit
 from app.models.permission import Permission
 from app.models.role import Role
 from app.models.role_permission import RolePermission
@@ -28,4 +29,6 @@ __all__ = [
     "AgentIntervention",
     "AgentRun",
     "AgentTemplate",
+    "OrgUnit",
+    "AgentOrgAccess",
 ]
