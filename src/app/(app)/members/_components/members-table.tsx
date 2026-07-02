@@ -7,7 +7,9 @@ import { StatusPill } from '@/components/ui/status-pill';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select-dropdown';
@@ -20,7 +22,7 @@ import {
   type MemberStatus,
   type WorkspaceMember,
 } from '@/lib/data/members';
-import type { OrgUnit } from '@/lib/data/org-units';
+import { buildOrgUnitTree, type OrgUnit } from '@/lib/data/org-units';
 import { formatDate, formatRelativeKorean } from '@/lib/data/format';
 import { MemberRowActions } from './member-row-actions';
 import type { MemberCaps } from './members-client';
@@ -71,6 +73,8 @@ export function MembersTable({
 }: MembersTableProps) {
   const orgLabel = (id: string | null): string =>
     (id && orgUnits.find((o) => o.id === id)?.label) || '미지정';
+  // 조직구분 셀렉트는 본부▸팀 그룹으로 묶는다 — 멤버는 팀에만 배정 가능.
+  const orgTree = buildOrgUnitTree(orgUnits);
   if (members.length === 0) {
     return (
       <EmptyState
@@ -169,11 +173,18 @@ export function MembersTable({
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value={ORG_NONE}>미지정</SelectItem>
-                          {orgUnits.map((ou) => (
-                            <SelectItem key={ou.id} value={ou.id}>
-                              {ou.label}
-                            </SelectItem>
-                          ))}
+                          {orgTree.map(({ parent, children }) =>
+                            children.length === 0 ? null : (
+                              <SelectGroup key={parent.id}>
+                                <SelectLabel>{parent.label}</SelectLabel>
+                                {children.map((child) => (
+                                  <SelectItem key={child.id} value={child.id}>
+                                    {child.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            ),
+                          )}
                         </SelectContent>
                       </Select>
                     ) : (
