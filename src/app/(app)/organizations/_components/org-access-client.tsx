@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   RiAddLine,
   RiArrowDownSLine,
@@ -73,6 +73,8 @@ export function OrgAccessClient() {
         <TabsContent value="access">
           <AgentAccessTab
             orgUnits={orgs.data ?? []}
+            orgStatus={orgs.status}
+            orgError={orgs.error}
             accessStatus={access.status}
             accessError={access.error}
             accessData={access.data ?? []}
@@ -131,10 +133,11 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
     setBusy(true);
     try {
       await fn();
-      onOrgsChanged();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
+      // 성공/실패 모두 서버 상태로 재동기화(실패 시 stale 행 잔존 방지, 리뷰 #13).
+      onOrgsChanged();
       setBusy(false);
     }
   };
@@ -320,48 +323,83 @@ function IconBtn({
 // ── 에이전트 접근 탭 ─────────────────────────────────────────────────────────
 interface AgentAccessTabProps {
   orgUnits: OrgUnit[];
+  orgStatus: 'loading' | 'success' | 'error';
+  orgError: ApiError | null;
   accessStatus: 'loading' | 'success' | 'error';
   accessError: ApiError | null;
   accessData: AgentAccess[];
   onReload: () => void;
 }
 
+/** 토글 병합 디바운스(ms) — rapid 클릭을 최종 상태 1회 PATCH로 합친다. */
+const PERSIST_DEBOUNCE_MS = 400;
+
 function AgentAccessTab({
   orgUnits,
+  orgStatus,
+  orgError,
   accessStatus,
   accessError,
   accessData,
   onReload,
 }: AgentAccessTabProps) {
-  // 낙관적 로컬 미러(agentId → 선택된 org id 집합).
+  // 낙관적 로컬 미러(agentId → 선택된 org id 배열).
   const [local, setLocal] = useState<Record<string, string[]>>({});
   useEffect(() => {
     setLocal(Object.fromEntries(accessData.map((a) => [a.agentId, a.orgUnitIds])));
   }, [accessData]);
 
-  if (accessStatus === 'loading' || accessStatus === 'error') {
-    return <LoadState error={accessError} onReload={onReload} />;
+  // 에이전트별 디바운스 타이머 + 마지막 성공 스냅샷(실패 롤백용). 렌더와 무관하게 유지.
+  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const serverSnapshot = useRef<Record<string, string[]>>({});
+  useEffect(() => {
+    serverSnapshot.current = Object.fromEntries(accessData.map((a) => [a.agentId, a.orgUnitIds]));
+  }, [accessData]);
+  useEffect(() => {
+    const t = timers.current;
+    return () => {
+      Object.values(t).forEach(clearTimeout);
+    };
+  }, []);
+
+  // 조직구분·접근 리소스 둘 다 성공해야 안전하게 렌더/변경(리뷰 #2·#7: orgs 미로드 시 빈 payload 반영 방지).
+  if (orgStatus !== 'success' || accessStatus !== 'success') {
+    return <LoadState error={accessError ?? orgError} onReload={onReload} />;
   }
 
-  const persist = async (agentId: string, orgUnitIds: string[]) => {
-    try {
-      await api.patch(`/agent-access/${agentId}`, { orgUnitIds });
-    } catch (err) {
-      toast.error(errorMessage(err));
-      onReload(); // 실패 시 서버 상태로 롤백.
-    }
+  // 해당 에이전트만 최신 로컬 상태로 PATCH(디바운스). 실패 시 그 에이전트만 서버 스냅샷으로 롤백(리뷰 #1·#6·#8).
+  const schedulePersist = (agentId: string) => {
+    const existing = timers.current[agentId];
+    if (existing) clearTimeout(existing);
+    timers.current[agentId] = setTimeout(() => {
+      delete timers.current[agentId];
+      setLocal((cur) => {
+        const orgUnitIds = cur[agentId] ?? [];
+        api.patch(`/agent-access/${agentId}`, { orgUnitIds }).catch((err) => {
+          toast.error(errorMessage(err));
+          const snap = serverSnapshot.current[agentId] ?? [];
+          setLocal((p) => ({ ...p, [agentId]: snap })); // 그 에이전트만 롤백.
+        });
+        return cur; // setLocal 은 최신값 읽기용, 상태 변경 없음.
+      });
+    }, PERSIST_DEBOUNCE_MS);
   };
 
   const setSelection = (agentId: string, orgUnitIds: string[]) => {
     setLocal((prev) => ({ ...prev, [agentId]: orgUnitIds }));
-    void persist(agentId, orgUnitIds);
+    schedulePersist(agentId);
   };
 
   const toggle = (agentId: string, orgId: string) => {
-    const current = new Set(local[agentId] ?? []);
-    if (current.has(orgId)) current.delete(orgId);
-    else current.add(orgId);
-    setSelection(agentId, orgUnits.filter((o) => current.has(o.id)).map((o) => o.id));
+    // 최신 로컬 상태 기준으로 함수형 갱신(리뷰 #6: 클로저 stale 방지).
+    setLocal((prev) => {
+      const current = new Set(prev[agentId] ?? []);
+      if (current.has(orgId)) current.delete(orgId);
+      else current.add(orgId);
+      const next = orgUnits.filter((o) => current.has(o.id)).map((o) => o.id);
+      return { ...prev, [agentId]: next };
+    });
+    schedulePersist(agentId);
   };
 
   if (accessData.length === 0) {
@@ -437,7 +475,9 @@ function AgentAccessTab({
                       aria-hidden
                       className={cn(
                         'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
-                        on ? 'border-accent bg-accent text-white' : 'border-border-strong bg-surface',
+                        on
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-border-strong bg-surface',
                       )}
                     >
                       {on ? <RiCheckLine size={13} /> : null}

@@ -19,12 +19,25 @@ from app.models import (
     AgentIntervention,
     AgentLog,
     AgentStep,
+    OrgUnit,
     Permission,
     Role,
     RolePermission,
     User,
 )
 from app.services.agent_fixtures import AGENT_FIXTURES
+
+# 조직구분 기준 데이터 — alembic 0005 와 동일. create_all 부트스트랩/SQLite 테스트 경로에서도
+# 동일하게 존재하도록 여기서도 멱등 시드한다(리뷰 #5·#12: 마이그레이션에만 있으면 경로 불일치).
+_ORG_UNITS_SEED: tuple[tuple[str, str], ...] = (
+    ("exec", "임원실"),
+    ("mgmt", "경영본부"),
+    ("sales", "영업본부"),
+    ("china", "중국법인"),
+    ("fa-lab", "FA연구소"),
+    ("mfg", "제조본부"),
+    ("imp-lab", "IMP연구소"),
+)
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
 _LOCAL_ADMIN_USERID = "admin"
@@ -184,9 +197,19 @@ async def seed_local_admin(db: AsyncSession) -> None:
         await db.flush()
 
 
+async def seed_org_units(db: AsyncSession) -> None:
+    """조직구분 7종 멱등 시드(id 슬러그 기준, 이미 있으면 건너뜀)."""
+    existing = set((await db.execute(select(OrgUnit.id))).scalars())
+    for i, (slug, label) in enumerate(_ORG_UNITS_SEED):
+        if slug not in existing:
+            db.add(OrgUnit(id=slug, label=label, sort_order=i))
+    await db.flush()
+
+
 async def seed_all(db: AsyncSession) -> None:
     """전체 시드를 1개 트랜잭션 흐름으로 실행. 호출자가 commit 한다."""
     permissions = await seed_permissions(db)
     await seed_roles(db, permissions)
     await seed_local_admin(db)
     await seed_agents(db)
+    await seed_org_units(db)

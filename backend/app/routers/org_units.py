@@ -95,11 +95,20 @@ async def delete_org_unit(org_id: str, db: DbSession, _actor: RequireAdmin) -> R
 
 @router.post("/org-units/reorder")
 async def reorder_org_units(body: ReorderIn, db: DbSession, _actor: RequireAdmin) -> list[dict]:
-    rows = (await db.execute(select(OrgUnit))).scalars().all()
+    # 부분/stale orderedIds 여도 전체 순열을 재구성해 중복·간극 없는 sort_order 를 보장(리뷰 #3).
+    rows = (
+        (await db.execute(select(OrgUnit).order_by(OrgUnit.sort_order.asc()))).scalars().all()
+    )
     by_id = {o.id: o for o in rows}
-    for index, oid in enumerate(body.orderedIds):
-        if oid in by_id:
-            by_id[oid].sort_order = index
+    ordered: list[str] = []
+    for oid in body.orderedIds:  # 클라가 준 순서 중 실재하는 것만, 중복 제거.
+        if oid in by_id and oid not in ordered:
+            ordered.append(oid)
+    for o in rows:  # 목록에 빠진 나머지는 현재 순서대로 뒤에 붙인다.
+        if o.id not in ordered:
+            ordered.append(o.id)
+    for index, oid in enumerate(ordered):
+        by_id[oid].sort_order = index
     await db.commit()
     return await list_org_units(db, _actor)
 
@@ -142,6 +151,12 @@ async def set_agent_access(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
     valid_ids = set((await db.execute(select(OrgUnit.id))).scalars())
     requested = [oid for oid in dict.fromkeys(body.orgUnitIds) if oid in valid_ids]
+    # 비어있지 않은 요청인데 전부 무효 = 클라 목록이 오래됨 → 조용히 전체 해제하지 말고 거부(리뷰 #4).
+    if body.orgUnitIds and not requested:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="요청한 조직구분이 모두 유효하지 않습니다. 목록을 새로고침해 주세요.",
+        )
     await db.execute(delete(AgentOrgAccess).where(AgentOrgAccess.agent_id == agent_id))
     for oid in requested:
         db.add(AgentOrgAccess(agent_id=agent_id, org_unit_id=oid))
