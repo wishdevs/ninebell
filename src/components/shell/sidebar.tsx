@@ -17,6 +17,7 @@ import {
   RiShieldCheckLine,
   RiFileList3Line,
   RiOrganizationChart,
+  RiWallet3Line,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
@@ -40,6 +41,7 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   audit: RiShieldCheckLine,
   logging: RiFileList3Line,
   org: RiOrganizationChart,
+  budget: RiWallet3Line,
 };
 
 export function Sidebar() {

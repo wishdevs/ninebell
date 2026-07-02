@@ -20,7 +20,8 @@ export type NavIconKey =
   | 'design'
   | 'audit'
   | 'logging'
-  | 'org';
+  | 'org'
+  | 'budget';
 
 export interface NavItem {
   href: string;
@@ -51,6 +52,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
       // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+    ],
+  },
+  {
+    label: '관리',
+    items: [
+      // 개인 즐겨찾기/카탈로그 — 로그인한 모든 사용자에게 노출(게이트 없음).
+      { href: '/manage/budget-units', label: '예산단위 관리', icon: 'budget' },
+      { href: '/manage/projects', label: '프로젝트 관리', icon: 'projects' },
     ],
   },
   {
