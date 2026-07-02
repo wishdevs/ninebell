@@ -62,9 +62,14 @@ export interface LiveGridRow {
 }
 
 /** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
+/** 예산단위 보기 — 선택 단위는 (예산단위명 × 사업계획명 × 예산계정명) 조합 행.
+ * code 는 BG|BIZPLAN|BGACCT 복합키. */
 export interface BudgetUnitOption {
   code: string;
   name: string;
+  bizplanNm?: string;
+  bgacctNm?: string;
+  /** 과거 데이터 하위호환(미사용). */
   deptNm?: string;
 }
 
@@ -113,7 +118,8 @@ export interface LiveHitl {
 /** 그리드 개입 제출 한 행 — 비제외(skip=false) 행은 budgetUnit·note 필수, project 선택. */
 export interface GridRowSubmit {
   no: number;
-  budgetUnit: { code: string; name: string } | null;
+  /** 예산단위 조합 선택 — bizplanNm/bgacctNm 이 있으면 서버가 그 조합 행을 정확히 고른다. */
+  budgetUnit: { code: string; name: string; bizplanNm?: string; bgacctNm?: string } | null;
   project: { code: string; name: string } | null;
   note: string;
   skip: boolean;

@@ -29,6 +29,7 @@ import {
   startCatalogSync,
   type CatalogItem,
   type CatalogKind,
+  type CodeExtra,
   type Favorite,
   type SyncStatus,
 } from '@/lib/api/me-codes';
@@ -277,17 +278,7 @@ export function CodeCatalogManager({
                 <span className="text-foreground-tertiary w-5 text-center text-[11px] tabular-nums">
                   {i + 1}
                 </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
-                    {f.name}
-                  </p>
-                  <p className="text-foreground-tertiary truncate font-mono text-[11px]">
-                    {f.code}
-                    {f.extra?.deptNm ? (
-                      <span className="ml-1.5 font-sans">· {f.extra.deptNm}</span>
-                    ) : null}
-                  </p>
-                </div>
+                <CodeRowInfo kind={kind} name={f.name} code={f.code} extra={f.extra} />
                 <div className="flex items-center gap-0.5">
                   <IconBtn label="위로" onClick={() => void move(i, -1)} disabled={i === 0}>
                     <RiArrowUpSLine size={16} aria-hidden />
@@ -377,17 +368,7 @@ export function CodeCatalogManager({
               const fav = favByCode.has(item.code);
               return (
                 <li key={item.code} className="flex items-center gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
-                      {item.name}
-                    </p>
-                    <p className="text-foreground-tertiary truncate font-mono text-[11px]">
-                      {item.code}
-                      {item.extra?.deptNm ? (
-                        <span className="ml-1.5 font-sans">· {item.extra.deptNm}</span>
-                      ) : null}
-                    </p>
-                  </div>
+                  <CodeRowInfo kind={kind} name={item.name} code={item.code} extra={item.extra} />
                   <StarButton active={fav} disabled={busy} onClick={() => toggleFav(item)} />
                 </li>
               );
@@ -400,6 +381,50 @@ export function CodeCatalogManager({
         ) : null}
       </div>
     </SectionCard>
+  );
+}
+
+/** 코드 행 표시 — 선택에 필요한 정보를 전부 노출한다.
+ * 예산단위 = 조합 행(예산단위명·사업계획명·예산계정명 3필드), 프로젝트 = 이름·코드·거래처. */
+function CodeRowInfo({
+  kind,
+  name,
+  code,
+  extra,
+}: {
+  kind: CatalogKind;
+  name: string;
+  code: string;
+  extra: CodeExtra | null;
+}) {
+  if (kind === 'budget_unit') {
+    return (
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+          <span className="text-foreground-tertiary mr-1 text-[11px] font-normal">예산단위명</span>
+          {name}
+        </p>
+        <p className="text-foreground-secondary truncate text-[12px]">
+          <span className="text-foreground-tertiary mr-1 text-[11px]">사업계획명</span>
+          {extra?.bizplanNm || '-'}
+        </p>
+        <p className="text-foreground-secondary truncate text-[12px]">
+          <span className="text-foreground-tertiary mr-1 text-[11px]">예산계정명</span>
+          {extra?.bgacctNm || '-'}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="min-w-0 flex-1">
+      <p className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+        {name}
+      </p>
+      <p className="text-foreground-tertiary truncate font-mono text-[11px]">
+        {code}
+        {extra?.partnerNm ? <span className="ml-1.5 font-sans">· {extra.partnerNm}</span> : null}
+      </p>
+    </div>
   );
 }
 

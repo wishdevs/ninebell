@@ -190,38 +190,57 @@ async def _picker_search(page: Any, keyword: str) -> None:
 
 
 async def dump_budget_units(page: Any) -> list[dict]:
-    """예산단위(bg_cd) 코드피커 빈검색 전량 → 유니크 (BG_CD,BG_NM). 반환 [{code,name}].
+    """예산단위(bg_cd) 코드피커 빈검색 전량 — **조합 행 그대로**(디둡 없음).
 
-    목록은 **전사 예산단위**(이름이 곧 부서: 임원실·경영 본부·인사기획팀…)다. 그리드의 DEPT_NM
-    은 행별 소속이 아니라 로그인 사용자 부서가 전 행 반복이라 읽지 않는다(초기 구현 오해 정정).
-    중복행(BIZPLAN 조합만 다름)은 (BG_CD) 기준 최초 1건만 남긴다.
+    선택 단위는 BG명 단독이 아니라 (예산단위명 × 사업계획명 × 예산계정명) 조합 행이다
+    (사용자 정정 2026-07-02 — BG만 남기면 부서 리스트에 불과함). 반환
+    [{code(BG|BIZPLAN|BGACCT 복합), name(BG_NM), bizplanCd, bizplanNm, bgacctCd, bgacctNm}].
+    그리드의 DEPT_NM 은 행별 소속이 아니라 로그인 사용자 부서 반복이라 읽지 않는다.
     """
     if not await _open_picker(page, "bg_cd"):
         return []
     await _picker_search(page, "")
-    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["BG_CD", "BG_NM"], 0])
+    read = await page.evaluate(
+        js.PICKER_READ_MULTI_JS,
+        [["BG_CD", "BG_NM", "BIZPLAN_CD", "BIZPLAN_NM", "BGACCT_CD", "BGACCT_NM"], 0],
+    )
     await page.evaluate(js.PICKER_CLOSE_JS)
     await page.wait_for_timeout(400)
     seen: set[str] = set()
     out: list[dict] = []
     for o in read.get("options") or []:
-        code = o.get("BG_CD")
-        if not code or code in seen:
+        bg = o.get("BG_CD")
+        if not bg:
+            continue
+        code = f"{bg}|{o.get('BIZPLAN_CD') or ''}|{o.get('BGACCT_CD') or ''}"
+        if code in seen:
             continue
         seen.add(code)
-        out.append({"code": code, "name": o.get("BG_NM") or ""})
+        out.append(
+            {
+                "code": code,
+                "name": o.get("BG_NM") or "",
+                "bizplanCd": o.get("BIZPLAN_CD") or "",
+                "bizplanNm": o.get("BIZPLAN_NM") or "",
+                "bgacctCd": o.get("BGACCT_CD") or "",
+                "bgacctNm": o.get("BGACCT_NM") or "",
+            }
+        )
     return out
 
 
 async def dump_projects(page: Any, keyword: str | None) -> list[dict]:
-    """프로젝트(pjt_cd) 코드피커 검색(빈검색=초기 500행) → (PJT_NO) 유니크. 반환 [{code,name,useYn}].
+    """프로젝트(pjt_cd) 코드피커 검색(빈검색=초기 500행) → (PJT_NO) 유니크.
 
-    ⚠ 팝업 캡(500행). 전량 수집은 서비스에서 prefix sweep 으로 합집합한다.
+    반환 [{code,name,useYn,partnerNm}] — 파트너명은 목록에서 프로젝트를 고를 때 필요한
+    식별 정보(동명 프로젝트 구분). ⚠ 팝업 캡(500행) — 전량 수집은 prefix sweep 합집합.
     """
     if not await _open_picker(page, "pjt_cd"):
         return []
     await _picker_search(page, keyword or "")
-    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN"], 0])
+    read = await page.evaluate(
+        js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
+    )
     await page.evaluate(js.PICKER_CLOSE_JS)
     await page.wait_for_timeout(400)
     return _dedupe_projects(read.get("options") or [])
@@ -235,7 +254,14 @@ def _dedupe_projects(options: list[dict]) -> list[dict]:
         if not code or code in seen:
             continue
         seen.add(code)
-        out.append({"code": code, "name": o.get("PJT_NM") or "", "useYn": o.get("USE_YN") or ""})
+        out.append(
+            {
+                "code": code,
+                "name": o.get("PJT_NM") or "",
+                "useYn": o.get("USE_YN") or "",
+                "partnerNm": o.get("PARTNER_NM") or "",
+            }
+        )
     return out
 
 
@@ -256,7 +282,9 @@ async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict
     cap_hit: list[str] = []
     for kw in prefixes:
         await _picker_search(page, kw)
-        read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN"], 0])
+        read = await page.evaluate(
+            js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
+        )
         if read.get("rows") == PROJECT_PICKER_CAP:
             cap_hit.append(kw or "(빈검색)")
         for row in _dedupe_projects(read.get("options") or []):
@@ -264,6 +292,61 @@ async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict
     await page.evaluate(js.PICKER_CLOSE_JS)
     await page.wait_for_timeout(400)
     return list(by_code.values()), cap_hit
+
+
+# ── 예산단위 조합 선택(BG × 사업계획 × 예산계정 특정 행) ─────────────────────────────
+async def fill_budget_codepicker(page: Any, combo: dict) -> dict:
+    """예산단위 피커에서 (BG_NM, BIZPLAN_NM, BGACCT_NM) 조합이 정확히 일치하는 행을 선택.
+
+    combo = {name(BG_NM), bizplanNm, bgacctNm}. 선택 단위가 조합 행이므로(BG 동일해도
+    예산계정이 다르면 다른 선택) 이름 3개를 정규화 비교해 그 행 인덱스를 고른다.
+    bizplanNm/bgacctNm 이 비어 있으면 기존 fill_codepicker(BG명 매칭)로 폴백(하위호환).
+    반환 {ok, code, name} | {ok:False, reason}.
+    """
+    bg_nm = (combo.get("name") or "").strip()
+    bizplan = (combo.get("bizplanNm") or "").strip()
+    bgacct = (combo.get("bgacctNm") or "").strip()
+    if not (bizplan or bgacct):
+        return await fill_codepicker(page, "bg_cd", bg_nm, "BG_CD", "BG_NM")
+
+    if not await _open_picker(page, "bg_cd"):
+        return {"ok": False, "reason": "bg_cd 버튼 없음"}
+
+    async def _fail(reason: str) -> dict:
+        await page.evaluate(js.PICKER_CLOSE_JS)
+        await page.wait_for_timeout(400)
+        return {"ok": False, "reason": reason}
+
+    await _picker_search(page, bg_nm)
+    read = await page.evaluate(
+        js.PICKER_READ_MULTI_JS, [["BG_CD", "BG_NM", "BIZPLAN_NM", "BGACCT_NM"], 0]
+    )
+    opts = read.get("options") or []
+    matches = [
+        o
+        for o in opts
+        if _norm(o.get("BG_NM")) == _norm(bg_nm)
+        and _norm(o.get("BIZPLAN_NM")) == _norm(bizplan)
+        and _norm(o.get("BGACCT_NM")) == _norm(bgacct)
+    ]
+    if not matches:
+        return await _fail(
+            f"예산단위 조합 무매칭: {bg_nm} · {bizplan} · {bgacct} (후보 {len(opts)}건)"
+        )
+    chosen = matches[0]  # 완전 동일 조합 다건은 사실상 같은 선택.
+    sel = await page.evaluate(js.PICKER_SELECT_JS, chosen["i"])
+    if not sel.get("ok"):
+        return await _fail(f"예산단위 행 선택 실패: {sel}")
+    await page.wait_for_timeout(400)
+    apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
+    if apply_box:
+        await page.mouse.click(apply_box["x"], apply_box["y"])
+        await page.wait_for_timeout(1_000)
+    return {
+        "ok": True,
+        "code": chosen.get("BG_CD"),
+        "name": f"{chosen.get('BG_NM')} · {chosen.get('BIZPLAN_NM')} · {chosen.get('BGACCT_NM')}",
+    }
 
 
 # ── 카드 팝업 닫기(2패스 증빙유형 전환용) ─────────────────────────────────────────

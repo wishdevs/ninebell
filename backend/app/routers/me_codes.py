@@ -184,7 +184,9 @@ async def get_catalog(
     offset = max(0, offset)
 
     conds = [ErpCodeCatalog.kind == kind]
-    if q:
+    # 프로젝트는 SQL ILIKE(name/code/파트너는 별도), 예산단위는 조합 필드(사업계획·예산계정)
+    # 검색이 필요해 파이썬 필터(행 수천 건 이내라 충분).
+    if q and kind != "budget_unit":
         like = f"%{q}%"
         conds.append(or_(ErpCodeCatalog.name.ilike(like), ErpCodeCatalog.code.ilike(like)))
 
@@ -200,11 +202,23 @@ async def get_catalog(
         .all()
     )
 
-    # 예산단위 '내 부서' 필터 — 이름 정규화 매칭(행 수가 수십 건이라 파이썬 필터로 충분).
-    if kind == "budget_unit" and dept != "all":
-        match_dept = dept or user.department
-        if match_dept:
-            rows = [r for r in rows if dept_matches_budget_name(match_dept, r.name)]
+    if kind == "budget_unit":
+        # '내 부서' 필터 — 예산단위명 정규화 매칭.
+        if dept != "all":
+            match_dept = dept or user.department
+            if match_dept:
+                rows = [r for r in rows if dept_matches_budget_name(match_dept, r.name)]
+        # q — 예산단위명·사업계획명·예산계정명·코드 전체에서 부분 매칭.
+        if q:
+            ql = q.strip().lower()
+            rows = [
+                r
+                for r in rows
+                if ql in r.name.lower()
+                or ql in r.code.lower()
+                or ql in str((r.extra or {}).get("bizplanNm", "")).lower()
+                or ql in str((r.extra or {}).get("bgacctNm", "")).lower()
+            ]
 
     total = len(rows)
     page_rows = rows[offset : offset + limit]

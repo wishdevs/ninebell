@@ -20,10 +20,17 @@ import { api } from './client';
 /** 코드 종류 — 예산단위 / 프로젝트. */
 export type CatalogKind = 'budget_unit' | 'project';
 
-/** 부가 데이터 — 백엔드 JSON 객체(예산단위={deptNm}, 프로젝트={useYn}). */
+/** 부가 데이터 — 백엔드 JSON 객체.
+ * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),
+ * 프로젝트 = {useYn, partnerNm}. deptNm 은 과거 데이터 하위호환. */
 export interface CodeExtra {
   deptNm?: string;
   useYn?: string;
+  partnerNm?: string;
+  bizplanCd?: string;
+  bizplanNm?: string;
+  bgacctCd?: string;
+  bgacctNm?: string;
 }
 
 /** 자주쓰는(즐겨찾기) 한 항목. extra 는 부서명 등 부가 표시(예산단위=deptNm). */

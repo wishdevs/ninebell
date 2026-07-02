@@ -90,6 +90,9 @@ class TemplateCreate(BaseModel):
 class GridCodeRef(BaseModel):
     code: str = Field(max_length=64)
     name: str = Field(max_length=255)
+    # 예산단위 조합 선택(BG×사업계획×예산계정) — 반영 시 그 조합 행을 정확히 고르기 위한 값.
+    bizplanNm: str | None = Field(default=None, max_length=255)
+    bgacctNm: str | None = Field(default=None, max_length=255)
 
 
 class GridRowIn(BaseModel):

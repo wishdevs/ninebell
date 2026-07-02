@@ -70,7 +70,7 @@ function useFavorites(kind: CatalogKind) {
   const has = useCallback((code: string) => code in ids, [ids]);
 
   const toggle = useCallback(
-    async (code: string, name: string, deptNm?: string) => {
+    async (code: string, name: string, extra?: Record<string, string> | null) => {
       if (!code) return;
       if (code in ids) {
         const prevId = ids[code];
@@ -93,7 +93,7 @@ function useFavorites(kind: CatalogKind) {
       } else {
         setIds((p) => ({ ...p, [code]: '' }));
         try {
-          const fav = await addFavorite({ kind, code, name, extra: deptNm ? { deptNm } : null });
+          const fav = await addFavorite({ kind, code, name, extra: extra ?? null });
           setIds((p) => ({ ...p, [code]: fav.id }));
         } catch (err) {
           setIds((p) => {
@@ -217,7 +217,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
       return {
         no: r.no,
         budgetUnit: b
-          ? { code: b.code, name: b.name }
+          ? { code: b.code, name: b.name, bizplanNm: b.bizplanNm, bgacctNm: b.bgacctNm }
           : { code: e.budgetUnitCode, name: e.budgetUnitCode },
         project: e.projectCode ? { code: e.projectCode, name: e.projectName } : null,
         note: e.note.trim(),
@@ -328,7 +328,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                           void bFav.toggle(
                             e.budgetUnitCode,
                             o?.name ?? e.budgetUnitCode,
-                            o?.deptNm,
+                            o ? { bizplanNm: o.bizplanNm ?? '', bgacctNm: o.bgacctNm ?? '' } : null,
                           );
                         }}
                       />
@@ -534,8 +534,11 @@ function BudgetSelect({
   className?: string;
   onChange: (code: string) => void;
 }) {
+  // 선택 단위 = 조합 행 — 예산단위명·사업계획명·예산계정명을 모두 보여줘야 고를 수 있다.
   const label = (o: BudgetUnitOption) =>
-    o.deptNm ? `${o.name} · ${o.deptNm} (${o.code})` : `${o.name} (${o.code})`;
+    o.bgacctNm || o.bizplanNm
+      ? `${o.name} · ${o.bizplanNm || '-'} · ${o.bgacctNm || '-'}`
+      : `${o.name} (${o.code})`;
   return (
     <select
       value={value}

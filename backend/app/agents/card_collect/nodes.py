@@ -231,8 +231,16 @@ async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict
     budget_favs: list[dict] = []
     project_favs: list[dict] = []
     for f in rows:
+        extra = f.extra or {}
         if f.kind == "budget_unit":
-            budget_favs.append({"code": f.code, "name": f.name})
+            budget_favs.append(
+                {
+                    "code": f.code,
+                    "name": f.name,
+                    "bizplanNm": extra.get("bizplanNm", ""),
+                    "bgacctNm": extra.get("bgacctNm", ""),
+                }
+            )
         elif f.kind == "project":
             project_favs.append({"code": f.code, "name": f.name})
     return budget_favs, project_favs, department
@@ -482,6 +490,9 @@ async def _apply_batch(
         await emit_log(events, f"{label}행 반영 중…", "info")
         collected = {
             "예산단위": bu.get("name") or "",
+            # 조합 선택(BG×사업계획×예산계정) — 값이 있으면 그 행을 정확히 고른다.
+            "예산단위_사업계획": bu.get("bizplanNm") or "",
+            "예산단위_예산계정": bu.get("bgacctNm") or "",
             "계정": "",  # 계정은 예산단위로 자동 결정(비워 두면 자동 처리).
             "프로젝트": (proj.get("name") if proj else "") or "",
             "적요": note,
@@ -524,11 +535,22 @@ async def _apply_row_fields(
         # (계정은 값 없이도 예산단위 연동 자동축소를 태워야 하므로 건너뛰지 않는다.)
         if field == "프로젝트" and not (collected.get("프로젝트") or "").strip():
             continue
-        spec = FIELD_SPEC[field]
-        r = await steps.fill_codepicker(
-            page, spec["id"], collected[field], spec["code"], spec["name"],
-            allow_default=(field == "계정"),
-        )
+        if field == "예산단위":
+            # 선택 단위 = (BG × 사업계획 × 예산계정) 조합 행 — 그 행을 정확히 고른다.
+            r = await steps.fill_budget_codepicker(
+                page,
+                {
+                    "name": collected["예산단위"],
+                    "bizplanNm": collected.get("예산단위_사업계획", ""),
+                    "bgacctNm": collected.get("예산단위_예산계정", ""),
+                },
+            )
+        else:
+            spec = FIELD_SPEC[field]
+            r = await steps.fill_codepicker(
+                page, spec["id"], collected[field], spec["code"], spec["name"],
+                allow_default=(field == "계정"),
+            )
         if not r.get("ok"):
             return False, f"{field} '{collected[field]}': {r.get('reason')}"
         await emit_log(events, f"{field} = {r.get('name')} (code {r.get('code')})", "info")

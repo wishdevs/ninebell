@@ -101,9 +101,14 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
                 ErpCodeCatalog(
                     kind="budget_unit",
                     dept="",  # 전사 공용 — 부서 매칭은 조회 시 이름 정규화로.
-                    code=r["code"],
+                    code=r["code"],  # BG|BIZPLAN|BGACCT 복합(선택 단위 = 조합 행).
                     name=r["name"],
-                    extra=None,
+                    extra={
+                        "bizplanCd": r.get("bizplanCd") or "",
+                        "bizplanNm": r.get("bizplanNm") or "",
+                        "bgacctCd": r.get("bgacctCd") or "",
+                        "bgacctNm": r.get("bgacctNm") or "",
+                    },
                     synced_at=now,
                 )
             )
@@ -142,7 +147,7 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
                     dept="",
                     code=r["code"],
                     name=r["name"],
-                    extra={"useYn": r["useYn"]},
+                    extra={"useYn": r["useYn"], "partnerNm": r.get("partnerNm") or ""},
                     synced_at=now,
                 )
             )
