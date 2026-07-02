@@ -267,10 +267,13 @@ EVDN_APPLY_BOX_JS = """() => {
 }"""
 
 # 디테일 그리드 0행 증빙 셀 값 — '적용' 반영 판정(모달 닫힘 대신 셀 반영으로).
+# ⚠ OPEN_EVDN_EDITOR_JS 와 동일하게 '마지막 행'을 읽는다 — 증빙 선택·적용 대상 행과
+#   판정 행이 어긋나면(0행 고정이던 시절) 2패스에서 적용 성공을 실패로 오판한다.
 DETAIL_EVDN_CELL_JS = """() => {
   try {
-    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
-    const row = g.getDataSource().getJsonRows(0, 0)[0];
+    const ds = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid.getDataSource();
+    const idx = Math.max(0, ds.getRowCount() - 1);
+    const row = ds.getJsonRows(idx, idx)[0];
     return String((row && row.EVDN_TP_NM) || '');
   } catch (e) { return ''; }
 }"""
