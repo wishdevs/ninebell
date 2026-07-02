@@ -279,6 +279,10 @@ def _pick_project(o: dict) -> dict:
     }
 
 
+# 비용구분 → 예산계정 접두사. 팀의 비용구분이 이 접두사 계정을 우선하게 한다.
+_COST_PREFIX = {"판관비": "(판)", "제조원가": "(제)"}
+
+
 async def _prefill_selections(
     events: Any,
     settings: Any,
@@ -287,6 +291,7 @@ async def _prefill_selections(
     budget_favs: list[dict],
     mine_units: list[dict],
     project_favs: list[dict],
+    cost_prefix: str | None = None,
 ) -> dict[int, dict]:
     """행별 예산단위·프로젝트 프리셀렉트 — AI 추천이 확신하면 그 항목, 아니면 기본지정 폴백.
 
@@ -328,7 +333,17 @@ async def _prefill_selections(
 
     budget_by_code = {c["code"]: c for c in budget_candidates}
     project_by_code = {c["code"]: c for c in project_candidates}
-    default_budget = next((c for c in budget_favs if c.get("isDefault")), None)
+
+    # 기본 예산단위 폴백: 기본지정(isDefault) 우선, 단 비용구분 접두사가 있으면 접두사 일치를
+    # 더 우선한다(기본지정 없음 + 접두사 일치 후보가 있으면 그것으로 폴백).
+    def _prefix_ok(c: dict) -> bool:
+        return bool(cost_prefix) and (c.get("bgacctNm") or "").startswith(cost_prefix)
+
+    default_budget = (
+        next((c for c in budget_favs if c.get("isDefault") and _prefix_ok(c)), None)
+        or next((c for c in budget_favs if c.get("isDefault")), None)
+        or (next((c for c in budget_candidates if _prefix_ok(c)), None) if cost_prefix else None)
+    )
     default_project = next((c for c in project_favs if c.get("isDefault")), None)
 
     out: dict[int, dict] = {}
@@ -437,6 +452,18 @@ def make_collect_rows_node(timeout_s: int | None = None):
 
         # '내 부서' = 예산단위명 ↔ 소속부서 정규화 매칭('인사/기획팀' ↔ '인사기획팀').
         mine_units = [u for u in all_units if dept_matches_budget_name(department, u["name"])]
+        # 소속 팀 비용구분(판관비→'(판)' / 제조원가→'(제)') 이 있으면 그 접두사 계정을 우선한다
+        # (내 부서 목록·AI 후보·기본 폴백 순서에 반영). 없으면 기존 순서 유지.
+        cost_type = (state.get("params") or {}).get("cost_type")
+        cost_prefix = _COST_PREFIX.get(cost_type or "")
+        if cost_prefix:
+            await emit_log(
+                events, f"소속 팀 비용구분 '{cost_type}' → 예산계정 '{cost_prefix}' 우선 선택.", "info"
+            )
+            mine_units = sorted(
+                mine_units,
+                key=lambda u: 0 if (u.get("bgacctNm") or "").startswith(cost_prefix) else 1,
+            )
         # 그리드 선택지는 자주쓰는 + 내 부서만(사용자 확정 — 전사 전체는 과다·캡 잘림으로 무의미).
         # 전량 덤프(all_units)는 내 부서 매칭·AI 추천 후보용으로만 쓴다.
         budget_units = {
@@ -460,7 +487,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 "info",
             )
         preselect = await _prefill_selections(
-            events, settings, rows_list, recs, budget_favs, mine_units, project_favs
+            events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
+            cost_prefix=cost_prefix,
         )
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note

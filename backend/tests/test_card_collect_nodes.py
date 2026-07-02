@@ -553,3 +553,24 @@ def test_graph_state_declares_all_node_output_keys():
     declared = set(CardCollectState.__annotations__)
     missing = node_output_keys - declared
     assert not missing, f"CardCollectState 미선언 키(그래프 전달 누락됨): {missing}"
+
+
+async def test_prefill_cost_prefix_biases_default_budget():
+    """비용구분 접두사가 있으면 기본지정이 없어도 접두사 일치 예산단위로 폴백한다."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    events: asyncio.Queue = asyncio.Queue()
+    settings = SimpleNamespace(gemini_api_key="")  # AI 스킵 → 기본 폴백 경로.
+    rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
+    # isDefault 없음. (판)/(제) 두 후보 — cost_prefix='(제)' 면 제조원가 계정이 폴백돼야 한다.
+    budget_favs = [
+        {"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
+        {"code": "M1", "name": "인사기획팀", "bgacctNm": "(제)복리후생비"},
+    ]
+    out = await _prefill_selections(
+        events, settings, rows_list, {0: "적요"}, budget_favs, [], [], cost_prefix="(제)"
+    )
+    assert out[1]["budgetSource"] == "default"
+    assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
