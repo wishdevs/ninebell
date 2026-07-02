@@ -50,12 +50,18 @@ class CardCollectState(TypedDict, total=False):
     rows_list: list[dict]
     filled: int
     # 부가세구분 2패스 — 1차 그리드 입력 중 불공 대기분(입력값+복합키)과 2차 산출물.
+    # ⚠ 노드가 반환하는 키는 여기 선언돼야 다음 노드로 전달된다(미선언 키는 LangGraph 가
+    #   조용히 누락 — 실전 런 '적용할 행이 없습니다' 원인).
     pending_nontax: list[dict]
+    pass1_applied_idx: list[int]  # 1차 반영 성공 행 인덱스(카드팝업 '적용' 체크 대상)
+    pass1_saved: bool  # 1차 F7 실행됨 → 2차는 F3(새 행)부터
     save_cancelled: bool
     rows2_list: list[dict]
     pass2_work: list[dict]
     pass2_unmatched: int
+    pass2_unmatched_desc: str
     pass2_filled: int
+    pass2_applied_idx: list[int]
     result: str | dict
     error: str
 

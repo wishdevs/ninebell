@@ -473,3 +473,22 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     # 2행뿐이므로 앞선 2건이 서로 다른 idx(0,1)를 소비, 3번째는 매칭 실패.
     assert [w["idx"] for w in out["pass2_work"]] == [0, 1]
     assert out["pass2_unmatched"] == 1
+
+
+def test_graph_state_declares_all_node_output_keys():
+    """노드 반환 키가 CardCollectState 에 선언돼야 다음 노드로 전달된다(미선언=조용한 누락).
+
+    실전 런 회귀: pass1_applied_idx 미선언 → save 노드에서 '적용할 행이 없습니다' 실패.
+    새 반환 키를 추가하면 이 목록과 TypedDict 둘 다 갱신할 것.
+    """
+    from app.agents.card_collect.graph import CardCollectState
+
+    node_output_keys = {
+        "period", "rows_list", "filled", "pending_nontax", "pass1_applied_idx",
+        "pass1_saved", "save_cancelled", "rows2_list", "pass2_work",
+        "pass2_unmatched", "pass2_unmatched_desc", "pass2_filled", "pass2_applied_idx",
+        "result", "error",
+    }
+    declared = set(CardCollectState.__annotations__)
+    missing = node_output_keys - declared
+    assert not missing, f"CardCollectState 미선언 키(그래프 전달 누락됨): {missing}"
