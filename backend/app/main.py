@@ -13,18 +13,20 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright
 
 import app.agents  # noqa: F401 — import 시 실 워크플로우(expense-card-chat)를 registry 에 등록
 from app.config import get_settings
+from app.core.assistant_ratelimit import AssistantRateLimiter
 from app.core.ratelimit import LoginRateLimiter
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, auth, logs, org_units, runs, users
+from app.routers import agents, assistant, auth, logs, org_units, runs, users
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -46,6 +48,10 @@ def create_app() -> FastAPI:
         async with get_sessionmaker()() as session:
             await seed_all(session)
             await session.commit()
+
+        # --- 공용 httpx 클라이언트(AI 어시스턴트 Gemini 스트리밍) ---
+        # read=None: SSE 스트림이 장시간 idle 이어도 읽기 타임아웃으로 끊기지 않게 한다.
+        app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
 
         # --- 더존 헤드리스 브라우저 + 동시 로그인 상한 ---
         pw = await async_playwright().start()
@@ -91,6 +97,7 @@ def create_app() -> FastAPI:
             cred_reaper.cancel()
             signup_reaper.cancel()
             await close_all_sessions()  # 살아있는 라이브 세션의 브라우저까지 정리
+            await app.state.http.aclose()
             try:
                 await app.state.erp_browser.close()
             finally:
@@ -98,6 +105,8 @@ def create_app() -> FastAPI:
                 await dispose_engine()
 
     app = FastAPI(title="더존 옴니솔 대시보드 API", lifespan=lifespan)
+    # 동기·순수 인메모리라 lifespan 을 타지 않는 컨텍스트(테스트 등)에서도 필요 — 즉시 생성.
+    app.state.assistant_limiter = AssistantRateLimiter()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list(),
@@ -112,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(org_units.router)
     app.include_router(logs.router)
     app.include_router(runs.router)
+    app.include_router(assistant.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:

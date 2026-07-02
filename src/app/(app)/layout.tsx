@@ -1,4 +1,5 @@
 import { DashboardShell } from '@/components/shell/dashboard-shell';
+import { ChatLauncher } from '@/components/assistant/chat-launcher';
 import { UserProvider } from './providers/user-provider';
 
 /**
@@ -12,6 +13,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <UserProvider>
       <DashboardShell>{children}</DashboardShell>
+      <ChatLauncher />
     </UserProvider>
   );
 }

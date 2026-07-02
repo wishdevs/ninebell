@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   RiBarChartBoxLine,
   RiRobot2Line,
+  RiSparkling2Line,
   RiBriefcaseLine,
   RiFolderLine,
   RiHome5Line,
@@ -29,6 +30,7 @@ import { SidebarUserCard } from './sidebar-user-card';
 const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   home: RiHome5Line,
   agents: RiRobot2Line,
+  assistant: RiSparkling2Line,
   works: RiBriefcaseLine,
   analytics: RiBarChartBoxLine,
   projects: RiFolderLine,

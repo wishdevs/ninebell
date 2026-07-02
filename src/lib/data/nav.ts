@@ -11,6 +11,7 @@ import type { PermissionCode, Role } from '@/lib/auth/permissions';
 export type NavIconKey =
   | 'home'
   | 'agents'
+  | 'assistant'
   | 'works'
   | 'analytics'
   | 'projects'
@@ -46,7 +47,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
   {
     label: 'Workspace',
-    items: [{ href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' }],
+    items: [
+      { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
+      // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
+      { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+    ],
   },
   {
     label: '운영',
