@@ -78,10 +78,13 @@ READ_ROWS_JS = f"""(limit) => {{
     const n = g.getDataSource().getRowCount();
     const v = (i,f) => {{ try {{ const x=g.getValue(i,f); if(x==null) return null;
       if (x instanceof Date) return x.toISOString().slice(0,10); return String(x); }} catch(e) {{ return null; }} }};
+    // 부가세구분(VAT_TP)은 원시값이 코드('1')라 화면 라벨('과세' 등)로 읽는다(display value).
+    const dv = (i,f) => {{ try {{ const o = g.getDisplayValuesOfRow(i);
+      return o && o[f] != null ? String(o[f]) : v(i,f); }} catch(e) {{ return v(i,f); }} }};
     const out = [];
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({{
       i, TRAN_DT:v(i,'TRAN_DT'), TRAN_NM:v(i,'TRAN_NM'), TRAN_AMT:v(i,'TRAN_AMT'),
-      SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'),
+      SPPRC_AMT:v(i,'SPPRC_AMT'), VAT_AMT:v(i,'VAT_AMT'), VAT_TP:dv(i,'VAT_TP'),
       FINPRODUCT_NM:v(i,'FINPRODUCT_NM'), NOTE_DC:v(i,'NOTE_DC') }});
     return {{ rows:n, list: out }};
   }} catch(e) {{ return {{ rows:-1, err:String(e).slice(0,80) }}; }}

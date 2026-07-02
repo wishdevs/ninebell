@@ -141,19 +141,19 @@ def make_query_node():
             await emit_step(events, "query", "failed")
             return {"error": "조회에 실패했습니다(그리드 로딩 실패)."}
         lst = await steps.read_rows(page, limit=500)
-        # 리스트 표 보고(승인일/가맹점명/승인액/부가세).
+        # 리스트 표 보고(승인일/가맹점명/승인액/부가세구분).
         columns = [
             {"key": "d", "header": "승인일"},
             {"key": "m", "header": "가맹점명"},
             {"key": "a", "header": "승인액", "align": "right"},
-            {"key": "v", "header": "부가세", "align": "right"},
+            {"key": "v", "header": "부가세구분"},
         ]
         table_rows = [
             {
                 "d": r.get("TRAN_DT") or "",
                 "m": r.get("TRAN_NM") or "",
                 "a": _fmt_won(r.get("TRAN_AMT")),
-                "v": _fmt_won(r.get("VAT_AMT")),
+                "v": r.get("VAT_TP") or "-",
             }
             for r in lst
         ]
@@ -173,14 +173,14 @@ def _md_cell(v: object) -> str:
 
 
 def _full_table(rows: list[dict], recs: dict[int, str]) -> str:
-    """전체 승인내역 마크다운 표(# · 승인일 · 가맹점명 · 승인액 · 부가세 · 추천 적요)."""
-    head = "| # | 승인일 | 가맹점명 | 승인액 | 부가세 | 추천 적요 |\n|---:|---|---|---:|---:|---|"
+    """전체 승인내역 마크다운 표(# · 승인일 · 가맹점명 · 승인액 · 부가세구분 · 추천 적요)."""
+    head = "| # | 승인일 | 가맹점명 | 승인액 | 부가세구분 | 추천 적요 |\n|---:|---|---|---:|---|---|"
     lines = [head]
     for r in rows:
         i = r.get("i", 0)
         lines.append(
             f"| {i + 1} | {_md_cell(r.get('TRAN_DT'))} | {_md_cell(r.get('TRAN_NM'))} "
-            f"| {_md_cell(_fmt_won(r.get('TRAN_AMT')))} | {_md_cell(_fmt_won(r.get('VAT_AMT')))} "
+            f"| {_md_cell(_fmt_won(r.get('TRAN_AMT')))} | {_md_cell(r.get('VAT_TP') or '-')} "
             f"| {_md_cell(recs.get(i, ''))} |"
         )
     return "\n".join(lines)
@@ -206,7 +206,7 @@ def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str
 # 행별 현재 상태(날짜·가맹점·상태·적요)는 시스템 프롬프트가 아니라 매 호출 "컨텍스트 데이터"로
 # 넘긴다(gemini_chat_decide 의 context 인자) — 매 턴 바뀌는 값을 정적 프롬프트에 넣지 않는다.
 _CC_SYSTEM = """당신은 더존 ERP 법인카드 승인내역을 정리하는 대화형 에이전트입니다.
-사용자에게 이미 전체 승인내역 표(#·승인일·가맹점명·승인액·부가세·추천 적요)를 보여줬습니다.
+사용자에게 이미 전체 승인내역 표(#·승인일·가맹점명·승인액·부가세구분·추천 적요)를 보여줬습니다.
 사용자가 자연어로 특정 행(들)에 처리 지시를 내리면, 함께 전달되는 컨텍스트 데이터(행별 현재
 상태)를 참고해 도구를 호출하세요.
 
@@ -275,7 +275,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                         "date": r.get("TRAN_DT"),
                         "merchant": r.get("TRAN_NM"),
                         "amount": _fmt_won(r.get("TRAN_AMT")),
-                        "vat": _fmt_won(r.get("VAT_AMT")),
+                        "vatType": r.get("VAT_TP"),
                         "status": status[r.get("i", idx)],
                         "note": notes[r.get("i", idx)],
                     }

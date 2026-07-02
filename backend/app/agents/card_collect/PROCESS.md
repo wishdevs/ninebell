@@ -87,7 +87,10 @@
 12. **리스트 읽기 → 채팅 보고**   검증: ✅
     - 그리드 `.dews-ui-grid` dewsControl `_grid`. 컬럼(field): **승인일=`TRAN_DT`,
       가맹점명=`TRAN_NM`, 승인액=`TRAN_AMT`**, 카드명=`FINPRODUCT_NM`, 카드번호=`FINPRODUCT_NO`,
-      공급가액=`SPPRC_AMT`, 세액=`VAT_AMT`, 합계=`SUM_AMT`, 적요=`NOTE_DC`.
+      공급가액=`SPPRC_AMT`, 세액=`VAT_AMT`, 합계=`SUM_AMT`, 적요=`NOTE_DC`,
+      **부가세구분=`VAT_TP`**(원시값 코드 '1' 등 → `getDisplayValuesOfRow(i).VAT_TP`로 라벨
+      '과세' 등 획득, 2026-07-02 프로브 실측. 그 외 관리부서=`DEPT_NM`·승인번호=`APRVL_NO`·
+      결의번호=`ABDOCU_NO`·카드승인여부=`APRVL_YN` 등 visible 컬럼 존재).
     - `getValue(row, field)` 로 행별 읽기(날짜는 JS Date → `.toISOString().slice(0,10)`).
 13. **각 승인건 입력 필드**(예산단위·계정·프로젝트·적요)   검증: ✅ (일괄적용 모델)
     - 하단 **코드피커 폼**에 값 세팅 → 그리드에서 대상 행 체크 → **'일괄적용'** 클릭 → 체크행에 일괄 반영.
