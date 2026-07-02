@@ -32,7 +32,7 @@ export type ChatRole = 'user' | 'assistant' | 'system';
  * 알 수 없는 종류가 와도 무너지지 않도록 문자열 유니온으로 열어 둔다.
  */
 export type LiveHitlKind =
-  'confirm' | 'select' | 'multiselect' | 'input' | 'search' | 'chat' | (string & {});
+  'confirm' | 'select' | 'multiselect' | 'input' | 'search' | 'chat' | 'grid' | (string & {});
 
 // ── 서브 페이로드 ────────────────────────────────────────────────────
 
@@ -41,6 +41,52 @@ export interface LiveHitlOption {
   label: string;
   description?: string;
   recommended?: boolean;
+}
+
+/**
+ * 그리드 개입(kind=grid) 한 행 — 카드 거래내역. 표시 컬럼은 읽기 전용이며,
+ * 사용자는 행마다 예산단위·프로젝트·적요를 채운다. no 는 행 식별자(제출 시 키).
+ * 백엔드 진화 중 컬럼이 빠질 수 있어 표시 필드는 모두 옵셔널로 둔다.
+ */
+export interface LiveGridRow {
+  no: number;
+  card?: string;
+  merchant?: string;
+  amount?: string;
+  date?: string;
+  time?: string;
+  approved?: string;
+  vatType?: string;
+  /** 적요 기본값(입력 프리필). */
+  note?: string;
+}
+
+/** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
+export interface BudgetUnitOption {
+  code: string;
+  name: string;
+  deptNm?: string;
+}
+
+/** 프로젝트 보기 한 항목(자주쓰는/검색결과 공용). */
+export interface ProjectOption {
+  code: string;
+  name: string;
+}
+
+/** 그리드 개입의 예산단위 보기 — 자주쓰는(먼저) + 전체(부서). */
+export interface HitlBudgetUnits {
+  favorites?: BudgetUnitOption[];
+  all?: BudgetUnitOption[];
+}
+
+/** 그리드 개입의 프로젝트 보기 — 자주쓰는 + ERP 검색 결과(질의 후 채워짐). */
+export interface HitlProjects {
+  favorites?: ProjectOption[];
+  /** ERP 검색 응답. 검색 전이면 null. */
+  searchResults?: ProjectOption[] | null;
+  /** 직전 검색어(검색 전이면 null). */
+  query?: string | null;
 }
 
 export interface LiveHitl {
@@ -54,6 +100,21 @@ export interface LiveHitl {
   textLabel?: string;
   /** kind=search 일 때 검색창 placeholder. */
   searchPlaceholder?: string;
+  /** kind=grid — 채워야 할 거래내역 행(없으면 빈 그리드). */
+  rows?: LiveGridRow[];
+  /** kind=grid — 예산단위 보기(자주쓰는/전체). */
+  budgetUnits?: HitlBudgetUnits;
+  /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). */
+  projects?: HitlProjects;
+}
+
+/** 그리드 개입 제출 한 행 — 비제외(skip=false) 행은 budgetUnit·note 필수, project 선택. */
+export interface GridRowSubmit {
+  no: number;
+  budgetUnit: { code: string; name: string } | null;
+  project: { code: string; name: string } | null;
+  note: string;
+  skip: boolean;
 }
 
 /** SSE chat 프레임(백엔드 emit_chat) — 화면 표시용 ChatMessage 로 변환된다. */
@@ -107,6 +168,8 @@ export interface HitlPayload {
   query?: string;
   message?: string;
   done?: boolean;
+  /** kind=grid 일괄 제출 — 행별 예산단위·프로젝트·적요·제외. */
+  rows?: GridRowSubmit[];
 }
 
 // ── UI 상태 ──────────────────────────────────────────────────────────
@@ -171,6 +234,10 @@ export interface LiveRunActions {
   sendChat: (decisionId: string, text: string) => Promise<boolean>;
   /** 대화형 HITL 종료 — done 신호(BE 가 마무리 → result). */
   finishChat: (decisionId: string) => Promise<boolean>;
+  /** 그리드 개입 — 프로젝트 ERP 검색 질의(BE 가 searchResults 를 채운 새 hitl 프레임을 보냄). */
+  sendQuery: (decisionId: string, query: string) => Promise<boolean>;
+  /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). */
+  sendRows: (decisionId: string, rows: GridRowSubmit[]) => Promise<boolean>;
 }
 
 export type UseLiveRunReturn = LiveRunState & LiveRunActions;

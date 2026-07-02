@@ -17,6 +17,7 @@ import { API_BASE } from '@/lib/api/client';
 import { cancelRun } from './runs-api';
 import type {
   ChatMessage,
+  GridRowSubmit,
   HitlPayload,
   LiveFrame,
   LiveLogLine,
@@ -396,5 +397,18 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
     [],
   );
 
-  return { ...state, sendHitl, sendChat, finishChat };
+  // 그리드 개입 — 채팅 말풍선 없이 postHitl 만 감싼다(응답은 새 hitl/stream 프레임으로 온다).
+  const sendQuery = useCallback(
+    (decisionId: string, query: string): Promise<boolean> =>
+      postHitl(runIdRef.current, decisionId, { query: query.trim() }),
+    [],
+  );
+
+  const sendRows = useCallback(
+    (decisionId: string, rows: GridRowSubmit[]): Promise<boolean> =>
+      postHitl(runIdRef.current, decisionId, { rows }),
+    [],
+  );
+
+  return { ...state, sendHitl, sendChat, finishChat, sendQuery, sendRows };
 }

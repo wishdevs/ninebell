@@ -10,6 +10,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { useCurrentUser, useSetCurrentUser } from '@/app/(app)/providers/user-provider';
 import { errorMessage, updateMe } from '@/lib/api/client';
 import { MEMBER_ROLE_LABEL } from '@/lib/data/members';
+import { CodeCatalogManager } from './code-catalog-manager';
 
 /**
  * 계정 설정 폼 — 본인의 이름·부서·이메일을 수정한다(`PATCH /auth/me`).
@@ -112,6 +113,22 @@ export function AccountClient() {
           </Button>
         </div>
       </SectionCard>
+
+      <CodeCatalogManager
+        kind="budget_unit"
+        caption="코드"
+        title="예산단위 관리"
+        description="자주쓰는 예산단위를 관리하고, ERP에서 예산단위 목록을 동기화합니다. 기본은 내 부서 기준입니다."
+        supportsDept
+      />
+
+      <CodeCatalogManager
+        kind="project"
+        caption="코드"
+        title="프로젝트 관리"
+        description="자주쓰는 프로젝트를 관리하고, ERP에서 프로젝트 목록을 동기화합니다. 이름·코드로 검색할 수 있습니다."
+        supportsSearch
+      />
     </div>
   );
 }

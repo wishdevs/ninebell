@@ -5,6 +5,7 @@ import { RiCheckLine, RiCloseLine, RiErrorWarningLine, RiLoader4Line } from '@re
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
+import { LiveGridCard } from '@/components/live/LiveGridCard';
 import type {
   LiveLogLevel,
   LiveLogLine,
@@ -84,6 +85,12 @@ export function LiveSidePanel({ run, resultAction, runsPanel, workflowId }: Live
                 messages={run.chat}
                 onSend={(text) => run.sendChat(run.hitl!.id, text)}
                 onComplete={() => run.finishChat(run.hitl!.id)}
+              />
+            ) : run.hitl.kind === 'grid' ? (
+              <LiveGridCard
+                hitl={run.hitl}
+                onQuery={(query) => run.sendQuery(run.hitl!.id, query)}
+                onSubmit={(rows) => run.sendRows(run.hitl!.id, rows)}
               />
             ) : (
               <LiveChoiceCard
