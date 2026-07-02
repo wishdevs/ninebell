@@ -581,6 +581,20 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     status[idx] = "wait2"
                     notes[idx] = entry["note"]
 
+            # 행 분류 전문 로깅 — 승인취소(음수) 행이 어느 패스로 갔는지 사후 진단용.
+            def _row_desc(e: dict, tag: str) -> str:
+                src2 = rows_list[e["idx"]]
+                return (
+                    f"{e['label']}행 {(src2.get('TRAN_NM') or '?')[:10]} {src2.get('TRAN_AMT', '?')}"
+                    f"(승인 {src2.get('APRVL_NO', '?')}·'{src2.get('VAT_TP', '')}'→{tag})"
+                )
+
+            split_desc = ", ".join(
+                [_row_desc(e, "과세") for e in taxable_work]
+                + [_row_desc(e, "불공") for e in pending_nontax]
+            )
+            await emit_log(events, f"부가세구분 분류: {split_desc}", "info")
+
             filled, failures, applied_idx = await _apply_batch(
                 page, events, rows_list, taxable_work, status, notes, chat_id="cc-status"
             )
@@ -852,6 +866,22 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": "2차 조회에 실패했습니다(그리드 로딩 실패)."}
         lst2 = await steps.read_rows(page, limit=500)
+        # 2차 조회 리스트 전문 로깅 — 1차에서 적용된 행이 '처리여부' 전환 실패로 재출현하는
+        # 이상 징후(실전 관찰: 불공 리스트 2건) 진단용. 승인번호·금액·부가세구분을 남긴다.
+        summary2 = ", ".join(
+            f"{(r.get('TRAN_NM') or '?')[:10]} {r.get('TRAN_AMT', '?')}"
+            f"(승인 {r.get('APRVL_NO', '?')}·부가세구분 '{r.get('VAT_TP', '')}')"
+            for r in lst2[:8]
+        )
+        await emit_log(events, f"2차(불공) 조회 {len(lst2)}건: {summary2}", "info")
+        expected2 = len(pending)
+        if len(lst2) > expected2:
+            await emit_log(
+                events,
+                f"⚠ 2차 조회가 예상({expected2}건)보다 많음 — 1차 적용 행 중 처리 전환 안 된 행이 "
+                "재출현했을 수 있음(승인취소 행 여부 확인 필요).",
+                "warn",
+            )
 
         # 키당 후보 큐 — 동일 복합키(같은 승인번호·일자·금액) 행이 여러 건이어도 각 pending 이
         # 서로 다른 실제 행을 1:1 소비한다. setdefault(단일 보관)면 두 입력이 같은 행에 이중
