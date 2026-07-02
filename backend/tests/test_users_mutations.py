@@ -21,12 +21,15 @@ async def test_patch_sets_and_clears_org_unit(client, make_user, auth_as):
     target = await make_user("t-target", "user")
     admin = await make_user("u-adm", "admin")
     auth_as(admin)
-    # 유효 org 지정.
-    r = await client.patch(f"/users/{target}", json={"orgUnitId": "sales"})
-    assert r.status_code == 200 and r.json()["orgUnitId"] == "sales"
+    # 유효 org 지정 — 멤버는 팀(leaf)에만 배정 가능.
+    r = await client.patch(f"/users/{target}", json={"orgUnitId": "hq_sales__t0"})
+    assert r.status_code == 200 and r.json()["orgUnitId"] == "hq_sales__t0"
     # null 로 해제.
     r2 = await client.patch(f"/users/{target}", json={"orgUnitId": None})
     assert r2.status_code == 200 and r2.json()["orgUnitId"] is None
+    # 본부(비-leaf)에는 배정 불가 → 400.
+    r3 = await client.patch(f"/users/{target}", json={"orgUnitId": "hq_sales"})
+    assert r3.status_code == 400
 
 
 async def test_patch_unknown_org_unit_400(client, make_user, auth_as):

@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, select
 from app.core.deps import DbSession, require_role_min
 from app.core.permissions import ROLE_ADMIN, role_rank
 from app.models import Agent, AgentOrgAccess, OrgUnit, User
+from app.models.org_unit import COST_TYPES
 
 router = APIRouter(tags=["org-units"])
 
@@ -31,13 +32,17 @@ ORG_NONE_SENTINEL = "__none__"
 # ── 스키마 ────────────────────────────────────────────────────────────────────
 class OrgUnitCreate(BaseModel):
     label: str = Field(min_length=1, max_length=120)
+    parentId: str | None = None  # 지정 시 팀(하위), 없으면 본부(상위).
+    costType: str | None = None  # 팀에만 의미(판관비/제조원가).
 
 
 class OrgUnitUpdate(BaseModel):
-    label: str = Field(min_length=1, max_length=120)
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    costType: str | None = None  # 팀 비용구분 변경.
 
 
 class ReorderIn(BaseModel):
+    parentId: str | None = None  # 이 본부의 팀들을 재정렬. None 이면 본부들 재정렬.
     orderedIds: list[str]
 
 
@@ -46,7 +51,21 @@ class AgentAccessSetIn(BaseModel):
 
 
 def _org_dict(o: OrgUnit) -> dict:
-    return {"id": o.id, "label": o.label, "sortOrder": o.sort_order}
+    return {
+        "id": o.id,
+        "label": o.label,
+        "parentId": o.parent_id,
+        "costType": o.cost_type,
+        "sortOrder": o.sort_order,
+    }
+
+
+def _validate_cost_type(cost: str | None) -> None:
+    if cost is not None and cost not in COST_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"비용구분은 {'/'.join(COST_TYPES)} 중 하나여야 합니다.",
+        )
 
 
 # ── 조직구분 CRUD ─────────────────────────────────────────────────────────────
@@ -65,8 +84,35 @@ async def create_org_unit(body: OrgUnitCreate, db: DbSession, _actor: RequireAdm
     label = body.label.strip()
     if not label:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="이름을 입력하세요.")
-    max_order = (await db.execute(select(func.max(OrgUnit.sort_order)))).scalar()
-    org = OrgUnit(id=f"ou-{uuid.uuid4().hex[:10]}", label=label, sort_order=(max_order or 0) + 1)
+    _validate_cost_type(body.costType)
+    parent_id = body.parentId
+    cost_type = None
+    if parent_id is not None:
+        parent = await db.get(OrgUnit, parent_id)
+        if parent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="상위 본부를 찾을 수 없습니다.")
+        if parent.parent_id is not None:
+            # 2뎁스 고정 — 팀 아래에 다시 하위를 만들 수 없다.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="팀 아래에는 하위 조직을 만들 수 없습니다(본부→팀 2단계).",
+            )
+        cost_type = body.costType  # 팀에만 비용구분.
+    # 형제(같은 parent) 범위 내 최대 sort_order + 1.
+    max_order = (
+        await db.execute(
+            select(func.max(OrgUnit.sort_order)).where(OrgUnit.parent_id.is_(parent_id))
+            if parent_id is None
+            else select(func.max(OrgUnit.sort_order)).where(OrgUnit.parent_id == parent_id)
+        )
+    ).scalar()
+    org = OrgUnit(
+        id=f"ou-{uuid.uuid4().hex[:10]}",
+        label=label,
+        parent_id=parent_id,
+        cost_type=cost_type,
+        sort_order=(max_order or 0) + 1,
+    )
     db.add(org)
     await db.commit()
     return _org_dict(org)
@@ -79,10 +125,19 @@ async def update_org_unit(
     org = await db.get(OrgUnit, org_id)
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="조직구분을 찾을 수 없습니다.")
-    label = body.label.strip()
-    if not label:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="이름을 입력하세요.")
-    org.label = label
+    if body.label is not None:
+        label = body.label.strip()
+        if not label:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="이름을 입력하세요.")
+        org.label = label
+    if body.costType is not None:
+        _validate_cost_type(body.costType)
+        if org.parent_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="비용구분은 팀에만 지정할 수 있습니다.",
+            )
+        org.cost_type = body.costType
     await db.commit()
     return _org_dict(org)
 
@@ -99,13 +154,23 @@ async def delete_org_unit(org_id: str, db: DbSession, _actor: RequireAdmin) -> R
 
 @router.post("/org-units/reorder")
 async def reorder_org_units(body: ReorderIn, db: DbSession, _actor: RequireAdmin) -> list[dict]:
-    # 부분/stale orderedIds 여도 전체 순열을 재구성해 중복·간극 없는 sort_order 를 보장(리뷰 #3).
+    # parentId 범위(같은 형제)만 재정렬한다. None 이면 본부들, 값이면 그 본부의 팀들.
+    # 부분/stale orderedIds 여도 형제 전체 순열을 재구성해 중복·간극 없는 sort_order 를 보장.
+    sibling_filter = (
+        OrgUnit.parent_id.is_(None) if body.parentId is None else OrgUnit.parent_id == body.parentId
+    )
     rows = (
-        (await db.execute(select(OrgUnit).order_by(OrgUnit.sort_order.asc()))).scalars().all()
+        (
+            await db.execute(
+                select(OrgUnit).where(sibling_filter).order_by(OrgUnit.sort_order.asc())
+            )
+        )
+        .scalars()
+        .all()
     )
     by_id = {o.id: o for o in rows}
     ordered: list[str] = []
-    for oid in body.orderedIds:  # 클라가 준 순서 중 실재하는 것만, 중복 제거.
+    for oid in body.orderedIds:  # 클라가 준 순서 중 이 형제집합에 실재하는 것만, 중복 제거.
         if oid in by_id and oid not in ordered:
             ordered.append(oid)
     for o in rows:  # 목록에 빠진 나머지는 현재 순서대로 뒤에 붙인다.
@@ -125,9 +190,14 @@ async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
     access_configured=false 면 '최초 모두 선택'으로 전체 조직구분 id(+미지정)를 반환한다.
     '미지정'(조직 미배정 사용자 허용)은 ORG_NONE_SENTINEL 로 orgUnitIds 끝에 표현한다.
     """
+    # 접근 배정은 팀(leaf, parent_id IS NOT NULL)에만. 본부는 그룹핑용이라 제외.
     all_org_ids = list(
         (
-            await db.execute(select(OrgUnit.id).order_by(OrgUnit.sort_order.asc()))
+            await db.execute(
+                select(OrgUnit.id)
+                .where(OrgUnit.parent_id.is_not(None))
+                .order_by(OrgUnit.sort_order.asc())
+            )
         ).scalars()
     )
     agents = (
@@ -162,7 +232,10 @@ async def set_agent_access(
     ).scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
-    valid_ids = set((await db.execute(select(OrgUnit.id))).scalars())
+    # 팀(leaf)만 유효한 접근 대상 — 본부 id 로는 접근을 줄 수 없다.
+    valid_ids = set(
+        (await db.execute(select(OrgUnit.id).where(OrgUnit.parent_id.is_not(None)))).scalars()
+    )
     allow_unassigned = ORG_NONE_SENTINEL in body.orgUnitIds
     requested = [oid for oid in dict.fromkeys(body.orgUnitIds) if oid in valid_ids]
     # 비어있지 않은 요청인데 전부 무효(미지정 센티널도 없음) = 클라 목록이 오래됨 → 조용히 전체 해제하지 말고 거부(리뷰 #4).

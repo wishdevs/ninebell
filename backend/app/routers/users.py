@@ -79,12 +79,19 @@ async def update_user(
     if payload.status is not None:
         user.status = payload.status
     if "org_unit_id" in payload.model_fields_set:
-        # null/"" = 해제, 값 = 존재 검증 후 지정.
+        # null/"" = 해제, 값 = 존재 검증 후 지정. 멤버는 팀(leaf)에만 배정한다(본부 불가).
         new_org = payload.org_unit_id or None
-        if new_org is not None and (await db.get(OrgUnit, new_org)) is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="알 수 없는 조직구분입니다."
-            )
+        if new_org is not None:
+            org = await db.get(OrgUnit, new_org)
+            if org is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="알 수 없는 조직구분입니다."
+                )
+            if org.parent_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="본부에는 배정할 수 없습니다. 팀을 선택하세요.",
+                )
         user.org_unit_id = new_org
     await db.commit()
     await db.refresh(user)

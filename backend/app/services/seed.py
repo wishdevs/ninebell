@@ -34,14 +34,31 @@ from app.services.agent_fixtures import AGENT_FIXTURES
 
 # 조직구분 기준 데이터 — alembic 0005 와 동일. create_all 부트스트랩/SQLite 테스트 경로에서도
 # 동일하게 존재하도록 여기서도 멱등 시드한다(리뷰 #5·#12: 마이그레이션에만 있으면 경로 불일치).
-_ORG_UNITS_SEED: tuple[tuple[str, str], ...] = (
-    ("exec", "임원실"),
-    ("mgmt", "경영본부"),
-    ("sales", "영업본부"),
-    ("china", "중국법인"),
-    ("fa-lab", "FA연구소"),
-    ("mfg", "제조본부"),
-    ("imp-lab", "IMP연구소"),
+# 조직구분 2뎁스 시드 — 마이그레이션 0011 과 동일한 slug/구조를 유지한다(런타임=마이그레이션).
+# (본부 slug, 본부 라벨, [(팀 라벨, 비용구분), ...]). 팀 id = f"{본부slug}__t{index}".
+_SGA = "판관비"
+_MFG = "제조원가"
+_ORG_HIERARCHY: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
+    ("hq_sales_head", "영업본부장", (("영업본부장", _SGA),)),
+    ("hq_sales", "영업본부", (("영업팀", _SGA), ("영업관리팀", _SGA), ("CS팀", _SGA))),
+    ("hq_mgmt", "경영본부", (
+        ("인사기획팀", _SGA), ("총무팀", _SGA), ("회계팀", _SGA),
+        ("구매팀", _MFG), ("자재팀", _MFG), ("품질팀", _MFG),
+    )),
+    ("hq_imp_head", "IMP연구소 본부장", (("IMP연구소 본부장", _SGA),)),
+    ("hq_imp_group", "IMP연구소 그룹장", (("IMP연구소 그룹장", _SGA),)),
+    ("hq_imp", "IMP연구소", (("IMP1팀", _SGA), ("IMP2팀", _SGA), ("IMP3팀", _SGA))),
+    ("hq_fa_head", "FA연구소 본부장", (("FA연구소 본부장", _MFG),)),
+    ("hq_fa_advisor", "FA고문", (("FA고문", _MFG),)),
+    ("hq_fa", "FA연구소", (("연구기획팀", _MFG),)),
+    ("hq_fa_design", "FA연구소 (설계그룹)", (("설계1팀", _MFG), ("설계2팀", _MFG), ("설계3팀", _MFG))),
+    ("hq_fa_control", "FA연구소 (제어그룹)", (("전장팀", _MFG), ("제어1팀", _MFG), ("제어2팀", _MFG))),
+    ("hq_exec", "임원", (("임원실", _SGA),)),
+    ("hq_mfg", "제조본부", (
+        ("제조1-A팀", _MFG), ("제조1-B팀", _MFG), ("제조1-전장팀", _MFG),
+        ("로봇팀", _MFG), ("제조2팀", _MFG), ("생산관리팀", _MFG),
+    )),
+    ("hq_mfg_advisor", "제조고문", (("제조고문", _MFG),)),
 )
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
@@ -227,11 +244,16 @@ async def seed_local_admin(db: AsyncSession) -> None:
 
 
 async def seed_org_units(db: AsyncSession) -> None:
-    """조직구분 7종 멱등 시드(id 슬러그 기준, 이미 있으면 건너뜀)."""
+    """조직구분 2뎁스(본부→팀) 멱등 시드(id 슬러그 기준, 이미 있으면 건너뜀)."""
     existing = set((await db.execute(select(OrgUnit.id))).scalars())
-    for i, (slug, label) in enumerate(_ORG_UNITS_SEED):
-        if slug not in existing:
-            db.add(OrgUnit(id=slug, label=label, sort_order=i))
+    for hq_i, (hq_slug, hq_label, teams) in enumerate(_ORG_HIERARCHY):
+        if hq_slug not in existing:
+            db.add(OrgUnit(id=hq_slug, label=hq_label, parent_id=None, cost_type=None, sort_order=hq_i))
+        for t_i, (team_label, cost) in enumerate(teams):
+            team_id = f"{hq_slug}__t{t_i}"
+            if team_id not in existing:
+                db.add(OrgUnit(id=team_id, label=team_label, parent_id=hq_slug,
+                               cost_type=cost, sort_order=t_i))
     await db.flush()
 
 

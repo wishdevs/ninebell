@@ -1,9 +1,11 @@
 """조직구분(OrgUnit) + 에이전트 접근(AgentOrgAccess) ORM 모델.
 
-조직구분 = 에이전트 사용 권한을 나누는 조직 단위(임원실·경영본부 등). 관리자가 CRUD 한다.
-agent_org_access = (agent_id, org_unit_id) 존재 = 그 조직구분이 그 에이전트를 쓸 수 있음(allow).
-'최초 모두 선택'은 agents.access_configured=false 로 표현하고, 그때 GET 은 전체 조직구분을 반환한다
-(명시 설정 전이면 전체 허용). PATCH 시 access_configured=true + 명시 행으로 교체.
+조직구분 = 에이전트 사용 권한을 나누는 조직 단위. 2뎁스 계층: 본부(parent_id IS NULL) → 팀
+(parent_id = 본부 id). 관리자가 CRUD 한다. 멤버 배정·에이전트 접근은 **팀(leaf)에만** 허용한다
+(본부는 그룹핑·표시용). 팀에는 비용구분(cost_type: 판관비/제조원가)이 붙어 카드 자동화의
+예산계정 (판)/(제) 접두사 선택에 쓰인다.
+agent_org_access = (agent_id, org_unit_id) 존재 = 그 조직구분(팀)이 그 에이전트를 쓸 수 있음.
+'최초 모두 선택'은 agents.access_configured=false 로 표현하고, 그때 GET 은 전체 팀을 반환한다.
 """
 
 from __future__ import annotations
@@ -15,12 +17,24 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
+# 비용구분 값(팀에만). 카드 자동화에서 예산계정 접두사로 매핑: 판관비→'(판)', 제조원가→'(제)'.
+COST_TYPE_SGA = "판관비"
+COST_TYPE_MFG = "제조원가"
+COST_TYPES = (COST_TYPE_SGA, COST_TYPE_MFG)
+COST_TYPE_PREFIX = {COST_TYPE_SGA: "(판)", COST_TYPE_MFG: "(제)"}
+
 
 class OrgUnit(Base):
     __tablename__ = "org_units"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     label: Mapped[str] = mapped_column(String(120), nullable=False)
+    # 본부=NULL, 팀=본부 id. 본부 삭제 시 하위 팀도 CASCADE 삭제.
+    parent_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("org_units.id", ondelete="CASCADE"), nullable=True
+    )
+    # 비용구분(팀에만 의미). 판관비|제조원가. 본부는 NULL.
+    cost_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -30,7 +44,7 @@ class OrgUnit(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<OrgUnit id={self.id} label={self.label!r}>"
+        return f"<OrgUnit id={self.id} label={self.label!r} parent={self.parent_id}>"
 
 
 class AgentOrgAccess(Base):
