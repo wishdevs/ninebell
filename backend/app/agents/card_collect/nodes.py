@@ -433,14 +433,28 @@ def make_collect_rows_node(timeout_s: int | None = None):
 
         # '내 부서' = 예산단위명 ↔ 소속부서 정규화 매칭('인사/기획팀' ↔ '인사기획팀').
         mine_units = [u for u in all_units if dept_matches_budget_name(department, u["name"])]
+        # 그리드 선택지는 자주쓰는 + 내 부서만(사용자 확정 — 전사 전체는 과다·캡 잘림으로 무의미).
+        # 전량 덤프(all_units)는 내 부서 매칭·AI 추천 후보용으로만 쓴다.
         budget_units = {
             "favorites": budget_favs[:_MAX_FAVORITES],
             "mine": mine_units[:_MAX_BUDGET_UNITS],
-            "all": all_units[:_MAX_BUDGET_UNITS],
         }
         project_favs = project_favs[:_MAX_FAVORITES]
 
         # AI 추천 + 기본지정 폴백으로 행별 예산단위·프로젝트를 프리셀렉트한다(사용자는 수정 가능).
+        # 기본지정 부재는 폴백이 조용히 비는 원인이므로 명시적으로 알려 진단을 돕는다.
+        missing_defaults = [
+            label
+            for label, favs in (("예산단위", budget_favs), ("프로젝트", project_favs))
+            if favs and not any(f.get("isDefault") for f in favs)
+        ]
+        if missing_defaults:
+            await emit_log(
+                events,
+                f"{'/'.join(missing_defaults)} 기본지정이 없어 AI 추천 실패 시 빈 선택으로 둡니다"
+                " (관리 페이지에서 '기본'을 지정하세요).",
+                "info",
+            )
         preselect = await _prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs
         )

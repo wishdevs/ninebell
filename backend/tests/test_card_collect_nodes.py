@@ -144,10 +144,8 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
     assert len(frame["rows"]) == 2
     assert frame["rows"][0]["merchant"] == "가맹점0"
     assert frame["rows"][0]["time"] == "00:00:00" and frame["rows"][0]["approved"] == "승인"
-    assert frame["budgetUnits"]["all"] == [
-        {"code": "2000", "name": "경영 본부"},
-        {"code": "2101", "name": "인사기획팀"},
-    ]
+    # 그리드 선택지는 자주쓰는+내 부서만 — 전사 전체(all)는 프레임에 싣지 않는다(사용자 확정).
+    assert "all" not in frame["budgetUnits"]
     # 내 부서 그룹 = 소속 '인사/기획팀' ↔ 예산단위명 '인사기획팀' 정규화 매칭.
     assert frame["budgetUnits"]["mine"] == [{"code": "2101", "name": "인사기획팀"}]
     assert frame["budgetUnits"]["favorites"] == [{"code": "1000", "name": "영업본부"}]
