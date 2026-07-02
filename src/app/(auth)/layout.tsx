@@ -9,8 +9,16 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
     <div className="bg-background relative z-0 grid min-h-dvh grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
       <section className="bg-background relative flex flex-col">
         <header className="flex items-center px-6 py-6 sm:px-10 lg:px-12 lg:py-8">
-          <Link href="/login" className="flex items-center gap-3">
-            <span className="font-display text-base font-semibold tracking-tight">NINEBELL</span>
+          <Link href="/login" className="flex items-center">
+            {/* 나인벨 이미지 로고 — 미니멀 사이즈(h-5). */}
+            <Image
+              src="/ninebell-logo.png"
+              alt="NINEBELL"
+              width={2303}
+              height={350}
+              priority
+              className="h-5 w-auto"
+            />
           </Link>
         </header>
 

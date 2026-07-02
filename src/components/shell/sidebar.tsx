@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -89,8 +90,15 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
     <>
       <div className="border-border-subtle shrink-0 border-b px-5 py-5">
         <Link href="/" aria-label="NINEBELL 홈" className="inline-flex items-center">
-          {/* 로그인 상단과 동일한 워드마크(텍스트). 사이드바용으로 한 단계 작게(text-sm). */}
-          <span className="font-display text-sm font-semibold tracking-tight">NINEBELL</span>
+          {/* 나인벨 이미지 로고 — 미니멀 사이즈(h-5). */}
+          <Image
+            src="/ninebell-logo.png"
+            alt="NINEBELL"
+            width={2303}
+            height={350}
+            priority
+            className="h-5 w-auto"
+          />
         </Link>
       </div>
       <div className="flex-1 overflow-x-hidden overflow-y-auto">

@@ -161,9 +161,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             <LiveControls
               enabled={isLive}
               terminal={terminal}
-              showRealStart={defaultWorkflow !== 'demo-echo'}
               onStartReal={() => startRun(defaultWorkflow)}
-              onStartDemo={() => startRun('demo-echo')}
               onRestart={() => startRun(session.workflowId)}
               onStop={stopRun}
             />
@@ -291,42 +289,22 @@ function DebugStepper({
 interface LiveControlsProps {
   enabled: boolean;
   terminal: boolean;
-  /** demo-echo 외에 매핑된 실 워크플로우가 있으면 별도 "실행" 버튼을 노출. */
-  showRealStart: boolean;
   onStartReal: () => void;
-  onStartDemo: () => void;
   onRestart: () => void;
   onStop: () => void;
 }
 
 /**
  * 라이브 실행 컨트롤. 브라우저 큐(헤드리스 세션 슬롯)가 한정돼 일시정지는 없다 —
- * 진행 중에는 "종료"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 시 실 워크플로우가
- * 있으면 "실행"과 함께, demo-echo 로 라이브 레이어를 검증할 "데모 실행"을 항상 제공한다.
+ * 진행 중에는 "종료"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 전에는 "실행".
  */
-function LiveControls({
-  enabled,
-  terminal,
-  showRealStart,
-  onStartReal,
-  onStartDemo,
-  onRestart,
-  onStop,
-}: LiveControlsProps) {
+function LiveControls({ enabled, terminal, onStartReal, onRestart, onStop }: LiveControlsProps) {
   if (!enabled) {
     return (
-      <div className="flex items-center gap-2">
-        {showRealStart ? (
-          <Button size="sm" onClick={onStartReal}>
-            <RiPlayLine size={14} aria-hidden />
-            실행
-          </Button>
-        ) : null}
-        <Button size="sm" variant={showRealStart ? 'secondary' : 'primary'} onClick={onStartDemo}>
-          <RiPlayLine size={14} aria-hidden />
-          데모 실행
-        </Button>
-      </div>
+      <Button size="sm" onClick={onStartReal}>
+        <RiPlayLine size={14} aria-hidden />
+        실행
+      </Button>
     );
   }
   if (terminal) {
