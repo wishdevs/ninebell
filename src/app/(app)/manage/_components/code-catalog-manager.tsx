@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   RiArrowDownSLine,
   RiArrowUpSLine,
@@ -88,6 +88,13 @@ export function CodeCatalogManager({
   const [deptAll, setDeptAll] = useState(false);
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
+
+  // 페이지 이동 시 목록 스크롤을 상단으로 되돌린다(스티키 헤더 컨테이너 내부 스크롤).
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  const changePage = useCallback((next: number) => {
+    setPage(next);
+    listScrollRef.current?.scrollTo({ top: 0 });
+  }, []);
 
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [polling, setPolling] = useState(false);
@@ -385,7 +392,10 @@ export function CodeCatalogManager({
             compact
           />
         ) : (
-          <div className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border">
+          <div
+            ref={listScrollRef}
+            className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border"
+          >
             <table className="w-full border-separate border-spacing-0 text-[12px]">
               <thead>
                 <tr>
@@ -424,7 +434,7 @@ export function CodeCatalogManager({
         )}
 
         {!loading && !loadError ? (
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={changePage} />
         ) : null}
       </div>
     </SectionCard>
