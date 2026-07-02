@@ -9,11 +9,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.permissions import ALL_PERMISSIONS, DEFAULT_ROLES, ROLE_SUPER_ADMIN
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
+
+logger = logging.getLogger("app.services.seed")
 from app.models import (
     Agent,
     AgentIntervention,
@@ -41,10 +46,19 @@ _ORG_UNITS_SEED: tuple[tuple[str, str], ...] = (
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
 _LOCAL_ADMIN_USERID = "admin"
-# ⚠️ '1111' 은 사용자 명시 요청에 의한 약한 부트스트랩 비밀번호다.
-#    프로덕션 배포 전 반드시 변경할 것. seed 는 기존 해시를 절대 덮어쓰지 않으므로
-#    운영에서 비밀번호를 바꿔도 재시작 시 초기화되지 않는다.
-_LOCAL_ADMIN_PASSWORD = "1111"
+# env LOCAL_ADMIN_PASSWORD 미설정 시 폴백. 프로덕션 금지(seed 가 critical 경고).
+_FALLBACK_ADMIN_PASSWORD = "1111"
+
+
+def _resolve_admin_password() -> str:
+    """env(local_admin_password) 우선, 없으면 폴백 '1111' + critical 경고."""
+    pw = (get_settings().local_admin_password or "").strip()
+    if pw:
+        return pw
+    logger.critical(
+        "LOCAL_ADMIN_PASSWORD 미설정 — 기본 비밀번호 '1111' 사용 중. 프로덕션 배포 금지."
+    )
+    return _FALLBACK_ADMIN_PASSWORD
 
 
 async def seed_permissions(db: AsyncSession) -> dict[str, Permission]:
@@ -161,11 +175,13 @@ def _parse_iso(value: str | None):
 
 
 async def seed_local_admin(db: AsyncSession) -> None:
-    """로컬 시스템 관리자(admin/1111) 멱등 생성. 옴니솔/헤드리스 미사용.
+    """로컬 시스템 관리자(admin) 멱등 생성/보강. 옴니솔/헤드리스 미사용.
 
-    이미 존재하면 기존 password_hash 를 덮어쓰지 않는다(운영 비밀번호 변경 보존).
-    누락된 password_hash·role 만 보강한다.
+    비밀번호는 env(LOCAL_ADMIN_PASSWORD) 우선. 운영자가 수동 변경한 해시는 절대 덮어쓰지 않되,
+    **기존 해시가 폴백 '1111' 과 일치할 때만** env 값으로 회전(기본값 강제 탈피 유도). 누락된
+    password_hash·role 도 보강한다.
     """
+    password = _resolve_admin_password()
     admin = (
         await db.execute(select(User).where(User.omnisol_userid == _LOCAL_ADMIN_USERID))
     ).scalar_one_or_none()
@@ -178,7 +194,7 @@ async def seed_local_admin(db: AsyncSession) -> None:
             User(
                 omnisol_userid=_LOCAL_ADMIN_USERID,
                 display_name="시스템 관리자",
-                password_hash=hash_password(_LOCAL_ADMIN_PASSWORD),
+                password_hash=hash_password(password),
                 role_id=role.id if role is not None else None,
                 status="active",
             )
@@ -188,8 +204,16 @@ async def seed_local_admin(db: AsyncSession) -> None:
 
     changed = False
     if admin.password_hash is None:
-        admin.password_hash = hash_password(_LOCAL_ADMIN_PASSWORD)
+        admin.password_hash = hash_password(password)
         changed = True
+    elif (
+        password != _FALLBACK_ADMIN_PASSWORD
+        and verify_password(_FALLBACK_ADMIN_PASSWORD, admin.password_hash)
+    ):
+        # 기존이 기본값('1111')이고 env 로 새 비밀번호가 주어졌을 때만 회전(운영 변경분은 불변).
+        admin.password_hash = hash_password(password)
+        changed = True
+        logger.warning("LOCAL_ADMIN_PASSWORD 로 admin 기본 비밀번호를 회전했습니다.")
     if admin.role_id is None and role is not None:
         admin.role_id = role.id
         changed = True

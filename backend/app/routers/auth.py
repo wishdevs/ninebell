@@ -76,6 +76,35 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent")
 
+    # 시도 제한: 비밀번호 검증(옴니솔 헤드리스 호출 포함) '이전'에 차단해 자원 소모도 막는다.
+    # state 없으면(테스트/lifespan 미실행) 스킵. 자격증명 추측 실패만 카운트하고 성공 시 리셋한다.
+    limiter = getattr(request.app.state, "login_limiter", None)
+    if limiter is not None:
+        blocked = limiter.check(ip, body.userid)
+        if blocked is not None:
+            await record_access(
+                db,
+                omnisol_userid=body.userid,
+                status="failed",
+                error_msg="rate-limited",
+                ip=ip,
+                user_agent=ua,
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"로그인 시도가 너무 많습니다. {blocked}초 후 다시 시도하세요.",
+                headers={"Retry-After": str(blocked)},
+            )
+
+    def _record_failure() -> None:
+        if limiter is not None:
+            limiter.record_failure(ip, body.userid)
+
+    def _record_success() -> None:
+        if limiter is not None:
+            limiter.reset(body.userid)
+
     user = (
         await db.execute(select(User).where(User.omnisol_userid == body.userid))
     ).scalar_one_or_none()
@@ -83,6 +112,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
     # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출).
     if user is not None and user.password_hash is not None:
         if not verify_password(body.password, user.password_hash):
+            _record_failure()
             await record_access(
                 db,
                 omnisol_userid=body.userid,
@@ -96,6 +126,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="아이디 또는 비밀번호가 올바르지 않습니다.",
             )
+        _record_success()
         user.last_login_at = datetime.now(UTC)
         await record_access(
             db, omnisol_userid=body.userid, status="success", user_id=user.id, ip=ip, user_agent=ua
@@ -113,6 +144,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
                 request.app.state.erp_browser, body.userid, body.password, settings.erp_base
             )
     except ErpAuthError as exc:
+        _record_failure()
         await record_access(
             db, omnisol_userid=body.userid, status="failed", error_msg=str(exc), ip=ip, user_agent=ua
         )
@@ -136,6 +168,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
 
     # 2a) 기존 옴니솔 유저 → 세션 발급(기존 동작).
     if user is not None:
+        _record_success()
         _apply_profile(user, profile)
         user.last_login_at = datetime.now(UTC)
         await record_access(
@@ -147,7 +180,8 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         )
         return {"ok": True}
 
-    # 2b) 첫 접속(유저 없음) → 세션 미발급, 회원가입 유도.
+    # 2b) 첫 접속(유저 없음) → 세션 미발급, 회원가입 유도. 옴니솔 인증은 성공했으므로 리셋.
+    _record_success()
     signup_token = request.app.state.signup_cache.put(
         body.userid,
         body.password,

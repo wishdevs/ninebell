@@ -45,8 +45,19 @@ class Settings(BaseSettings):
     screencast_max_width: int = 1280
     screencast_max_height: int = 800
     screencast_every_nth_frame: int = 2
-    # HITL(사용자 개입) 대기 상한(초).
-    hitl_timeout_s: int = 300
+    # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
+    hitl_timeout_s: int = 600
+
+    # --- 로컬 시스템 관리자(admin) ---
+    # 비우면 seed 가 폴백 '1111'을 쓰되 critical 경고. 프로덕션은 반드시 env 로 지정.
+    local_admin_password: str = ""
+
+    # --- 로그인 시도 제한(인메모리, 단일 워커 전제) ---
+    login_max_attempts: int = 5
+    login_window_s: float = 900.0
+    login_ip_max_attempts: int = 20
+    login_lockout_base_s: float = 30.0
+    login_lockout_max_s: float = 900.0
 
     # 쉼표 구분 문자열(헬퍼로 파싱) — pydantic 의 list 자동 JSON 파싱 회피.
     super_admin_omnisol_ids: str = ""

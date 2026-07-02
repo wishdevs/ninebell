@@ -19,6 +19,7 @@ from playwright.async_api import async_playwright
 
 import app.agents  # noqa: F401 — import 시 실 워크플로우(expense-card-chat)를 registry 에 등록
 from app.config import get_settings
+from app.core.ratelimit import LoginRateLimiter
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
@@ -59,6 +60,15 @@ def create_app() -> FastAPI:
 
         app.state.browser_factory = _launch_browser
         session_reaper = asyncio.create_task(reap_sessions())
+
+        # --- 로그인 시도 제한(인메모리) ---
+        app.state.login_limiter = LoginRateLimiter(
+            max_attempts=settings.login_max_attempts,
+            window_s=settings.login_window_s,
+            ip_max_attempts=settings.login_ip_max_attempts,
+            lockout_base_s=settings.login_lockout_base_s,
+            lockout_max_s=settings.login_lockout_max_s,
+        )
 
         # --- 자격증명 캐시 + 회원가입 대기 캐시 + 주기 reaper ---
         app.state.cred_cache = CredCache()
