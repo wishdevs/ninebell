@@ -146,7 +146,12 @@ async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
 async def set_agent_access(
     agent_id: str, body: AgentAccessSetIn, db: DbSession, _actor: RequireAdmin
 ) -> dict:
-    agent = await db.get(Agent, agent_id)
+    # 동시 PATCH 직렬화 — delete→insert 패턴이라 잠금 없이는 뒤 요청의 DELETE 가 앞 요청의
+    # 미커밋 INSERT 를 못 보고 같은 행을 다시 넣어 PK 중복 500 이 난다(빠른 체크박스 토글 재현).
+    # SQLite(테스트)에선 FOR UPDATE 가 no-op 이지만 단일 커넥션이라 무해.
+    agent = (
+        await db.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
+    ).scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
     valid_ids = set((await db.execute(select(OrgUnit.id))).scalars())
