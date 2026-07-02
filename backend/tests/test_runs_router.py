@@ -178,8 +178,8 @@ async def test_hitl_grid_rows_pass_through_to_channel(client, make_user, auth_as
         assert r.json() == {"ok": True}
         payload = q.get_nowait()
         assert payload["rows"][0]["budgetUnit"] == {
-                "code": "2000", "name": "경영본부", "bizplanNm": None, "bgacctNm": None,
-            }  # 조합 필드는 옵셔널(미전송 시 None 통과)
+                "code": "2000", "name": "경영본부", "bizplanNm": None, "bgacctNm": None, "wbsNo": None,
+            }  # 조합/WBS 필드는 옵셔널(미전송 시 None 통과)
         assert payload["rows"][1] == {"no": 2, "budgetUnit": None, "project": None, "note": "", "skip": True}
     finally:
         close_hitl_channel("dec-grid")

@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
@@ -62,6 +62,7 @@ def _fav_dict(f: UserCodeFavorite) -> dict:
         "name": f.name,
         "extra": f.extra,
         "sortOrder": f.sort_order,
+        "isDefault": f.is_default,
     }
 
 
@@ -160,6 +161,46 @@ async def reorder_favorites(body: ReorderIn, user: CurrentUser, db: DbSession) -
     return await list_favorites(user, db, kind=body.kind)
 
 
+@router.post("/favorites/{fav_id}/default")
+async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
+    """대상 즐겨찾기를 그 (user,kind) 의 '기본'으로 지정 — 기존 default 는 해제(단일성 보장).
+
+    소유자 스코프. 대상이 없거나 소유자 불일치면 404. 갱신된 항목을 반환.
+    """
+    try:
+        parsed = uuid.UUID(fav_id)
+    except ValueError:
+        return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
+    target = (
+        await db.execute(
+            select(UserCodeFavorite).where(
+                UserCodeFavorite.id == parsed, UserCodeFavorite.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
+    # 같은 (user,kind) 의 기존 default 를 모두 해제한 뒤 대상만 true — 한 kind 당 1개만 유지.
+    siblings = (
+        (
+            await db.execute(
+                select(UserCodeFavorite).where(
+                    UserCodeFavorite.user_id == user.id,
+                    UserCodeFavorite.kind == target.kind,
+                    UserCodeFavorite.is_default.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for s in siblings:
+        s.is_default = False
+    target.is_default = True
+    await db.commit()
+    return _fav_dict(target)
+
+
 # ── 코드 카탈로그 조회 ──────────────────────────────────────────────────────────
 @router.get("/catalog")
 async def get_catalog(
@@ -183,18 +224,13 @@ async def get_catalog(
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
 
-    conds = [ErpCodeCatalog.kind == kind]
-    # 프로젝트는 SQL ILIKE(name/code/파트너는 별도), 예산단위는 조합 필드(사업계획·예산계정)
-    # 검색이 필요해 파이썬 필터(행 수천 건 이내라 충분).
-    if q and kind != "budget_unit":
-        like = f"%{q}%"
-        conds.append(or_(ErpCodeCatalog.name.ilike(like), ErpCodeCatalog.code.ilike(like)))
-
+    # 두 kind 모두 조합/부가 필드 검색이 필요해 파이썬 필터(행 수천 건 이내라 충분).
+    # 예산단위=사업계획·예산계정, 프로젝트=WBS요소명·위치·프로젝트번호까지 커버한다.
     rows = (
         (
             await db.execute(
                 select(ErpCodeCatalog)
-                .where(*conds)
+                .where(ErpCodeCatalog.kind == kind)
                 .order_by(ErpCodeCatalog.name.asc(), ErpCodeCatalog.code.asc())
             )
         )
@@ -219,6 +255,18 @@ async def get_catalog(
                 or ql in str((r.extra or {}).get("bizplanNm", "")).lower()
                 or ql in str((r.extra or {}).get("bgacctNm", "")).lower()
             ]
+    elif q:
+        # 프로젝트 — 프로젝트명(name)·코드 + WBS요소명·위치·프로젝트번호(extra)까지 부분 매칭.
+        ql = q.strip().lower()
+        rows = [
+            r
+            for r in rows
+            if ql in r.name.lower()
+            or ql in r.code.lower()
+            or ql in str((r.extra or {}).get("wbsNm", "")).lower()
+            or ql in str((r.extra or {}).get("loc", "")).lower()
+            or ql in str((r.extra or {}).get("pjtNo", "")).lower()
+        ]
 
     total = len(rows)
     page_rows = rows[offset : offset + limit]

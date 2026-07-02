@@ -93,6 +93,8 @@ class GridCodeRef(BaseModel):
     # 예산단위 조합 선택(BG×사업계획×예산계정) — 반영 시 그 조합 행을 정확히 고르기 위한 값.
     bizplanNm: str | None = Field(default=None, max_length=255)
     bgacctNm: str | None = Field(default=None, max_length=255)
+    # 프로젝트 WBS 행 선택 — 반영 시 그 WBS 요소를 정확히 고르기 위한 값(PJT_NM 검색 후 WBS_NO 일치).
+    wbsNo: str | None = Field(default=None, max_length=64)
 
 
 class GridRowIn(BaseModel):

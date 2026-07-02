@@ -24,11 +24,13 @@ interface LiveGridCardProps {
   onSubmit: (rows: GridRowSubmit[]) => Promise<boolean>;
 }
 
-/** 행별 사용자 입력(예산단위·프로젝트·적요·제외). budgetUnitCode='' = 미선택. */
+/** 행별 사용자 입력(예산단위·프로젝트·적요·제외). budgetUnitCode='' = 미선택.
+ * projectWbsNo = 선택한 WBS 행의 WBS_NO(반영 시 정확 선택용). */
 interface RowEdit {
   budgetUnitCode: string;
   projectCode: string;
   projectName: string;
+  projectWbsNo: string;
   note: string;
   skip: boolean;
 }
@@ -37,7 +39,14 @@ function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
   return Object.fromEntries(
     rows.map((r) => [
       r.no,
-      { budgetUnitCode: '', projectCode: '', projectName: '', note: r.note ?? '', skip: false },
+      {
+        budgetUnitCode: '',
+        projectCode: '',
+        projectName: '',
+        projectWbsNo: '',
+        note: r.note ?? '',
+        skip: false,
+      },
     ]),
   );
 }
@@ -219,7 +228,9 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         budgetUnit: b
           ? { code: b.code, name: b.name, bizplanNm: b.bizplanNm, bgacctNm: b.bgacctNm }
           : { code: e.budgetUnitCode, name: e.budgetUnitCode },
-        project: e.projectCode ? { code: e.projectCode, name: e.projectName } : null,
+        project: e.projectCode
+          ? { code: e.projectCode, name: e.projectName, wbsNo: e.projectWbsNo || undefined }
+          : null,
         note: e.note.trim(),
         skip: false,
       };
@@ -257,7 +268,9 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         projectFavs={pFavList}
         disabled={disabled}
         onBulkBudget={(code) => applyAll({ budgetUnitCode: code })}
-        onBulkProject={(code, name) => applyAll({ projectCode: code, projectName: name })}
+        onBulkProject={(code, name, wbsNo) =>
+          applyAll({ projectCode: code, projectName: name, projectWbsNo: wbsNo })
+        }
       />
 
       <div className="border-border min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border">
@@ -282,6 +295,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                 budgetUnitCode: '',
                 projectCode: '',
                 projectName: '',
+                projectWbsNo: '',
                 note: '',
                 skip: false,
               };
@@ -345,17 +359,26 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         searchResults={searchResults}
                         searchQuery={searchQuery}
                         disabled={e.skip || disabled}
-                        onSelect={(code, name) =>
-                          setRow(r.no, { projectCode: code, projectName: name })
+                        onSelect={(code, name, wbsNo) =>
+                          setRow(r.no, {
+                            projectCode: code,
+                            projectName: name,
+                            projectWbsNo: wbsNo,
+                          })
                         }
-                        onClear={() => setRow(r.no, { projectCode: '', projectName: '' })}
+                        onClear={() =>
+                          setRow(r.no, { projectCode: '', projectName: '', projectWbsNo: '' })
+                        }
                         onSearch={onQuery}
                       />
                       <StarButton
                         active={pFav.has(e.projectCode)}
                         disabled={e.skip || disabled || e.projectCode === ''}
                         onClick={() =>
-                          void pFav.toggle(e.projectCode, e.projectName || e.projectCode)
+                          void pFav.toggle(e.projectCode, e.projectName || e.projectCode, {
+                            wbsNo: e.projectWbsNo,
+                            wbsNm: '',
+                          })
                         }
                       />
                     </div>
@@ -473,7 +496,7 @@ function BulkBar({
   projectFavs: ProjectOption[];
   disabled: boolean;
   onBulkBudget: (code: string) => void;
-  onBulkProject: (code: string, name: string) => void;
+  onBulkProject: (code: string, name: string, wbsNo: string) => void;
 }) {
   return (
     <div className="border-border-subtle bg-muted/40 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border px-2.5 py-2">
@@ -495,14 +518,15 @@ function BulkBar({
         disabled={disabled || projectFavs.length === 0}
         onChange={(ev) => {
           const p = projectFavs.find((x) => x.code === ev.target.value);
-          if (p) onBulkProject(p.code, p.name);
+          if (p) onBulkProject(p.code, p.name, p.wbsNo ?? '');
         }}
         className="border-border bg-surface text-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-48 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
       >
         <option value="">프로젝트 전체 적용(자주쓰는)</option>
         {projectFavs.map((p) => (
           <option key={p.code} value={p.code}>
-            {p.name} ({p.code})
+            {p.name}
+            {p.wbsNm ? ` · ${p.wbsNm}` : ''}
           </option>
         ))}
       </select>
@@ -603,7 +627,7 @@ function ProjectCombobox({
   searchResults: ProjectOption[] | null;
   searchQuery: string | null;
   disabled?: boolean;
-  onSelect: (code: string, name: string) => void;
+  onSelect: (code: string, name: string, wbsNo: string) => void;
   onClear: () => void;
   onSearch: (query: string) => Promise<boolean>;
 }) {
@@ -633,7 +657,7 @@ function ProjectCombobox({
     : favorites;
 
   const pick = (p: ProjectOption) => {
-    onSelect(p.code, p.name);
+    onSelect(p.code, p.name, p.wbsNo ?? '');
     setOpen(false);
     setText('');
   };
@@ -658,7 +682,7 @@ function ProjectCombobox({
         )}
       >
         <span className={cn('truncate', code ? 'text-foreground' : 'text-muted-foreground')}>
-          {code ? `${name || code} (${code})` : '프로젝트 선택'}
+          {code ? name || code : '프로젝트 선택'}
         </span>
       </button>
 
@@ -751,7 +775,11 @@ function ProjectOptionRow({ option, onClick }: { option: ProjectOption; onClick:
       className="hover:bg-muted/60 flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
     >
       <span className="text-foreground truncate">{option.name}</span>
-      <span className="text-foreground-tertiary shrink-0 font-mono">{option.code}</span>
+      {option.wbsNm ? (
+        <span className="text-foreground-tertiary shrink-0 truncate">{option.wbsNm}</span>
+      ) : option.wbsNo ? (
+        <span className="text-foreground-tertiary shrink-0 font-mono">{option.wbsNo}</span>
+      ) : null}
     </button>
   );
 }

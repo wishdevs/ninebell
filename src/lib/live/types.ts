@@ -73,10 +73,13 @@ export interface BudgetUnitOption {
   deptNm?: string;
 }
 
-/** 프로젝트 보기 한 항목(자주쓰는/검색결과 공용). */
+/** 프로젝트 보기 한 항목(자주쓰는/검색결과 공용). 선택 단위는 WBS 행 — code=PJT_NO|WBS_NO 복합.
+ * name=프로젝트명(PJT_NM), wbsNo=WBS요소, wbsNm=WBS요소명. */
 export interface ProjectOption {
   code: string;
   name: string;
+  wbsNo?: string;
+  wbsNm?: string;
 }
 
 /** 그리드 개입의 예산단위 보기 — 자주쓰는 → 내 부서(이름 정규화 매칭) → 전사 전체. */
@@ -120,7 +123,8 @@ export interface GridRowSubmit {
   no: number;
   /** 예산단위 조합 선택 — bizplanNm/bgacctNm 이 있으면 서버가 그 조합 행을 정확히 고른다. */
   budgetUnit: { code: string; name: string; bizplanNm?: string; bgacctNm?: string } | null;
-  project: { code: string; name: string } | null;
+  /** 프로젝트 WBS 행 — wbsNo 가 있으면 서버가 그 WBS 요소를 정확히 고른다. */
+  project: { code: string; name: string; wbsNo?: string } | null;
   note: string;
   skip: boolean;
 }

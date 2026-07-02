@@ -146,7 +146,13 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
 
 
 async def test_grid_query_message_reemits_with_search_results(monkeypatch):
-    _stub_dumps(monkeypatch, units=[], projects=[{"code": "SP1", "name": "SPARES-1"}])
+    _stub_dumps(
+        monkeypatch,
+        units=[],
+        projects=[
+            {"code": "SP1|W1", "name": "SPARES-1", "wbsNo": "W1", "wbsNm": "정비 WBS"}
+        ],
+    )
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
     task = asyncio.create_task(make_collect_rows_node()(state))
@@ -156,7 +162,10 @@ async def test_grid_query_message_reemits_with_search_results(monkeypatch):
     second = await _next_hitl(events)
     assert second["id"] == first["id"]  # 같은 decision id 로 재방출
     assert second["projects"]["query"] == "SPARES"
-    assert second["projects"]["searchResults"] == [{"code": "SP1", "name": "SPARES-1"}]
+    # 검색 결과는 WBS 필드(wbsNo/wbsNm)를 함께 싣는다(프론트 옵션 라벨·정확 반영용).
+    assert second["projects"]["searchResults"] == [
+        {"code": "SP1|W1", "name": "SPARES-1", "wbsNo": "W1", "wbsNm": "정비 WBS"}
+    ]
 
     resolve_hitl(second["id"], {"rows": [{"no": 1, "skip": True}]})
     assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": []}

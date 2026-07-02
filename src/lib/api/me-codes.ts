@@ -10,6 +10,7 @@
  *   POST   /me/favorites   {kind,code,name,extra?}     → Favorite (중복 멱등)
  *   DELETE /me/favorites/{id}                          → 204
  *   POST   /me/favorites/reorder {kind, orderedIds}    → 204
+ *   POST   /me/favorites/{id}/default                  → Favorite (기존 default 해제)
  *   GET    /me/catalog?kind=&q=&dept=&limit=&offset=   → {items,total,syncedAt}
  *   POST   /me/catalog/sync {kind}                     → 202 {started:true} | 409(한글 detail)
  *   GET    /me/catalog/sync-status?kind=               → SyncStatus
@@ -22,7 +23,8 @@ export type CatalogKind = 'budget_unit' | 'project';
 
 /** 부가 데이터 — 백엔드 JSON 객체.
  * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),
- * 프로젝트 = {useYn, partnerNm}. deptNm 은 과거 데이터 하위호환. */
+ * 프로젝트 = {pjtNo, wbsNo, wbsNm, loc, useYn, partnerNm} (선택 단위 = WBS 행, code=PJT_NO|WBS_NO).
+ * deptNm 은 과거 데이터 하위호환. */
 export interface CodeExtra {
   deptNm?: string;
   useYn?: string;
@@ -31,6 +33,10 @@ export interface CodeExtra {
   bizplanNm?: string;
   bgacctCd?: string;
   bgacctNm?: string;
+  pjtNo?: string;
+  wbsNo?: string;
+  wbsNm?: string;
+  loc?: string;
 }
 
 /** 자주쓰는(즐겨찾기) 한 항목. extra 는 부서명 등 부가 표시(예산단위=deptNm). */
@@ -41,6 +47,8 @@ export interface Favorite {
   name: string;
   extra: CodeExtra | null;
   sortOrder: number;
+  /** (kind 당 1개) '기본' 지정 여부. 후속 AI 추천이 폴백으로 쓴다. */
+  isDefault: boolean;
 }
 
 /** 카탈로그(전체 코드) 한 항목. */
@@ -108,6 +116,11 @@ export function removeFavorite(id: string): Promise<void> {
 /** `POST /me/favorites/reorder` — 자주쓰는 순서 변경(전체 id 순서 전달). */
 export function reorderFavorites(kind: CatalogKind, orderedIds: string[]): Promise<void> {
   return api.post<void>('/me/favorites/reorder', { kind, orderedIds });
+}
+
+/** `POST /me/favorites/{id}/default` — 그 (kind) 의 '기본'으로 지정(기존 default 해제). */
+export function setDefaultFavorite(id: string): Promise<Favorite> {
+  return api.post<Favorite>(`/me/favorites/${encodeURIComponent(id)}/default`, {});
 }
 
 /** `GET /me/catalog` — 전체 코드 페이지(예산단위는 기본 내 부서, dept=all 로 해제). */

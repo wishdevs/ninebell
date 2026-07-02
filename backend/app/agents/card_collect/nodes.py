@@ -239,10 +239,19 @@ async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict
                     "name": f.name,
                     "bizplanNm": extra.get("bizplanNm", ""),
                     "bgacctNm": extra.get("bgacctNm", ""),
+                    "isDefault": f.is_default,
                 }
             )
         elif f.kind == "project":
-            project_favs.append({"code": f.code, "name": f.name})
+            project_favs.append(
+                {
+                    "code": f.code,
+                    "name": f.name,
+                    "wbsNo": extra.get("wbsNo", ""),
+                    "wbsNm": extra.get("wbsNm", ""),
+                    "isDefault": f.is_default,
+                }
+            )
     return budget_favs, project_favs, department
 
 
@@ -387,7 +396,13 @@ def make_collect_rows_node(timeout_s: int | None = None):
                         logger.exception("card-collect dump_projects failed")
                         found = []
                     last_results = [
-                        {"code": p.get("code"), "name": p.get("name")} for p in found
+                        {
+                            "code": p.get("code"),
+                            "name": p.get("name"),
+                            "wbsNo": p.get("wbsNo", ""),
+                            "wbsNm": p.get("wbsNm", ""),
+                        }
+                        for p in found
                     ][:_MAX_PROJECT_RESULTS]
                     last_query = kw
                     await _emit_frame(last_results, last_query)
@@ -495,6 +510,8 @@ async def _apply_batch(
             "예산단위_예산계정": bu.get("bgacctNm") or "",
             "계정": "",  # 계정은 예산단위로 자동 결정(비워 두면 자동 처리).
             "프로젝트": (proj.get("name") if proj else "") or "",
+            # WBS 행 단위 선택 — 값이 있으면 그 WBS 요소를 정확히 고른다.
+            "프로젝트_wbsNo": (proj.get("wbsNo") if proj else "") or "",
             "적요": note,
         }
         ok, detail = await _apply_row_fields(page, events, idx, collected)
@@ -544,6 +561,12 @@ async def _apply_row_fields(
                     "bizplanNm": collected.get("예산단위_사업계획", ""),
                     "bgacctNm": collected.get("예산단위_예산계정", ""),
                 },
+            )
+        elif field == "프로젝트":
+            # 선택 단위 = WBS 행 — PJT_NM 검색 후 WBS_NO 정확 일치(없으면 PJT_NM 폴백).
+            r = await steps.fill_project_codepicker(
+                page,
+                {"name": collected["프로젝트"], "wbsNo": collected.get("프로젝트_wbsNo", "")},
             )
         else:
             spec = FIELD_SPEC[field]

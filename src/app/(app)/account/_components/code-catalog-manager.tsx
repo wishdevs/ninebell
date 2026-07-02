@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   RiArrowDownSLine,
   RiArrowUpSLine,
@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import { SectionCard } from '@/components/ui/section-card';
 import { Spinner } from '@/components/ui/spinner';
+import { Td, Th } from '@/components/ui/table-cell';
 import { errorMessage } from '@/lib/api/client';
 import {
   addFavorite,
@@ -26,6 +27,7 @@ import {
   fetchSyncStatus,
   removeFavorite,
   reorderFavorites,
+  setDefaultFavorite,
   startCatalogSync,
   type CatalogItem,
   type CatalogKind,
@@ -47,14 +49,24 @@ interface CodeCatalogManagerProps {
   description: string;
   /** 예산단위 — '전체 부서' 토글 노출(기본은 내 부서). */
   supportsDept?: boolean;
-  /** 프로젝트 — 서버 검색 입력 노출(2,000+ 항목). */
-  supportsSearch?: boolean;
 }
 
+/** 카탈로그 테이블 컬럼 헤더(주 컬럼이 첫 컬럼). */
+const CATALOG_HEADERS: Record<CatalogKind, readonly string[]> = {
+  budget_unit: ['예산계정명', '예산단위명', '사업계획명'],
+  project: ['프로젝트', 'WBS요소', '위치'],
+};
+
+const SEARCH_PLACEHOLDER: Record<CatalogKind, string> = {
+  budget_unit: '예산계정·예산단위·사업계획 검색',
+  project: '프로젝트·WBS·위치 검색',
+};
+
 /**
- * 코드(예산단위·프로젝트) 관리 — 자주쓰는(순서변경·삭제) + 전체 카탈로그(★ 토글) +
- * ERP 동기화(진행 중 3초 폴링). 예산단위는 부서 필터 토글, 프로젝트는 서버 검색을 갖는다.
- * 두 관리 화면이 로직을 공유하므로 kind 로 매개변수화한 단일 컴포넌트로 둔다.
+ * 코드(예산단위·프로젝트) 관리 — 자주쓰는(순서변경·삭제·기본지정) + 전체 카탈로그(테이블·★ 토글) +
+ * ERP 동기화(진행 중 3초 폴링). 두 kind 가 로직을 공유하므로 kind 로 매개변수화한 단일 컴포넌트다.
+ * 전체 목록은 sticky 헤더 테이블(예산단위=예산계정명 주 컬럼, 프로젝트=프로젝트/WBS요소/위치)이며
+ * 두 kind 모두 서버 검색을 갖는다. 예산단위만 '전체 부서' 토글을 추가한다.
  */
 export function CodeCatalogManager({
   kind,
@@ -62,7 +74,6 @@ export function CodeCatalogManager({
   title,
   description,
   supportsDept = false,
-  supportsSearch = false,
 }: CodeCatalogManagerProps) {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [busy, setBusy] = useState(false);
@@ -101,7 +112,7 @@ export function CodeCatalogManager({
     try {
       const res = await fetchCatalog({
         kind,
-        q: supportsSearch && query ? query : undefined,
+        q: query || undefined,
         dept: supportsDept && deptAll ? 'all' : undefined,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
@@ -116,7 +127,7 @@ export function CodeCatalogManager({
     } finally {
       setLoading(false);
     }
-  }, [kind, supportsSearch, query, supportsDept, deptAll, page]);
+  }, [kind, query, supportsDept, deptAll, page]);
 
   useEffect(() => {
     void loadFavorites();
@@ -143,15 +154,14 @@ export function CodeCatalogManager({
     };
   }, [kind]);
 
-  // 검색어 디바운스(프로젝트) — 입력 후 300ms 안정되면 서버 질의, 페이지 1로.
+  // 검색어 디바운스 — 입력 후 300ms 안정되면 서버 질의, 페이지 1로.
   useEffect(() => {
-    if (!supportsSearch) return;
     const t = setTimeout(() => {
       setQuery(queryInput.trim());
       setPage(1);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [queryInput, supportsSearch]);
+  }, [queryInput]);
 
   // 동기화 진행 중 폴링 — 끝나면 목록을 새로고침하고 결과를 토스트.
   useEffect(() => {
@@ -219,6 +229,18 @@ export function CodeCatalogManager({
     else void addFav(item);
   };
 
+  const setDefault = async (id: string) => {
+    const prev = favorites;
+    // 낙관적: 대상만 기본, 나머지는 해제(같은 kind 내 단일성).
+    setFavorites((cur) => cur.map((f) => ({ ...f, isDefault: f.id === id })));
+    try {
+      await setDefaultFavorite(id);
+    } catch (err) {
+      setFavorites(prev);
+      toast.error(errorMessage(err, '기본 지정에 실패했습니다.'));
+    }
+  };
+
   const move = async (index: number, dir: -1 | 1) => {
     const next = index + dir;
     if (next < 0 || next >= favorites.length) return;
@@ -238,6 +260,7 @@ export function CodeCatalogManager({
   };
 
   const syncLabel = sync?.lastSyncedAt ?? syncedAt;
+  const headers = CATALOG_HEADERS[kind];
 
   return (
     <SectionCard
@@ -259,7 +282,7 @@ export function CodeCatalogManager({
         </div>
       }
     >
-      {/* 자주쓰는 — 순서변경 + 삭제 */}
+      {/* 자주쓰는 — 순서변경 + 기본지정 + 삭제 */}
       <div className="flex flex-col gap-2">
         <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
           자주쓰는
@@ -279,6 +302,7 @@ export function CodeCatalogManager({
                   {i + 1}
                 </span>
                 <CodeRowInfo kind={kind} name={f.name} code={f.code} extra={f.extra} />
+                <DefaultToggle active={f.isDefault} onClick={() => void setDefault(f.id)} />
                 <div className="flex items-center gap-0.5">
                   <IconBtn label="위로" onClick={() => void move(i, -1)} disabled={i === 0}>
                     <RiArrowUpSLine size={16} aria-hidden />
@@ -300,7 +324,7 @@ export function CodeCatalogManager({
         )}
       </div>
 
-      {/* 전체 카탈로그 — 검색/부서 토글 + ★ 토글 */}
+      {/* 전체 카탈로그 — 검색/부서 토글 + sticky 헤더 테이블 + ★ 토글 */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
@@ -322,21 +346,19 @@ export function CodeCatalogManager({
           ) : null}
         </div>
 
-        {supportsSearch ? (
-          <div className="relative">
-            <RiSearchLine
-              size={15}
-              aria-hidden
-              className="text-foreground-tertiary pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
-            />
-            <Input
-              value={queryInput}
-              onChange={(e) => setQueryInput(e.target.value)}
-              placeholder="프로젝트 이름·코드 검색"
-              className="pl-9"
-            />
-          </div>
-        ) : null}
+        <div className="relative">
+          <RiSearchLine
+            size={15}
+            aria-hidden
+            className="text-foreground-tertiary pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
+          />
+          <Input
+            value={queryInput}
+            onChange={(e) => setQueryInput(e.target.value)}
+            placeholder={SEARCH_PLACEHOLDER[kind]}
+            className="pl-9"
+          />
+        </div>
 
         {loading ? (
           <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
@@ -363,17 +385,42 @@ export function CodeCatalogManager({
             compact
           />
         ) : (
-          <ul className="border-border divide-border-subtle flex flex-col divide-y overflow-hidden rounded-[var(--radius-md)] border">
-            {items.map((item) => {
-              const fav = favByCode.has(item.code);
-              return (
-                <li key={item.code} className="flex items-center gap-3 px-3 py-2">
-                  <CodeRowInfo kind={kind} name={item.name} code={item.code} extra={item.extra} />
-                  <StarButton active={fav} disabled={busy} onClick={() => toggleFav(item)} />
-                </li>
-              );
-            })}
-          </ul>
+          <div className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border">
+            <table className="w-full border-separate border-spacing-0 text-[12px]">
+              <thead>
+                <tr>
+                  {headers.map((h, idx) => (
+                    <Th
+                      key={h}
+                      className={cn(
+                        'bg-surface text-foreground-tertiary border-border-subtle sticky top-0 z-10 border-b text-left',
+                        idx === 0 && 'text-foreground-secondary',
+                      )}
+                    >
+                      {h}
+                    </Th>
+                  ))}
+                  <Th className="bg-surface border-border-subtle sticky top-0 z-10 w-12 border-b text-center">
+                    자주쓰는
+                  </Th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.code} className="hover:bg-muted/40 transition-colors">
+                    <CatalogRowCells kind={kind} item={item} />
+                    <Td className="border-border-subtle border-b text-center">
+                      <StarButton
+                        active={favByCode.has(item.code)}
+                        disabled={busy}
+                        onClick={() => toggleFav(item)}
+                      />
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {!loading && !loadError ? (
@@ -384,8 +431,42 @@ export function CodeCatalogManager({
   );
 }
 
-/** 코드 행 표시 — 선택에 필요한 정보를 전부 노출한다.
- * 예산단위 = 조합 행(예산단위명·사업계획명·예산계정명 3필드), 프로젝트 = 이름·코드·거래처. */
+/** 카탈로그 테이블 한 행의 데이터 셀(★ 컬럼 제외) — kind 별 컬럼 스펙.
+ * 예산단위 = 예산계정명(주·강조) · 예산단위명 · 사업계획명.
+ * 프로젝트 = 프로젝트(이름/번호) · WBS요소(번호/이름) · 위치. */
+function CatalogRowCells({ kind, item }: { kind: CatalogKind; item: CatalogItem }) {
+  const extra = item.extra ?? {};
+  const cellBorder = 'border-border-subtle border-b align-top';
+  if (kind === 'budget_unit') {
+    return (
+      <>
+        <Td className={cn(cellBorder, 'text-foreground font-medium')}>{extra.bgacctNm || '-'}</Td>
+        <Td className={cn(cellBorder, 'text-foreground-secondary')}>{item.name || '-'}</Td>
+        <Td className={cn(cellBorder, 'text-foreground-secondary')}>{extra.bizplanNm || '-'}</Td>
+      </>
+    );
+  }
+  return (
+    <>
+      <Td className={cellBorder}>
+        <span className="text-foreground block font-medium">{item.name || '-'}</span>
+        <span className="text-foreground-tertiary block font-mono text-[11px]">
+          {extra.pjtNo || '-'}
+        </span>
+      </Td>
+      <Td className={cellBorder}>
+        <span className="text-foreground-secondary block font-mono text-[11px]">
+          {extra.wbsNo || '-'}
+        </span>
+        <span className="text-foreground-tertiary block">{extra.wbsNm || '-'}</span>
+      </Td>
+      <Td className={cn(cellBorder, 'text-foreground-secondary')}>{extra.loc || '-'}</Td>
+    </>
+  );
+}
+
+/** 자주쓰는 행 표시 — 선택에 필요한 정보를 노출한다.
+ * 예산단위 = 예산단위명·사업계획명·예산계정명 3필드, 프로젝트 = 이름·프로젝트번호·WBS요소명. */
 function CodeRowInfo({
   kind,
   name,
@@ -421,10 +502,31 @@ function CodeRowInfo({
         {name}
       </p>
       <p className="text-foreground-tertiary truncate font-mono text-[11px]">
-        {code}
-        {extra?.partnerNm ? <span className="ml-1.5 font-sans">· {extra.partnerNm}</span> : null}
+        {extra?.pjtNo || code}
+        {extra?.wbsNm ? <span className="ml-1.5 font-sans">· {extra.wbsNm}</span> : null}
       </p>
     </div>
+  );
+}
+
+/** 기본지정 토글 — 하나만 활성(라디오 성격). 활성 시 강조 뱃지 '기본'. */
+function DefaultToggle({ active, onClick }: { active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={active ? '기본 지정됨' : '기본으로 지정'}
+      title={active ? '기본 지정됨' : '기본으로 지정'}
+      className={cn(
+        'flex h-6 shrink-0 items-center rounded-full border px-2 text-[11px] font-medium transition-colors',
+        active
+          ? 'border-accent bg-accent/10 text-accent'
+          : 'border-border text-foreground-tertiary hover:border-accent/50 hover:text-foreground-secondary',
+      )}
+    >
+      기본
+    </button>
   );
 }
 

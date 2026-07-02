@@ -137,8 +137,8 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
         "프로젝트 스크롤 수집 — 원시 %d행 로드(서버 total=%s), 고유 프로젝트 %d건",
         raw_loaded, server_total, len(rows),
     )
-    # 완결 판정은 원시 행 수 기준 — total(2,358)은 WBS 하위행 포함이라 dedupe 건수(1,318)와
-    # 다르다. 원시 로드가 total 에 못 미쳤을 때만 접두 스윕으로 보강한다.
+    # 완결 판정은 원시 행 수 기준 — dedupe 키가 PJT_NO|WBS_NO 복합이라 dedupe 후 행 수가
+    # 원시(2,358)와 거의 같다(WBS 세분성 유지). 원시 로드가 total 에 못 미치면 접두 스윕 보강.
     if raw_loaded < (server_total or steps.PROJECT_PICKER_CAP + 1):
         logger.warning("프로젝트 로드 미달(%d/%s) — 접두 스윕 보강", raw_loaded, server_total)
         sweep_rows, cap_hit = await steps.dump_projects_sweep(page, list(_PROJECT_PREFIXES))
@@ -165,9 +165,16 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
                 ErpCodeCatalog(
                     kind="project",
                     dept="",
-                    code=r["code"],
+                    code=r["code"],  # PJT_NO|WBS_NO 복합 — WBS 행 단위.
                     name=r["name"],
-                    extra={"useYn": r["useYn"], "partnerNm": r.get("partnerNm") or ""},
+                    extra={
+                        "pjtNo": r.get("pjtNo") or "",
+                        "wbsNo": r.get("wbsNo") or "",
+                        "wbsNm": r.get("wbsNm") or "",
+                        "loc": r.get("loc") or "",
+                        "useYn": r.get("useYn") or "",
+                        "partnerNm": r.get("partnerNm") or "",
+                    },
                     synced_at=now,
                 )
             )

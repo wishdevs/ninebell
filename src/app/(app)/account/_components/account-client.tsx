@@ -126,8 +126,7 @@ export function AccountClient() {
         kind="project"
         caption="코드"
         title="프로젝트 관리"
-        description="자주쓰는 프로젝트를 관리하고, ERP에서 프로젝트 목록을 동기화합니다. 이름·코드로 검색할 수 있습니다."
-        supportsSearch
+        description="자주쓰는 프로젝트를 관리하고, ERP에서 프로젝트 목록을 동기화합니다. 프로젝트·WBS·위치로 검색할 수 있습니다."
       />
     </div>
   );

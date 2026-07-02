@@ -233,35 +233,51 @@ async def dump_budget_units(page: Any) -> list[dict]:
     return out
 
 
-async def dump_projects(page: Any, keyword: str | None) -> list[dict]:
-    """프로젝트(pjt_cd) 코드피커 검색(빈검색=초기 500행) → (PJT_NO) 유니크.
+# 프로젝트 팝업(H_PS_WBS_MST) 은 WBS 하위행 단위다. 카탈로그도 WBS 행 단위로 수집한다
+# — code 는 PJT_NO|WBS_NO 복합키(전사 WBS_NO 단독 유니크가 offline 미검증 + WBS 없는
+# 프로젝트-레벨 행 충돌 대비), 팝업 데이터셋 내 유일성 보장·WBS 세분성 유지(원시 ~2,358행).
+_PROJECT_FIELDS = ["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM", "WBS_NO", "WBS_NM", "VIEW_WBS_NM", "WBS_LOC"]
 
-    반환 [{code,name,useYn,partnerNm}] — 파트너명은 목록에서 프로젝트를 고를 때 필요한
-    식별 정보(동명 프로젝트 구분). ⚠ 팝업 캡(500행) — 전량 수집은 prefix sweep 합집합.
+
+async def dump_projects(page: Any, keyword: str | None) -> list[dict]:
+    """프로젝트(pjt_cd) 코드피커 검색(빈검색=초기 500행) → (PJT_NO|WBS_NO) 유니크.
+
+    반환 [{code,name,pjtNo,wbsNo,wbsNm,loc,useYn,partnerNm}] — WBS 하위행 단위.
+    ⚠ 팝업 캡(500행) — 전량 수집은 prefix sweep 합집합.
     """
     if not await _open_picker(page, "pjt_cd"):
         return []
     await _picker_search(page, keyword or "")
-    read = await page.evaluate(
-        js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
-    )
+    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [_PROJECT_FIELDS, 0])
     await page.evaluate(js.PICKER_CLOSE_JS)
     await page.wait_for_timeout(400)
     return _dedupe_projects(read.get("options") or [])
 
 
 def _dedupe_projects(options: list[dict]) -> list[dict]:
+    """WBS 행 단위 정규화 — code=PJT_NO|WBS_NO 복합, name=PJT_NM(주 표시·검색).
+
+    wbsNm 은 VIEW_WBS_NM(표시명) 우선, 없으면 WBS_NM. loc=WBS_LOC.
+    """
     seen: set[str] = set()
     out: list[dict] = []
     for o in options:
-        code = o.get("PJT_NO")
-        if not code or code in seen:
+        pjt = o.get("PJT_NO")
+        if not pjt:
+            continue
+        wbs = o.get("WBS_NO") or ""
+        code = f"{pjt}|{wbs}"
+        if code in seen:
             continue
         seen.add(code)
         out.append(
             {
                 "code": code,
                 "name": o.get("PJT_NM") or "",
+                "pjtNo": pjt,
+                "wbsNo": wbs,
+                "wbsNm": o.get("VIEW_WBS_NM") or o.get("WBS_NM") or "",
+                "loc": o.get("WBS_LOC") or "",
                 "useYn": o.get("USE_YN") or "",
                 "partnerNm": o.get("PARTNER_NM") or "",
             }
@@ -280,9 +296,9 @@ async def dump_projects_scroll(
 
     팝업 그리드는 서버 페이징(500/페이지)이다. 프로브(2026-07-02): DOM 스크롤/페이징
     API/End 키는 무효, **setCurrent(마지막 행)+ArrowDown 연타가 라운드당 +500 결정적**.
-    조회 XHR 응답의 total 을 캡처해 목표치로 삼는다. ⚠ total(실측 2,358)은 WBS 하위행
-    포함 **원시 행 수**이고, PJT_NO 중복 제거 후 고유 프로젝트는 그보다 적다(실측 1,318)
-    — 완결 판정은 원시 로드 행 수(raw_loaded)로만 한다.
+    조회 XHR 응답의 total 을 캡처해 목표치로 삼는다. total(실측 2,358)은 WBS 하위행 포함
+    **원시 행 수**이며, dedupe 키가 PJT_NO|WBS_NO 복합이라 dedupe 후 행 수도 원시와 거의
+    같다(WBS 세분성 유지). 완결 판정은 원시 로드 행 수(raw_loaded)로만 한다.
     반환 (dedupe된 rows, server_total|None, raw_loaded).
     """
     server_total: int | None = None
@@ -331,9 +347,7 @@ async def dump_projects_scroll(
             else:
                 stable = 0
             prev = max(prev, cur)
-        read = await page.evaluate(
-            js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
-        )
+        read = await page.evaluate(js.PICKER_READ_MULTI_JS, [_PROJECT_FIELDS, 0])
         await page.evaluate(js.PICKER_CLOSE_JS)
         await page.wait_for_timeout(400)
         raw_loaded = read.get("rows") if isinstance(read.get("rows"), int) else prev
@@ -355,9 +369,7 @@ async def dump_projects_sweep(page: Any, prefixes: list[str]) -> tuple[list[dict
     cap_hit: list[str] = []
     for kw in prefixes:
         await _picker_search(page, kw)
-        read = await page.evaluate(
-            js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "USE_YN", "PARTNER_NM"], 0]
-        )
+        read = await page.evaluate(js.PICKER_READ_MULTI_JS, [_PROJECT_FIELDS, 0])
         if read.get("rows") == PROJECT_PICKER_CAP:
             cap_hit.append(kw or "(빈검색)")
         for row in _dedupe_projects(read.get("options") or []):
@@ -420,6 +432,48 @@ async def fill_budget_codepicker(page: Any, combo: dict) -> dict:
         "code": chosen.get("BG_CD"),
         "name": f"{chosen.get('BG_NM')} · {chosen.get('BIZPLAN_NM')} · {chosen.get('BGACCT_NM')}",
     }
+
+
+# ── 프로젝트 WBS 행 선택(PJT_NM 검색 → WBS_NO 정확 일치) ─────────────────────────────
+async def fill_project_codepicker(page: Any, combo: dict) -> dict:
+    """프로젝트 피커에서 PJT_NM 검색 후 WBS_NO 가 정확히 일치하는 WBS 행을 선택.
+
+    combo = {name(PJT_NM), wbsNo}. 카탈로그가 WBS 행 단위라 같은 프로젝트에 여러 WBS 요소가
+    있어(선택이 달라짐) WBS_NO 로 정확히 고른다. wbsNo 가 없으면 fill_codepicker(PJT_NM 매칭)로
+    폴백(구 PJT_NO 즐겨찾기·WBS 미지정 하위호환). 반환 {ok, code, name} | {ok:False, reason}.
+    """
+    pjt_nm = (combo.get("name") or "").strip()
+    wbs_no = (combo.get("wbsNo") or "").strip()
+    if not wbs_no:
+        return await fill_codepicker(page, "pjt_cd", pjt_nm, "PJT_NO", "PJT_NM")
+
+    if not await _open_picker(page, "pjt_cd"):
+        return {"ok": False, "reason": "pjt_cd 버튼 없음"}
+
+    async def _fail(reason: str) -> dict:
+        await page.evaluate(js.PICKER_CLOSE_JS)
+        await page.wait_for_timeout(400)
+        return {"ok": False, "reason": reason}
+
+    await _picker_search(page, pjt_nm)
+    read = await page.evaluate(js.PICKER_READ_MULTI_JS, [["PJT_NO", "PJT_NM", "WBS_NO"], 0])
+    opts = read.get("options") or []
+    matches = [o for o in opts if _norm(o.get("WBS_NO")) == _norm(wbs_no)]
+    if not matches:
+        # WBS_NO 무매칭 → PJT_NM 정확 일치로 폴백(WBS 체계 변경/이전 즐겨찾기 대비, 임의선택 아님).
+        matches = [o for o in opts if _norm(o.get("PJT_NM")) == _norm(pjt_nm)]
+        if not matches:
+            return await _fail(f"프로젝트 무매칭: {pjt_nm} · WBS {wbs_no} (후보 {len(opts)}건)")
+    chosen = matches[0]
+    sel = await page.evaluate(js.PICKER_SELECT_JS, chosen["i"])
+    if not sel.get("ok"):
+        return await _fail(f"프로젝트 행 선택 실패: {sel}")
+    await page.wait_for_timeout(400)
+    apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
+    if apply_box:
+        await page.mouse.click(apply_box["x"], apply_box["y"])
+        await page.wait_for_timeout(1_000)
+    return {"ok": True, "code": chosen.get("PJT_NO"), "name": chosen.get("PJT_NM")}
 
 
 # ── 카드 팝업 닫기(2패스 증빙유형 전환용) ─────────────────────────────────────────

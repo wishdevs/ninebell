@@ -10,7 +10,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, JSONVariant
@@ -36,6 +46,10 @@ class UserCodeFavorite(Base):
     # 부가 스냅샷(예: {"deptNm": ...}) — 카탈로그에서 복사.
     extra: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # (user, kind) 당 1개만 True — 단일성은 라우터(POST /me/favorites/{id}/default)가 보장.
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

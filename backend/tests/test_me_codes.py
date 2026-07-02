@@ -113,6 +113,65 @@ async def test_favorite_reorder(client, make_user, auth_as):
     assert [i["code"] for i in reordered.json()["items"]] == ["C", "A", "B"]
 
 
+async def test_favorite_created_is_not_default(client, make_user, auth_as):
+    uid = await make_user("fav-default-init", "user")
+    auth_as(uid)
+    created = await client.post(
+        "/me/favorites", json={"kind": "project", "code": "P1", "name": "프로젝트1"}
+    )
+    assert created.json()["isDefault"] is False
+
+
+async def test_set_default_is_single_per_kind(client, make_user, auth_as):
+    """(user,kind) 당 기본은 1개 — 두 번째 지정 시 첫 번째가 자동 해제된다."""
+    uid = await make_user("fav-default", "user")
+    auth_as(uid)
+    ids = []
+    for code in ("P1", "P2"):
+        r = await client.post("/me/favorites", json={"kind": "project", "code": code, "name": code})
+        ids.append(r.json()["id"])
+
+    first = await client.post(f"/me/favorites/{ids[0]}/default")
+    assert first.status_code == 200
+    assert first.json()["isDefault"] is True
+
+    # 두 번째 지정 → 첫 번째 해제.
+    await client.post(f"/me/favorites/{ids[1]}/default")
+    listed = {i["id"]: i["isDefault"] for i in (await client.get("/me/favorites?kind=project")).json()["items"]}
+    assert listed[ids[0]] is False
+    assert listed[ids[1]] is True
+
+
+async def test_set_default_is_scoped_per_kind(client, make_user, auth_as):
+    """기본 지정은 kind 별로 독립 — 프로젝트 기본이 예산단위 기본을 건드리지 않는다."""
+    uid = await make_user("fav-default-kind", "user")
+    auth_as(uid)
+    bg = await client.post("/me/favorites", json={"kind": "budget_unit", "code": "B1", "name": "b"})
+    pj = await client.post("/me/favorites", json={"kind": "project", "code": "P1", "name": "p"})
+    await client.post(f"/me/favorites/{bg.json()['id']}/default")
+    await client.post(f"/me/favorites/{pj.json()['id']}/default")
+    bg_items = {i["id"]: i["isDefault"] for i in (await client.get("/me/favorites?kind=budget_unit")).json()["items"]}
+    assert bg_items[bg.json()["id"]] is True
+
+
+async def test_set_default_others_favorite_returns_404(client, make_user, auth_as):
+    owner = await make_user("def-owner", "user")
+    other = await make_user("def-other", "user")
+    auth_as(owner)
+    created = await client.post(
+        "/me/favorites", json={"kind": "project", "code": "PX", "name": "x"}
+    )
+    fav_id = created.json()["id"]
+
+    auth_as(other)
+    resp = await client.post(f"/me/favorites/{fav_id}/default")
+    assert resp.status_code == 404
+    # 소유자 것은 기본이 지정되지 않았다.
+    auth_as(owner)
+    items = (await client.get("/me/favorites?kind=project")).json()["items"]
+    assert items[0]["isDefault"] is False
+
+
 async def test_favorite_kind_filter(client, make_user, auth_as):
     uid = await make_user("fav-kind", "user")
     auth_as(uid)
@@ -148,6 +207,39 @@ async def test_catalog_query_and_envelope(client, make_user, auth_as, sm):
     assert [i["code"] for i in filtered.json()["items"]] == ["P100"]
     by_code = await client.get("/me/catalog?kind=project&q=P200")
     assert [i["code"] for i in by_code.json()["items"]] == ["P200"]
+
+
+async def test_catalog_project_q_covers_wbs_extra(client, make_user, auth_as, sm):
+    """프로젝트 q 는 name/code 외에 extra(wbsNm/loc/pjtNo)도 부분 매칭한다(파이썬 필터)."""
+    uid = await make_user("cat-proj-wbs", "user")
+    auth_as(uid)
+    now = datetime.now(timezone.utc)
+    await _seed_catalog(
+        sm,
+        [
+            {
+                "kind": "project", "dept": "", "code": "PJ100|W1", "name": "알파 프로젝트",
+                "extra": {"pjtNo": "PJ100", "wbsNo": "W1", "wbsNm": "정비 요소", "loc": "부산"},
+                "synced_at": now,
+            },
+            {
+                "kind": "project", "dept": "", "code": "PJ200|W9", "name": "베타 프로젝트",
+                "extra": {"pjtNo": "PJ200", "wbsNo": "W9", "wbsNm": "설계 요소", "loc": "서울"},
+                "synced_at": now,
+            },
+        ],
+    )
+    # WBS요소명 매칭.
+    by_wbsnm = await client.get("/me/catalog?kind=project&q=정비")
+    assert [i["code"] for i in by_wbsnm.json()["items"]] == ["PJ100|W1"]
+    # 위치(loc) 매칭.
+    by_loc = await client.get("/me/catalog?kind=project&q=서울")
+    assert [i["code"] for i in by_loc.json()["items"]] == ["PJ200|W9"]
+    # 프로젝트번호(pjtNo) 매칭 + extra 가 응답에 실린다.
+    by_pjtno = await client.get("/me/catalog?kind=project&q=PJ100")
+    body = by_pjtno.json()
+    assert [i["code"] for i in body["items"]] == ["PJ100|W1"]
+    assert body["items"][0]["extra"]["wbsNm"] == "정비 요소"
 
 
 async def test_catalog_dept_default_and_all(client, make_user, auth_as, sm):
@@ -280,3 +372,43 @@ async def test_sync_catalog_budget_units_upsert_and_stale_delete(sm, monkeypatch
         )
     codes = {r.code for r in rows}
     assert codes == {"B1", "B2"}  # OLD 는 stale 삭제됨.
+
+
+async def test_sync_catalog_projects_wbs_rows(sm, monkeypatch):
+    """프로젝트 동기화 — WBS 행 단위(code=PJT_NO|WBS_NO)로 upsert + extra 보존."""
+
+    async def _noop_chain(page, userid, password):  # noqa: ANN001
+        return None
+
+    async def _fake_scroll(page):  # noqa: ANN001
+        rows = [
+            {"code": "PJ1|W1", "name": "알파", "pjtNo": "PJ1", "wbsNo": "W1",
+             "wbsNm": "정비", "loc": "부산", "useYn": "Y", "partnerNm": "가나상사"},
+            {"code": "PJ1|W2", "name": "알파", "pjtNo": "PJ1", "wbsNo": "W2",
+             "wbsNm": "설계", "loc": "서울", "useYn": "Y", "partnerNm": "가나상사"},
+        ]
+        return rows, 2, 2  # (rows, server_total, raw_loaded) — raw_loaded>=total 이라 스윕 생략.
+
+    browser = _FakeBrowser()
+
+    async def _factory():
+        return browser
+
+    monkeypatch.setattr(code_sync, "_run_entry_chain", _noop_chain)
+    monkeypatch.setattr(code_sync.steps, "dump_projects_scroll", _fake_scroll)
+
+    result = await code_sync.sync_catalog("project", "u", "p", _factory, sm)
+    assert result["count"] == 2
+
+    async with sm() as s:
+        rows = (
+            (await s.execute(select(ErpCodeCatalog).where(ErpCodeCatalog.kind == "project")))
+            .scalars()
+            .all()
+        )
+    by_code = {r.code: r for r in rows}
+    assert set(by_code) == {"PJ1|W1", "PJ1|W2"}  # 같은 PJT_NO 도 WBS_NO 로 분리 유지.
+    assert by_code["PJ1|W1"].name == "알파"
+    assert by_code["PJ1|W1"].extra["wbsNm"] == "정비"
+    assert by_code["PJ1|W1"].extra["loc"] == "부산"
+    assert by_code["PJ1|W1"].extra["pjtNo"] == "PJ1"
