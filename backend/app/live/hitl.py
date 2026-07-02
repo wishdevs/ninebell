@@ -13,10 +13,30 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from app.config import get_settings
+
 # decision_id → 대기 큐. 노드가 만들고, resolve_hitl 이 넣고, 노드가 pop 한다.
 _hitl_queues: dict[str, asyncio.Queue] = {}
 # decision_id → owner(세션 사용자 식별자). 값이 있으면 그 사용자만 resolve 가능.
 _hitl_owner: dict[str, str] = {}
+
+
+def open_hitl_channel(decision_id: str) -> asyncio.Queue:
+    """지속(멀티턴) HITL 큐 등록 — 대화형 노드용.
+
+    `wait_hitl`(단발)과 달리 노드 수명 동안 같은 decision_id 로 큐를 유지해, 도구 실행 등
+    턴 사이 공백에도 사용자 메시지가 유실되지 않고 큐잉된다. 반드시 `close_hitl_channel` 로 정리.
+    소유권(`_hitl_owner`)은 LiveSession 이 hitl 프레임을 볼 때 자동 등록한다.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    _hitl_queues[decision_id] = q
+    return q
+
+
+def close_hitl_channel(decision_id: str) -> None:
+    """`open_hitl_channel` 로 연 채널 정리(큐·소유권 제거)."""
+    _hitl_queues.pop(decision_id, None)
+    _hitl_owner.pop(decision_id, None)
 
 
 def set_hitl_owner(decision_id: str, owner: str | None) -> None:
@@ -49,13 +69,16 @@ async def wait_hitl(
     prompt: str,
     options: list[dict] | None = None,
     extra: dict | None = None,
-    timeout_s: int = 300,
+    timeout_s: int | None = None,
 ) -> dict:
     """hitl 이벤트를 방출하고 사용자 응답을 기다린다(최대 timeout_s).
 
     소유권은 LiveSession 이 hitl 이벤트를 보며 등록하므로 여기서는 큐만 만든다.
     타임아웃 시 asyncio.TimeoutError 를 던진다(호출 노드가 실패 이벤트로 변환).
+    timeout_s 미지정 시 config.hitl_timeout_s(단일 소스)를 쓴다.
     """
+    if timeout_s is None:
+        timeout_s = get_settings().hitl_timeout_s
     decision_id = uuid.uuid4().hex
     q: asyncio.Queue = asyncio.Queue()
     _hitl_queues[decision_id] = q

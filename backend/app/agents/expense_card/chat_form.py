@@ -28,9 +28,9 @@ from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_tran
 
 # 대화형(chat) HITL 은 하나의 decision_id 에 사용자 메시지를 여러 번 + '선택 완료' 1번 받는다
 # (resolve_hitl 이 같은 큐로 여러 턴을 전달 — app.live.hitl 설계). wait_hitl 은 단발이라
-# 여기선 엔진의 chat-HITL 큐(_hitl_queues)에 직접 등록해 멀티턴을 받는다. 소유권(_hitl_owner)은
-# LiveSession 이 hitl 프레임을 보며 등록하고, 종료 시 여기서 정리한다.
-from app.live.hitl import _hitl_owner, _hitl_queues
+# 여기선 지속 채널(open/close_hitl_channel)로 멀티턴을 받는다. 소유권(_hitl_owner)은
+# LiveSession 이 hitl 프레임을 보며 등록하고, 종료 시 close 로 정리한다.
+from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.patterns import emit_shot
 
 from .domain import remark_for, use_item_from_remark
@@ -278,8 +278,8 @@ async def _auto_replay(events: asyncio.Queue, page: Any, template: list[dict]) -
     }
 
 
-def make_chat_form_node(timeout_s: int = 600):
-    """대화형 폼 채움 노드 팩토리. timeout_s = 사용자 입력 한 턴 대기 상한(초)."""
+def make_chat_form_node(timeout_s: int | None = None):
+    """대화형 폼 채움 노드 팩토리. timeout_s = 사용자 입력 대기 상한(초). None 이면 config 폴백."""
 
     async def chat_form(state: dict) -> dict:
         if state.get("error"):
@@ -387,8 +387,7 @@ def make_chat_form_node(timeout_s: int = 600):
         # chat HITL 오픈 — 하나의 decision_id 로 멀티턴(사용자 메시지 여러 번 + '선택 완료' 1번).
         # 소유권은 LiveSession 이 이 hitl 프레임을 보며 등록한다(/runs/hitl 격리).
         decision_id = uuid.uuid4().hex
-        q: asyncio.Queue = asyncio.Queue()
-        _hitl_queues[decision_id] = q
+        q = open_hitl_channel(decision_id)
         await emit_hitl(
             events,
             decision_id=decision_id,
@@ -400,14 +399,15 @@ def make_chat_form_node(timeout_s: int = 600):
         await emit_log(events, "대화형 폼 입력 대기 중(chat HITL) — 사용자 메시지를 기다립니다.", "info")
         await emit_shot(events.put, page)
 
+        wait_timeout = timeout_s if timeout_s is not None else get_settings().hitl_timeout_s
         try:
             while True:
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=timeout_s)
+                    msg = await asyncio.wait_for(q.get(), timeout=wait_timeout)
                 except asyncio.TimeoutError:
                     await emit_step(events, "chat_form", "failed")
                     return {
-                        "error": f"대화형 폼 입력 대기 시간 초과({timeout_s // 60}분). 다시 실행해 주세요."
+                        "error": f"대화형 폼 입력 대기 시간 초과({wait_timeout // 60}분). 다시 실행해 주세요."
                     }
 
                 # 종료는 사용자가 '선택 완료'(done)를 눌렀을 때만. 에이전트는 스스로 끝내지 않는다.
@@ -591,8 +591,7 @@ def make_chat_form_node(timeout_s: int = 600):
                         "요청하신 필드를 처리했어요. 더 추가/수정할 게 있으면 말씀하시고, 끝나면 '선택 완료'를 눌러주세요."
                     )
         finally:
-            _hitl_queues.pop(decision_id, None)
-            _hitl_owner.pop(decision_id, None)
+            close_hitl_channel(decision_id)
             await http.aclose()
 
     return chat_form
