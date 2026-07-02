@@ -159,6 +159,7 @@
 - [x] 행별 write 루프 — 다행 이슈(예산현황 확인창) 해결·통합
 - [x] `apply_row`(일괄적용) + 예산현황 확인창 처리 — 10/10 검증
 - [x] 헤드리스 10회 반복 테스트(저장 직전까지) — **10/10 PASS(avg 55s)**
+- [x] 리뷰 반영·회귀 수정 후 **최종 코드 10회 재검증 — 10/10 PASS(avg 56.7s, 2026-07-02)**
 - [x] LangGraph 노드/그래프(`graph.py`) + registry 등록 (`card-collect`)
 - [x] 프론트 매핑(card-chat→card-collect)·step-defs·에이전트 메타 (HITL은 chat/choice 인프라 재사용)
 - [~] 리뷰 반영 후 회귀 재검증(갱신 fill_codepicker N=3) — 진행 중
