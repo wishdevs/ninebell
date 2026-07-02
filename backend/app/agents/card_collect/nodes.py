@@ -21,6 +21,7 @@ import uuid
 from datetime import date
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from app.agents.common.nodes import make_open_evdn_node, make_select_evdn_node
@@ -33,6 +34,7 @@ from app.services.code_sync import dept_matches_budget_name
 from nbkit.patterns import emit_shot
 
 from . import steps
+from .recommend import RECOMMEND_CONFIDENCE_THRESHOLD, recommend_selections
 
 logger = logging.getLogger("app.agents.card_collect.nodes")
 
@@ -255,6 +257,107 @@ async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict
     return budget_favs, project_favs, department
 
 
+def _pick_budget(o: dict) -> dict:
+    return {
+        "code": o["code"],
+        "name": o["name"],
+        "bizplanNm": o.get("bizplanNm", ""),
+        "bgacctNm": o.get("bgacctNm", ""),
+    }
+
+
+def _pick_project(o: dict) -> dict:
+    return {
+        "code": o["code"],
+        "name": o["name"],
+        "wbsNo": o.get("wbsNo", ""),
+        "wbsNm": o.get("wbsNm", ""),
+    }
+
+
+async def _prefill_selections(
+    events: Any,
+    settings: Any,
+    rows_list: list[dict],
+    recs: dict[int, str],
+    budget_favs: list[dict],
+    mine_units: list[dict],
+    project_favs: list[dict],
+) -> dict[int, dict]:
+    """행별 예산단위·프로젝트 프리셀렉트 — AI 추천이 확신하면 그 항목, 아니면 기본지정 폴백.
+
+    반환 {no: {budgetUnit, project, budgetSource, projectSource}} — 각 값은 없으면 None.
+    예산단위·프로젝트는 서로 독립적으로 결정한다(예: 예산단위는 AI, 프로젝트는 기본).
+    """
+    # AI 후보 — 예산단위(자주쓰는 + 내 부서, code 중복 제거) / 프로젝트(자주쓰는).
+    budget_candidates: list[dict] = []
+    seen: set[str] = set()
+    for c in [*budget_favs, *mine_units]:
+        code = c.get("code")
+        if code and code not in seen:
+            seen.add(code)
+            budget_candidates.append(c)
+    project_candidates = list(project_favs)
+
+    recommendations: dict[int, dict] = {}
+    if settings.gemini_api_key and (budget_candidates or project_candidates):
+        rec_rows = [
+            {
+                "no": idx + 1,
+                "merchant": r.get("TRAN_NM") or "",
+                "amount": _fmt_won(r.get("TRAN_AMT")),
+                "vatType": r.get("VAT_TP") or "",
+                "note": recs[r.get("i", idx)],
+            }
+            for idx, r in enumerate(rows_list)
+        ]
+        await emit_log(events, "AI 추천을 계산하는 중입니다…", "info")
+        http = httpx.AsyncClient(timeout=60.0)
+        try:
+            recommendations = await recommend_selections(
+                rec_rows, budget_candidates, project_candidates, http=http, settings=settings
+            )
+        finally:
+            await http.aclose()
+        if not recommendations:
+            await emit_log(events, "AI 추천을 받지 못해 기본지정으로 프리필합니다.", "warn")
+
+    budget_by_code = {c["code"]: c for c in budget_candidates}
+    project_by_code = {c["code"]: c for c in project_candidates}
+    default_budget = next((c for c in budget_favs if c.get("isDefault")), None)
+    default_project = next((c for c in project_favs if c.get("isDefault")), None)
+
+    out: dict[int, dict] = {}
+    for idx in range(len(rows_list)):
+        no = idx + 1
+        rec = recommendations.get(no) or {}
+        hi = rec.get("confidence", 0.0) >= RECOMMEND_CONFIDENCE_THRESHOLD
+
+        ai_budget = budget_by_code.get(rec.get("budgetUnitCode", "")) if hi else None
+        if ai_budget:
+            budget, budget_source = _pick_budget(ai_budget), "ai"
+        elif default_budget:
+            budget, budget_source = _pick_budget(default_budget), "default"
+        else:
+            budget, budget_source = None, None
+
+        ai_project = project_by_code.get(rec.get("projectCode", "")) if hi else None
+        if ai_project:
+            project, project_source = _pick_project(ai_project), "ai"
+        elif default_project:
+            project, project_source = _pick_project(default_project), "default"
+        else:
+            project, project_source = None, None
+
+        out[no] = {
+            "budgetUnit": budget,
+            "project": project,
+            "budgetSource": budget_source,
+            "projectSource": project_source,
+        }
+    return out
+
+
 def _validate_grid_submit(rows_in: list[dict], n: int) -> tuple[bool, str]:
     """제출 rows 서버검증. 비스킵 행은 예산단위(code·name)·적요 필수, 행번호는 1..n.
 
@@ -318,22 +421,6 @@ def make_collect_rows_node(timeout_s: int | None = None):
         status: dict[int, str] = {r.get("i", idx): "pending" for idx, r in enumerate(rows_list)}
         notes = dict(recs)
 
-        # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note).
-        grid_rows = [
-            {
-                "no": idx + 1,
-                "card": r.get("FINPRODUCT_NM") or "",
-                "merchant": r.get("TRAN_NM") or "",
-                "amount": _fmt_won(r.get("TRAN_AMT")),
-                "date": r.get("TRAN_DT") or "",
-                "time": r.get("TRAN_TM") or "",
-                "approved": r.get("APRVL_YN") or "",
-                "vatType": r.get("VAT_TP") or "",
-                "note": recs[r.get("i", idx)],
-            }
-            for idx, r in enumerate(rows_list)
-        ]
-
         # 즐겨찾기·부서(DB) + 예산단위 라이브 덤프(ERP). 실패는 경고 후 빈 목록으로 진행(런 유지).
         budget_favs, project_favs, department = await _load_user_favorites(state.get("owner"))
         try:
@@ -352,6 +439,29 @@ def make_collect_rows_node(timeout_s: int | None = None):
             "all": all_units[:_MAX_BUDGET_UNITS],
         }
         project_favs = project_favs[:_MAX_FAVORITES]
+
+        # AI 추천 + 기본지정 폴백으로 행별 예산단위·프로젝트를 프리셀렉트한다(사용자는 수정 가능).
+        preselect = await _prefill_selections(
+            events, settings, rows_list, recs, budget_favs, mine_units, project_favs
+        )
+
+        # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note
+        #  + 프리셀렉트 budgetUnit/project·출처 budgetSource/projectSource).
+        grid_rows = [
+            {
+                "no": idx + 1,
+                "card": r.get("FINPRODUCT_NM") or "",
+                "merchant": r.get("TRAN_NM") or "",
+                "amount": _fmt_won(r.get("TRAN_AMT")),
+                "date": r.get("TRAN_DT") or "",
+                "time": r.get("TRAN_TM") or "",
+                "approved": r.get("APRVL_YN") or "",
+                "vatType": r.get("VAT_TP") or "",
+                "note": recs[r.get("i", idx)],
+                **preselect[idx + 1],
+            }
+            for idx, r in enumerate(rows_list)
+        ]
 
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.

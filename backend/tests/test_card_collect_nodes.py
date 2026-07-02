@@ -17,6 +17,20 @@ from app.agents.card_collect import steps
 from app.agents.card_collect.nodes import _fmt_won, make_collect_rows_node, recommend_note
 
 
+@pytest.fixture(autouse=True)
+def _stub_recommend(monkeypatch):
+    """collect_rows 의 AI 추천을 오프라인 기본값(빈 추천)으로 고정 — 실 Gemini 호출 차단.
+
+    추천 전용 검증은 test_card_collect_recommend.py 에서 별도로 한다. 여기선 기존 그리드
+    프레임/제출 로직만 봐야 하므로 추천은 {}(전부 기본지정 폴백 경로) 로 둔다.
+    """
+
+    async def _none(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(cc_nodes, "recommend_selections", _none)
+
+
 # ── compute_period(D2 10일 규칙) ──────────────────────────────────────────────
 def test_compute_period_before_cutoff_is_previous_month():
     # 7월 3일(10일 이전) → 전월(6월) 전체.

@@ -12,6 +12,7 @@ import type {
   GridRowSubmit,
   LiveGridRow,
   LiveHitl,
+  PrefillSource,
   ProjectOption,
 } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
@@ -25,7 +26,8 @@ interface LiveGridCardProps {
 }
 
 /** 행별 사용자 입력(예산단위·프로젝트·적요·제외). budgetUnitCode='' = 미선택.
- * projectWbsNo = 선택한 WBS 행의 WBS_NO(반영 시 정확 선택용). */
+ * projectWbsNo = 선택한 WBS 행의 WBS_NO(반영 시 정확 선택용).
+ * budgetSource/projectSource = 프리셀렉트 출처 배지(AI/기본) — 사용자가 값을 바꾸면 null 로 지운다. */
 interface RowEdit {
   budgetUnitCode: string;
   projectCode: string;
@@ -33,6 +35,8 @@ interface RowEdit {
   projectWbsNo: string;
   note: string;
   skip: boolean;
+  budgetSource: PrefillSource | null;
+  projectSource: PrefillSource | null;
 }
 
 function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
@@ -40,12 +44,15 @@ function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
     rows.map((r) => [
       r.no,
       {
-        budgetUnitCode: '',
-        projectCode: '',
-        projectName: '',
-        projectWbsNo: '',
+        // AI 추천·기본지정 프리셀렉트를 초기값으로 시드(사용자가 그대로 적용하거나 수정).
+        budgetUnitCode: r.budgetUnit?.code ?? '',
+        projectCode: r.project?.code ?? '',
+        projectName: r.project?.name ?? '',
+        projectWbsNo: r.project?.wbsNo ?? '',
         note: r.note ?? '',
         skip: false,
+        budgetSource: r.budgetUnit ? (r.budgetSource ?? null) : null,
+        projectSource: r.project ? (r.projectSource ?? null) : null,
       },
     ]),
   );
@@ -120,7 +127,10 @@ function useFavorites(kind: CatalogKind) {
   return { has, toggle, reset, loadIds };
 }
 
-const TX_COLUMNS: { key: keyof LiveGridRow; header: string; align?: 'right' }[] = [
+/** 읽기 전용 표시 컬럼 키(문자열 값만) — 프리셀렉트 객체 필드(budgetUnit/project)는 제외. */
+type TxColumnKey = 'card' | 'merchant' | 'amount' | 'date' | 'time' | 'approved' | 'vatType';
+
+const TX_COLUMNS: { key: TxColumnKey; header: string; align?: 'right' }[] = [
   { key: 'card', header: '카드명' },
   { key: 'merchant', header: '가맹점명' },
   { key: 'amount', header: '승인액', align: 'right' },
@@ -169,12 +179,15 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     void pFav.loadIds();
   }, [hitl.id, hitl.rows, hitl.budgetUnits, hitl.projects, bFav, pFav]);
 
-  // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선.
+  // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선. 프리셀렉트가 그룹 밖 코드여도
+  // 라벨·★ 가 풀리도록 행 프리셀렉트를 맵에 보강한다.
   const budgetByCode = useMemo(() => {
     const m = new Map<string, BudgetUnitOption>();
     for (const o of [...bFavList, ...bMineList, ...bAllList]) if (!m.has(o.code)) m.set(o.code, o);
+    for (const r of rows)
+      if (r.budgetUnit && !m.has(r.budgetUnit.code)) m.set(r.budgetUnit.code, r.budgetUnit);
     return m;
-  }, [hitl.budgetUnits]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hitl.budgetUnits, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 그룹 간 중복 제거: 자주쓰는 → 내 부서 → 전체 순으로 앞 그룹에 나온 코드는 뒤에서 제외.
   const bMineExclFav = useMemo(() => {
@@ -298,6 +311,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                 projectWbsNo: '',
                 note: '',
                 skip: false,
+                budgetSource: null,
+                projectSource: null,
               };
               const rowInvalid = !e.skip && !isRowValid(r.no);
               return (
@@ -325,14 +340,18 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                   {/* 예산단위 select + ★ */}
                   <Td>
                     <div className="flex items-center gap-1.5">
+                      {e.budgetSource ? <SourceBadge source={e.budgetSource} /> : null}
                       <BudgetSelect
                         value={e.budgetUnitCode}
                         favorites={bFavList}
                         mineExclFav={bMineExclFav}
                         allExclFav={bAllExclFav}
+                        selectedOption={budgetByCode.get(e.budgetUnitCode)}
                         disabled={e.skip || disabled}
                         invalid={rowInvalid && e.budgetUnitCode === ''}
-                        onChange={(code) => setRow(r.no, { budgetUnitCode: code })}
+                        onChange={(code) =>
+                          setRow(r.no, { budgetUnitCode: code, budgetSource: null })
+                        }
                       />
                       <StarButton
                         active={bFav.has(e.budgetUnitCode)}
@@ -352,6 +371,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                   {/* 프로젝트 combobox + ★ */}
                   <Td>
                     <div className="flex items-center gap-1.5">
+                      {e.projectSource ? <SourceBadge source={e.projectSource} /> : null}
                       <ProjectCombobox
                         code={e.projectCode}
                         name={e.projectName}
@@ -364,10 +384,16 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                             projectCode: code,
                             projectName: name,
                             projectWbsNo: wbsNo,
+                            projectSource: null,
                           })
                         }
                         onClear={() =>
-                          setRow(r.no, { projectCode: '', projectName: '', projectWbsNo: '' })
+                          setRow(r.no, {
+                            projectCode: '',
+                            projectName: '',
+                            projectWbsNo: '',
+                            projectSource: null,
+                          })
                         }
                         onSearch={onQuery}
                       />
@@ -541,6 +567,7 @@ function BudgetSelect({
   favorites,
   mineExclFav = [],
   allExclFav,
+  selectedOption,
   disabled,
   invalid,
   placeholder = '예산단위 선택',
@@ -552,6 +579,8 @@ function BudgetSelect({
   /** 내 부서 매칭(자주쓰는 제외분). */
   mineExclFav?: BudgetUnitOption[];
   allExclFav: BudgetUnitOption[];
+  /** 현재 값의 옵션 — 그룹 밖(프리셀렉트) 코드일 때 라벨을 표시하려 별도 옵션을 끼운다. */
+  selectedOption?: BudgetUnitOption;
   disabled?: boolean;
   invalid?: boolean;
   placeholder?: string;
@@ -563,6 +592,8 @@ function BudgetSelect({
     o.bgacctNm || o.bizplanNm
       ? `${o.name} · ${o.bizplanNm || '-'} · ${o.bgacctNm || '-'}`
       : `${o.name} (${o.code})`;
+  const inGroups =
+    value !== '' && [...favorites, ...mineExclFav, ...allExclFav].some((o) => o.code === value);
   return (
     <select
       value={value}
@@ -577,6 +608,9 @@ function BudgetSelect({
       )}
     >
       <option value="">{placeholder}</option>
+      {!inGroups && value !== '' && selectedOption ? (
+        <option value={value}>{label(selectedOption)}</option>
+      ) : null}
       {favorites.length > 0 ? (
         <optgroup label="자주쓰는">
           {favorites.map((o) => (
@@ -810,6 +844,23 @@ function StarButton({
     >
       {active ? <RiStarFill size={14} aria-hidden /> : <RiStarLine size={14} aria-hidden />}
     </button>
+  );
+}
+
+// ── 프리셀렉트 출처 배지(AI / 기본) ──────────────────────────────────
+
+function SourceBadge({ source }: { source: PrefillSource }) {
+  const isAi = source === 'ai';
+  return (
+    <span
+      title={isAi ? 'AI 추천으로 미리 선택됨' : '기본지정으로 미리 선택됨'}
+      className={cn(
+        'shrink-0 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[9px] font-semibold tracking-wide',
+        isAi ? 'bg-accent/15 text-accent' : 'bg-muted text-foreground-tertiary',
+      )}
+    >
+      {isAi ? 'AI' : '기본'}
+    </span>
   );
 }
 

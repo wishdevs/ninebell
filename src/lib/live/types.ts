@@ -59,7 +59,18 @@ export interface LiveGridRow {
   vatType?: string;
   /** 적요 기본값(입력 프리필). */
   note?: string;
+  /** 예산단위 프리셀렉트(AI 추천 또는 기본지정). 없으면 null/미포함. */
+  budgetUnit?: BudgetUnitOption | null;
+  /** 프로젝트 프리셀렉트(AI 추천 또는 기본지정). 없으면 null/미포함. */
+  project?: ProjectOption | null;
+  /** 예산단위 프리셀렉트 출처 — 'ai'=AI 추천, 'default'=기본지정 즐겨찾기. */
+  budgetSource?: PrefillSource | null;
+  /** 프로젝트 프리셀렉트 출처 — 'ai'=AI 추천, 'default'=기본지정 즐겨찾기. */
+  projectSource?: PrefillSource | null;
 }
+
+/** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백. */
+export type PrefillSource = 'ai' | 'default';
 
 /** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
 /** 예산단위 보기 — 선택 단위는 (예산단위명 × 사업계획명 × 예산계정명) 조합 행.
