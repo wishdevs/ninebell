@@ -979,7 +979,7 @@ def make_save_final_node():
             await emit_log(
                 events,
                 "저장 중 확인창: "
-                + " / ".join(f"[{m.get('title')}] {m.get('text', '')[:60]}" for m in seen[:3]),
+                + " / ".join(f"[{m.get('title')}] {m.get('text', '')[:160]}" for m in seen[:3]),
                 "info",
             )
         await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")

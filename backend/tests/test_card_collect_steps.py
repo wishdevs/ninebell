@@ -78,6 +78,30 @@ async def test_apply_rows_dismisses_late_budget_modal():
     assert any(m["title"] == "예산현황" for m in r.get("late_modals") or [])
 
 
+class _SaveErrorPage(_LateModalPage):
+    """F7 후 '[오류]' 모달이 뜨는 fake — 저장 거부 케이스(실측: 승인취소 계정 불일치)."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._spawned = True  # 부모의 pre-F7 지연 모달 스폰 비활성화
+        self._err_spawned = False
+
+    async def evaluate(self, script, arg=None):
+        if script == js.MODALS_SNAPSHOT_JS and "F7" in self.keys and not self._err_spawned:
+            self._err_spawned = True
+            self.modals = [{"title": "오류", "text": "[승인번호: X, 승인취소] 승인 건 계정과 다릅니다."}]
+            return list(self.modals)
+        return await super().evaluate(script, arg)
+
+
+async def test_save_document_reports_error_modal_as_failure():
+    """F7 후 '오류' 모달 관찰 시 ok:False + 모달 전문 — 미저장 가짜 성공 방지."""
+    page = _SaveErrorPage(card_win=False)
+    r = await steps.save_document(page, confirm=True)
+    assert r["ok"] is False
+    assert "승인 건 계정과 다릅니다" in r["reason"]
+
+
 async def test_save_document_dismisses_leftover_modal_before_f7():
     """F7 전에 잔여 모달을 닫아야 한다 — 모달이 F7 을 삼키면 미저장 가짜 성공이 된다."""
     page = _LateModalPage(card_win=False)

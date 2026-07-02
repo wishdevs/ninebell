@@ -618,4 +618,11 @@ async def save_document(page: Any, confirm: bool) -> dict:
                     break
             continue
         break  # 모달 없음 — 저장 시퀀스 종료로 판단.
+    # 실전 실측(2026-07-02): 저장 검증 실패 시 '[오류] 승인 건 계정과 다릅니다…' 류의
+    # 오류 모달이 뜬다 — 확인만 누르고 성공 보고하면 미저장 가짜 성공. 오류 모달이
+    # 하나라도 관찰되면 실패로 반환해 사용자가 원인(모달 전문)을 볼 수 있게 한다.
+    errors = [m for m in modals_seen if "오류" in (m.get("title") or "")]
+    if errors:
+        detail = " / ".join((m.get("text") or m.get("title") or "")[:200] for m in errors[:3])
+        return {"ok": False, "reason": f"저장(F7)이 ERP 오류로 거부됨: {detail}", "modals_seen": modals_seen[:6]}
     return {"ok": True, "via": "F7", "modals_seen": modals_seen[:6], "pre_modals": pre[:4]}
