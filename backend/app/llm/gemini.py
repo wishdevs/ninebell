@@ -65,6 +65,7 @@ class GeminiProvider:
         url = f"{self._base}/models/{self._model}:streamGenerateContent"
         body = self._build_body(messages, system, temperature, max_output_tokens, tools)
         headers = {"x-goog-api-key": self._key, "content-type": "application/json"}
+        done_sent = False  # finishReason 으로 이미 done 을 냈으면 마지막 보강 done 을 생략(중복 [DONE] 방지).
         try:
             async with asyncio.timeout(_STREAM_TIMEOUT_S):
                 async with self._http.stream(
@@ -97,13 +98,15 @@ class GeminiProvider:
                                     },
                                 )
                         if cand.get("finishReason"):
+                            done_sent = True
                             yield ChatChunk(
                                 delta="", done=True, finish_reason=cand["finishReason"]
                             )
         except TimeoutError:
             yield ChatChunk(delta="", done=True, finish_reason="timeout")
             return
-        yield ChatChunk(delta="", done=True)
+        if not done_sent:
+            yield ChatChunk(delta="", done=True)
 
     async def aclose(self) -> None:
         return None
