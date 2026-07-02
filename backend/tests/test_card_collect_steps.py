@@ -94,6 +94,30 @@ class _SaveErrorPage(_LateModalPage):
         return await super().evaluate(script, arg)
 
 
+class _ToastPage(_LateModalPage):
+    """F7 후 모달 없이 인라인 검증 토스트만 뜨는 fake — 필수값 누락 미저장 케이스(실측 2026-07-03)."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._spawned = True  # 부모의 예산현황 지연 모달 비활성화
+
+    async def evaluate(self, script, arg=None):
+        if script == js.VALIDATION_TOAST_JS and "F7" in self.keys:
+            return ["상세그리드에 필수 값이 입력되지 않은 항목이 있습니다"]
+        if script == js.MODALS_SNAPSHOT_JS:
+            return []  # 토스트는 모달이 아님
+        return await super().evaluate(script, arg)
+
+
+async def test_save_document_reports_validation_toast_as_failure():
+    """F7 후 인라인 '필수 값…' 토스트 관찰 시 ok:False — 미저장 가짜 성공 방지."""
+    page = _ToastPage(card_win=False)
+    r = await steps.save_document(page, confirm=True)
+    assert r["ok"] is False
+    assert "필수 값" in r["reason"]
+    assert page.keys == ["F7"]
+
+
 async def test_save_document_reports_error_modal_as_failure():
     """F7 후 '오류' 모달 관찰 시 ok:False + 모달 전문 — 미저장 가짜 성공 방지."""
     page = _SaveErrorPage(card_win=False)

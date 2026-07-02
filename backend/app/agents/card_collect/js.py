@@ -336,3 +336,21 @@ MODAL_BTN_BOX_JS = """(btnText) => {
   }
   return null;
 }"""
+
+
+# 저장(F7) 실패를 알리는 dews 인라인 토스트/경고 텍스트 탐지(모달 아님 → MODALS_SNAPSHOT 로는
+# 안 잡힌다). 실측(2026-07-03): 필수값 누락 시 하단에 '상세그리드에 필수 값이 입력되지 않은
+# 항목이 있습니다' 토스트가 뜨는데 결의번호는 blank(미저장). 실패 문구를 담은 보이는 짧은
+# 요소들의 텍스트를 반환한다. 반환 [] = 실패 신호 없음.
+VALIDATION_TOAST_JS = r"""() => {
+  const phrases = ['필수 값','필수값','입력되지 않은','입력되지않은','저장에 실패','저장 실패',
+                   '실패했습니다','확인해 주세요','확인하세요','오류가 발생'];
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const out = new Set();
+  for (const el of document.querySelectorAll('div,span,p,td,li')) {
+    if (el.offsetParent === null) continue;
+    const t = c(el.innerText);
+    if (t && t.length < 120 && phrases.some(p => t.includes(p))) out.add(t);
+  }
+  return [...out];
+}"""

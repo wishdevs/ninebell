@@ -606,8 +606,14 @@ async def save_document(page: Any, confirm: bool) -> dict:
     pre = await dismiss_blocking_modals(page, rounds=3)
     await page.keyboard.press("F7")
     modals_seen: list[dict] = []
+    toasts_seen: list[str] = []
     for _ in range(8):
         await page.wait_for_timeout(2_000)
+        # 인라인 검증 토스트('필수 값…')는 모달이 아니라 F7 직후 잠깐 떴다 사라지므로
+        # 매 폴링마다 함께 스캔한다(실측: 미저장인데 ok 로 오판하던 원인).
+        toasts = await page.evaluate(js.VALIDATION_TOAST_JS)
+        if toasts:
+            toasts_seen.extend(toasts)
         modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
         if modals:
             modals_seen.extend(modals)
@@ -617,7 +623,18 @@ async def save_document(page: Any, confirm: bool) -> dict:
                     await page.mouse.click(btn["x"], btn["y"])
                     break
             continue
-        break  # 모달 없음 — 저장 시퀀스 종료로 판단.
+        if toasts:
+            break  # 검증 토스트 확인됨 — 저장 실패로 즉시 종료.
+        break  # 모달·토스트 없음 — 저장 시퀀스 종료로 판단.
+    # 인라인 검증 토스트(필수값 누락 등) = 미저장. 모달만 보던 시절 ok 로 오판(2026-07-03 실측).
+    if toasts_seen:
+        detail = " / ".join(dict.fromkeys(toasts_seen))[:300]
+        return {
+            "ok": False,
+            "reason": f"저장(F7)이 검증 실패로 거부됨: {detail}",
+            "modals_seen": modals_seen[:6],
+            "toasts_seen": list(dict.fromkeys(toasts_seen))[:6],
+        }
     # 실전 실측(2026-07-02): 저장 검증 실패 시 '[오류] 승인 건 계정과 다릅니다…' 류의
     # 오류 모달이 뜬다 — 확인만 누르고 성공 보고하면 미저장 가짜 성공. 오류 모달이
     # 하나라도 관찰되면 실패로 반환해 사용자가 원인(모달 전문)을 볼 수 있게 한다.
