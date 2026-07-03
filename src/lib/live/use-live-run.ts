@@ -62,6 +62,7 @@ type Action =
   | { type: 'markError'; id: string }
   | { type: 'connected'; value: boolean }
   | { type: 'failure'; message: string }
+  | { type: 'clearHitl' }
   | { type: 'detach' };
 
 function upsertStep(steps: readonly LiveStepState[], next: LiveStepState): LiveStepState[] {
@@ -150,6 +151,12 @@ function reducer(state: LiveRunState, action: Action): LiveRunState {
       };
     case 'connected':
       return state.connected === action.value ? state : { ...state, connected: action.value };
+    case 'clearHitl':
+      // 그리드 '입력 완료' 제출 직후 낙관적으로 개입을 닫아 패널을 축소하고 화면을 원래 크기로
+      // 되돌린다. 반영·저장은 이어서 진행(running). 제출이 무효면 백엔드가 그리드 프레임을
+      // 재방출해 다시 열리므로 안전하다. 종료 상태는 sticky.
+      if (state.hitl == null || state.status === 'succeeded' || state.status === 'failed') return state;
+      return { ...state, hitl: null, status: 'running' };
     case 'failure':
       return { ...state, status: 'failed', hitl: null, connected: false, error: action.message };
     case 'detach':
@@ -405,8 +412,11 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
   );
 
   const sendRows = useCallback(
-    (decisionId: string, rows: GridRowSubmit[]): Promise<boolean> =>
-      postHitl(runIdRef.current, decisionId, { rows }),
+    (decisionId: string, rows: GridRowSubmit[]): Promise<boolean> => {
+      // 제출 즉시 개입 패널 축소·화면 원복(낙관적). 무효 제출이면 백엔드가 그리드를 재방출한다.
+      dispatch({ type: 'clearHitl' });
+      return postHitl(runIdRef.current, decisionId, { rows });
+    },
     [],
   );
 
