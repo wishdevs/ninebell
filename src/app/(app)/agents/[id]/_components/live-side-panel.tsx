@@ -1,7 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { RiCheckLine, RiCloseLine, RiErrorWarningLine, RiLoader4Line } from '@remixicon/react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  RiCheckLine,
+  RiCloseLine,
+  RiErrorWarningLine,
+  RiUserLine,
+  RiLoader4Line,
+} from '@remixicon/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
@@ -43,10 +49,15 @@ export function LiveSidePanel({ run, resultAction, runsPanel, workflowId }: Live
 
   const [tab, setTab] = useState<TabKey>('workflow');
 
-  // HITL 이 뜨면 개입 탭으로 끌어온다(사용자 응답 유도).
+  // HITL 이 뜨면 개입 탭으로 끌어오고, 개입이 끝나면(제출) 워크플로우 탭으로 되돌린다
+  // (사용자 요청: 제출 후 개입 탭이 아니라 워크플로우 진행이 보여야 한다).
+  const prevHadHitl = useRef(false);
   useEffect(() => {
-    if (run.hitl) setTab('intervention');
-  }, [run.hitl?.id]);
+    const has = Boolean(run.hitl);
+    if (has) setTab('intervention');
+    else if (prevHadHitl.current && !terminal) setTab('workflow');
+    prevHadHitl.current = has;
+  }, [run.hitl?.id, terminal]);
   // 종료되면 결과가 있을 때 결과 탭으로.
   useEffect(() => {
     if (terminal && hasResult) setTab('result');
@@ -141,6 +152,7 @@ interface DisplayStep {
   ms?: number;
   skill?: string;
   detail?: string;
+  intervention?: boolean;
 }
 
 const STEP_DOT: Record<DisplayStepStatus, string> = {
@@ -180,6 +192,7 @@ function buildDisplaySteps(
       ms: live?.ms,
       skill: d.skill,
       detail: d.detail,
+      intervention: d.intervention,
     };
   });
   // 정의에 없는(향후 추가된) 단계는 도착 순서 그대로 뒤에 붙인다.
@@ -199,6 +212,18 @@ export function LiveStepList({
   workflowId?: string;
 }) {
   const display = buildDisplaySteps(workflowId, steps);
+  // 진행 중(또는 마지막으로 도착한) 단계 = 마지막 비-대기 단계. 이 단계를 자동으로 화면에
+  // 스크롤해 진행 상황이 항상 보이게 한다(사용자 요청: 하단 스크롤이 안 돼 진행이 안 보임).
+  let activeIndex = -1;
+  display.forEach((s, i) => {
+    if (s.status !== 'pending') activeIndex = i;
+  });
+  const activeRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // display 는 매 렌더 새 배열이므로 steps/상태 변화에만 반응하도록 활성 인덱스로 좁힌다.
+  }, [activeIndex, display[activeIndex]?.status]);
+
   if (display.length === 0) {
     return (
       <p className="text-foreground-tertiary py-6 text-center text-[12px]">
@@ -209,7 +234,11 @@ export function LiveStepList({
   return (
     <ol className="flex flex-col">
       {display.map((step, i) => (
-        <li key={step.id} className="relative flex gap-3 pb-4 last:pb-0">
+        <li
+          key={step.id}
+          ref={i === activeIndex ? activeRef : undefined}
+          className="relative flex gap-3 pb-4 last:pb-0"
+        >
           {i < display.length - 1 ? (
             <span
               aria-hidden
@@ -234,8 +263,16 @@ export function LiveStepList({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
-                {step.label}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-semibold">
+                  {step.label}
+                </span>
+                {step.intervention ? (
+                  <span className="bg-warning/15 text-warning inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
+                    <RiUserLine size={10} aria-hidden />
+                    개입 필요
+                  </span>
+                ) : null}
               </span>
               <span
                 className={cn(

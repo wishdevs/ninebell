@@ -34,8 +34,8 @@ async def test_agent_detail_includes_flowgraph(client, make_user, auth_as):
     data = resp.json()
     assert "flowGraph" in data
     assert data["intervention"]["kind"] == "chat"
-    # 단계 id 는 저장 key 로 직렬화된다.
-    assert data["steps"][0]["id"] == "access"
+    # 단계 id 는 저장 key 로 직렬화된다(실제 card-collect 그래프의 첫 노드 = login).
+    assert data["steps"][0]["id"] == "login"
 
 
 async def test_logs_forbidden_for_user_allowed_for_super_admin(client, make_user, auth_as):

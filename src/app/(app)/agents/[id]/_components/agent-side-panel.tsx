@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { RiUserLine } from '@remixicon/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Agent, LogEntry, LogLevel, StepStatus, WorkflowStep } from '@/lib/data/agents';
 import { LOG_LEVEL_LABEL } from '@/lib/data/agents';
@@ -97,8 +98,16 @@ export function WorkflowDetail({ steps }: { steps: readonly WorkflowStep[] }) {
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
-                {step.label}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-semibold">
+                  {step.label}
+                </span>
+                {step.intervention ? (
+                  <span className="bg-warning/15 text-warning inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
+                    <RiUserLine size={10} aria-hidden />
+                    개입 필요
+                  </span>
+                ) : null}
               </span>
               <span
                 className={cn(

@@ -14,6 +14,8 @@ export interface WorkflowStepDef {
   skill?: string;
   /** 보조 설명. */
   detail?: string;
+  /** true 면 이 단계에서 사용자 개입(HITL)이 필요하다 — 단계 목록에 '개입 필요' 표시. */
+  intervention?: boolean;
 }
 
 export const WORKFLOW_STEP_DEFS: Record<string, readonly WorkflowStepDef[]> = {
@@ -118,6 +120,7 @@ export const WORKFLOW_STEP_DEFS: Record<string, readonly WorkflowStepDef[]> = {
       label: '건별 입력(그리드)',
       skill: '그리드 입력',
       detail: '전 행 예산단위/프로젝트/적요 입력 → 과세분(법인카드) 먼저 반영',
+      intervention: true,
     },
     {
       id: 'apply_doc',

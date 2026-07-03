@@ -80,6 +80,8 @@ export interface WorkflowStep {
   /** 우측 상세 워크플로우 탭에 노출될 보조 설명/하위 단계. */
   detail?: string;
   substeps?: readonly SubStep[];
+  /** true 면 이 단계에서 사용자 개입(HITL)이 필요하다 — '개입 필요' 표시. */
+  intervention?: boolean;
 }
 
 // ── 로그 ─────────────────────────────────────────────────────────────
@@ -416,8 +418,8 @@ export const AGENTS: readonly Agent[] = [
     successRate: 89.1,
     avgSeconds: 124,
     lastRunAt: relativeFromNow({ minutes: 6 }),
-    // steps = 실제 워크플로우(expense-card-chat) 노드 순서. 미실행 시 상단 스텝퍼가 이 목록을
-    // 중립으로 노출하고, 라이브 실행 시 run.steps 가 진행상태를 오버레이한다.
+    // steps = 실제 워크플로우(card-collect) 15개 노드 순서(backend graph.py 와 1:1). 미실행 시
+    // 상단 스텝퍼가 이 목록을 중립으로 노출하고, 라이브 실행 시 run.steps 가 진행상태를 오버레이한다.
     steps: [
       {
         id: 'login',
@@ -490,18 +492,40 @@ export const AGENTS: readonly Agent[] = [
         detail: '승인내역 조회 → 리스트 보고',
       },
       {
-        id: 'collect',
-        label: '건별 입력',
-        skill: '대화형 입력',
+        id: 'collect_rows',
+        label: '건별 입력(그리드)',
+        skill: '그리드 입력',
         status: 'pending',
-        detail: '건별 예산단위/계정/프로젝트/적요 입력(적요 추천)',
+        intervention: true,
+        detail: "전 행 예산단위·프로젝트·적요를 입력하고 '입력 완료'로 제출(사용자 개입)",
       },
       {
-        id: 'save',
-        label: '저장',
+        id: 'apply_doc',
+        label: '과세분 적용',
+        skill: '문서 반영',
+        status: 'pending',
+        detail: '과세 행 체크 → 적용 → 결의서 반영(저장 전)',
+      },
+      {
+        id: 'switch_evdn',
+        label: '불공 전환',
+        skill: '코드피커',
+        status: 'pending',
+        detail: '행 추가(F3) → 증빙유형 법인카드(불공) 선택 → 재조회·행 매칭',
+      },
+      {
+        id: 'apply_pass2',
+        label: '불공분 반영·적용',
+        skill: '그리드 입력',
+        status: 'pending',
+        detail: '입력해둔 값을 불공 행에 자동 반영 후 결의서 적용',
+      },
+      {
+        id: 'save_final',
+        label: '저장(F7)',
         skill: '저장',
         status: 'pending',
-        detail: '사용자 확인 후 결의서 저장(F7)',
+        detail: '과세·불공 반영분을 마지막에 한 번만 저장',
       },
     ],
     logs: [
