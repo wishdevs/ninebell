@@ -56,11 +56,18 @@ async def omnisol_login(
     await page.fill(selectors.LOGIN_USERID, userid)
     await page.fill(selectors.LOGIN_PASSWORD, password)
     await page.click(selectors.LOGIN_SUBMIT)
-    await waits.wait_networkidle(page, timeout_ms=20_000)  # 못 잡아도 계속
-    await page.wait_for_timeout(1_500)
+    # 제출 후 성공을 **양성 신호(아바타 출현)** 폴링으로 판정 — 기존 wait_networkidle(20s)
+    # 은 메인 SPA 의 롱폴링/지속 요청 때문에 상한을 통째로 태우는 경우가 잦았다(실측:
+    # login 단계 ~17s). 상한(~20s)은 유지하되 아바타가 뜨는 즉시 진행한다.
+    for i in range(66):
+        await page.wait_for_timeout(300)
+        if await selector_present(page, selectors.AVATAR):
+            logger.info("옴니솔 로그인 성공(%d폴): userid=%s", i + 1, userid)
+            return
+    # 아바타 미출현(셀렉터 변경 등) — 최종 폴백은 기존과 동일한 폼 소멸 판정.
     if not await is_authenticated(page, login_selector=selectors.LOGIN_USERID):
         raise AuthError("아이디 또는 비밀번호가 올바르지 않습니다.")
-    logger.info("옴니솔 로그인 성공: userid=%s", userid)
+    logger.info("옴니솔 로그인 성공(폼 소멸 폴백): userid=%s", userid)
 
 
 async def read_current_user_type(page: Any) -> str:
