@@ -181,11 +181,26 @@ export interface SeedSelection {
 
 export interface SeedResult {
   total: number;
+  limit: number;
+  offset: number;
   items: SeedSelection[];
 }
 
-export async function fetchCardSeed(q?: string): Promise<SeedResult> {
-  const qs = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
-  const res = await api.get<Partial<SeedResult>>(`/me/card-learning/seed${qs}`);
-  return { total: res.total ?? 0, items: res.items ?? [] };
+export async function fetchCardSeed(
+  opts: { q?: string; limit?: number; offset?: number } = {},
+): Promise<SeedResult> {
+  const p = new URLSearchParams();
+  if (opts.q && opts.q.trim()) p.set('q', opts.q.trim());
+  if (opts.limit != null) p.set('limit', String(opts.limit));
+  if (opts.offset != null) p.set('offset', String(opts.offset));
+  const qs = p.toString();
+  const res = await api.get<Partial<SeedResult>>(
+    `/me/card-learning/seed${qs ? `?${qs}` : ''}`,
+  );
+  return {
+    total: res.total ?? 0,
+    limit: res.limit ?? opts.limit ?? 50,
+    offset: res.offset ?? opts.offset ?? 0,
+    items: res.items ?? [],
+  };
 }

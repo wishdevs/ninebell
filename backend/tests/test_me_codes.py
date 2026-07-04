@@ -232,10 +232,17 @@ async def test_card_seed_list_and_search(client, make_user, auth_as, sm):
     assert [i["merchant"] for i in body["items"]] == ["지에스25 성남", "맘스터치 상대원점"]
     assert body["items"][0]["acctName"] == "복리후생비-석식"
 
-    # q 는 가맹점명 ILIKE.
+    # q 는 가맹점명 ILIKE. total 은 필터 적용 후 건수(페이지 계산용).
     filtered = (await client.get("/me/card-learning/seed?q=맘스터치")).json()
     assert [i["merchant"] for i in filtered["items"]] == ["맘스터치 상대원점"]
-    assert filtered["total"] == 2  # total 은 전체(잘림 표시용), items 는 필터 결과
+    assert filtered["total"] == 1
+
+    # 페이지네이션(limit/offset) — 빈도순 2페이지.
+    page1 = (await client.get("/me/card-learning/seed?limit=1&offset=0")).json()
+    page2 = (await client.get("/me/card-learning/seed?limit=1&offset=1")).json()
+    assert page1["total"] == 2 and page2["total"] == 2
+    assert [i["merchant"] for i in page1["items"]] == ["지에스25 성남"]
+    assert [i["merchant"] for i in page2["items"]] == ["맘스터치 상대원점"]
 
 
 async def test_catalog_project_q_covers_wbs_extra(client, make_user, auth_as, sm):

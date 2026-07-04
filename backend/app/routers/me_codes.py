@@ -252,21 +252,34 @@ async def list_card_learning(user: CurrentUser, db: DbSession) -> dict:
 
 @router.get("/card-learning/seed")
 async def list_card_seed(
-    user: CurrentUser, db: DbSession, q: str | None = None, limit: int = 200
+    user: CurrentUser, db: DbSession, q: str | None = None, limit: int = 50, offset: int = 0
 ) -> dict:
     """전사 기초자료(seed, 가맹점→계정·적요) 목록 — 개발 디버그용. 공용 데이터(user 무관).
 
-    개인 학습이 없을 때 AI 힌트·폴백으로 쓰는 전사 관례. q 로 가맹점 검색, 빈도순. 1,048행이라
-    limit(기본 200)로 자른다(total 도 함께 반환해 잘림을 표시).
+    개인 학습이 없을 때 AI 힌트·폴백으로 쓰는 전사 관례. q 로 가맹점 검색, 빈도순 페이지네이션
+    (limit/offset). total 은 **필터 적용 후** 전체 건수라 프론트가 페이지 수를 계산한다. 동빈도
+    타이는 norm_merchant 로 안정 정렬(페이지 간 순서 흔들림 방지).
     """
-    stmt = select(CardSeedSelection).order_by(CardSeedSelection.count.desc())
+    base = select(CardSeedSelection)
+    count_stmt = select(func.count()).select_from(CardSeedSelection)
     if q and q.strip():
-        stmt = stmt.where(CardSeedSelection.merchant.ilike(f"%{q.strip()}%"))
-    stmt = stmt.limit(max(1, min(1000, limit)))
-    rows = (await db.execute(stmt)).scalars().all()
-    total = (await db.execute(select(func.count()).select_from(CardSeedSelection))).scalar() or 0
+        cond = CardSeedSelection.merchant.ilike(f"%{q.strip()}%")
+        base = base.where(cond)
+        count_stmt = count_stmt.where(cond)
+    total = (await db.execute(count_stmt)).scalar() or 0
+    limit = max(1, min(200, limit))
+    offset = max(0, offset)
+    rows = (
+        await db.execute(
+            base.order_by(CardSeedSelection.count.desc(), CardSeedSelection.norm_merchant)
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
     return {
         "total": int(total),
+        "limit": limit,
+        "offset": offset,
         "items": [
             {
                 "id": str(r.id),

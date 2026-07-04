@@ -31,16 +31,24 @@ function DominanceBadge({ value }: { value: number }) {
  * 전사 기초자료(seed) 목록 — 개발 디버그 표. 공용 데이터(user 무관, 가맹점→계정·적요).
  * 1,048행이라 검색(가맹점명) + 상위 200 제한. total 로 잘림을 표시한다.
  */
+const PAGE_SIZE = 50;
+
 export function CardSeedTable() {
   const [rows, setRows] = useState<SeedSelection[]>([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // 검색어가 바뀌면 1페이지로 되돌린다(다른 결과 집합).
+  useEffect(() => {
+    setPage(0);
+  }, [q]);
 
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true);
-      fetchCardSeed(q)
+      fetchCardSeed({ q, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
         .then((r) => {
           setRows(r.items);
           setTotal(r.total);
@@ -49,7 +57,11 @@ export function CardSeedTable() {
         .finally(() => setLoading(false));
     }, 250); // 검색 디바운스
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, page]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const rangeEnd = page * PAGE_SIZE + rows.length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -60,8 +72,8 @@ export function CardSeedTable() {
           placeholder="가맹점명 검색…"
           className="max-w-xs"
         />
-        <span className="text-foreground-tertiary text-[length:var(--text-body-sm)]">
-          {loading ? '조회 중…' : `${rows.length}${total > rows.length ? ` / 총 ${total}` : ''}건`}
+        <span className="text-foreground-tertiary text-[length:var(--text-body-sm)] tabular-nums">
+          {loading ? '조회 중…' : total === 0 ? '0건' : `${rangeStart}–${rangeEnd} / 총 ${total}건`}
         </span>
       </div>
 
@@ -123,6 +135,30 @@ export function CardSeedTable() {
           </div>
         </SectionCard>
       )}
+
+      {pageCount > 1 ? (
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0 || loading}
+            className="border-border text-foreground-secondary hover:bg-muted/60 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            이전
+          </button>
+          <span className="text-foreground-tertiary min-w-24 text-center text-[length:var(--text-body-sm)] tabular-nums">
+            {page + 1} / {pageCount}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            disabled={page >= pageCount - 1 || loading}
+            className="border-border text-foreground-secondary hover:bg-muted/60 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            다음
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
