@@ -51,15 +51,22 @@ async def record_selections(owner: str | None, entries: list[dict]) -> int:
     uid = _uuid(owner)
     if uid is None or not entries:
         return 0
+    # ⚠ 같은 런에 같은 가맹점이 2건 이상이면 (user, norm_merchant) 유니크가 걸려 커밋 전체가
+    # 롤백돼 아무것도 저장 안 되던 버그(2026-07-05 실측: '네이버파이낸셜' 중복). 배치 내 중복
+    # 가맹점을 **최신 선택 우선으로 1건으로 접는다**(같은 결정의 반복이므로 런당 1회 확정).
+    collapsed: dict[str, dict] = {}
+    for e in entries:
+        key = norm_merchant((e.get("merchant") or "").strip())
+        if key:
+            collapsed[key] = e
+    if not collapsed:
+        return 0
     now = datetime.now(UTC)
     n = 0
     try:
         async with get_sessionmaker()() as s:
-            for e in entries:
+            for key, e in collapsed.items():
                 merchant = (e.get("merchant") or "").strip()
-                key = norm_merchant(merchant)
-                if not key:
-                    continue
                 row = (
                     await s.execute(
                         select(CardLearnedSelection).where(
