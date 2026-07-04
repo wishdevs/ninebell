@@ -13,6 +13,14 @@ const SIGNUP_STORAGE_KEY = 'nb_signup';
 /** '아이디 저장' 프리필 키(localStorage). 비밀번호는 절대 저장하지 않는다. */
 const REMEMBERED_ID_KEY = 'nb_remembered_userid';
 
+/** 개발 환경 전용 빠른 로그인 계정(테스트 자격증명). 프로덕션 빌드에선 렌더되지 않는다
+ * (NODE_ENV 정적 치환으로 트리셰이킹). 실 배포엔 포함되지 않으므로 테스트 편의용으로만 쓴다. */
+const DEV_QUICK_ACCOUNTS: ReadonlyArray<{ userid: string; password: string }> = [
+  { userid: 'admin', password: '1111' },
+  { userid: '이트라이브', password: '1111' },
+  { userid: '이트라이브2', password: '1111' },
+];
+
 /**
  * `POST /auth/login` 응답 계약.
  * - 기존 유저/로컬 계정: 세션 발급 후 `{ ok: true }`.
@@ -52,16 +60,19 @@ export function LoginForm() {
     }
   }, []);
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function login(uid: string, pw: string) {
     if (submitting) return;
     setError(null);
     setSubmitting(true);
     // 아이디 저장은 제출 시점 기준으로 반영(비밀번호는 저장하지 않는다).
-    if (saveId) localStorage.setItem(REMEMBERED_ID_KEY, userid.trim());
+    if (saveId) localStorage.setItem(REMEMBERED_ID_KEY, uid.trim());
     else localStorage.removeItem(REMEMBERED_ID_KEY);
     try {
-      const res = await api.post<LoginResponse>('/auth/login', { userid, password, remember });
+      const res = await api.post<LoginResponse>('/auth/login', {
+        userid: uid,
+        password: pw,
+        remember,
+      });
       if ('signupRequired' in res && res.signupRequired) {
         // 첫 접속 — 세션 미발급. prefill+토큰을 넘겨 회원가입 단계로 유도한다.
         sessionStorage.setItem(
@@ -88,6 +99,18 @@ export function LoginForm() {
       }
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await login(userid, password);
+  }
+
+  /** 개발 전용 빠른 로그인 — 필드에 채워 보여주고 바로 로그인한다(상태 반영은 화면 표시용). */
+  function quickLogin(uid: string, pw: string) {
+    setUserid(uid);
+    setPassword(pw);
+    void login(uid, pw);
   }
 
   return (
@@ -157,6 +180,28 @@ export function LoginForm() {
           '로그인'
         )}
       </Button>
+
+      {process.env.NODE_ENV !== 'production' ? (
+        <div className="border-border/60 mt-1 flex flex-col gap-2 border-t border-dashed pt-4">
+          <span className="text-foreground-tertiary text-[length:var(--text-body-sm)]">
+            개발 전용 · 빠른 로그인
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {DEV_QUICK_ACCOUNTS.map((acct) => (
+              <Button
+                key={acct.userid}
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={submitting}
+                onClick={() => quickLogin(acct.userid, acct.password)}
+              >
+                {acct.userid}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </form>
   );
 }
