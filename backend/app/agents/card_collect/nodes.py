@@ -752,6 +752,25 @@ def make_collect_rows_node(timeout_s: int | None = None):
             for idx, r in enumerate(rows_list)
         ]
 
+        # 저장 실패 재시도(방식 1): 이전 제출 선택을 행 identity(_row_key)로 복원해 사용자가
+        # 처음부터 다시 고르지 않게 한다(틀린 행만 고치면 됨). 복원값은 사용자 값이므로 배지 없음.
+        retry_prefill = state.get("retry_prefill") or {}
+        if retry_prefill:
+            restored = 0
+            for gr, r in zip(grid_rows, rows_list):
+                prev = retry_prefill.get(_row_key(r))
+                if not prev:
+                    continue
+                if prev.get("budgetUnit"):
+                    gr["budgetUnit"], gr["budgetSource"] = prev["budgetUnit"], None
+                if prev.get("project"):
+                    gr["project"], gr["projectSource"] = prev["project"], None
+                if prev.get("note"):
+                    gr["note"] = prev["note"]
+                restored += 1
+            if restored:
+                await emit_log(events, f"이전 선택 {restored}건 복원(저장 실패 재시도) — 틀린 행만 고쳐 주세요.", "info")
+
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
         decision_id = uuid.uuid4().hex
@@ -923,12 +942,26 @@ def make_collect_rows_node(timeout_s: int | None = None):
         )
         await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")
         await emit_step(events, "collect_rows", "done", _ms(t0))
-        return {
+        # 저장 실패 시 재시도 그리드에서 복원할 수 있게 이번 제출 선택을 행 identity 로 보존.
+        # 제외(skip) 행은 복원 대상 아님(재시도 시 사용자가 다시 정함) → 실입력 행만.
+        retry_prefill = {
+            _row_key(rows_list[row["no"] - 1]): {
+                "budgetUnit": row.get("budgetUnit"),
+                "project": row.get("project"),
+                "note": row.get("note"),
+            }
+            for row in submitted
+            if not row.get("skip")
+        }
+        out = {
             "filled": filled,
             "pending_nontax": pending_nontax,
             "pass1_applied_idx": applied_idx,
             "pass1_failed": len(failures),
         }
+        if retry_prefill:  # 보존할 실입력이 있을 때만(없으면 상태 오염 없이 원래 반환).
+            out["retry_prefill"] = retry_prefill
+        return out
 
     return collect_rows
 
@@ -1316,13 +1349,21 @@ def make_apply_pass2_node():
     return apply_pass2
 
 
+# 저장(F7)이 ERP 에서 거부되면 그리드 재선택으로 되돌리는 최대 재시도 횟수(방식 1).
+MAX_SAVE_RETRIES = 2
+
+
 def make_save_final_node():
     """최종 저장(F7) 1회 — 별도 확인 없음(사용자 업무 규칙: 그리드 '입력 완료' 제출이 곧
-    저장까지의 승인이다). 반영 0건이면 저장하지 않는다."""
+    저장까지의 승인이다). 반영 0건이면 저장하지 않는다.
+
+    저장이 ERP 에서 거부되면(계정 불일치 등) MAX_SAVE_RETRIES 까지 retry_save 를 켜서
+    그래프가 menu_nav 로 되돌아가 문서를 새로 만들고 '건별 입력' 그리드부터 재입력하게 한다.
+    """
 
     async def save_final(state: dict) -> dict:
         if state.get("error"):
-            return {"result": f"오류로 저장하지 않음: {state.get('error')}"}
+            return {"result": f"오류로 저장하지 않음: {state.get('error')}", "retry_save": False}
         events = state["events"]
         page = state["page"]
         filled1 = state.get("filled", 0)
@@ -1342,15 +1383,34 @@ def make_save_final_node():
             # '처리 완료 — 반영 0건'으로 성공 표시되던 문제).
             if failed_n:
                 await emit_step(events, "save_final", "failed")
-                return {"error": f"모든 행 반영 실패({failed_n}건) — 저장하지 않았습니다. 로그의 행별 실패 사유를 확인하세요."}
+                return {"error": f"모든 행 반영 실패({failed_n}건) — 저장하지 않았습니다. 로그의 행별 실패 사유를 확인하세요.", "retry_save": False}
             await emit_step(events, "save_final", "done", _ms(t0))
-            return {"result": f"처리 완료 — 반영 0건(저장할 내용 없음){tail}."}
+            return {"result": f"처리 완료 — 반영 0건(저장할 내용 없음){tail}.", "retry_save": False}
         # 과세/불공 어느 한쪽이 0건이면 그 패스는 생략된 것 — 나머지 반영분만으로 저장한다.
         await emit_log(events, f"과세 {filled1}건 · 불공 {filled2}건 반영 완료 — 저장(F7)을 진행합니다.", "info")
         r = await steps.save_document(page, confirm=True)
         if not r.get("ok"):
             await emit_step(events, "save_final", "failed")
-            return {"error": f"저장 실패: {r.get('reason') or r}"}
+            reason = r.get("reason") or str(r)
+            retries = state.get("save_retries", 0)
+            # ERP 거부(계정 불일치 등)는 재선택으로 고칠 수 있다 — 상한까지 그리드로 되돌린다.
+            if retries < MAX_SAVE_RETRIES:
+                await emit_chat(
+                    events,
+                    chat_id="cc-retry",
+                    role="assistant",
+                    content=(
+                        f"저장이 거부됐습니다:\n{reason}\n\n선택을 다시 확인해 주세요. "
+                        f"문서를 새로 만들어 '건별 입력' 단계로 돌아갑니다"
+                        f"({retries + 1}/{MAX_SAVE_RETRIES}회 재시도)."
+                    ),
+                    streaming=False,
+                )
+                await emit_log(
+                    events, f"저장 거부 → 그리드 재입력 재시도 {retries + 1}/{MAX_SAVE_RETRIES}: {reason}", "warn"
+                )
+                return {"retry_save": True, "save_retries": retries + 1, "save_error_msg": reason}
+            return {"error": f"저장 실패({retries}회 재시도 후 포기): {reason}", "retry_save": False}
         seen = r.get("modals_seen") or []
         if seen:
             await emit_log(
@@ -1362,6 +1422,6 @@ def make_save_final_node():
         await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "save_final", "done", _ms(t0))
-        return {"result": f"처리 완료 — 과세 {filled1}건 · 불공 {filled2}건 입력·저장{tail}."}
+        return {"result": f"처리 완료 — 과세 {filled1}건 · 불공 {filled2}건 입력·저장{tail}.", "retry_save": False}
 
     return save_final

@@ -65,6 +65,11 @@ class CardCollectState(TypedDict, total=False):
     pass2_filled: int
     pass2_applied_idx: list[int]
     pass2_failed: int
+    # 저장 실패 → 그리드 재선택 재시도(방식 1: 문서 리셋 후 재실행, 상한 MAX_SAVE_RETRIES).
+    retry_save: bool  # save_final 이 재시도 신호를 켠다(라우터가 menu_nav 로 되돌림)
+    save_retries: int  # 누적 재시도 횟수(상한 초과 시 실패 종료)
+    save_error_msg: str  # 직전 저장 실패 사유(재진입한 그리드에 표시)
+    retry_prefill: dict  # {row_key: {budgetUnit, project, note, skip}} — 재시도 시 이전 선택 보존
     result: str | dict
     error: str
 
@@ -113,5 +118,13 @@ def build_card_collect_graph():
         ("apply_pass2", "save_final"),
     ]:
         g.add_edge(a, b)
-    g.add_edge("save_final", END)
-    return g.compile()
+
+    # 저장 실패 재시도(방식 1): retry_save 가 켜지면 menu_nav 로 되돌려 문서를 새로 만들고
+    # (딥링크 재로드로 저장 안 된 초안 폐기) 그리드부터 재입력한다. 아니면 종료.
+    def _after_save(state: CardCollectState) -> str:
+        return "menu_nav" if state.get("retry_save") else END
+
+    g.add_conditional_edges("save_final", _after_save, {"menu_nav": "menu_nav", END: END})
+    # 재시도 루프(최대 2회)는 체인(~15노드)을 3회까지 재실행 → 기본 recursion_limit(25) 초과.
+    # 3패스(~45) + 여유로 60 으로 올린다.
+    return g.compile().with_config({"recursion_limit": 60})

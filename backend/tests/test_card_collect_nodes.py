@@ -214,7 +214,10 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
     )
     out = await asyncio.wait_for(task, timeout=2)
     # 전 행 과세 → 1차에서 처리, 불공 대기 없음. 1행 성공, 2행 실패, 3행 skip.
-    assert out == {"filled": 1, "pending_nontax": [], "pass1_applied_idx": [0], "pass1_failed": 1}
+    assert (out["filled"], out["pending_nontax"], out["pass1_applied_idx"], out["pass1_failed"]) == (
+        1, [], [0], 1
+    )
+    assert "retry_prefill" in out  # 실입력(비-skip) 행은 저장실패 재시도용으로 보존
     assert calls == [0, 1]  # skip 아닌 두 행만, no 순(idx 0,1)
 
     frames = []
@@ -504,7 +507,42 @@ async def test_save_final_saves_without_confirmation(monkeypatch):
     out = await make_save_final_node()(
         {"events": events, "page": object(), "filled": 3, "pass2_filled": 1}
     )
-    assert out == {"result": "처리 완료 — 과세 3건 · 불공 1건 입력·저장."}
+    assert out == {"result": "처리 완료 — 과세 3건 · 불공 1건 입력·저장.", "retry_save": False}
+
+
+async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
+    """저장 거부(ERP 오류) 시 상한까지 retry_save 를 켜 그리드로 되돌리고, 초과하면 실패 종료."""
+
+    async def _reject(page, confirm):
+        return {"ok": False, "reason": "승인 건 계정과 다릅니다."}
+
+    monkeypatch.setattr(steps, "save_document", _reject)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+
+    # 1차 실패(save_retries 0) → 재시도 신호 + 카운터 1.
+    out1 = await make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
+    )
+    assert out1 == {"retry_save": True, "save_retries": 1, "save_error_msg": "승인 건 계정과 다릅니다."}
+
+    # 상한(2) 도달 후 또 실패 → 재시도 안 하고 error(retry_save False).
+    out2 = await make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 2}
+    )
+    assert out2["retry_save"] is False and "저장 실패" in out2["error"]
+
+
+def test_graph_has_save_retry_edge_to_menu_nav():
+    """save_final 실패 재시도 라우팅: retry_save 면 menu_nav 로, 아니면 END."""
+    from app.agents.card_collect import graph as gmod
+
+    g = gmod.build_card_collect_graph()
+    # 컴파일된 그래프에 조건부 엣지가 있고 recursion_limit 이 상향됐는지(재시도 3패스 허용).
+    assert g.config.get("recursion_limit", 25) >= 45
 
 
 async def test_save_final_zero_total_skips_save(monkeypatch):
