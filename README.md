@@ -126,3 +126,4 @@ pnpm tsc && pnpm build               # 프론트 타입·빌드 검증
 - [docs/PERMISSIONS.md](docs/PERMISSIONS.md) — RBAC 권한 모델
 - [docs/REVIEW-langgraph-hitl.md](docs/REVIEW-langgraph-hitl.md) — LangGraph/HITL 설계 리뷰
 - [backend/app/agents/card_collect/PROCESS.md](backend/app/agents/card_collect/PROCESS.md) — card-collect 실측 플로우
+- [backend/e2e/README.md](backend/e2e/README.md) — E2E 스모크(에이전트 실행→저장 확인→ERP 삭제)
