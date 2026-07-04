@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 import app.routers.me_codes as me_codes
 import app.services.code_sync as code_sync
-from app.models import ErpCodeCatalog, User
+from app.models import CardSeedSelection, ErpCodeCatalog, User
 
 
 async def _seed_catalog(sm, rows: list[dict]) -> None:
@@ -207,6 +207,35 @@ async def test_catalog_query_and_envelope(client, make_user, auth_as, sm):
     assert [i["code"] for i in filtered.json()["items"]] == ["P100"]
     by_code = await client.get("/me/catalog?kind=project&q=P200")
     assert [i["code"] for i in by_code.json()["items"]] == ["P200"]
+
+
+async def test_card_seed_list_and_search(client, make_user, auth_as, sm):
+    """전사 seed 목록 — 빈도순 + total 반환 + 가맹점 q 검색(공용 데이터, user 무관)."""
+    uid = await make_user("seed-user", "user")
+    auth_as(uid)
+    async with sm() as s:
+        s.add(CardSeedSelection(
+            norm_merchant="맘스터치상대원점", merchant="맘스터치 상대원점",
+            acct_code="81100", acct_name="복리후생비-석식", note="직원 야근식대",
+            count=562, dominance=0.93, last_year=2025,
+        ))
+        s.add(CardSeedSelection(
+            norm_merchant="지에스25성남", merchant="지에스25 성남",
+            acct_code="81100", acct_name="복리후생비-석식", note="야근식대",
+            count=745, dominance=0.79, last_year=2025,
+        ))
+        await s.commit()
+
+    body = (await client.get("/me/card-learning/seed")).json()
+    assert body["total"] == 2
+    # 빈도순(745 먼저).
+    assert [i["merchant"] for i in body["items"]] == ["지에스25 성남", "맘스터치 상대원점"]
+    assert body["items"][0]["acctName"] == "복리후생비-석식"
+
+    # q 는 가맹점명 ILIKE.
+    filtered = (await client.get("/me/card-learning/seed?q=맘스터치")).json()
+    assert [i["merchant"] for i in filtered["items"]] == ["맘스터치 상대원점"]
+    assert filtered["total"] == 2  # total 은 전체(잘림 표시용), items 는 필터 결과
 
 
 async def test_catalog_project_q_covers_wbs_extra(client, make_user, auth_as, sm):

@@ -22,7 +22,12 @@ from sqlalchemy import func, select
 import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
 from app.core.security import InvalidTokenError, decode_session_token
-from app.models import CardLearnedSelection, ErpCodeCatalog, UserCodeFavorite
+from app.models import (
+    CardLearnedSelection,
+    CardSeedSelection,
+    ErpCodeCatalog,
+    UserCodeFavorite,
+)
 from app.services.code_sync import dept_matches_budget_name, sync_catalog
 
 logger = logging.getLogger(__name__)
@@ -242,6 +247,40 @@ async def list_card_learning(user: CurrentUser, db: DbSession) -> dict:
             }
             for r in rows
         ]
+    }
+
+
+@router.get("/card-learning/seed")
+async def list_card_seed(
+    user: CurrentUser, db: DbSession, q: str | None = None, limit: int = 200
+) -> dict:
+    """전사 기초자료(seed, 가맹점→계정·적요) 목록 — 개발 디버그용. 공용 데이터(user 무관).
+
+    개인 학습이 없을 때 AI 힌트·폴백으로 쓰는 전사 관례. q 로 가맹점 검색, 빈도순. 1,048행이라
+    limit(기본 200)로 자른다(total 도 함께 반환해 잘림을 표시).
+    """
+    stmt = select(CardSeedSelection).order_by(CardSeedSelection.count.desc())
+    if q and q.strip():
+        stmt = stmt.where(CardSeedSelection.merchant.ilike(f"%{q.strip()}%"))
+    stmt = stmt.limit(max(1, min(1000, limit)))
+    rows = (await db.execute(stmt)).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(CardSeedSelection))).scalar() or 0
+    return {
+        "total": int(total),
+        "items": [
+            {
+                "id": str(r.id),
+                "merchant": r.merchant,
+                "normMerchant": r.norm_merchant,
+                "acctCode": r.acct_code,
+                "acctName": r.acct_name,
+                "note": r.note,
+                "count": r.count,
+                "dominance": r.dominance,
+                "lastYear": r.last_year,
+            }
+            for r in rows
+        ],
     }
 
 

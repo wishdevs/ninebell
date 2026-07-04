@@ -1,13 +1,17 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CardLearningTable } from './_components/card-learning-table';
+import { CardSeedTable } from './_components/card-seed-table';
 
 export const metadata: Metadata = { title: '개입 학습(디버그)' };
 
 /**
- * 개입 학습 디버그 — 가맹점→사용자 확정 선택(예산단위/프로젝트/적요·빈도)을 열람한다.
- * 제작용이며 **개발 환경에서만** 접근 가능(프로덕션 빌드에서는 404). 실제 사용자는 볼 필요 없음.
+ * 개입 학습 디버그 — AI 추천 근거가 되는 두 tier 를 탭으로 나눠 열람한다.
+ * - 공통: 전사 기초자료(seed, 가맹점→계정·적요) — 공용, 개인 학습 없을 때 폴백.
+ * - 개인: 사용자가 그리드 개입에서 확정한 선택(예산단위/프로젝트/적요·빈도).
+ * 제작용이며 **개발 환경에서만** 접근 가능(프로덕션 빌드에서는 404).
  */
 export default function CardLearningDevPage() {
   if (process.env.NODE_ENV === 'production') notFound();
@@ -16,9 +20,20 @@ export default function CardLearningDevPage() {
       <PageHeader
         caption="개발 · 디버그"
         title="개입 학습"
-        description="AI 추천의 근거가 되는 '가맹점 → 과거 확정 선택'을 확인합니다. 빈도 3회 이상이면 AI 없이 그 선택으로 결정적 프리필됩니다."
+        description="AI 추천의 근거 데이터를 확인합니다. 우선순위: 개인(확정 ≥3회는 결정적) > AI > 공통(전사) > 기본."
       />
-      <CardLearningTable />
+      <Tabs defaultValue="seed">
+        <TabsList>
+          <TabsTrigger value="seed">공통 (전사)</TabsTrigger>
+          <TabsTrigger value="personal">개인</TabsTrigger>
+        </TabsList>
+        <TabsContent value="seed" className="pt-4">
+          <CardSeedTable />
+        </TabsContent>
+        <TabsContent value="personal" className="pt-4">
+          <CardLearningTable />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

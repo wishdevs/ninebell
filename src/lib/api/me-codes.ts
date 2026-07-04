@@ -165,3 +165,27 @@ export async function fetchCardLearning(): Promise<LearnedSelection[]> {
   const res = await api.get<{ items?: LearnedSelection[] }>('/me/card-learning');
   return res.items ?? [];
 }
+
+// ── 전사 기초자료(seed, 공통) ─────────────────────────────────────────────────
+export interface SeedSelection {
+  id: string;
+  merchant: string;
+  normMerchant: string;
+  acctCode: string | null;
+  acctName: string | null;
+  note: string | null;
+  count: number;
+  dominance: number;
+  lastYear: number | null;
+}
+
+export interface SeedResult {
+  total: number;
+  items: SeedSelection[];
+}
+
+export async function fetchCardSeed(q?: string): Promise<SeedResult> {
+  const qs = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+  const res = await api.get<Partial<SeedResult>>(`/me/card-learning/seed${qs}`);
+  return { total: res.total ?? 0, items: res.items ?? [] };
+}
