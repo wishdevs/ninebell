@@ -104,6 +104,12 @@ class GridRowIn(BaseModel):
     project: GridCodeRef | None = None
     note: str = Field(default="", max_length=200)
     skip: bool = False
+    # 개입 학습(필드 단위): 사용자가 프리필에서 실제로 바꾼 필드 표시 — 바꾼 것만 학습한다.
+    # ⚠ 이 필드가 없으면 프론트가 보낸 편집 플래그가 model_dump 에서 버려져 학습이 전량 0건이
+    #   된다(2026-07-05 실측 회귀). collect_rows 가 row.get('budgetEdited') 로 읽는다.
+    budgetEdited: bool = False
+    projectEdited: bool = False
+    noteEdited: bool = False
 
 
 class HitlDecision(BaseModel):

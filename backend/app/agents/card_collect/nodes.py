@@ -928,11 +928,16 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     )
             _owner = state.get("owner")
             learned_n = await card_learning.record_selections(_owner, learn_entries)
-            # 항상 로깅(진단): owner 유무·후보 건수·저장 결과. 0건이면 원인을 바로 좁힌다.
+            # 항상 로깅(진단): owner 유무·편집 플래그 도착 여부·후보·저장. 0건이면 원인을 바로 좁힌다.
+            # 편집표시 0인데 사용자가 바꿨다면 → 프론트 번들 stale(budgetEdited 미전송) 신호.
+            _all = [*taxable_work, *pending_nontax]
+            _eb = sum(1 for e in _all if e.get("budgetEdited"))
+            _en = sum(1 for e in _all if e.get("noteEdited"))
+            _ep = sum(1 for e in _all if e.get("projectEdited"))
             await emit_log(
                 events,
-                f"개입 학습: owner={'있음' if _owner else '없음'} · 후보 {len(learn_entries)}건"
-                f"(제출 {len(apply_rows)}·과세 {len(taxable_work)}·불공 {len(pending_nontax)}) · 저장 {learned_n}건.",
+                f"개입 학습: owner={'있음' if _owner else '없음'} · 편집표시(예산 {_eb}·적요 {_en}·프로젝트 {_ep})"
+                f" · 후보 {len(learn_entries)}건 · 저장 {learned_n}건.",
                 "info" if learned_n else "warn",
             )
 

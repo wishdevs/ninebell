@@ -126,6 +126,41 @@ async def test_hitl_resolves_owned_decision(client, make_user, auth_as):
 
 
 @pytest.mark.asyncio
+async def test_hitl_grid_rows_preserve_edited_flags(client, make_user, auth_as):
+    """개입 학습 회귀(2026-07-05): 프론트가 보낸 budgetEdited/noteEdited 가 GridRowIn 을 통과해
+    큐 payload 에 남아야 한다. 모델에 필드가 없으면 model_dump 에서 버려져 '바꾼 필드만 학습'이
+    전량 0건이 됐다."""
+    uid = await make_user("edit-flags", "user")
+    auth_as(uid)
+    q: asyncio.Queue = asyncio.Queue()
+    _hitl_queues["dec-edit"] = q
+    set_hitl_owner("dec-edit", str(uid))
+    try:
+        r = await client.post(
+            "/runs/hitl",
+            json={
+                "decisionId": "dec-edit",
+                "rows": [
+                    {
+                        "no": 1,
+                        "budgetUnit": {"code": "B", "name": "n"},
+                        "note": "x",
+                        "budgetEdited": True,
+                        "noteEdited": True,
+                    }
+                ],
+            },
+        )
+        assert r.json() == {"ok": True}
+        row = q.get_nowait()["rows"][0]
+        assert row["budgetEdited"] is True
+        assert row["noteEdited"] is True
+        assert row["projectEdited"] is False  # 미전송 기본값
+    finally:
+        _hitl_queues.pop("dec-edit", None)
+
+
+@pytest.mark.asyncio
 async def test_hitl_owner_bound_at_channel_open_forbidden(client, make_user, auth_as):
     """채널 오픈 시점에 바인딩된 소유자(레이스 창 제거)를 /runs/hitl 이 존중한다 — 타인은 403."""
     uid = await make_user("heidi", "user")
@@ -180,7 +215,10 @@ async def test_hitl_grid_rows_pass_through_to_channel(client, make_user, auth_as
         assert payload["rows"][0]["budgetUnit"] == {
                 "code": "2000", "name": "경영본부", "bizplanNm": None, "bgacctNm": None, "wbsNo": None,
             }  # 조합/WBS 필드는 옵셔널(미전송 시 None 통과)
-        assert payload["rows"][1] == {"no": 2, "budgetUnit": None, "project": None, "note": "", "skip": True}
+        assert payload["rows"][1] == {
+            "no": 2, "budgetUnit": None, "project": None, "note": "", "skip": True,
+            "budgetEdited": False, "projectEdited": False, "noteEdited": False,
+        }
     finally:
         close_hitl_channel("dec-grid")
 
