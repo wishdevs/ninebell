@@ -19,3 +19,4 @@ httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.2
 aiosqlite==0.20.0
+xlrd==2.0.2  # scripts/import_card_seed.py — .xls 기초자료 파싱(수동 임포터 전용)

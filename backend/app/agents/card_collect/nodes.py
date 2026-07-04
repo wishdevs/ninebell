@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import date
@@ -353,6 +354,30 @@ def _pick_project(o: dict) -> dict:
     }
 
 
+def _acct_norm(s: str | None) -> str:
+    """예산계정명 매칭 키 — (판)/(제)/(공통) 접두사·공백·하이픈·괄호를 흡수해
+    seed 계정과목('복리후생비-석식')과 예산단위 bgacctNm('(판)복리후생비-석식')을 묶는다."""
+    t = str(s or "")
+    for pre in ("(판)", "(제)", "(공통)", "（판）", "（제）"):
+        t = t.replace(pre, "")
+    return re.sub(r"[\s()\[\]{}·・,./\-_]+", "", t).lower()
+
+
+def _resolve_seed_budget(acct_name: str | None, candidates: list[dict]) -> dict | None:
+    """seed 계정과목명을 예산단위 후보의 bgacctNm 과 매칭해 예산단위(_pick_budget 형태) 반환.
+
+    사용자 결정 '1.a'(2026-07-04): 계정 → 예산단위 연결. 별도 표가 아니라 예산단위 카탈로그의
+    bgacctNm(계정명)으로 런타임 매칭한다. 정확 매칭 1건이면 그것, 아니면 None(모호/무매칭 →
+    AI/기본에 맡김)."""
+    if not acct_name:
+        return None
+    key = _acct_norm(acct_name)
+    if not key:
+        return None
+    hits = [c for c in candidates if _acct_norm(c.get("bgacctNm")) == key]
+    return _pick_budget(hits[0]) if len(hits) == 1 else None
+
+
 # 비용구분 → 예산계정 접두사. 팀의 비용구분이 이 접두사 계정을 우선하게 한다.
 _COST_PREFIX = {"판관비": "(판)", "제조원가": "(제)"}
 # 비용구분 → 기본 프로젝트 번호(PJT_NO). ERP 에 비용구분과 동명의 프로젝트가 존재
@@ -403,13 +428,16 @@ async def _prefill_selections(
     cost_prefix: str | None = None,
     cost_project: dict | None = None,
     learned: dict | None = None,
+    seed: dict | None = None,
 ) -> dict[int, dict]:
-    """행별 예산단위·프로젝트 프리셀렉트 — 3단: 학습(결정적) > AI > 기본지정 폴백.
+    """행별 예산단위·프로젝트 프리셀렉트 — 예산단위 단: 학습(결정적) > AI > 전사seed > 기본지정.
 
     반환 {no: {budgetUnit, project, budgetSource, projectSource}} — 각 값은 없으면 None.
     learned={norm_merchant: {budget, project, note, count}} — 과거 개입 확정분. 같은 가맹점을
     LEARNED_APPLY_MIN_COUNT 회 이상 확정했으면 AI 없이 그 선택을 그대로 프리필(source='learned').
-    예산단위·프로젝트는 서로 독립적으로 결정한다.
+    seed={norm_merchant: {acct_name, note, count, dominance}} — 전사 기초자료. 계정→예산단위로
+    해석해 AI 힌트(priorChoice) + 일반 기본보다 나은 폴백(source='seed')으로만 쓴다(결정적 아님 —
+    키워드 매칭·비개인 데이터라 AI 가 맥락으로 판단). 예산단위·프로젝트는 서로 독립 결정.
     """
     learned = learned or {}
     # 학습 힌트를 recommend 프롬프트에 실어(Tier 2) — 결정적 적용에 못 미치는 가맹점도 AI 가
@@ -428,6 +456,17 @@ async def _prefill_selections(
             seen.add(code)
             budget_candidates.append(c)
     project_candidates = list(project_favs)
+
+    # 전사 seed → 계정(acct_name)을 예산단위 후보의 bgacctNm 과 매칭해 해석(결정 1.a). 개인 학습이
+    # 없는 행에 대해 AI 힌트·개선된 폴백으로 쓴다(결정적 아님). {no: 예산단위(_pick_budget 형태)}.
+    seed = seed or {}
+    seed_budget_by_no: dict[int, dict] = {}
+    for idx, r in enumerate(rows_list):
+        sh = seed.get(card_learning.norm_merchant(r.get("TRAN_NM")))
+        if sh:
+            sb = _resolve_seed_budget(sh.get("acct_name"), budget_candidates)
+            if sb:
+                seed_budget_by_no[idx + 1] = sb
 
     recommendations: dict[int, dict] = {}
     if settings.gemini_api_key and (budget_candidates or project_candidates):
@@ -454,6 +493,17 @@ async def _prefill_selections(
                     "projectCode": pj.get("code") or "",
                     "projectName": pj.get("name") or "",
                     "count": hit.get("count") or 1,
+                }
+            elif rr["no"] in seed_budget_by_no:
+                # 개인 학습 없음 → 전사 seed 로 해석한 예산단위를 AI 힌트로(전사 관례 우선 유도).
+                sb = seed_budget_by_no[rr["no"]]
+                rr["priorChoice"] = {
+                    "budgetUnitCode": sb.get("code") or "",
+                    "budgetUnitName": sb.get("name") or "",
+                    "bgacctNm": sb.get("bgacctNm") or "",
+                    "projectCode": "",
+                    "projectName": "",
+                    "count": 1,
                 }
         await emit_log(events, "AI 추천을 계산하는 중입니다…", "info")
         http = httpx.AsyncClient(timeout=60.0)
@@ -499,6 +549,9 @@ async def _prefill_selections(
             ai_budget = budget_by_code.get(rec.get("budgetUnitCode", "")) if hi else None
             if ai_budget:
                 budget, budget_source = _pick_budget(ai_budget), "ai"
+            elif no in seed_budget_by_no:
+                # 전사 seed 해석 예산단위 — 일반 기본보다 나은 폴백(계정 기반 실제 관례).
+                budget, budget_source = seed_budget_by_no[no], "seed"
             elif default_budget:
                 budget, budget_source = _pick_budget(default_budget), "default"
             else:
@@ -658,23 +711,27 @@ def make_collect_rows_node(timeout_s: int | None = None):
             )
         # 개입 학습 조회: 이번 런 가맹점들에 대해서만 과거 확정분을 로드(전 이력 무관, 프롬프트
         # 크기는 행 수에 비례). 결정적 프리필(반복 가맹점) + AI 힌트로 쓴다.
-        learned = await card_learning.retrieve_for_merchants(
-            state.get("owner"), [r.get("TRAN_NM") or "" for r in rows_list]
-        )
+        merchants = [r.get("TRAN_NM") or "" for r in rows_list]
+        learned = await card_learning.retrieve_for_merchants(state.get("owner"), merchants)
+        # 전사 기초자료(seed) 폴백 — 개인 학습이 없는 가맹점에 대해 과거 전사 관례를 힌트로.
+        seed = await card_learning.retrieve_seed_for_merchants(merchants)
         if learned:
             await emit_log(events, f"과거 개입 학습 {len(learned)}개 가맹점 매칭 — 추천에 반영.", "info")
-        # 적요도 학습 반영: 과거에 이 가맹점에 실제로 쓴 적요가 있으면 키워드 휴리스틱 대신 그것으로
-        # 프리필한다(사용자의 실제 표현 > 추측). recs(그리드 표시) · notes(반영/현황) 둘 다 갱신.
+        if seed:
+            await emit_log(events, f"전사 기초자료 {len(seed)}개 가맹점 매칭 — 개인 학습 없는 행에 반영.", "info")
+        # 적요 반영: 개인 학습 적요 > 전사 seed 적요 > 키워드 휴리스틱(사용자의 실제 표현 우선).
+        # recs(그리드 표시) · notes(반영/현황) 둘 다 갱신.
         for idx, r in enumerate(rows_list):
-            hit = learned.get(card_learning.norm_merchant(r.get("TRAN_NM")))
-            learned_note = (hit or {}).get("note")
-            if learned_note and learned_note.strip():
+            norm = card_learning.norm_merchant(r.get("TRAN_NM"))
+            note_hint = ((learned.get(norm) or {}).get("note")
+                         or (seed.get(norm) or {}).get("note"))
+            if note_hint and note_hint.strip():
                 key = r.get("i", idx)
-                recs[key] = learned_note.strip()
-                notes[key] = learned_note.strip()
+                recs[key] = note_hint.strip()
+                notes[key] = note_hint.strip()
         preselect = await _prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
-            cost_prefix=cost_prefix, cost_project=cost_project, learned=learned,
+            cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
         )
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note

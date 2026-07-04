@@ -856,6 +856,11 @@ const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: st
     title: '과거 이 가맹점에 확정했던 선택으로 미리 채움(개입 학습)',
     cls: 'bg-success/15 text-success',
   },
+  seed: {
+    label: '전사',
+    title: '전사 기초자료(과거 법인카드 실적)의 이 가맹점 관례로 미리 채움',
+    cls: 'bg-info/15 text-info',
+  },
   default: {
     label: '기본',
     title: '기본지정으로 미리 선택됨',

@@ -615,6 +615,46 @@ async def test_set_acct_date_node_fails_on_step_error(monkeypatch):
     assert "회계일 설정 실패" in out["error"]
 
 
+# ── 전사 seed(기초자료) 프리필 ─────────────────────────────────────────────────
+def test_resolve_seed_budget_matches_account_via_bgacctnm():
+    """seed 계정과목명을 예산단위 bgacctNm 과 (판)/(제) 접두사 무시하고 매칭. 모호/무매칭→None."""
+    from app.agents.card_collect.nodes import _resolve_seed_budget
+
+    cands = [
+        {"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+        {"code": "B2", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
+    ]
+    assert _resolve_seed_budget("복리후생비-석식", cands)["code"] == "B1"  # 접두사 무시 정확 매칭
+    assert _resolve_seed_budget("여비교통비", cands) is None  # 무매칭
+    # 같은 계정을 (판)/(제) 두 예산단위가 가지면 모호 → None(AI/기본에 맡김).
+    ambiguous = cands + [{"code": "B3", "name": "영업팀", "bgacctNm": "(제)복리후생비-석식"}]
+    assert _resolve_seed_budget("복리후생비-석식", ambiguous) is None
+
+
+async def test_prefill_uses_seed_budget_between_ai_and_default():
+    """개인학습·AI 없음 → 전사 seed 로 해석한 예산단위(source='seed')를 기본보다 우선."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
+
+    settings = SimpleNamespace(gemini_api_key="")  # AI off
+    rows_list = [{"i": 0, "TRAN_NM": "맘스터치 상대원점", "TRAN_AMT": "9000", "VAT_TP": "과세"}]
+    # 기본지정 예산단위(B0)와, seed 계정에 매칭되는 예산단위(B1)가 공존 — seed 가 기본보다 우선.
+    budget_favs = [{"code": "B0", "name": "인사기획팀", "bgacctNm": "(판)소모품비", "isDefault": True}]
+    mine = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"}]
+    seed = {
+        card_learning.norm_merchant("맘스터치 상대원점"): {
+            "acct_name": "복리후생비-석식", "note": "직원 야근식대", "count": 562, "dominance": 0.93,
+        }
+    }
+    out = await _prefill_selections(
+        asyncio.Queue(), settings, rows_list, {0: "x"}, budget_favs, mine, [], seed=seed,
+    )
+    assert out[1]["budgetSource"] == "seed"
+    assert out[1]["budgetUnit"]["code"] == "B1"  # 기본(B0) 아닌 seed 해석(B1)
+
+
 # ── 패스 스킵 경로 보증(사용자 지적 2026-07-04) ─────────────────────────────────
 async def test_save_final_saves_when_no_nontax(monkeypatch):
     """불공 0건: 2차를 생략해도 과세 반영분만으로 최종 저장(F7)해야 한다."""

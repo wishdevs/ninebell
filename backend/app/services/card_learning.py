@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.db import get_sessionmaker
-from app.models import CardLearnedSelection
+from app.models import CardLearnedSelection, CardSeedSelection
 
 logger = logging.getLogger("app.services.card_learning")
 
@@ -130,6 +130,39 @@ async def retrieve_for_merchants(owner: str | None, merchants: list[str]) -> dic
             "project": r.project,
             "note": r.note,
             "count": r.count,
+        }
+        for r in rows
+    }
+
+
+async def retrieve_seed_for_merchants(merchants: list[str]) -> dict[str, dict]:
+    """전사 기초자료(card_seed_selections)에서 이번 런 가맹점들만 조회 → {norm: {...}}.
+
+    개인 학습(retrieve_for_merchants)이 없을 때의 **전사 폴백 tier**. user 무관 공용이며 조회는
+    요청 가맹점 키로만 스코프(전 이력 무관, 프롬프트 크기는 런 크기에 비례). 반환 각 값:
+    {merchant, acct_code, acct_name, note, count, dominance}. 결정적 적용이 아니라 AI 힌트·
+    개선된 폴백으로만 쓴다(키워드 매칭 + 비개인 데이터 → 최종값 아님, AI가 맥락으로 판단)."""
+    keys = {norm_merchant(m) for m in merchants if norm_merchant(m)}
+    if not keys:
+        return {}
+    try:
+        async with get_sessionmaker()() as s:
+            rows = (
+                await s.execute(
+                    select(CardSeedSelection).where(CardSeedSelection.norm_merchant.in_(keys))
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — 조회 실패가 런을 죽여선 안 된다(부가기능).
+        logger.exception("card seed retrieve failed")
+        return {}
+    return {
+        r.norm_merchant: {
+            "merchant": r.merchant,
+            "acct_code": r.acct_code,
+            "acct_name": r.acct_name,
+            "note": r.note,
+            "count": r.count,
+            "dominance": r.dominance,
         }
         for r in rows
     }
