@@ -41,11 +41,14 @@ async def omnisol_login(
     # 쪽으로 분기 폴링. 폼 부재(음성)가 아니라 요소 수(양성)로 워밍을 판정해, 폼이 아직
     # 안 그려진 초기 화면을 인증으로 오판하지 않는다. 만료 세션은 폼이 보여 정상 로그인.
     await page.goto(f"{base.rstrip('/')}/", wait_until="domcontentloaded", timeout=timeout_ms)
-    for _ in range(40):  # 상한 ~12s
+    for i in range(40):  # 상한 ~12s
         if await selector_present(page, selectors.LOGIN_USERID):
             break  # 로그인 폼 확인 → 콜드 경로.
-        if await is_authenticated(page):  # 요소 수 임계(양성) — 세션 워밍(재사용) 경로.
-            logger.info("옴니솔 세션 재사용(웜 진입): userid=%s", userid)
+        # 웜 판정은 **아바타**(로그인 후에만 렌더, 헤더라 이른 시점 출현)를 1순위 양성 신호로 —
+        # 요소 수 임계(200)는 SPA 하이드레이션이 느리면 수 초 늦게 넘어 로그인 단계가 길어진다
+        # (실측 2026-07-04: 이미 로그인된 메인 페이지에서 login 단계 ~18s).
+        if await selector_present(page, selectors.AVATAR) or await is_authenticated(page):
+            logger.info("옴니솔 세션 재사용(웜 진입, %d폴): userid=%s", i + 1, userid)
             return
         await page.wait_for_timeout(300)
     else:

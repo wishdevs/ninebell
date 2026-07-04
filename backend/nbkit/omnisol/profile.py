@@ -32,11 +32,16 @@ async def read_profile(page: Any) -> dict:
             await page.evaluate(js_lib.AVATAR_CLICK_JS)
         except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
             pass
-    try:
-        await page.wait_for_timeout(1_500)
-    except Exception:  # noqa: BLE001
-        pass
-    raw = await safe_evaluate(page, js_lib.PROFILE_JS, default={})
+    # 패널 렌더를 폴링(고정 1.5s 대체) — 데이터가 잡히는 즉시 진행, 상한 ~2.4s(내성 유지).
+    raw: dict = {}
+    for _ in range(12):
+        try:
+            await page.wait_for_timeout(200)
+        except Exception:  # noqa: BLE001
+            break
+        raw = await safe_evaluate(page, js_lib.PROFILE_JS, default={}) or {}
+        if raw.get("display_name") or raw.get("department"):
+            break
     if not raw:
         logger.warning("프로필 추출 실패 — 빈 값으로 진행(셀렉터 변경 가능성)")
         raw = {}
