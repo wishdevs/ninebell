@@ -721,25 +721,34 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
         return {"ok": False, "reason": "카드팝업 '적용' 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
 
-    # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. 최대 ~20초(상한 유지,
-    # 간격 2s→400ms — 모달·닫힘을 뜨는 즉시 처리해 구간을 수 초 단축).
-    for _ in range(50):
-        await page.wait_for_timeout(400)
+    # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. check-first(400ms
+    # 선대기 제거) + 간격 축소 — 40행 처리 시 각 모달을 뜨는 즉시 클릭. 상한 45s(대량 행 서버
+    # 처리 여유). 계측(clicks/iters/elapsed)을 반환해 다음 런에서 병목 위치를 본다.
+    import time as _t
+    t0 = _t.monotonic()
+    clicks = 0
+    for it in range(300):
         yes = await page.evaluate(js.MODAL_BTN_BOX_JS, "예")
         if yes:
             await page.mouse.click(yes["x"], yes["y"])
+            clicks += 1
             continue
         ok_btn = await page.evaluate(js.MODAL_BTN_BOX_JS, "확인")
         if ok_btn and "예산" in (ok_btn.get("title") or ""):
             await page.mouse.click(ok_btn["x"], ok_btn["y"])
+            clicks += 1
             continue
         if not await page.evaluate(js.CARD_WIN_EXISTS_JS):
-            # '예산현황' 모달이 팝업 닫힘 이후 지연되어 뜨는 케이스(실측) — 즉시 반환하지
-            # 말고 잔여 모달을 정리한 뒤 반환해야 다음 단계가 막히지 않는다.
             dismissed = await dismiss_blocking_modals(page)
-            return {"ok": True, "checked": chk.get("checked"), "late_modals": dismissed[:4]}
+            elapsed = int((_t.monotonic() - t0) * 1000)
+            return {"ok": True, "checked": chk.get("checked"), "late_modals": dismissed[:4],
+                    "clicks": clicks, "iters": it, "elapsed_ms": elapsed}
+        await page.wait_for_timeout(150)
+        if (_t.monotonic() - t0) > 45:
+            break
     modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
-    return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals}
+    return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals,
+            "clicks": clicks, "elapsed_ms": int((_t.monotonic() - t0) * 1000)}
 
 
 async def save_document(page: Any, confirm: bool) -> dict:

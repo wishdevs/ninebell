@@ -18,12 +18,44 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .screencast import screencast_pump
 
 logger = logging.getLogger(__name__)
+
+
+# ── 대기 배율(속도 튜닝·극단 테스트) ─────────────────────────────────────────────
+# CARD_DELAY_SCALE 로 모든 page.wait_for_timeout(고정 settle·폴 간격·닫힘 대기)을 한 번에
+# 스케일한다(코드 40여 곳 무수정). 예: 0.2=1/5 로 극단 축소 → 어디서 깨지는지 파악.
+# 1.0(기본)이면 프록시 없이 원본 page 그대로.
+class _ScaledPage:
+    """page 위임 프록시 — wait_for_timeout 만 배율 적용, 나머지 속성/메서드는 원본 위임."""
+
+    def __init__(self, page: Any, scale: float):
+        object.__setattr__(self, "_page", page)
+        object.__setattr__(self, "_scale", scale)
+
+    async def wait_for_timeout(self, ms: float) -> Any:
+        return await self._page.wait_for_timeout(max(0.0, ms * self._scale))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._page, name)
+
+
+def _maybe_scale_page(page: Any) -> Any:
+    if page is None:
+        return None
+    try:
+        scale = float(os.environ.get("CARD_DELAY_SCALE", "1") or "1")
+    except ValueError:
+        scale = 1.0
+    if scale == 1.0 or scale <= 0:
+        return page
+    logger.info("run_workflow: 대기 배율 CARD_DELAY_SCALE=%s 적용", scale)
+    return _ScaledPage(page, scale)
 
 # 브라우저 팩토리: fresh 헤드리스 브라우저를 반환하는 async 콜러블(playwright chromium 등).
 BrowserFactory = Callable[[], Awaitable[Any]]
@@ -113,6 +145,9 @@ async def run_workflow(
                 logger.warning("run_workflow: new_page 실패 — 페이지 없이 진행")
                 page = None
 
+        raw_page = page  # storage_state 저장은 원본 page.context 로(프록시 우회).
+        page = _maybe_scale_page(page)  # 대기 배율 프록시(CARD_DELAY_SCALE, 기본 1.0=무변경)
+
         state: dict = {
             "page": page,
             "browser": browser,
@@ -162,7 +197,7 @@ async def run_workflow(
             except Exception:
                 logger.debug("runner task 종료 예외 무시", exc_info=True)
             # 브라우저 닫기 전에 인증 세션 상태를 캐시(다음 런 웜 진입). 실패는 무시.
-            await _save_state(page, creds.get("userid"))
+            await _save_state(raw_page, creds.get("userid"))
             try:
                 await browser.close()
             except Exception:
