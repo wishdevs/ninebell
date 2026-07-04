@@ -849,17 +849,27 @@ function StarButton({
 
 // ── 프리셀렉트 출처 배지(AI / 기본) ──────────────────────────────────
 
+const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: string }> = {
+  ai: { label: 'AI', title: 'AI 추천으로 미리 선택됨', cls: 'bg-accent/15 text-accent' },
+  learned: {
+    label: '학습',
+    title: '과거 이 가맹점에 확정했던 선택으로 미리 채움(개입 학습)',
+    cls: 'bg-success/15 text-success',
+  },
+  default: { label: '기본', title: '기본지정으로 미리 선택됨', cls: 'bg-muted text-foreground-tertiary' },
+};
+
 function SourceBadge({ source }: { source: PrefillSource }) {
-  const isAi = source === 'ai';
+  const meta = SOURCE_META[source] ?? SOURCE_META.default;
   return (
     <span
-      title={isAi ? 'AI 추천으로 미리 선택됨' : '기본지정으로 미리 선택됨'}
+      title={meta.title}
       className={cn(
         'shrink-0 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[9px] font-semibold tracking-wide',
-        isAi ? 'bg-accent/15 text-accent' : 'bg-muted text-foreground-tertiary',
+        meta.cls,
       )}
     >
-      {isAi ? 'AI' : '기본'}
+      {meta.label}
     </span>
   );
 }

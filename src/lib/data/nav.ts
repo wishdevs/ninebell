@@ -21,7 +21,8 @@ export type NavIconKey =
   | 'audit'
   | 'logging'
   | 'org'
-  | 'budget';
+  | 'budget'
+  | 'learning';
 
 export interface NavItem {
   href: string;
@@ -33,6 +34,8 @@ export interface NavItem {
   permission?: PermissionCode;
   /** 이 롤 이상(계층)에게만 노출. `permission`과 함께 쓰지 않는다. */
   minRole?: Role;
+  /** true면 개발 환경(NODE_ENV!=='production')에서만 노출 — 제작용 디버그 메뉴. */
+  devOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -75,6 +78,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
   {
     label: '개발',
-    items: [{ href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' }],
+    items: [
+      { href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' },
+      // 개입 학습(가맹점→선택) 디버그 — 개발 환경에서만 노출.
+      { href: '/dev/card-learning', label: '개입 학습(디버그)', icon: 'learning', devOnly: true },
+    ],
   },
 ];

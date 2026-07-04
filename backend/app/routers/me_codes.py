@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
 from app.core.security import InvalidTokenError, decode_session_token
-from app.models import ErpCodeCatalog, UserCodeFavorite
+from app.models import CardLearnedSelection, ErpCodeCatalog, UserCodeFavorite
 from app.services.code_sync import dept_matches_budget_name, sync_catalog
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,44 @@ async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
     target.is_default = True
     await db.commit()
     return _fav_dict(target)
+
+
+# ── 개입 학습(디버그 조회) ───────────────────────────────────────────────────────
+@router.get("/card-learning")
+async def list_card_learning(user: CurrentUser, db: DbSession) -> dict:
+    """현재 사용자의 카드 개입 학습(가맹점→확정 선택) 목록 — 개발 디버그용(빈도·최근순).
+
+    제작 중 'AI 가 무엇을 근거로 추천하는지' 확인용. 본인 데이터만 조회한다.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(CardLearnedSelection)
+                .where(CardLearnedSelection.user_id == user.id)
+                .order_by(
+                    CardLearnedSelection.count.desc(),
+                    CardLearnedSelection.last_used_at.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "merchant": r.merchant,
+                "normMerchant": r.norm_merchant,
+                "budget": r.budget,
+                "project": r.project,
+                "note": r.note,
+                "count": r.count,
+                "lastUsedAt": r.last_used_at.isoformat() if r.last_used_at else None,
+            }
+            for r in rows
+        ]
+    }
 
 
 # ── 코드 카탈로그 조회 ──────────────────────────────────────────────────────────

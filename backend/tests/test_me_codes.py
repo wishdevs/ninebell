@@ -432,3 +432,41 @@ async def test_default_favorite_toggles_off_on_second_click(client, make_user, a
     # 목록에서도 해제 확인
     favs = (await client.get("/me/favorites", params={"kind": "project"})).json()["items"]
     assert all(not f["isDefault"] for f in favs)
+
+
+async def test_card_learning_debug_lists_recorded(client, make_user, auth_as, sm):
+    """개입 학습 디버그 조회 — record_selections 로 쌓은 항목을 빈도순으로 반환."""
+    from app.services import card_learning
+
+    uid = await make_user("u-learn", "user")
+    auth_as(uid)
+    # 같은 가맹점 2회(count=2) + 다른 가맹점 1회.
+    entry = {
+        "merchant": "네이버파이낸셜㈜",
+        "budget": {"code": "2006|1|2", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
+        "project": {"code": "800|800", "name": "판매관리비", "wbsNo": "800"},
+        "note": "소모품",
+    }
+    await card_learning.record_selections(str(uid), [entry])
+    await card_learning.record_selections(str(uid), [entry])  # 재확정 → count 2
+    await card_learning.record_selections(str(uid), [{"merchant": "쿠팡", "budget": {"code": "x", "name": "y"}}])
+
+    r = await client.get("/me/card-learning")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 2
+    top = items[0]  # 빈도순 → 네이버(count=2) 먼저
+    assert top["merchant"] == "네이버파이낸셜㈜" and top["count"] == 2
+    assert top["budget"]["bgacctNm"] == "(판)소모품비" and top["project"]["wbsNo"] == "800"
+
+
+async def test_card_learning_retrieve_matches_normalized_merchant(sm, make_user):
+    """정규화 매칭 — '네이버파이낸셜㈜' 저장분이 '네이버파이낸셜(주)' 조회로 잡힌다."""
+    from app.services import card_learning
+
+    uid = await make_user("u-learn2", "user")
+    await card_learning.record_selections(
+        str(uid), [{"merchant": "네이버파이낸셜㈜", "budget": {"code": "b", "name": "n"}}]
+    )
+    hits = await card_learning.retrieve_for_merchants(str(uid), ["네이버파이낸셜(주)"])
+    assert card_learning.norm_merchant("네이버파이낸셜(주)") in hits

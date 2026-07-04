@@ -31,6 +31,8 @@ _SYSTEM = (
     "가맹점명·금액·부가세구분·적요 초안을 근거로 판단합니다. "
     "확신이 서지 않으면 낮은 confidence 를 매기고, 적당한 후보가 없으면 해당 코드를 null 로 두세요. "
     "budgetUnitCode·projectCode 는 반드시 제공된 후보의 code 값을 그대로 사용하고, 새로 만들지 마세요. "
+    "행에 priorChoice(과거 사용자가 같은 가맹점에 확정했던 선택)가 있으면, 그 code 를 최우선으로 "
+    "채택하고 confidence 를 높게 매기세요(사용자의 반복 판단이 가장 신뢰도 높은 근거입니다). "
     "모든 행에 대해 submit_recommendations 를 정확히 한 번 호출하세요."
 )
 
@@ -120,6 +122,8 @@ async def recommend_selections(
                 "amount": r.get("amount") or "",
                 "vatType": r.get("vatType") or "",
                 "note": r.get("note") or "",
+                # 과거 사용자가 이 가맹점에 확정했던 선택(개입 학습). 있으면 최우선 참고.
+                **({"priorChoice": r["priorChoice"]} if r.get("priorChoice") else {}),
             }
             for r in rows
         ],

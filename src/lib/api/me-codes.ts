@@ -148,3 +148,20 @@ export function startCatalogSync(kind: CatalogKind): Promise<{ started: boolean 
 export function fetchSyncStatus(kind: CatalogKind): Promise<SyncStatus> {
   return api.get<SyncStatus>(`/me/catalog/sync-status?kind=${kind}`);
 }
+
+// ── 개입 학습(디버그) ────────────────────────────────────────────────────────
+export interface LearnedSelection {
+  id: string;
+  merchant: string;
+  normMerchant: string;
+  budget: { code: string; name: string; bizplanNm?: string; bgacctNm?: string } | null;
+  project: { code: string; name: string; wbsNo?: string; wbsNm?: string } | null;
+  note: string | null;
+  count: number;
+  lastUsedAt: string | null;
+}
+
+export async function fetchCardLearning(): Promise<LearnedSelection[]> {
+  const res = await api.get<{ items?: LearnedSelection[] }>('/me/card-learning');
+  return res.items ?? [];
+}

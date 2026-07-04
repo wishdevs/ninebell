@@ -34,6 +34,7 @@ from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 from app.live.hitl import close_hitl_channel, open_hitl_channel, wait_hitl
 from app.models import ErpCodeCatalog, User, UserCodeFavorite
+from app.services import card_learning
 from app.services.code_sync import dept_matches_budget_name
 from nbkit.patterns import emit_shot
 
@@ -401,12 +402,23 @@ async def _prefill_selections(
     project_favs: list[dict],
     cost_prefix: str | None = None,
     cost_project: dict | None = None,
+    learned: dict | None = None,
 ) -> dict[int, dict]:
-    """행별 예산단위·프로젝트 프리셀렉트 — AI 추천이 확신하면 그 항목, 아니면 기본지정 폴백.
+    """행별 예산단위·프로젝트 프리셀렉트 — 3단: 학습(결정적) > AI > 기본지정 폴백.
 
     반환 {no: {budgetUnit, project, budgetSource, projectSource}} — 각 값은 없으면 None.
-    예산단위·프로젝트는 서로 독립적으로 결정한다(예: 예산단위는 AI, 프로젝트는 기본).
+    learned={norm_merchant: {budget, project, note, count}} — 과거 개입 확정분. 같은 가맹점을
+    LEARNED_APPLY_MIN_COUNT 회 이상 확정했으면 AI 없이 그 선택을 그대로 프리필(source='learned').
+    예산단위·프로젝트는 서로 독립적으로 결정한다.
     """
+    learned = learned or {}
+    # 학습 힌트를 recommend 프롬프트에 실어(Tier 2) — 결정적 적용에 못 미치는 가맹점도 AI 가
+    # 과거 선택을 우선하도록 유도한다. {no: {budgetName, bgacctNm, projectName}}.
+    learned_by_no: dict[int, dict] = {}
+    for idx, r in enumerate(rows_list):
+        hit = learned.get(card_learning.norm_merchant(r.get("TRAN_NM")))
+        if hit:
+            learned_by_no[idx + 1] = hit
     # AI 후보 — 예산단위(자주쓰는 + 내 부서, code 중복 제거) / 프로젝트(자주쓰는).
     budget_candidates: list[dict] = []
     seen: set[str] = set()
@@ -429,6 +441,20 @@ async def _prefill_selections(
             }
             for idx, r in enumerate(rows_list)
         ]
+        # 학습 힌트를 각 행에 부착(AI 가 과거 선택을 우선하도록).
+        for rr in rec_rows:
+            hit = learned_by_no.get(rr["no"])
+            if hit:
+                bu = hit.get("budget") or {}
+                pj = hit.get("project") or {}
+                rr["priorChoice"] = {
+                    "budgetUnitCode": bu.get("code") or "",
+                    "budgetUnitName": bu.get("name") or "",
+                    "bgacctNm": bu.get("bgacctNm") or "",
+                    "projectCode": pj.get("code") or "",
+                    "projectName": pj.get("name") or "",
+                    "count": hit.get("count") or 1,
+                }
         await emit_log(events, "AI 추천을 계산하는 중입니다…", "info")
         http = httpx.AsyncClient(timeout=60.0)
         try:
@@ -462,22 +488,33 @@ async def _prefill_selections(
         no = idx + 1
         rec = recommendations.get(no) or {}
         hi = rec.get("confidence", 0.0) >= RECOMMEND_CONFIDENCE_THRESHOLD
+        # Tier 1 — 결정적 적용: 반복 확정(count>=MIN)한 가맹점은 그 선택을 그대로.
+        lh = learned_by_no.get(no) or {}
+        learned_ok = (lh.get("count") or 0) >= card_learning.LEARNED_APPLY_MIN_COUNT
 
-        ai_budget = budget_by_code.get(rec.get("budgetUnitCode", "")) if hi else None
-        if ai_budget:
-            budget, budget_source = _pick_budget(ai_budget), "ai"
-        elif default_budget:
-            budget, budget_source = _pick_budget(default_budget), "default"
+        learned_budget = lh.get("budget") if learned_ok else None
+        if learned_budget and learned_budget.get("code"):
+            budget, budget_source = _pick_budget(learned_budget), "learned"
         else:
-            budget, budget_source = None, None
+            ai_budget = budget_by_code.get(rec.get("budgetUnitCode", "")) if hi else None
+            if ai_budget:
+                budget, budget_source = _pick_budget(ai_budget), "ai"
+            elif default_budget:
+                budget, budget_source = _pick_budget(default_budget), "default"
+            else:
+                budget, budget_source = None, None
 
-        ai_project = project_by_code.get(rec.get("projectCode", "")) if hi else None
-        if ai_project:
-            project, project_source = _pick_project(ai_project), "ai"
-        elif default_project:
-            project, project_source = _pick_project(default_project), "default"
+        learned_project = lh.get("project") if learned_ok else None
+        if learned_project and learned_project.get("code"):
+            project, project_source = _pick_project(learned_project), "learned"
         else:
-            project, project_source = None, None
+            ai_project = project_by_code.get(rec.get("projectCode", "")) if hi else None
+            if ai_project:
+                project, project_source = _pick_project(ai_project), "ai"
+            elif default_project:
+                project, project_source = _pick_project(default_project), "default"
+            else:
+                project, project_source = None, None
 
         out[no] = {
             "budgetUnit": budget,
@@ -619,9 +656,16 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 f"팀 비용구분 '{cost_type}' → 기본 프로젝트 {cost_project['name']}({cost_project['wbsNo']}) 프리셀렉트.",
                 "info",
             )
+        # 개입 학습 조회: 이번 런 가맹점들에 대해서만 과거 확정분을 로드(전 이력 무관, 프롬프트
+        # 크기는 행 수에 비례). 결정적 프리필(반복 가맹점) + AI 힌트로 쓴다.
+        learned = await card_learning.retrieve_for_merchants(
+            state.get("owner"), [r.get("TRAN_NM") or "" for r in rows_list]
+        )
+        if learned:
+            await emit_log(events, f"과거 개입 학습 {len(learned)}개 가맹점 매칭 — 추천에 반영.", "info")
         preselect = await _prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
-            cost_prefix=cost_prefix, cost_project=cost_project,
+            cost_prefix=cost_prefix, cost_project=cost_project, learned=learned,
         )
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note
@@ -755,6 +799,22 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 + [_row_desc(e, "불공") for e in pending_nontax]
             )
             await emit_log(events, f"부가세구분 분류: {split_desc}", "info")
+
+            # 개입 학습: 사용자가 확정한 선택을 가맹점 단위로 누적(다음 런 추천 힌트·결정적 프리필).
+            # 예산단위 값이 있는 행만(빈 선택은 학습 대상 아님). owner 없으면 서비스가 no-op.
+            learn_entries = [
+                {
+                    "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                    "budget": e["budgetUnit"] or None,
+                    "project": e["project"],
+                    "note": e["note"],
+                }
+                for e in [*taxable_work, *pending_nontax]
+                if (e.get("budgetUnit") or {}).get("code")
+            ]
+            learned_n = await card_learning.record_selections(state.get("owner"), learn_entries)
+            if learned_n:
+                await emit_log(events, f"개입 학습 저장: {learned_n}개 가맹점 선택 기억.", "info")
 
             filled, failures, applied_idx = await _apply_batch(
                 page, events, rows_list, taxable_work, status, notes, chat_id="cc-status"

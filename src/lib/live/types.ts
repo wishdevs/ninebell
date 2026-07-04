@@ -70,7 +70,7 @@ export interface LiveGridRow {
 }
 
 /** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백. */
-export type PrefillSource = 'ai' | 'default';
+export type PrefillSource = 'ai' | 'default' | 'learned';
 
 /** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
 /** 예산단위 보기 — 선택 단위는 (예산단위명 × 사업계획명 × 예산계정명) 조합 행.

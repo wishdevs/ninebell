@@ -18,6 +18,7 @@ import {
   RiFileList3Line,
   RiOrganizationChart,
   RiWallet3Line,
+  RiBrainLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
@@ -42,6 +43,7 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   logging: RiFileList3Line,
   org: RiOrganizationChart,
   budget: RiWallet3Line,
+  learning: RiBrainLine,
 };
 
 export function Sidebar() {
@@ -85,6 +87,8 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
 
   // 게이트 평가: permission이면 보유 여부, minRole이면 롤 계층, 없으면 전원 노출.
   const isVisible = (item: NavItem): boolean => {
+    // 개발전용 메뉴는 프로덕션 빌드에서 숨긴다(제작용 디버그).
+    if (item.devOnly && process.env.NODE_ENV === 'production') return false;
     if (item.permission) return has(item.permission);
     if (item.minRole) return roleAtLeast(role, item.minRole);
     return true;
