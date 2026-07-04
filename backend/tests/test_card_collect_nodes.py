@@ -155,7 +155,7 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
 
     # 전부 skip 제출로 노드를 정상 종료시킨다.
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_grid_query_message_reemits_with_search_results(monkeypatch):
@@ -181,7 +181,7 @@ async def test_grid_query_message_reemits_with_search_results(monkeypatch):
     ]
 
     resolve_hitl(second["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkeypatch):
@@ -213,7 +213,7 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
     )
     out = await asyncio.wait_for(task, timeout=2)
     # 전 행 과세 → 1차에서 처리, 불공 대기 없음. 1행 성공, 2행 실패, 3행 skip.
-    assert out == {"filled": 1, "pending_nontax": [], "pass1_applied_idx": [0]}
+    assert out == {"filled": 1, "pending_nontax": [], "pass1_applied_idx": [0], "pass1_failed": 1}
     assert calls == [0, 1]  # skip 아닌 두 행만, no 순(idx 0,1)
 
     frames = []
@@ -246,7 +246,7 @@ async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
     assert applied == []  # 무효 제출은 반영하지 않는다
 
     resolve_hitl(reemit["id"], {"rows": [{"no": 1, "skip": True}]})
-    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_grid_timeout_returns_error(monkeypatch):
@@ -439,7 +439,7 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
         ],
     }
     out = await make_apply_pass2_node()(state)
-    assert out == {"pass2_filled": 1, "pass2_applied_idx": [1]} and calls == [1]
+    assert out == {"pass2_filled": 1, "pass2_applied_idx": [1], "pass2_failed": 0} and calls == [1]
     assert doc_applied == [[1]]  # 불공분도 문서 적용까지 자동(저장은 save_final 1회)
 
 
@@ -612,3 +612,78 @@ async def test_set_acct_date_node_fails_on_step_error(monkeypatch):
         {"events": asyncio.Queue(), "page": object(), "params": {}}
     )
     assert "회계일 설정 실패" in out["error"]
+
+
+# ── 패스 스킵 경로 보증(사용자 지적 2026-07-04) ─────────────────────────────────
+async def test_save_final_saves_when_no_nontax(monkeypatch):
+    """불공 0건: 2차를 생략해도 과세 반영분만으로 최종 저장(F7)해야 한다."""
+    saved: list[bool] = []
+
+    async def _ok_save(page, confirm):
+        saved.append(confirm)
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+
+    async def _noop_shot(emit, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    out = await cc_nodes.make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 0}
+    )
+    assert saved == [True]
+    assert "과세 3건 · 불공 0건" in out["result"]
+
+
+async def test_save_final_saves_when_no_taxable(monkeypatch):
+    """과세 0건: 1차를 생략해도 불공 반영분만으로 최종 저장(F7)해야 한다."""
+    saved: list[bool] = []
+
+    async def _ok_save(page, confirm):
+        saved.append(confirm)
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+
+    async def _noop_shot(emit, page):
+        return None
+
+    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    out = await cc_nodes.make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 0, "pass2_filled": 2}
+    )
+    assert saved == [True]
+    assert "과세 0건 · 불공 2건" in out["result"]
+
+
+async def test_save_final_fails_loudly_when_all_rows_failed(monkeypatch):
+    """반영 0건이 '행 실패' 때문이면 성공 위장 금지 — 실패로 보고, 저장 안 함(실전 40/40 회귀)."""
+    called: list[bool] = []
+
+    async def _save(page, confirm):
+        called.append(confirm)
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "save_document", _save)
+    out = await cc_nodes.make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 0, "pass2_filled": 0, "pass1_failed": 40}
+    )
+    assert called == []  # 저장 시도 자체가 없어야 한다
+    assert "모든 행 반영 실패(40건)" in out["error"]
+
+
+async def test_apply_doc_skips_without_apply_when_no_taxable(monkeypatch):
+    """과세 0건이면 apply_doc 은 '적용' 없이 통과(에러 없음) — 2차(불공)로 진행 가능해야 한다."""
+    applied: list = []
+
+    async def _apply(page, idx):
+        applied.append(idx)
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "apply_rows_to_document", _apply)
+    out = await cc_nodes.make_apply_doc_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 0}
+    )
+    assert out == {}  # 에러 없음 + pass1_doc_applied 미설정(2차는 기존 행에서 재선택)
+    assert applied == []

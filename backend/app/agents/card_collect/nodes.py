@@ -726,6 +726,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
             "filled": filled,
             "pending_nontax": pending_nontax,
             "pass1_applied_idx": applied_idx,
+            "pass1_failed": len(failures),
         }
 
     return collect_rows
@@ -1083,7 +1084,7 @@ def make_apply_pass2_node():
             if out.get("error"):
                 return {"error": out["error"]}
         await emit_step(events, "apply_pass2", "done", _ms(t0))
-        return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx}
+        return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx, "pass2_failed": len(failures2)}
 
     return apply_pass2
 
@@ -1099,15 +1100,25 @@ def make_save_final_node():
         page = state["page"]
         filled1 = state.get("filled", 0)
         filled2 = state.get("pass2_filled", 0)
+        failed_n = state.get("pass1_failed", 0) + state.get("pass2_failed", 0)
         unmatched_n = state.get("pass2_unmatched", 0)
         # 매칭 실패(반영 누락)는 최종 결과에 반드시 노출한다(리뷰 HIGH #2).
         tail = f" · ⚠ 매칭 실패 {unmatched_n}건(수동 확인 필요)" if unmatched_n else ""
+        if failed_n:
+            tail += f" · ⚠ 행 반영 실패 {failed_n}건"
         total = filled1 + filled2
         await emit_step(events, "save_final", "running")
         t0 = time.monotonic()
         if not total:
+            # 반영 0건: 조회 자체가 0건이면 정상 완료지만, 행 반영 **실패** 때문이라면
+            # '처리 완료'로 위장하지 않고 실패로 보고한다(실전 2026-07-04: 40/40 실패가
+            # '처리 완료 — 반영 0건'으로 성공 표시되던 문제).
+            if failed_n:
+                await emit_step(events, "save_final", "failed")
+                return {"error": f"모든 행 반영 실패({failed_n}건) — 저장하지 않았습니다. 로그의 행별 실패 사유를 확인하세요."}
             await emit_step(events, "save_final", "done", _ms(t0))
             return {"result": f"처리 완료 — 반영 0건(저장할 내용 없음){tail}."}
+        # 과세/불공 어느 한쪽이 0건이면 그 패스는 생략된 것 — 나머지 반영분만으로 저장한다.
         await emit_log(events, f"과세 {filled1}건 · 불공 {filled2}건 반영 완료 — 저장(F7)을 진행합니다.", "info")
         r = await steps.save_document(page, confirm=True)
         if not r.get("ok"):

@@ -161,6 +161,10 @@ async def _wait_picker_rows_stable(
     min_ms: 안정 판정의 **두 관측이 모두** 이 시간 이후여야 한다 — 검색(Enter) 직후 서버
     재조회가 도착하기 전의 '옛 rowcount 안정'을 새 결과로 오인하는 것을 방지. 반환 마지막
     rowcount(-1=팝업 없음 그대로 종료 — 호출부의 기존 실패 경로가 처리).
+
+    ⚠ **0행은 조기 안정으로 인정하지 않는다** — 검색 직후 그리드가 잠깐 비는(재조회 중)
+    상태를 '결과 0건'으로 오판해 후보 0건으로 전량 실패하던 실전 회귀(2026-07-04, 40/40행
+    '예산단위 조합 무매칭 후보 0건'). 진짜 0건 검색은 cap 소진 후 0을 반환한다.
     """
     prev: int | None = None
     waited = 0
@@ -171,8 +175,8 @@ async def _wait_picker_rows_stable(
         n = await page.evaluate(js.PICKER_ROWCOUNT_JS)
         if isinstance(n, int) and n >= 0:
             last = n
-            # 직전 관측(waited-interval)도 min_ms 이후일 때만 안정 인정.
-            if waited - interval_ms >= min_ms and n == prev:
+            # 직전 관측(waited-interval)도 min_ms 이후 + 양수일 때만 조기 안정 인정.
+            if n > 0 and waited - interval_ms >= min_ms and n == prev:
                 return n
             prev = n
         else:

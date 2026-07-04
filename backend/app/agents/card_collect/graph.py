@@ -56,6 +56,7 @@ class CardCollectState(TypedDict, total=False):
     #   조용히 누락 — 실전 런 '적용할 행이 없습니다' 원인).
     pending_nontax: list[dict]
     pass1_applied_idx: list[int]  # 1차 반영 성공 행 인덱스(카드팝업 '적용' 체크 대상)
+    pass1_failed: int  # 1차 행 채움 실패 수 — 전량 실패 시 save_final 이 실패로 보고
     pass1_doc_applied: bool  # 1차 적용('적용' 클릭·문서 반영) 실행됨 → 2차는 F3(새 행)부터
     rows2_list: list[dict]
     pass2_work: list[dict]
@@ -63,6 +64,7 @@ class CardCollectState(TypedDict, total=False):
     pass2_unmatched_desc: str
     pass2_filled: int
     pass2_applied_idx: list[int]
+    pass2_failed: int
     result: str | dict
     error: str
 
