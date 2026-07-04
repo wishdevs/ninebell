@@ -29,7 +29,7 @@ async def navigate_menu(
     *,
     label: str = "메뉴",
     grids_required: int = 1,
-    tries: int = 10,
+    tries: int = 33,
     timeout_ms: int = MENU_TIMEOUT_MS,
 ) -> None:
     """``base+menu_path`` 딥링크로 진입하고 그리드 로드/권한팝업을 폴링.
@@ -52,7 +52,7 @@ async def navigate_menu(
                 f"{label} 메뉴에 접근할 수 없습니다 — \"{chk.get('popup')}\". "
                 "이 계정에 해당 모듈 권한이 없거나 메뉴가 이동/변경되었습니다."
             )
-        await page.wait_for_timeout(1_000)
+        await page.wait_for_timeout(300)  # 300ms 폴링(기존 1s — 상한 ~10s 유지, tries=33)
     raise MenuError(f"{label} 메뉴가 로드되지 않았습니다(그리드 미출현, 타임아웃).")
 
 

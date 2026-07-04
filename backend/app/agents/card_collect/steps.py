@@ -61,20 +61,25 @@ async def set_period(page: Any, start: str, end: str) -> dict:
 async def run_query(page: Any, timeout_polls: int = 20) -> int:
     """조회 클릭 후 rowcount 가 '안정'될 때까지 폴링. 반환 행 수(0 가능, -1=클릭 실패).
 
-    느린 그리드에서 0을 실제 0건으로 오인하지 않도록, 같은 값이 2회 연속 관측될 때까지 기다린다
-    (그동안 상한 폴링). 대부분 수 초 내 안정된다(리뷰 #8).
+    느린 그리드에서 0을 실제 0건으로 오인하지 않도록, 같은 양수가 **3회 연속**(600ms 안정창)
+    관측될 때까지 기다린다. 300ms 간격 폴링(기존 1s) — 상한은 timeout_polls 초로 동일.
     """
     box = await page.evaluate(js.QUERY_BTN_JS)
     if not box:
         return -1
     await page.mouse.click(box["x"], box["y"])
     prev = -2
+    stable = 0
     rows = -1
-    for _ in range(timeout_polls):
-        await page.wait_for_timeout(1_000)
+    for _ in range(timeout_polls * 1000 // 300):
+        await page.wait_for_timeout(300)
         rows = await page.evaluate(js.ROWCOUNT_JS)
         if isinstance(rows, int) and rows > 0 and rows == prev:
-            break  # 양수로 안정 → 확정.
+            stable += 1
+            if stable >= 2:  # 직전 포함 3회 연속 동일
+                break
+        else:
+            stable = 0
         prev = rows
     return rows if isinstance(rows, int) else -1
 
@@ -92,6 +97,47 @@ async def set_note(page: Any, row: int, text: str) -> dict:
 # ── 코드피커(예산단위/계정/프로젝트) ──────────────────────────────────────────────
 def _norm(s: object) -> str:
     return re.sub(r"\s+", "", str(s or "")).lower()
+
+
+# ── 조건 대기 헬퍼(속도 최적화) ──────────────────────────────────────────────────
+# 고정 wait_for_timeout(1200~1800ms) 을 조건 폴링으로 대체 — worst-case 상한은 유지하되
+# 준비되는 즉시 진행한다(행당 픽커 채움 ~14s → ~6-8s, 실측 기반 최적화 2026-07-04).
+async def _wait_picker_rows_stable(
+    page: Any, *, cap_ms: int = 3_000, interval_ms: int = 200, min_ms: int = 0
+) -> int:
+    """피커 그리드 rowcount 가 준비(>=0)되고 2회 연속 동일해질 때까지 폴링.
+
+    min_ms: 안정 판정의 **두 관측이 모두** 이 시간 이후여야 한다 — 검색(Enter) 직후 서버
+    재조회가 도착하기 전의 '옛 rowcount 안정'을 새 결과로 오인하는 것을 방지. 반환 마지막
+    rowcount(-1=팝업 없음 그대로 종료 — 호출부의 기존 실패 경로가 처리).
+    """
+    prev: int | None = None
+    waited = 0
+    last = -1
+    while waited < cap_ms:
+        await page.wait_for_timeout(interval_ms)
+        waited += interval_ms
+        n = await page.evaluate(js.PICKER_ROWCOUNT_JS)
+        if isinstance(n, int) and n >= 0:
+            last = n
+            # 직전 관측(waited-interval)도 min_ms 이후일 때만 안정 인정.
+            if waited - interval_ms >= min_ms and n == prev:
+                return n
+            prev = n
+        else:
+            prev = None
+    return last
+
+
+async def _wait_picker_closed(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> None:
+    """'적용' 클릭 후 피커 팝업이 닫힐 때까지 폴링(고정 1000ms 대체)."""
+    waited = 0
+    while waited < cap_ms:
+        await page.wait_for_timeout(interval_ms)
+        waited += interval_ms
+        n = await page.evaluate(js.PICKER_ROWCOUNT_JS)
+        if not isinstance(n, int) or n < 0:  # 팝업 사라짐
+            return
 
 
 # field_id: bg_cd(예산단위)/acct_cd(계정)/pjt_cd(프로젝트). code/name 필드는 팝업 컬럼.
@@ -116,7 +162,7 @@ async def fill_codepicker(
     if not box:
         return {"ok": False, "reason": f"{field_id} 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_500)
+    await _wait_picker_rows_stable(page, cap_ms=3_000)  # 팝업 오픈+그리드 준비(고정 1.5s 대체)
 
     async def _fail(reason: str, **extra: Any) -> dict:
         # 실패 시 열린 코드피커 팝업을 닫는다 — 안 닫으면 다음 코드피커가 이 팝업을 읽어 오작동한다.
@@ -128,7 +174,8 @@ async def fill_codepicker(
         s = await page.evaluate(js.PICKER_SEARCH_JS, keyword)
         if s.get("ok"):
             await page.keyboard.press("Enter")
-            await page.wait_for_timeout(1_200)
+            # 서버 재조회 안정 대기(고정 1.2s 대체) — min_ms 로 옛 rowcount 오인 방지.
+            await _wait_picker_rows_stable(page, cap_ms=2_000, min_ms=600)
     read = await page.evaluate(js.PICKER_READ_JS, [code_field, name_field, 25])
     opts = read.get("options") or []
 
@@ -155,7 +202,7 @@ async def fill_codepicker(
             # 다건이면 실패(임의선택 금지). ⚠ index0 blind pick 아님(리뷰 HIGH #1).
             await page.evaluate(js.PICKER_SEARCH_JS, "")
             await page.keyboard.press("Enter")
-            await page.wait_for_timeout(1_000)
+            await _wait_picker_rows_stable(page, cap_ms=2_000, min_ms=600)
             dflt = (await page.evaluate(js.PICKER_READ_JS, [code_field, name_field, 25])).get("options") or []
             if len(dflt) == 1:
                 chosen = dflt[0]
@@ -177,26 +224,26 @@ async def fill_codepicker(
     apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
     if apply_box:
         await page.mouse.click(apply_box["x"], apply_box["y"])
-        await page.wait_for_timeout(1_000)
+        await _wait_picker_closed(page)  # 팝업 닫힘 폴링(고정 1s 대체)
     return {"ok": True, "code": chosen["code"], "name": chosen["name"]}
 
 
 # ── 코드 카탈로그 덤프(코드피커 전량 읽기) ─────────────────────────────────────────
 async def _open_picker(page: Any, field_id: str) -> bool:
-    """코드피커 버튼 좌표 클릭 → 팝업 오픈 대기. 성공 True."""
+    """코드피커 버튼 좌표 클릭 → 팝업 오픈·그리드 준비 폴링(고정 1.8s 대체). 성공 True."""
     box = await page.evaluate(js.picker_btn_js(field_id))
     if not box:
         return False
     await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_800)
+    await _wait_picker_rows_stable(page, cap_ms=3_000)
     return True
 
 
 async def _picker_search(page: Any, keyword: str) -> None:
-    """열린 코드피커 팝업에 keyword 를 넣고 Enter 로 서버 재조회."""
+    """열린 코드피커 팝업에 keyword 를 넣고 Enter 로 서버 재조회(안정 폴링, 고정 1.2s 대체)."""
     await page.evaluate(js.PICKER_SEARCH_JS, keyword)
     await page.keyboard.press("Enter")
-    await page.wait_for_timeout(1_200)
+    await _wait_picker_rows_stable(page, cap_ms=2_000, min_ms=600)
 
 
 async def dump_budget_units(page: Any) -> list[dict]:
@@ -432,7 +479,7 @@ async def fill_budget_codepicker(page: Any, combo: dict) -> dict:
     apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
     if apply_box:
         await page.mouse.click(apply_box["x"], apply_box["y"])
-        await page.wait_for_timeout(1_000)
+        await _wait_picker_closed(page)  # 팝업 닫힘 폴링(고정 1s 대체)
     return {
         "ok": True,
         "code": chosen.get("BG_CD"),
@@ -478,7 +525,7 @@ async def fill_project_codepicker(page: Any, combo: dict) -> dict:
     apply_box = await page.evaluate(js.PICKER_APPLY_BTN_JS)
     if apply_box:
         await page.mouse.click(apply_box["x"], apply_box["y"])
-        await page.wait_for_timeout(1_000)
+        await _wait_picker_closed(page)  # 팝업 닫힘 폴링(고정 1s 대체)
     return {"ok": True, "code": chosen.get("PJT_NO"), "name": chosen.get("PJT_NM")}
 
 
@@ -514,13 +561,21 @@ async def apply_row(page: Any, row: int) -> dict:
     if not box:
         return {"ok": False, "reason": "'일괄적용' 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_200)
     # 일괄적용 → '예산현황' 확인창(확인/취소) 이 뜬다. '확인'으로 draft 반영을 완료한다.
     # ⚠ draft(메모리) 완료일 뿐 F7 저장 아님. 미처리 시 창이 남아 다음 행 코드피커가 0건이 된다.
-    cf = await page.evaluate(js.BUDGET_CONFIRM_JS)
-    if cf.get("clicked"):
-        await page.wait_for_timeout(900)
-    return {"ok": True, "budget_confirm": cf.get("clicked")}
+    # 고정 1.2s+0.9s → 200ms 폴링(상한 2s)으로 뜨는 즉시 확인(행당 ~1s 단축).
+    clicked = False
+    waited = 0
+    while waited < 2_000:
+        await page.wait_for_timeout(200)
+        waited += 200
+        cf = await page.evaluate(js.BUDGET_CONFIRM_JS)
+        if cf.get("clicked"):
+            clicked = True
+            break
+    if clicked:
+        await page.wait_for_timeout(300)  # 모달 닫힘 settle(기존 900ms 축소)
+    return {"ok": True, "budget_confirm": clicked}
 
 
 async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
@@ -528,25 +583,35 @@ async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
 
     실전 실측(2026-07-02 2차 런): 카드팝업 '적용' 후 팝업 닫힘보다 **늦게** '예산현황'
     모달이 떠서, 다음 단계(F3·증빙 코드피커)가 막혀 TypeError 로 실패했다. 확인 계열만
-    클릭(취소/아니오 금지). 빈 폴링 2회 연속이면 종료. 닫은 모달 스냅샷 목록 반환.
+    클릭(취소/아니오 금지). 닫은 모달 스냅샷 목록 반환.
+
+    속도: 첫 체크는 대기 없이 즉시, 이후 400ms 폴링. **2초 연속 조용**하면 종료(지연 모달
+    관찰 창 유지, 기존 최소 3s → 2s). 상한 = rounds×1.5s(기존 시그니처 호환).
     """
     seen: list[dict] = []
-    empty = 0
-    for _ in range(rounds):
-        await page.wait_for_timeout(1_500)
-        modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
+    cap_ms = rounds * 1_500
+    interval = 400
+    quiet_needed = 2_000  # 이 시간 동안 모달이 안 뜨면 종료(지연 출현 관찰 창)
+    waited = 0
+    quiet = 0
+    while True:
+        modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)  # 첫 체크 즉시(고정 1.5s 선대기 제거)
+        if modals:
+            quiet = 0
+            seen.extend(modals)
+            for label in ("확인", "예"):
+                btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
+                if btn:
+                    await page.mouse.click(btn["x"], btn["y"])
+                    break
+        elif quiet >= quiet_needed:
+            break
+        if waited >= cap_ms:
+            break
+        await page.wait_for_timeout(interval)
+        waited += interval
         if not modals:
-            empty += 1
-            if empty >= 2:
-                break
-            continue
-        empty = 0
-        seen.extend(modals)
-        for label in ("확인", "예"):
-            btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
-            if btn:
-                await page.mouse.click(btn["x"], btn["y"])
-                break
+            quiet += interval
     return seen
 
 
@@ -570,9 +635,10 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
         return {"ok": False, "reason": "카드팝업 '적용' 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
 
-    # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. 최대 ~20초.
-    for _ in range(10):
-        await page.wait_for_timeout(2_000)
+    # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. 최대 ~20초(상한 유지,
+    # 간격 2s→400ms — 모달·닫힘을 뜨는 즉시 처리해 구간을 수 초 단축).
+    for _ in range(50):
+        await page.wait_for_timeout(400)
         yes = await page.evaluate(js.MODAL_BTN_BOX_JS, "예")
         if yes:
             await page.mouse.click(yes["x"], yes["y"])
@@ -607,8 +673,12 @@ async def save_document(page: Any, confirm: bool) -> dict:
     await page.keyboard.press("F7")
     modals_seen: list[dict] = []
     toasts_seen: list[str] = []
-    for _ in range(8):
-        await page.wait_for_timeout(2_000)
+    # 간격 2s→500ms(상한 16s 유지). ⚠ F7 직후 모달이 뜨기까지 ~1-2s 걸리므로, '모달 없음'
+    # 종료 판정은 최소 관찰 창(3s) 이후에만 허용 — 빠른 폴링이 미출현 모달을 놓치지 않게.
+    waited = 0
+    while waited < 16_000:
+        await page.wait_for_timeout(500)
+        waited += 500
         # 인라인 검증 토스트('필수 값…')는 모달이 아니라 F7 직후 잠깐 떴다 사라지므로
         # 매 폴링마다 함께 스캔한다(실측: 미저장인데 ok 로 오판하던 원인).
         toasts = await page.evaluate(js.VALIDATION_TOAST_JS)
@@ -625,7 +695,8 @@ async def save_document(page: Any, confirm: bool) -> dict:
             continue
         if toasts:
             break  # 검증 토스트 확인됨 — 저장 실패로 즉시 종료.
-        break  # 모달·토스트 없음 — 저장 시퀀스 종료로 판단.
+        if waited >= 3_000:
+            break  # 관찰 창 경과 + 모달·토스트 없음 — 저장 시퀀스 종료로 판단.
     # 인라인 검증 토스트(필수값 누락 등) = 미저장. 모달만 보던 시절 ok 로 오판(2026-07-03 실측).
     if toasts_seen:
         detail = " / ".join(dict.fromkeys(toasts_seen))[:300]

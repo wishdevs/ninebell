@@ -136,3 +136,41 @@ async def test_save_document_dismisses_leftover_modal_before_f7():
     assert any(m["title"] == "예산현황" for m in r.get("pre_modals") or [])
     # 모달 클릭(정리)이 F7 이전에 일어났는지 — clicks 가 있고 keys 는 그 뒤에 눌림.
     assert page.clicks, "잔여 모달 '확인' 클릭이 없었다"
+
+
+class _PickerSeqPage:
+    """PICKER_ROWCOUNT_JS 가 호출마다 시퀀스 값을 돌려주는 fake — 조건 대기 헬퍼 검증."""
+
+    def __init__(self, seq):
+        self._seq = list(seq)
+        self.polls = 0
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if script == js.PICKER_ROWCOUNT_JS:
+            self.polls += 1
+            return self._seq.pop(0) if self._seq else -1
+        return None
+
+
+async def test_wait_picker_rows_stable_returns_on_stability():
+    """rowcount 준비(>=0) 후 2회 연속 동일하면 즉시 반환 — 고정 대기 대체 검증."""
+    page = _PickerSeqPage([-2, -2, 5, 5])  # 로딩→로딩→5→5(안정)
+    n = await steps._wait_picker_rows_stable(page, cap_ms=3_000, interval_ms=200)
+    assert n == 5
+    assert page.polls == 4  # 4번째 폴에서 안정 확정(총 ~800ms 상당 — 고정 1.5~1.8s 미만)
+
+
+async def test_wait_picker_rows_stable_min_ms_defers_stability():
+    """min_ms 이전의 '옛 rowcount 안정'은 무시 — 검색 재조회 오인 방지."""
+    page = _PickerSeqPage([7, 7, 7, 3, 3])  # 600ms 전 7(옛값)→재조회 후 3(새값)
+    n = await steps._wait_picker_rows_stable(page, cap_ms=2_000, interval_ms=200, min_ms=600)
+    assert n == 3
+
+
+async def test_wait_picker_closed_returns_when_gone():
+    page = _PickerSeqPage([4, 4, -1])  # 열림→열림→닫힘
+    await steps._wait_picker_closed(page, cap_ms=1_500, interval_ms=150)
+    assert page.polls == 3

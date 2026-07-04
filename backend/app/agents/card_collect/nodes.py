@@ -33,7 +33,7 @@ from app.config import get_settings
 from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 from app.live.hitl import close_hitl_channel, open_hitl_channel, wait_hitl
-from app.models import User, UserCodeFavorite
+from app.models import ErpCodeCatalog, User, UserCodeFavorite
 from app.services.code_sync import dept_matches_budget_name
 from nbkit.patterns import emit_shot
 
@@ -208,6 +208,33 @@ def _status_table(rows: list[dict], status: dict[int, str], notes: dict[int, str
             f"| {_md_cell(notes.get(i, ''))} | {_STATUS_MARK.get(status.get(i, 'pending'))} |"
         )
     return "\n".join(lines)
+
+
+async def _load_budget_catalog() -> list[dict]:
+    """erp_code_catalog(kind='budget_unit') 캐시 → dump_budget_units 와 동일 형태 목록.
+
+    라이브 피커 전량 덤프(~3.4s + 대형 DOM 리드)를 매 런 반복하지 않기 위한 속도 최적화
+    (2026-07-04). code_sync 가 같은 dump 로 채우므로 형태가 1:1(code=BG|BIZPLAN|BGACCT,
+    name=BG_NM, extra=bizplan/bgacct). 비어 있으면 [] — 호출부가 라이브 덤프로 폴백한다.
+    """
+    async with get_sessionmaker()() as s:
+        rows = (
+            await s.execute(select(ErpCodeCatalog).where(ErpCodeCatalog.kind == "budget_unit"))
+        ).scalars().all()
+    out: list[dict] = []
+    for r in rows:
+        extra = r.extra or {}
+        out.append(
+            {
+                "code": r.code,
+                "name": r.name,
+                "bizplanCd": extra.get("bizplanCd", ""),
+                "bizplanNm": extra.get("bizplanNm", ""),
+                "bgacctCd": extra.get("bgacctCd", ""),
+                "bgacctNm": extra.get("bgacctNm", ""),
+            }
+        )
+    return out
 
 
 async def _load_user_favorites(owner: str | None) -> tuple[list[dict], list[dict], str | None]:
@@ -413,6 +440,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
         page = state["page"]
         rows_list: list[dict] = state.get("rows_list") or []
         await emit_step(events, "collect_rows", "running")
+        t0 = time.monotonic()
         if not rows_list:
             period = state.get("period") or []
             period_txt = f"{period[0]} ~ {period[1]}" if len(period) == 2 else "이번 조회 기간"
@@ -426,7 +454,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 streaming=False,
             )
             await emit_log(events, "처리할 승인내역이 없습니다.", "warn")
-            await emit_step(events, "collect_rows", "done")
+            await emit_step(events, "collect_rows", "done", _ms(t0))
             return {"filled": 0}
 
         settings = get_settings()
@@ -440,13 +468,22 @@ def make_collect_rows_node(timeout_s: int | None = None):
         status: dict[int, str] = {r.get("i", idx): "pending" for idx, r in enumerate(rows_list)}
         notes = dict(recs)
 
-        # 즐겨찾기·부서(DB) + 예산단위 라이브 덤프(ERP). 실패는 경고 후 빈 목록으로 진행(런 유지).
+        # 즐겨찾기·부서(DB) + 예산단위 목록. 카탈로그 캐시(erp_code_catalog) 우선 — 라이브
+        # 피커 전량 덤프(~3.4s)는 캐시가 빌 때만 폴백(속도 최적화 2026-07-04).
         budget_favs, project_favs, department = await _load_user_favorites(state.get("owner"))
         try:
-            all_units = await steps.dump_budget_units(page)
-        except Exception:  # noqa: BLE001 — 덤프 실패로 런을 죽이지 않는다.
-            logger.exception("card-collect dump_budget_units failed")
+            all_units = await _load_budget_catalog()
+        except Exception:  # noqa: BLE001 — 캐시 조회 실패로 런을 죽이지 않는다.
+            logger.exception("card-collect budget catalog load failed")
             all_units = []
+        if all_units:
+            await emit_log(events, f"예산단위 {len(all_units)}건 — 카탈로그 캐시 사용(덤프 생략).", "info")
+        else:
+            try:
+                all_units = await steps.dump_budget_units(page)
+            except Exception:  # noqa: BLE001 — 덤프 실패로 런을 죽이지 않는다.
+                logger.exception("card-collect dump_budget_units failed")
+                all_units = []
         if not all_units:
             await emit_log(events, "예산단위 목록을 불러오지 못했습니다(즐겨찾기·검색으로 진행).", "warn")
 
@@ -644,7 +681,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
             streaming=False,
         )
         await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")
-        await emit_step(events, "collect_rows", "done")
+        await emit_step(events, "collect_rows", "done", _ms(t0))
         return {
             "filled": filled,
             "pending_nontax": pending_nontax,
@@ -799,8 +836,9 @@ def make_apply_doc_node():
         events = state["events"]
         filled = state.get("filled", 0)
         await emit_step(events, "apply_doc", "running")
+        t0 = time.monotonic()
         if not filled:
-            await emit_step(events, "apply_doc", "done")
+            await emit_step(events, "apply_doc", "done", _ms(t0))
             await emit_log(events, "1차(과세) 반영 건이 없어 적용 없이 2차로 진행합니다.", "info")
             return {}
         out = await _apply_doc(
@@ -811,7 +849,7 @@ def make_apply_doc_node():
         )
         if out.get("error"):
             return {"error": out["error"]}
-        await emit_step(events, "apply_doc", "done")
+        await emit_step(events, "apply_doc", "done", _ms(t0))
         # 적용으로 팝업이 닫힘 — 2차는 새 상세행 추가(F3)부터 다시 플로우를 탄다(사용자 업무 규칙).
         return {"pass1_doc_applied": True}
 
@@ -835,9 +873,10 @@ def make_switch_evdn_node():
         page = state["page"]
         pending: list[dict] = state.get("pending_nontax") or []
         await emit_step(events, "switch_evdn", "running")
+        t0 = time.monotonic()
         if not pending:
             await emit_log(events, "불공(비과세) 대상이 없어 2차를 생략합니다.", "info")
-            await emit_step(events, "switch_evdn", "done")
+            await emit_step(events, "switch_evdn", "done", _ms(t0))
             return {"pass2_work": []}
 
         # 잔여 확인 모달('예산현황' 등)이 남아 있으면 F3/코드피커가 막힌다 — 방어적 정리.
@@ -945,7 +984,7 @@ def make_switch_evdn_node():
             events, f"증빙유형 '법인카드(불공)' 전환 완료 — 2차 대상 {len(work)}건.", "ok"
         )
         await emit_shot(events.put, page)
-        await emit_step(events, "switch_evdn", "done")
+        await emit_step(events, "switch_evdn", "done", _ms(t0))
         return {
             "rows2_list": lst2,
             "pass2_work": work,
@@ -966,8 +1005,9 @@ def make_apply_pass2_node():
         page = state["page"]
         work: list[dict] = state.get("pass2_work") or []
         await emit_step(events, "apply_pass2", "running")
+        t0 = time.monotonic()
         if not work:
-            await emit_step(events, "apply_pass2", "done")
+            await emit_step(events, "apply_pass2", "done", _ms(t0))
             return {"pass2_filled": 0}
         rows2: list[dict] = state.get("rows2_list") or []
         target_idx = {w["idx"] for w in work}
@@ -1002,7 +1042,7 @@ def make_apply_pass2_node():
             )
             if out.get("error"):
                 return {"error": out["error"]}
-        await emit_step(events, "apply_pass2", "done")
+        await emit_step(events, "apply_pass2", "done", _ms(t0))
         return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx}
 
     return apply_pass2
@@ -1024,8 +1064,9 @@ def make_save_final_node():
         tail = f" · ⚠ 매칭 실패 {unmatched_n}건(수동 확인 필요)" if unmatched_n else ""
         total = filled1 + filled2
         await emit_step(events, "save_final", "running")
+        t0 = time.monotonic()
         if not total:
-            await emit_step(events, "save_final", "done")
+            await emit_step(events, "save_final", "done", _ms(t0))
             return {"result": f"처리 완료 — 반영 0건(저장할 내용 없음){tail}."}
         await emit_log(events, f"과세 {filled1}건 · 불공 {filled2}건 반영 완료 — 저장(F7)을 진행합니다.", "info")
         r = await steps.save_document(page, confirm=True)
@@ -1042,7 +1083,7 @@ def make_save_final_node():
             )
         await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")
         await emit_shot(events.put, page)
-        await emit_step(events, "save_final", "done")
+        await emit_step(events, "save_final", "done", _ms(t0))
         return {"result": f"처리 완료 — 과세 {filled1}건 · 불공 {filled2}건 입력·저장{tail}."}
 
     return save_final

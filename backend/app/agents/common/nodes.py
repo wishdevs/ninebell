@@ -93,10 +93,10 @@ def make_set_gubun_node(gubun_text: str):
         page = state["page"]
         await emit_step(emit, "set_gubun", "running")
         t0 = time.monotonic()
-        for _ in range(15):  # select 로드 폴링
+        for _ in range(50):  # select 로드 폴링(300ms 간격, 상한 15s 유지)
             if await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
                 break
-            await page.wait_for_timeout(1_000)
+            await page.wait_for_timeout(300)
         r = await page.evaluate(
             js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS,
             {"selector": selectors.GUBUN_SELECT, "text": gubun_text},
@@ -126,8 +126,8 @@ def make_add_row_node():
         t0 = time.monotonic()
         await js_click(page, selectors.BTN_ADD)
         rows: Any = -1
-        for _ in range(10):  # 디테일 그리드 rowCount 0→1 폴링
-            await page.wait_for_timeout(1_000)
+        for _ in range(33):  # 디테일 그리드 rowCount 0→1 폴링(300ms 간격, 상한 ~10s 유지)
+            await page.wait_for_timeout(300)
             rows = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
             if isinstance(rows, int) and rows > 0:
                 break
@@ -169,8 +169,8 @@ def make_open_evdn_node():
             if not rect:
                 continue
             await mouse_click(page, rect["x"], rect["y"])  # 돋보기(캔버스) 클릭
-            for _ in range(6):
-                await page.wait_for_timeout(1_000)
+            for _ in range(20):  # 300ms 간격(상한 6s 유지)
+                await page.wait_for_timeout(300)
                 opened = await page.evaluate(js_lib.EVDN_POPUP_OPEN_JS)
                 if opened:
                     break
@@ -218,8 +218,8 @@ def make_select_evdn_node(code: str = "01"):
         if box:
             await mouse_click(page, box["x"], box["y"])
         applied = False
-        for _ in range(8):
-            await page.wait_for_timeout(1_000)
+        for _ in range(27):  # 300ms 간격(상한 ~8s 유지)
+            await page.wait_for_timeout(300)
             cell = await page.evaluate(js_lib.DETAIL_EVDN_CELL_JS)
             if sel_name and sel_name in cell:
                 applied = True
