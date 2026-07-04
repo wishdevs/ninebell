@@ -577,6 +577,62 @@ async def test_prefill_cost_prefix_biases_default_budget():
     assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
 
 
+async def test_prefill_skips_ai_when_all_rows_covered(monkeypatch):
+    """최적화 #2: 모든 행이 기본지정 예산단위+기본 프로젝트로 채워지면 Gemini 미호출."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    called = {"ai": False}
+
+    async def _boom(*a, **k):  # 호출되면 실패 — 스킵 검증.
+        called["ai"] = True
+        return {}
+
+    monkeypatch.setattr(cc_nodes, "recommend_selections", _boom)
+
+    settings = SimpleNamespace(gemini_api_key="k")  # 키 있어도 커버되면 스킵돼야 한다.
+    rows_list = [
+        {"i": 0, "TRAN_NM": "가맹점A", "TRAN_AMT": "1000", "VAT_TP": "과세"},
+        {"i": 1, "TRAN_NM": "가맹점B", "TRAN_AMT": "2000", "VAT_TP": "과세"},
+    ]
+    budget_favs = [{"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비", "isDefault": True}]
+    cost_project = {"code": "800", "name": "판관비프로젝트"}
+    out = await _prefill_selections(
+        asyncio.Queue(), settings, rows_list, {0: "적요", 1: "적요"}, budget_favs, [], [],
+        cost_prefix="(판)", cost_project=cost_project,
+    )
+    assert called["ai"] is False  # 커버율 100% → AI 미호출
+    assert out[1]["budgetSource"] == "default" and out[2]["budgetSource"] == "default"
+    assert out[1]["projectSource"] == "default" and out[2]["projectSource"] == "default"
+
+
+async def test_prefill_runs_ai_when_a_row_uncovered(monkeypatch):
+    """기본 프로젝트가 없어 커버 안 되는 행이 있으면 AI 를 호출한다."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    called = {"ai": False}
+
+    async def _rec(*a, **k):
+        called["ai"] = True
+        return {}
+
+    monkeypatch.setattr(cc_nodes, "recommend_selections", _rec)
+
+    settings = SimpleNamespace(gemini_api_key="k")
+    rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
+    budget_favs = [{"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비", "isDefault": True}]
+    # 기본 프로젝트 없음(project_favs=[], cost_project=None) → project 미커버 → AI 호출.
+    out = await _prefill_selections(
+        asyncio.Queue(), settings, rows_list, {0: "적요"}, budget_favs, [], [],
+        cost_prefix="(판)", cost_project=None,
+    )
+    assert called["ai"] is True
+    assert out[1]["budgetSource"] == "default"
+
+
 # ── 회계일(set_acct_date) — 수집 기간 월의 말일(규칙 2026-07-04) ────────────────
 def test_period_month_end():
     assert steps.period_month_end("2026-06-01") == ("20260630", "2026-06-30")

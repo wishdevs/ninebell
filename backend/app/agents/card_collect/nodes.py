@@ -429,8 +429,43 @@ async def _prefill_selections(
             budget_candidates.append(c)
     project_candidates = list(project_favs)
 
+    budget_by_code = {c["code"]: c for c in budget_candidates}
+    project_by_code = {c["code"]: c for c in project_candidates}
+
+    # 기본 예산단위 폴백: 기본지정(isDefault) 우선, 단 비용구분 접두사가 있으면 접두사 일치를
+    # 더 우선한다(기본지정 없음 + 접두사 일치 후보가 있으면 그것으로 폴백).
+    def _prefix_ok(c: dict) -> bool:
+        return bool(cost_prefix) and (c.get("bgacctNm") or "").startswith(cost_prefix)
+
+    default_budget = (
+        next((c for c in budget_favs if c.get("isDefault") and _prefix_ok(c)), None)
+        or next((c for c in budget_favs if c.get("isDefault")), None)
+        or (next((c for c in budget_candidates if _prefix_ok(c)), None) if cost_prefix else None)
+    )
+    # 프로젝트 기본: 기본지정 즐겨찾기(명시 설정) 우선, 없으면 팀 비용구분 프로젝트
+    # (제조원가→500 / 판관비→800, 사용자 확정 2026-07-04).
+    default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
+
+    # ── AI 추천 스킵 판정(최적화 #2, 2026-07-04) ─────────────────────────────────
+    # AI 는 후보 중 '더 나은' 예산단위/프로젝트를 고르는 역할뿐이라, 모든 행이 이미
+    # 결정적 소스(학습 Tier-1) 또는 기본지정/비용구분 폴백으로 채워진다면 AI 결과는
+    # 어차피 쓰이지 않거나(학습 우선) 폴백과 동일하다 → Gemini 호출(실측 ~28.5s) 생략.
+    # 커버 안 되는 행(기본도 없는)이 하나라도 있으면 AI 를 돌려 그 행을 메운다.
+    def _row_covered(no: int) -> bool:
+        lh = learned_by_no.get(no) or {}
+        learned_ok = (lh.get("count") or 0) >= card_learning.LEARNED_APPLY_MIN_COUNT
+        budget_ok = (learned_ok and (lh.get("budget") or {}).get("code")) or bool(default_budget)
+        project_ok = (learned_ok and (lh.get("project") or {}).get("code")) or bool(default_project)
+        return bool(budget_ok and project_ok)
+
+    all_covered = all(_row_covered(idx + 1) for idx in range(len(rows_list)))
+
     recommendations: dict[int, dict] = {}
-    if settings.gemini_api_key and (budget_candidates or project_candidates):
+    if all_covered:
+        await emit_log(
+            events, "모든 행이 학습/기본지정으로 채워집니다 — AI 추천을 건너뜁니다.", "info"
+        )
+    elif settings.gemini_api_key and (budget_candidates or project_candidates):
         rec_rows = [
             {
                 "no": idx + 1,
@@ -465,23 +500,6 @@ async def _prefill_selections(
             await http.aclose()
         if not recommendations:
             await emit_log(events, "AI 추천을 받지 못해 기본지정으로 프리필합니다.", "warn")
-
-    budget_by_code = {c["code"]: c for c in budget_candidates}
-    project_by_code = {c["code"]: c for c in project_candidates}
-
-    # 기본 예산단위 폴백: 기본지정(isDefault) 우선, 단 비용구분 접두사가 있으면 접두사 일치를
-    # 더 우선한다(기본지정 없음 + 접두사 일치 후보가 있으면 그것으로 폴백).
-    def _prefix_ok(c: dict) -> bool:
-        return bool(cost_prefix) and (c.get("bgacctNm") or "").startswith(cost_prefix)
-
-    default_budget = (
-        next((c for c in budget_favs if c.get("isDefault") and _prefix_ok(c)), None)
-        or next((c for c in budget_favs if c.get("isDefault")), None)
-        or (next((c for c in budget_candidates if _prefix_ok(c)), None) if cost_prefix else None)
-    )
-    # 프로젝트 기본: 기본지정 즐겨찾기(명시 설정) 우선, 없으면 팀 비용구분 프로젝트
-    # (제조원가→500 / 판관비→800, 사용자 확정 2026-07-04).
-    default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
 
     out: dict[int, dict] = {}
     for idx in range(len(rows_list)):
