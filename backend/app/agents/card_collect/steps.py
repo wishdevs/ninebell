@@ -83,13 +83,11 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
     if not box:
         return {"ok": False, "reason": "돋보기 버튼 없음(법인카드 팝업 아님?)"}
     await page.mouse.click(box["x"], box["y"])
-    # 서브팝업 그리드 준비 폴링(고정 1.5s 대체).
+    # 서브팝업 그리드 준비 폴링(check-first: 준비됐으면 즉시 진행, 아니면 150ms 간격 재시도).
     by = "all"
     sel: dict = {}
     waited = 0
     while waited < 6_000:
-        await page.wait_for_timeout(300)
-        waited += 300
         if owner_name and (owner_name or "").strip():
             # 본인 이름 매칭 우선 — matched>0 이면 그것으로 확정, matched==0 이면 전체선택 폴백.
             r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owner_name)
@@ -104,13 +102,21 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
             sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
             if sel.get("ok"):
                 break
+        await page.wait_for_timeout(150)
+        waited += 150
     if not sel.get("ok"):
         return {"ok": False, "reason": f"서브팝업 카드선택 실패: {sel}"}
     apply_box = await page.evaluate(js.CARD_SUB_APPLY_BTN_JS)
     if not apply_box:
         return {"ok": False, "reason": "서브팝업 '적용' 버튼 없음", "n": sel.get("n")}
     await page.mouse.click(apply_box["x"], apply_box["y"])
-    await page.wait_for_timeout(1_000)
+    # 적용 후 서브팝업 닫힘 폴링(고정 1000ms 대체) — 닫히는 즉시 진행, 상한 2s.
+    closed_waited = 0
+    while closed_waited < 2_000:
+        await page.wait_for_timeout(150)
+        closed_waited += 150
+        if not await page.evaluate(js.CARD_SUB_EXISTS_JS):
+            break
     return {"ok": True, "n": sel.get("n"), "checked": sel.get("checked"), "by": by}
 
 

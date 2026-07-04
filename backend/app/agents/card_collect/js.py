@@ -398,3 +398,12 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owner) => {
     return { ok:true, n, matched, checked };
   } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
 }"""
+
+
+# '카드' 서브팝업(법인카드가 아닌 k-window)이 열려 있는지 — 적용 후 닫힘 폴링용.
+CARD_SUB_EXISTS_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  return [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .some(w => !/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText)) &&
+               /카드/.test(c((w.querySelector('.k-window-title')||{}).innerText)));
+}"""
