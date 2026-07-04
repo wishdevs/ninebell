@@ -856,7 +856,11 @@ const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: st
     title: '과거 이 가맹점에 확정했던 선택으로 미리 채움(개입 학습)',
     cls: 'bg-success/15 text-success',
   },
-  default: { label: '기본', title: '기본지정으로 미리 선택됨', cls: 'bg-muted text-foreground-tertiary' },
+  default: {
+    label: '기본',
+    title: '기본지정으로 미리 선택됨',
+    cls: 'bg-muted text-foreground-tertiary',
+  },
 };
 
 function SourceBadge({ source }: { source: PrefillSource }) {
