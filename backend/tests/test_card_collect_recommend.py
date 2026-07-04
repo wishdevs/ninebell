@@ -159,7 +159,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
     # 추천 없고 기본지정도 없는 2행 → 프리셀렉트 없음.
     assert frame["rows"][1]["budgetUnit"] is None and frame["rows"][1]["budgetSource"] is None
 
-    assert (await _drain_and_finish(task, frame, 2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await _drain_and_finish(task, frame, 2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
@@ -191,7 +191,7 @@ async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
     assert frame["rows"][0]["budgetUnit"]["code"] == "9000"
     assert frame["rows"][0]["budgetSource"] == "default"
 
-    assert (await _drain_and_finish(task, frame, 1)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await _drain_and_finish(task, frame, 1)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
@@ -225,7 +225,7 @@ async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
         "code": "PP", "name": "기본프로젝트", "wbsNo": "W1", "wbsNm": "WBS1",
     }
 
-    assert (await _drain_and_finish(task, frame, 1)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await _drain_and_finish(task, frame, 1)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
 async def test_collect_rows_recommend_exception_uses_default_fallback(monkeypatch):
@@ -252,4 +252,4 @@ async def test_collect_rows_recommend_exception_uses_default_fallback(monkeypatc
         assert frame["rows"][i]["budgetUnit"]["code"] == "9000"
         assert frame["rows"][i]["budgetSource"] == "default"
 
-    assert (await _drain_and_finish(task, frame, 2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": []}
+    assert (await _drain_and_finish(task, frame, 2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
