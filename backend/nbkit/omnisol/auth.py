@@ -17,7 +17,7 @@ from typing import Any
 
 from nbkit.browser import waits
 from nbkit.browser.actions import mouse_click, safe_evaluate
-from nbkit.browser.detection import is_authenticated
+from nbkit.browser.detection import is_authenticated, selector_present
 from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.errors import AuthError, UserTypeError
 
@@ -36,13 +36,20 @@ async def omnisol_login(
     """
     if not (userid and password):
         raise AuthError("자격증명이 비어 있습니다.")
-    await page.goto(f"{base.rstrip('/')}/", wait_until="networkidle", timeout=timeout_ms)
-    # 세션 워밍(storage_state 재사용) 경로: 이미 인증된 컨텍스트면 로그인 폼이 없다 —
-    # 이때 fill 을 시도하면 타임아웃으로 실패하므로 즉시 성공 처리(프로브 실측 2026-07-04:
-    # 웜 진입 ~4s, ERP 동시세션 킥 없음). 만료된 세션이면 폼이 다시 보여 정상 로그인한다.
-    if await is_authenticated(page, login_selector=selectors.LOGIN_USERID):
-        logger.info("옴니솔 세션 재사용(웜 진입): userid=%s", userid)
-        return
+    # networkidle 전체 대기를 피한다(웜 세션에서 인증 SPA 전체 로드 ~15s 실측) —
+    # domcontentloaded 후 '로그인 폼 출현' vs '인증 SPA(요소 수 임계)' 중 먼저 확정되는
+    # 쪽으로 분기 폴링. 폼 부재(음성)가 아니라 요소 수(양성)로 워밍을 판정해, 폼이 아직
+    # 안 그려진 초기 화면을 인증으로 오판하지 않는다. 만료 세션은 폼이 보여 정상 로그인.
+    await page.goto(f"{base.rstrip('/')}/", wait_until="domcontentloaded", timeout=timeout_ms)
+    for _ in range(40):  # 상한 ~12s
+        if await selector_present(page, selectors.LOGIN_USERID):
+            break  # 로그인 폼 확인 → 콜드 경로.
+        if await is_authenticated(page):  # 요소 수 임계(양성) — 세션 워밍(재사용) 경로.
+            logger.info("옴니솔 세션 재사용(웜 진입): userid=%s", userid)
+            return
+        await page.wait_for_timeout(300)
+    else:
+        raise AuthError("로그인 페이지가 로드되지 않았습니다(폼/대시보드 모두 미출현).")
     await page.fill(selectors.LOGIN_USERID, userid)
     await page.fill(selectors.LOGIN_PASSWORD, password)
     await page.click(selectors.LOGIN_SUBMIT)
