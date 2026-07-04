@@ -31,20 +31,21 @@ def _stub_recommend(monkeypatch):
     monkeypatch.setattr(cc_nodes, "recommend_selections", _none)
 
 
-# ── compute_period(D2 3일 규칙 — 2026-07-04 변경: 3일 이하=전월, 4일부터=당월) ──
+# ── compute_period(D2 10일 규칙 — 2026-07-04 변경: 10일 미만=전월, 10일부터=당월) ──
 def test_compute_period_before_cutoff_is_previous_month():
-    # 7월 3일(3일 이하) → 전월(6월) 전체.
-    assert steps.compute_period(date(2026, 7, 3)) == ("2026-06-01", "2026-06-30")
+    # 7월 9일(10일 미만) → 전월(6월) 전체. 오늘 7/4도 여기 해당.
+    assert steps.compute_period(date(2026, 7, 9)) == ("2026-06-01", "2026-06-30")
+    assert steps.compute_period(date(2026, 7, 4)) == ("2026-06-01", "2026-06-30")
 
 
 def test_compute_period_on_or_after_cutoff_is_current_month_to_today():
-    # 7월 4일(컷오프 경계)부터 당월 1일~오늘.
-    assert steps.compute_period(date(2026, 7, 4)) == ("2026-07-01", "2026-07-04")
+    # 7월 10일(컷오프 경계)부터 당월 1일~오늘.
+    assert steps.compute_period(date(2026, 7, 10)) == ("2026-07-01", "2026-07-10")
     assert steps.compute_period(date(2026, 7, 15)) == ("2026-07-01", "2026-07-15")
 
 
 def test_compute_period_january_rolls_to_previous_year():
-    # 1월 2일(3일 이하) → 전년 12월 전체(연도 롤백).
+    # 1월 2일(10일 미만) → 전년 12월 전체(연도 롤백).
     assert steps.compute_period(date(2026, 1, 2)) == ("2025-12-01", "2025-12-31")
 
 
@@ -585,7 +586,7 @@ def test_period_month_end():
 
 
 async def test_set_acct_date_node_uses_period_month_end(monkeypatch):
-    """전월 수집(3일 이하)=전월 말일, 당월 수집(4일부터)=당월 말일을 ACTG_DT 로 설정."""
+    """전월 수집(10일 미만)=전월 말일, 당월 수집(10일부터)=당월 말일을 ACTG_DT 로 설정."""
     calls: dict = {}
 
     async def _fake_set(page, compact, dashed):
@@ -597,10 +598,10 @@ async def test_set_acct_date_node_uses_period_month_end(monkeypatch):
 
     out = await node({"events": asyncio.Queue(), "page": object(), "params": {"today": "2026-07-02"}})
     assert out == {}
-    assert calls["compact"] == "20260630"  # 7/2(3일 이하) → 전월(6월) 말일
+    assert calls["compact"] == "20260630"  # 7/2(10일 미만) → 전월(6월) 말일
 
     await node({"events": asyncio.Queue(), "page": object(), "params": {"today": "2026-07-15"}})
-    assert calls["compact"] == "20260731"  # 4일부터 → 당월(7월) 말일
+    assert calls["compact"] == "20260731"  # 10일부터 → 당월(7월) 말일
 
 
 async def test_set_acct_date_node_fails_on_step_error(monkeypatch):

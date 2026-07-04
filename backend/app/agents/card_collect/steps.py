@@ -19,13 +19,13 @@ from . import js
 logger = logging.getLogger(__name__)
 
 # ── D2: 승인일 기간 계산 ─────────────────────────────────────────────────────────
-# 오늘이 매월 3일 이하(포함)면 전월(1일~말일), 4일부터는 당월(1일~오늘).
-# (규칙 변경 2026-07-04: 기존 10일 기준 → 3일 기준, 사용자 확정)
-DAY_CUTOFF = 4
+# 오늘이 매월 10일 미만(1~9일)이면 전월(1일~말일), 10일부터는 당월(1일~오늘).
+# (규칙 변경 2026-07-04: 3일 기준 → 10일 기준, 사용자 확정)
+DAY_CUTOFF = 10
 
 
 def compute_period(today: date) -> tuple[str, str]:
-    """(start, end) YYYY-MM-DD. 3일 이하=전월 전체, 4일부터=당월 1일~오늘."""
+    """(start, end) YYYY-MM-DD. 10일 미만=전월 전체, 10일부터=당월 1일~오늘."""
     if today.day < DAY_CUTOFF:
         year = today.year - 1 if today.month == 1 else today.year
         month = 12 if today.month == 1 else today.month - 1

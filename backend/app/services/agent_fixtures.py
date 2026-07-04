@@ -105,7 +105,7 @@ AGENT_FIXTURES: list[dict] = [
             {"key": "open_evdn", "label": "증빙유형 선택", "skill": "코드피커", "status": "done", "detail": "증빙유형 코드피커 열기"},
             {"key": "select_evdn", "label": "법인카드 선택", "skill": "코드피커", "status": "done", "detail": "증빙유형 01 법인카드 선택 → 승인내역 팝업"},
             {"key": "select_all_cards", "label": "카드 전체선택", "skill": "코드피커", "status": "done", "detail": "카드번호 돋보기 → 전체선택 → 적용"},
-            {"key": "set_period", "label": "승인일 기간", "skill": "필드 입력", "status": "done", "detail": "3일 이하=전월 / 4일부터=당월 기간 설정"},
+            {"key": "set_period", "label": "승인일 기간", "skill": "필드 입력", "status": "done", "detail": "10일 미만=전월 / 10일부터=당월 기간 설정"},
             {"key": "query", "label": "조회", "skill": "그리드 읽기", "status": "done", "detail": "승인내역 조회 → 리스트 보고"},
             {
                 "key": "collect_rows", "label": "건별 입력(그리드)", "skill": "그리드 입력", "status": "active",
