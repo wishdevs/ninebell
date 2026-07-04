@@ -288,3 +288,34 @@ async def test_prefill_explicit_default_favorite_beats_cost_project():
         cost_project={"code": "800|800", "name": "판매관리비", "wbsNo": "800", "wbsNm": ""},
     )
     assert out[1]["project"]["code"] == "P9|W9"  # 명시 기본지정 우선
+
+
+async def test_learned_note_prefills_grid(monkeypatch):
+    """학습된 적요가 있으면 키워드 휴리스틱 대신 그 적요로 그리드 프리필된다."""
+    from app.services import card_learning
+
+    async def _learned(owner, merchants):
+        return {
+            card_learning.norm_merchant("네이버파이낸셜㈜"): {
+                "merchant": "네이버파이낸셜㈜",
+                "budget": {"code": "b1", "name": "인사기획팀"},
+                "project": None,
+                "note": "6월 팀 소모품",
+                "count": 1,
+            }
+        }
+
+    monkeypatch.setattr(card_learning, "retrieve_for_merchants", _learned)
+    _stub_dumps(monkeypatch, units=[{"code": "b1", "name": "인사기획팀"}])
+
+    events: asyncio.Queue = asyncio.Queue()
+    rows = [{"i": 0, "TRAN_NM": "네이버파이낸셜(주)", "TRAN_AMT": "1000", "VAT_TP": "과세",
+             "TRAN_DT": "2026-06-01", "TRAN_TM": "00:00:00", "APRVL_YN": "승인",
+             "FINPRODUCT_NM": "카드"}]
+    state = {"events": events, "page": object(), "rows_list": rows, "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    assert frame["rows"][0]["note"] == "6월 팀 소모품"  # 학습 적요 프리필(휴리스틱 아님)
+
+    resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}]})
+    await asyncio.wait_for(task, timeout=2)

@@ -663,6 +663,15 @@ def make_collect_rows_node(timeout_s: int | None = None):
         )
         if learned:
             await emit_log(events, f"과거 개입 학습 {len(learned)}개 가맹점 매칭 — 추천에 반영.", "info")
+        # 적요도 학습 반영: 과거에 이 가맹점에 실제로 쓴 적요가 있으면 키워드 휴리스틱 대신 그것으로
+        # 프리필한다(사용자의 실제 표현 > 추측). recs(그리드 표시) · notes(반영/현황) 둘 다 갱신.
+        for idx, r in enumerate(rows_list):
+            hit = learned.get(card_learning.norm_merchant(r.get("TRAN_NM")))
+            learned_note = (hit or {}).get("note")
+            if learned_note and learned_note.strip():
+                key = r.get("i", idx)
+                recs[key] = learned_note.strip()
+                notes[key] = learned_note.strip()
         preselect = await _prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned,
