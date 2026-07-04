@@ -91,6 +91,12 @@ export const WORKFLOW_STEP_DEFS: Record<string, readonly WorkflowStepDef[]> = {
       detail: 'F3로 카드 결의 상세행 생성',
     },
     {
+      id: 'set_acct_date',
+      label: '회계일 설정',
+      skill: '필드 입력',
+      detail: '수집 기간 월의 말일로 결의서 회계일 설정(전월 수집=전월 말일 / 당월=당월 말일)',
+    },
+    {
       id: 'open_evdn',
       label: '증빙유형 선택',
       skill: '코드피커',
@@ -112,7 +118,7 @@ export const WORKFLOW_STEP_DEFS: Record<string, readonly WorkflowStepDef[]> = {
       id: 'set_period',
       label: '승인일 기간',
       skill: '필드 입력',
-      detail: '10일 이전=전월 / 이후=당월 기간 설정',
+      detail: '3일 이하=전월 / 4일부터=당월 기간 설정',
     },
     { id: 'query', label: '조회', skill: '그리드 읽기', detail: '승인내역 조회 → 리스트 보고' },
     {

@@ -354,3 +354,17 @@ VALIDATION_TOAST_JS = r"""() => {
   }
   return [...out];
 }"""
+
+
+# 마스터(결의서) 그리드 0행의 회계일(ACTG_DT) 설정 + 표시값 검증. 인자 ymd='YYYYMMDD'.
+# ⚠ 'YYYY-MM-DD'(대시) 형식은 오류 없이 셀을 **비운다**(프로브 실측 2026-07-04) — 컴팩트만 사용.
+SET_ACCT_DATE_JS = """(ymd) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    if (ds.getRowCount() < 1) return { ok: false, reason: '결의서(마스터) 행 없음' };
+    ds.setValue(0, 'ACTG_DT', ymd);
+    const disp = (g.getDisplayValuesOfRow ? g.getDisplayValuesOfRow(0) : {}) || {};
+    return { ok: true, display: String(disp.ACTG_DT || '') };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""

@@ -18,18 +18,47 @@ from . import js
 logger = logging.getLogger(__name__)
 
 # ── D2: 승인일 기간 계산 ─────────────────────────────────────────────────────────
-# 오늘이 매월 10일 이전이면 전월(1일~말일), 10일 이후(포함)면 당월(1일~오늘).
-DAY_CUTOFF = 10
+# 오늘이 매월 3일 이하(포함)면 전월(1일~말일), 4일부터는 당월(1일~오늘).
+# (규칙 변경 2026-07-04: 기존 10일 기준 → 3일 기준, 사용자 확정)
+DAY_CUTOFF = 4
 
 
 def compute_period(today: date) -> tuple[str, str]:
-    """(start, end) YYYY-MM-DD. 10일 이전=전월 전체, 10일 이후=당월 1일~오늘."""
+    """(start, end) YYYY-MM-DD. 3일 이하=전월 전체, 4일부터=당월 1일~오늘."""
     if today.day < DAY_CUTOFF:
         year = today.year - 1 if today.month == 1 else today.year
         month = 12 if today.month == 1 else today.month - 1
         last = calendar.monthrange(year, month)[1]
         return f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last:02d}"
     return f"{today.year:04d}-{today.month:02d}-01", today.isoformat()
+
+
+def period_month_end(period_start: str) -> tuple[str, str]:
+    """기간 시작일(YYYY-MM-01)의 그 달 **말일** — (compact 'YYYYMMDD', dashed 'YYYY-MM-DD').
+
+    회계일 규칙(사용자 확정 2026-07-04): 전월 수집이면 전월 말일, 당월 수집이면 당월 말일.
+    compact 는 그리드 setValue 용(대시 형식은 셀을 비우는 함정 — SET_ACCT_DATE_JS 참조).
+    """
+    y, m = int(period_start[:4]), int(period_start[5:7])
+    last = calendar.monthrange(y, m)[1]
+    return f"{y:04d}{m:02d}{last:02d}", f"{y:04d}-{m:02d}-{last:02d}"
+
+
+async def set_acct_date(page: Any, ymd_compact: str, expect_display: str) -> dict:
+    """마스터(결의서) 0행 회계일(ACTG_DT) 설정 + 표시값 검증. 반환 {ok, display}|{ok:False, reason}.
+
+    프로브 실측(2026-07-04): F3 직후 마스터 행 1개 존재, ds.setValue(0,'ACTG_DT','YYYYMMDD')
+    로 설정되고 표시값이 dashed 로 확인된다.
+    """
+    r = await page.evaluate(js.SET_ACCT_DATE_JS, ymd_compact)
+    if not r.get("ok"):
+        return {"ok": False, "reason": r.get("reason") or "회계일 설정 실패"}
+    if (r.get("display") or "") != expect_display:
+        return {
+            "ok": False,
+            "reason": f"회계일 표시값 불일치(기대 {expect_display}·실제 {r.get('display')!r})",
+        }
+    return {"ok": True, "display": r.get("display")}
 
 
 # ── 카드 전체선택 ────────────────────────────────────────────────────────────────

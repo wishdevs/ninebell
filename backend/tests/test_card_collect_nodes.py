@@ -31,20 +31,21 @@ def _stub_recommend(monkeypatch):
     monkeypatch.setattr(cc_nodes, "recommend_selections", _none)
 
 
-# ── compute_period(D2 10일 규칙) ──────────────────────────────────────────────
+# ── compute_period(D2 3일 규칙 — 2026-07-04 변경: 3일 이하=전월, 4일부터=당월) ──
 def test_compute_period_before_cutoff_is_previous_month():
-    # 7월 3일(10일 이전) → 전월(6월) 전체.
+    # 7월 3일(3일 이하) → 전월(6월) 전체.
     assert steps.compute_period(date(2026, 7, 3)) == ("2026-06-01", "2026-06-30")
 
 
 def test_compute_period_on_or_after_cutoff_is_current_month_to_today():
-    # 7월 15일(10일 이후) → 당월 1일~오늘.
+    # 7월 4일(컷오프 경계)부터 당월 1일~오늘.
+    assert steps.compute_period(date(2026, 7, 4)) == ("2026-07-01", "2026-07-04")
     assert steps.compute_period(date(2026, 7, 15)) == ("2026-07-01", "2026-07-15")
 
 
 def test_compute_period_january_rolls_to_previous_year():
-    # 1월 5일 → 전년 12월 전체(연도 롤백).
-    assert steps.compute_period(date(2026, 1, 5)) == ("2025-12-01", "2025-12-31")
+    # 1월 2일(3일 이하) → 전년 12월 전체(연도 롤백).
+    assert steps.compute_period(date(2026, 1, 2)) == ("2025-12-01", "2025-12-31")
 
 
 # ── 휴리스틱 ──────────────────────────────────────────────────────────────────
@@ -574,3 +575,40 @@ async def test_prefill_cost_prefix_biases_default_budget():
     )
     assert out[1]["budgetSource"] == "default"
     assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
+
+
+# ── 회계일(set_acct_date) — 수집 기간 월의 말일(규칙 2026-07-04) ────────────────
+def test_period_month_end():
+    assert steps.period_month_end("2026-06-01") == ("20260630", "2026-06-30")
+    assert steps.period_month_end("2026-02-01") == ("20260228", "2026-02-28")
+    assert steps.period_month_end("2025-12-01") == ("20251231", "2025-12-31")
+
+
+async def test_set_acct_date_node_uses_period_month_end(monkeypatch):
+    """전월 수집(3일 이하)=전월 말일, 당월 수집(4일부터)=당월 말일을 ACTG_DT 로 설정."""
+    calls: dict = {}
+
+    async def _fake_set(page, compact, dashed):
+        calls["compact"], calls["dashed"] = compact, dashed
+        return {"ok": True, "display": dashed}
+
+    monkeypatch.setattr(steps, "set_acct_date", _fake_set)
+    node = cc_nodes.make_set_acct_date_node()
+
+    out = await node({"events": asyncio.Queue(), "page": object(), "params": {"today": "2026-07-02"}})
+    assert out == {}
+    assert calls["compact"] == "20260630"  # 7/2(3일 이하) → 전월(6월) 말일
+
+    await node({"events": asyncio.Queue(), "page": object(), "params": {"today": "2026-07-15"}})
+    assert calls["compact"] == "20260731"  # 4일부터 → 당월(7월) 말일
+
+
+async def test_set_acct_date_node_fails_on_step_error(monkeypatch):
+    async def _fail(page, compact, dashed):
+        return {"ok": False, "reason": "결의서(마스터) 행 없음"}
+
+    monkeypatch.setattr(steps, "set_acct_date", _fail)
+    out = await cc_nodes.make_set_acct_date_node()(
+        {"events": asyncio.Queue(), "page": object(), "params": {}}
+    )
+    assert "회계일 설정 실패" in out["error"]

@@ -1,7 +1,7 @@
 """법인카드 승인내역 정리(card-collect) — LangGraph StateGraph 조립.
 
 진입 앞단(login→user_type(회계)→menu_nav(결의서입력)→set_gubun(카드)→add_row(F3)
-→open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후는
+→set_acct_date(회계일=기간월 말일)→open_evdn→select_evdn(01))은 app.agents.common.nodes 를 그대로 재사용하고, 카드팝업 이후는
 부가세구분 2패스: select_all_cards→set_period→query→collect_rows(그리드 1회 입력·과세 반영)
 →apply_doc(과세 적용)→switch_evdn(F3·불공 전환·재조회·매칭)→apply_pass2(불공 반영·적용)
 →save_final(최종 저장 F7 — 마지막 1회, 사용자 업무 규칙).
@@ -33,6 +33,7 @@ from .nodes import (
     make_query_node,
     make_save_final_node,
     make_select_all_cards_node,
+    make_set_acct_date_node,
     make_set_period_node,
     make_switch_evdn_node,
 )
@@ -75,6 +76,9 @@ def build_card_collect_graph():
     g.add_node("menu_nav", make_menu_nav_node())
     g.add_node("set_gubun", make_set_gubun_node("카드"))
     g.add_node("add_row", make_add_row_node())
+    # 회계일 = 수집 기간 월의 말일(사용자 규칙 2026-07-04) — F3 로 생긴 마스터 행에,
+    # 카드 팝업이 뜨기 전(메인 화면) 시점에 설정한다.
+    g.add_node("set_acct_date", make_set_acct_date_node())
     g.add_node("open_evdn", make_open_evdn_node())
     g.add_node("select_evdn", make_select_evdn_node("01"))  # 법인카드
     # 카드팝업 이후(신규)
@@ -94,7 +98,8 @@ def build_card_collect_graph():
         ("user_type", "menu_nav"),
         ("menu_nav", "set_gubun"),
         ("set_gubun", "add_row"),
-        ("add_row", "open_evdn"),
+        ("add_row", "set_acct_date"),
+        ("set_acct_date", "open_evdn"),
         ("open_evdn", "select_evdn"),
         ("select_evdn", "select_all_cards"),
         ("select_all_cards", "set_period"),

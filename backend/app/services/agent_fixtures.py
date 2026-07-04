@@ -101,10 +101,11 @@ AGENT_FIXTURES: list[dict] = [
             {"key": "menu_nav", "label": "결의서입력 화면", "skill": "메뉴 이동", "status": "done", "detail": "전사공통(회계) 결의서 입력 화면 진입"},
             {"key": "set_gubun", "label": "결의구분: 카드", "skill": "필드 입력", "status": "done", "detail": "결의구분 드롭다운을 카드로 설정"},
             {"key": "add_row", "label": "상세행 추가(F3)", "skill": "필드 입력", "status": "done", "detail": "F3로 카드 결의 상세행 생성"},
+            {"key": "set_acct_date", "label": "회계일 설정", "skill": "필드 입력", "status": "done", "detail": "수집 기간 월의 말일로 결의서 회계일 설정(전월 수집=전월 말일 / 당월=당월 말일)"},
             {"key": "open_evdn", "label": "증빙유형 선택", "skill": "코드피커", "status": "done", "detail": "증빙유형 코드피커 열기"},
             {"key": "select_evdn", "label": "법인카드 선택", "skill": "코드피커", "status": "done", "detail": "증빙유형 01 법인카드 선택 → 승인내역 팝업"},
             {"key": "select_all_cards", "label": "카드 전체선택", "skill": "코드피커", "status": "done", "detail": "카드번호 돋보기 → 전체선택 → 적용"},
-            {"key": "set_period", "label": "승인일 기간", "skill": "필드 입력", "status": "done", "detail": "10일 이전=전월 / 이후=당월 기간 설정"},
+            {"key": "set_period", "label": "승인일 기간", "skill": "필드 입력", "status": "done", "detail": "3일 이하=전월 / 4일부터=당월 기간 설정"},
             {"key": "query", "label": "조회", "skill": "그리드 읽기", "status": "done", "detail": "승인내역 조회 → 리스트 보고"},
             {
                 "key": "collect_rows", "label": "건별 입력(그리드)", "skill": "그리드 입력", "status": "active",

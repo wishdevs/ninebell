@@ -107,6 +107,46 @@ def make_select_all_cards_node():
     return select_all_cards
 
 
+# ── 회계일(마스터 그리드 ACTG_DT = 수집 기간 월의 말일) ────────────────────────────
+def _params_today(state: dict) -> date:
+    """params['today'] 재정의(테스트/재현용) 지원 — set_period 와 동일 규약."""
+    params = state.get("params") or {}
+    raw = params.get("today")
+    if raw:
+        try:
+            return date.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            pass
+    return date.today()
+
+
+def make_set_acct_date_node():
+    """회계일 규칙(사용자 확정 2026-07-04): 전월 수집=전월 말일, 당월 수집=당월 말일.
+
+    F3 직후 생성된 마스터(결의서) 행의 ACTG_DT 를 수집 기간 월의 말일로 설정한다.
+    카드 팝업이 뜨기 전(메인 화면)이라 안전하게 datasource 로 쓴다(프로브 실측).
+    """
+
+    async def set_acct_date(state: dict) -> dict:
+        if state.get("error"):
+            return {}
+        events = state["events"]
+        page = state["page"]
+        await emit_step(events, "set_acct_date", "running")
+        t0 = time.monotonic()
+        start, _end = steps.compute_period(_params_today(state))
+        compact, dashed = steps.period_month_end(start)
+        r = await steps.set_acct_date(page, compact, dashed)
+        if not r.get("ok"):
+            await emit_step(events, "set_acct_date", "failed")
+            return {"error": f"회계일 설정 실패({dashed}): {r.get('reason')}"}
+        await emit_log(events, f"회계일 = {dashed} (수집 기간 월의 말일).", "info")
+        await emit_step(events, "set_acct_date", "done", _ms(t0))
+        return {}
+
+    return set_acct_date
+
+
 # ── 승인일 기간(D2) ──────────────────────────────────────────────────────────────
 def make_set_period_node():
     async def set_period(state: dict) -> dict:

@@ -457,6 +457,13 @@ export const AGENTS: readonly Agent[] = [
         detail: 'F3로 카드 결의 상세행 생성',
       },
       {
+        id: 'set_acct_date',
+        label: '회계일 설정',
+        skill: '필드 입력',
+        status: 'pending',
+        detail: '수집 기간 월의 말일로 결의서 회계일 설정(전월 수집=전월 말일 / 당월=당월 말일)',
+      },
+      {
         id: 'evdn',
         label: '증빙유형 선택',
         skill: '코드피커',
@@ -482,7 +489,7 @@ export const AGENTS: readonly Agent[] = [
         label: '승인일 기간',
         skill: '필드 입력',
         status: 'pending',
-        detail: '10일 이전=전월 / 이후=당월 기간 설정',
+        detail: '3일 이하=전월 / 4일부터=당월 기간 설정',
       },
       {
         id: 'query',
