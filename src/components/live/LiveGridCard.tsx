@@ -327,6 +327,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                     'border-border/50 border-t align-top',
                     e.skip && 'opacity-40',
                     rowInvalid && 'bg-danger/[0.04]',
+                    r.error && 'bg-danger/[0.07] ring-danger/30 ring-1 ring-inset',
                   )}
                 >
                   <Td className="text-foreground-tertiary text-center tabular-nums">{r.no}</Td>
@@ -371,6 +372,12 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         }}
                       />
                     </div>
+                    {r.error ? (
+                      <p className="text-danger mt-1.5 flex items-start gap-1 text-[11px] leading-snug">
+                        <span aria-hidden>⚠</span>
+                        <span>{r.error}</span>
+                      </p>
+                    ) : null}
                   </Td>
 
                   {/* 프로젝트 combobox + ★ */}

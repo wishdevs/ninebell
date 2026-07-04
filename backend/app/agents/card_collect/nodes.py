@@ -771,6 +771,22 @@ def make_collect_rows_node(timeout_s: int | None = None):
             if restored:
                 await emit_log(events, f"이전 선택 {restored}건 복원(저장 실패 재시도) — 틀린 행만 고쳐 주세요.", "info")
 
+        # 저장 거부 조치 안내: 해당 행에 '어떤 계정으로 고쳐야 하는지' 오류 메시지를 붙인다.
+        issues = state.get("save_error_issues") or []
+        by_row = {it["rowNo"]: it for it in issues if it.get("rowNo")}
+        for gr in grid_rows:
+            it = by_row.get(gr["no"])
+            if not it:
+                continue
+            if it.get("requiredAccount"):
+                gr["error"] = (
+                    f"저장 거부 — 예산계정이 ‘{it['requiredAccount']}’와 같아야 합니다. "
+                    "예산단위를 그 계정에 맞는 것으로 다시 선택하세요."
+                )
+                gr["budgetSource"] = None  # 재선택 유도 — 자동배지 제거
+            else:
+                gr["error"] = "저장 거부 — 예산단위를 다시 선택하세요."
+
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
         decision_id = uuid.uuid4().hex
@@ -1352,6 +1368,75 @@ def make_apply_pass2_node():
 # 저장(F7)이 ERP 에서 거부되면 그리드 재선택으로 되돌리는 최대 재시도 횟수(방식 1).
 MAX_SAVE_RETRIES = 2
 
+# ERP 저장 거부 모달 파싱 — 승인번호·요구 계정을 뽑아 '어느 행을 어떤 계정으로' 안내한다.
+# 예: "[승인번호 : 03187517, 승인취소] 승인 건 계정과 다릅니다. 세금과공과금-인사(과)와 동일해야 합니다."
+_SAVE_APRVL_RE = re.compile(r"승인번호\s*[:：]\s*(\w+)")
+_SAVE_REQ_ACCT_RE = re.compile(r"다릅니다[.\s]*(.+?)\s*와\s*동일")
+
+
+def _parse_save_rejections(reason: str, rows_list: list[dict]) -> list[dict]:
+    """ERP 저장 거부 메시지 → 조치 안내 리스트. 승인번호로 그리드 행(rowNo·가맹점)을 매핑한다.
+
+    반환 [{aprvlNo, requiredAccount, rowNo, merchant, raw}] (파싱 실패분은 제외, 중복 승인번호 접기).
+    형식이 달라 못 뽑으면 빈 리스트 — 호출부가 원문 폴백."""
+    by_aprvl: dict[str, dict] = {r.get("APRVL_NO", "").lstrip("0"): r for r in rows_list if r.get("APRVL_NO")}
+    idx_of = {id(r): i for i, r in enumerate(rows_list)}
+    issues: list[dict] = []
+    seen: set[str] = set()
+    for seg in re.split(r"(?=\[?\s*승인번호)", reason or ""):
+        seg = seg.strip()
+        if not seg:
+            continue
+        m = _SAVE_APRVL_RE.search(seg)
+        a = _SAVE_REQ_ACCT_RE.search(seg)
+        aprvl = m.group(1) if m else None
+        acct = a.group(1).strip() if a else None
+        if not (aprvl or acct):
+            continue
+        key = f"{aprvl}|{acct}"
+        if key in seen:
+            continue
+        seen.add(key)
+        row = by_aprvl.get((aprvl or "").lstrip("0"))
+        issues.append(
+            {
+                "aprvlNo": aprvl,
+                "requiredAccount": acct,
+                "rowNo": (idx_of.get(id(row)) + 1) if row is not None else None,
+                "merchant": row.get("TRAN_NM") if row is not None else None,
+                "raw": seg[:200],
+            }
+        )
+    return issues
+
+
+def _save_guidance(issues: list[dict], reason: str) -> str:
+    """조치 안내 채팅 본문 — 왜 실패했고(계정 불일치) 어느 행을 어떤 계정으로 고칠지."""
+    if not issues:
+        return (
+            f"저장이 ERP 에서 거부됐습니다:\n{reason}\n\n"
+            "선택을 다시 확인해 주세요. '건별 입력' 화면으로 돌아갑니다."
+        )
+    lines = []
+    for it in issues:
+        where = (
+            f"{it['rowNo']}행 「{it['merchant']}」"
+            if it.get("rowNo")
+            else f"승인번호 {it.get('aprvlNo') or '?'}"
+        )
+        if it.get("requiredAccount"):
+            lines.append(
+                f"• {where}: 이 건은 예산계정이 **‘{it['requiredAccount']}’**와 같아야 합니다. "
+                f"그 계정에 해당하는 예산단위로 다시 선택해 주세요."
+            )
+        else:
+            lines.append(f"• {where}: 계정이 맞지 않습니다. 예산단위를 다시 선택해 주세요.")
+    return (
+        "저장이 거부됐습니다 — 승인취소 건은 **원 승인 건과 같은 예산계정**이어야 합니다.\n"
+        "아래 항목을 고쳐 다시 저장해 주세요:\n" + "\n".join(lines) +
+        "\n\n'건별 입력' 화면으로 돌아갑니다. 표시된 행만 고치면 됩니다."
+    )
+
 
 def make_save_final_node():
     """최종 저장(F7) 1회 — 별도 확인 없음(사용자 업무 규칙: 그리드 '입력 완료' 제출이 곧
@@ -1393,23 +1478,26 @@ def make_save_final_node():
             await emit_step(events, "save_final", "failed")
             reason = r.get("reason") or str(r)
             retries = state.get("save_retries", 0)
+            issues = _parse_save_rejections(reason, state.get("rows_list") or [])
             # ERP 거부(계정 불일치 등)는 재선택으로 고칠 수 있다 — 상한까지 그리드로 되돌린다.
             if retries < MAX_SAVE_RETRIES:
                 await emit_chat(
                     events,
                     chat_id="cc-retry",
                     role="assistant",
-                    content=(
-                        f"저장이 거부됐습니다:\n{reason}\n\n선택을 다시 확인해 주세요. "
-                        f"문서를 새로 만들어 '건별 입력' 단계로 돌아갑니다"
-                        f"({retries + 1}/{MAX_SAVE_RETRIES}회 재시도)."
-                    ),
+                    content=_save_guidance(issues, reason)
+                    + f"\n\n(재시도 {retries + 1}/{MAX_SAVE_RETRIES}회)",
                     streaming=False,
                 )
                 await emit_log(
                     events, f"저장 거부 → 그리드 재입력 재시도 {retries + 1}/{MAX_SAVE_RETRIES}: {reason}", "warn"
                 )
-                return {"retry_save": True, "save_retries": retries + 1, "save_error_msg": reason}
+                return {
+                    "retry_save": True,
+                    "save_retries": retries + 1,
+                    "save_error_msg": reason,
+                    "save_error_issues": issues,
+                }
             return {"error": f"저장 실패({retries}회 재시도 후 포기): {reason}", "retry_save": False}
         seen = r.get("modals_seen") or []
         if seen:

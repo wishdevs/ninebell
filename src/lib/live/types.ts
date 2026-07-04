@@ -67,6 +67,8 @@ export interface LiveGridRow {
   budgetSource?: PrefillSource | null;
   /** 프로젝트 프리셀렉트 출처 — 'ai'=AI 추천, 'default'=기본지정 즐겨찾기. */
   projectSource?: PrefillSource | null;
+  /** 저장 실패 재시도 시 이 행의 조치 안내(예: 예산계정이 무엇과 같아야 하는지). 있으면 강조. */
+  error?: string;
 }
 
 /** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백. */

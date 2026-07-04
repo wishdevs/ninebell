@@ -69,6 +69,7 @@ class CardCollectState(TypedDict, total=False):
     retry_save: bool  # save_final 이 재시도 신호를 켠다(라우터가 menu_nav 로 되돌림)
     save_retries: int  # 누적 재시도 횟수(상한 초과 시 실패 종료)
     save_error_msg: str  # 직전 저장 실패 사유(재진입한 그리드에 표시)
+    save_error_issues: list[dict]  # 파싱된 조치 안내 [{aprvlNo, requiredAccount, rowNo, merchant, raw}]
     retry_prefill: dict  # {row_key: {budgetUnit, project, note, skip}} — 재시도 시 이전 선택 보존
     result: str | dict
     error: str

@@ -510,6 +510,38 @@ async def test_save_final_saves_without_confirmation(monkeypatch):
     assert out == {"result": "처리 완료 — 과세 3건 · 불공 1건 입력·저장.", "retry_save": False}
 
 
+def test_parse_save_rejections_extracts_aprvl_account_and_maps_row():
+    """ERP 거부 메시지에서 승인번호·요구계정을 뽑고 rows_list APRVL_NO 로 행을 매핑한다."""
+    from app.agents.card_collect.nodes import _parse_save_rejections, _save_guidance
+
+    rows = [
+        {"APRVL_NO": "03187517", "TRAN_NM": "가맹A"},
+        {"APRVL_NO": "99999999", "TRAN_NM": "가맹B"},
+    ]
+    reason = (
+        "[승인번호 : 03187517, 승인취소] 승인 건 계정과 다릅니다. "
+        "세금과공과금-인사(과)와 동일해야 합니다. 확인 / "
+        "[승인번호 : 03187517, 승인취소] 승인 건 계정과 다릅니다. 세금과공과금-인사(과)와 동일해야 합니다. 확인"
+    )
+    issues = _parse_save_rejections(reason, rows)
+    assert len(issues) == 1  # 중복 승인번호 접힘
+    it = issues[0]
+    assert it["aprvlNo"] == "03187517"
+    assert it["requiredAccount"] == "세금과공과금-인사(과)"
+    assert it["rowNo"] == 1 and it["merchant"] == "가맹A"
+    # 안내 본문에 행·계정·조치가 담긴다.
+    guide = _save_guidance(issues, reason)
+    assert "1행" in guide and "세금과공과금-인사(과)" in guide and "예산단위" in guide
+
+
+def test_parse_save_rejections_falls_back_when_unparseable():
+    """형식이 다르면 빈 리스트 → 안내는 원문 폴백."""
+    from app.agents.card_collect.nodes import _parse_save_rejections, _save_guidance
+
+    assert _parse_save_rejections("알 수 없는 오류", []) == []
+    assert "알 수 없는 오류" in _save_guidance([], "알 수 없는 오류")
+
+
 async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
     """저장 거부(ERP 오류) 시 상한까지 retry_save 를 켜 그리드로 되돌리고, 초과하면 실패 종료."""
 
@@ -527,7 +559,12 @@ async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
     out1 = await make_save_final_node()(
         {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
     )
-    assert out1 == {"retry_save": True, "save_retries": 1, "save_error_msg": "승인 건 계정과 다릅니다."}
+    assert out1 == {
+        "retry_save": True,
+        "save_retries": 1,
+        "save_error_msg": "승인 건 계정과 다릅니다.",
+        "save_error_issues": [],  # 승인번호/요구계정 없는 메시지 → 파싱 없음(원문 폴백)
+    }
 
     # 상한(2) 도달 후 또 실패 → 재시도 안 하고 error(retry_save False).
     out2 = await make_save_final_node()(
