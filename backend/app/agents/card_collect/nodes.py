@@ -447,24 +447,23 @@ async def _prefill_selections(
     default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
 
     # ── AI 추천 스킵 판정(최적화 #2, 2026-07-04) ─────────────────────────────────
-    # 기본지정/비용구분은 '기본'일 뿐 최종값이 될 수 없다(사용자 원칙). 기본만 있는 행은
-    # 반드시 AI 가 가맹점을 평가해 예산단위·프로젝트를 판단해야 한다. AI 호출을 건너뛸 수
-    # 있는 경우는 오직 **모든 행이 학습 Tier-1(반복 확정, count>=MIN)로 결정적 커버**되어
-    # AI 결과가 어차피 쓰이지 않을 때뿐이다(학습이 AI 보다 우선). 이때만 Gemini(~28.5s) 생략.
+    # AI 는 후보 중 '더 나은' 예산단위/프로젝트를 고르는 역할뿐이라, 모든 행이 이미
+    # 결정적 소스(학습 Tier-1) 또는 기본지정/비용구분 폴백으로 채워진다면 AI 결과는
+    # 어차피 쓰이지 않거나(학습 우선) 폴백과 동일하다 → Gemini 호출(실측 ~28.5s) 생략.
+    # 커버 안 되는 행(기본도 없는)이 하나라도 있으면 AI 를 돌려 그 행을 메운다.
     def _row_covered(no: int) -> bool:
         lh = learned_by_no.get(no) or {}
-        if (lh.get("count") or 0) < card_learning.LEARNED_APPLY_MIN_COUNT:
-            return False
-        return bool((lh.get("budget") or {}).get("code") and (lh.get("project") or {}).get("code"))
+        learned_ok = (lh.get("count") or 0) >= card_learning.LEARNED_APPLY_MIN_COUNT
+        budget_ok = (learned_ok and (lh.get("budget") or {}).get("code")) or bool(default_budget)
+        project_ok = (learned_ok and (lh.get("project") or {}).get("code")) or bool(default_project)
+        return bool(budget_ok and project_ok)
 
-    all_covered = bool(rows_list) and all(
-        _row_covered(idx + 1) for idx in range(len(rows_list))
-    )
+    all_covered = all(_row_covered(idx + 1) for idx in range(len(rows_list)))
 
     recommendations: dict[int, dict] = {}
     if all_covered:
         await emit_log(
-            events, "모든 행이 학습(반복 확정)으로 채워집니다 — AI 추천을 건너뜁니다.", "info"
+            events, "모든 행이 학습/기본지정으로 채워집니다 — AI 추천을 건너뜁니다.", "info"
         )
     elif settings.gemini_api_key and (budget_candidates or project_candidates):
         rec_rows = [
