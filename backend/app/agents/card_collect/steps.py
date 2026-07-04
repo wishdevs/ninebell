@@ -89,10 +89,14 @@ async def run_query(page: Any, timeout_polls: int = 20) -> int:
     prev = -2
     stable = 0
     rows = -1
+    waited = 0
     for _ in range(timeout_polls * 1000 // 300):
         await page.wait_for_timeout(300)
+        waited += 300
         rows = await page.evaluate(js.ROWCOUNT_JS)
-        if isinstance(rows, int) and rows > 0 and rows == prev:
+        if isinstance(rows, int) and rows == prev and (rows > 0 or waited >= 3_000):
+            # 양수는 즉시 안정 인정, 0건은 3초 유예 후 안정 인정 — 진짜 빈 결과에서
+            # 상한(20s)을 전부 태우지 않는다(실측 2026-07-04: 0건 조회가 20s 소모).
             stable += 1
             if stable >= 2:  # 직전 포함 3회 연속 동일
                 break
