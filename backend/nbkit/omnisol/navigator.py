@@ -39,8 +39,11 @@ async def navigate_menu(
     - tries 회 폴링에도 그리드 미로드면 :class:`MenuError`(타임아웃).
     """
     logger.info("%s 메뉴 진입: %s%s", label, base.rstrip("/"), menu_path)
+    # networkidle 대기 금지 — 옴니솔 SPA 는 롱폴링을 유지해 networkidle 이 거의 안정되지
+    # 않아 상한까지 태운다(실측 menu_nav ~7s). domcontentloaded 로 즉시 반환하고, 아래
+    # 그리드 로드 폴링(MENU_CHECK_JS)을 준비 신호로 삼는다(그게 이미 진입 성공 판정 기준).
     await page.goto(
-        f"{base.rstrip('/')}{menu_path}", wait_until="networkidle", timeout=timeout_ms
+        f"{base.rstrip('/')}{menu_path}", wait_until="domcontentloaded", timeout=timeout_ms
     )
     for _ in range(tries):
         chk = await page.evaluate(js_lib.MENU_CHECK_JS)
