@@ -34,13 +34,31 @@ def compute_period(today: date) -> tuple[str, str]:
 
 # ── 카드 전체선택 ────────────────────────────────────────────────────────────────
 async def select_all_cards(page: Any) -> dict:
-    """카드번호 돋보기 → '카드' 서브팝업 전체선택 → 적용. 반환 {ok, n}."""
-    box = await page.evaluate(js.CARD_SEARCH_BTN_JS)
+    """카드번호 돋보기 → '카드' 서브팝업 전체선택 → 적용. 반환 {ok, n}.
+
+    ⚠ 증빙유형 01 적용 직후 법인카드 팝업이 **로딩 중**('데이터 처리 중')일 수 있다 — 돋보기
+    버튼 출현을 폴링(실측 2026-07-04: 폴링 세분화 후 '돋보기 버튼 없음' 레이스).
+    """
+    box = None
+    waited = 0
+    while waited < 10_000:  # 팝업 로딩 폴링(상한 10s)
+        box = await page.evaluate(js.CARD_SEARCH_BTN_JS)
+        if box:
+            break
+        await page.wait_for_timeout(300)
+        waited += 300
     if not box:
         return {"ok": False, "reason": "돋보기 버튼 없음(법인카드 팝업 아님?)"}
     await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_500)
-    sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
+    # 서브팝업 그리드 준비 폴링(고정 1.5s 대체) — 전체선택 JS 가 성공할 때까지 재시도.
+    sel: dict = {}
+    waited = 0
+    while waited < 6_000:
+        await page.wait_for_timeout(300)
+        waited += 300
+        sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
+        if sel.get("ok"):
+            break
     if not sel.get("ok"):
         return {"ok": False, "reason": f"서브팝업 전체선택 실패: {sel}"}
     apply_box = await page.evaluate(js.CARD_SUB_APPLY_BTN_JS)

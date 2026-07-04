@@ -208,7 +208,14 @@ def make_select_evdn_node(code: str = "01"):
         page = state["page"]
         await emit_step(emit, "select_evdn", "running")
         t0 = time.monotonic()
-        r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
+        # 팝업 '창'은 떠도 내부 그리드 행이 늦게 로드되는 레이스(실측 2026-07-04: 폴링 세분화
+        # 후 code-not-found) — 선택 자체를 폴링해 행 로드를 기다린다(상한 ~6s).
+        r: dict = {}
+        for _ in range(20):
+            r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
+            if r.get("ok"):
+                break
+            await page.wait_for_timeout(300)
         if not r.get("ok"):
             await emit_step(emit, "select_evdn", "failed")
             return {"error": f"증빙유형 코드 {code} 자동선택 실패: {r.get('reason')}"}
