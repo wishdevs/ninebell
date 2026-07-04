@@ -238,13 +238,14 @@ export function CodeCatalogManager({
 
   const setDefault = async (id: string) => {
     const prev = favorites;
-    // 낙관적: 대상만 기본, 나머지는 해제(같은 kind 내 단일성).
-    setFavorites((cur) => cur.map((f) => ({ ...f, isDefault: f.id === id })));
+    const wasDefault = favorites.find((f) => f.id === id)?.isDefault ?? false;
+    // 낙관적 토글: 이미 기본이면 해제(전부 false), 아니면 대상만 기본(같은 kind 내 단일성).
+    setFavorites((cur) => cur.map((f) => ({ ...f, isDefault: !wasDefault && f.id === id })));
     try {
-      await setDefaultFavorite(id);
+      await setDefaultFavorite(id); // 서버도 토글(이미 기본이면 해제) — 응답과 일관.
     } catch (err) {
       setFavorites(prev);
-      toast.error(errorMessage(err, '기본 지정에 실패했습니다.'));
+      toast.error(errorMessage(err, '기본 지정 변경에 실패했습니다.'));
     }
   };
 
@@ -519,15 +520,15 @@ function CodeRowInfo({
   );
 }
 
-/** 기본지정 토글 — 하나만 활성(라디오 성격). 활성 시 강조 뱃지 '기본'. */
+/** 기본지정 토글 — 하나만 활성. 활성 상태에서 다시 클릭하면 해제된다(2026-07-04). */
 function DefaultToggle({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      aria-label={active ? '기본 지정됨' : '기본으로 지정'}
-      title={active ? '기본 지정됨' : '기본으로 지정'}
+      aria-label={active ? '기본 해제' : '기본으로 지정'}
+      title={active ? '다시 클릭하면 기본 해제' : '기본으로 지정'}
       className={cn(
         'flex h-6 shrink-0 items-center rounded-full border px-2 text-[11px] font-medium transition-colors',
         active

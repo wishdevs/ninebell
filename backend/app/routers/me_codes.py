@@ -163,7 +163,8 @@ async def reorder_favorites(body: ReorderIn, user: CurrentUser, db: DbSession) -
 
 @router.post("/favorites/{fav_id}/default")
 async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
-    """대상 즐겨찾기를 그 (user,kind) 의 '기본'으로 지정 — 기존 default 는 해제(단일성 보장).
+    """대상 즐겨찾기의 '기본'을 **토글** — 지정 시 같은 kind 의 기존 default 해제(단일성),
+    이미 기본이면 해제(사용자 요청 2026-07-04: 다시 클릭하면 해제).
 
     소유자 스코프. 대상이 없거나 소유자 불일치면 404. 갱신된 항목을 반환.
     """
@@ -180,6 +181,11 @@ async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
     ).scalar_one_or_none()
     if target is None:
         return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
+    if target.is_default:
+        # 토글 해제 — 그 kind 의 기본 없음 상태가 된다(에이전트는 비용구분 기본 등 폴백 사용).
+        target.is_default = False
+        await db.commit()
+        return _fav_dict(target)
     # 같은 (user,kind) 의 기존 default 를 모두 해제한 뒤 대상만 true — 한 kind 당 1개만 유지.
     siblings = (
         (

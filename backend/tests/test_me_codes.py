@@ -412,3 +412,23 @@ async def test_sync_catalog_projects_wbs_rows(sm, monkeypatch):
     assert by_code["PJ1|W1"].extra["wbsNm"] == "정비"
     assert by_code["PJ1|W1"].extra["loc"] == "부산"
     assert by_code["PJ1|W1"].extra["pjtNo"] == "PJ1"
+
+
+async def test_default_favorite_toggles_off_on_second_click(client, make_user, auth_as):
+    """기본지정을 다시 클릭하면 해제된다(토글, 2026-07-04)."""
+    uid = await make_user("u-toggle", "user")
+    auth_as(uid)
+    r = await client.post(
+        "/me/favorites",
+        json={"kind": "project", "code": "800|800", "name": "판매관리비", "extra": {"wbsNo": "800"}},
+    )
+    fav_id = r.json()["id"]
+    # 지정 → isDefault true
+    r1 = await client.post(f"/me/favorites/{fav_id}/default")
+    assert r1.status_code == 200 and r1.json()["isDefault"] is True
+    # 다시 클릭 → 해제
+    r2 = await client.post(f"/me/favorites/{fav_id}/default")
+    assert r2.status_code == 200 and r2.json()["isDefault"] is False
+    # 목록에서도 해제 확인
+    favs = (await client.get("/me/favorites", params={"kind": "project"})).json()["items"]
+    assert all(not f["isDefault"] for f in favs)

@@ -347,6 +347,41 @@ def _pick_project(o: dict) -> dict:
 
 # 비용구분 → 예산계정 접두사. 팀의 비용구분이 이 접두사 계정을 우선하게 한다.
 _COST_PREFIX = {"판관비": "(판)", "제조원가": "(제)"}
+# 비용구분 → 기본 프로젝트 번호(PJT_NO). ERP 에 비용구분과 동명의 프로젝트가 존재
+# (500|500 '제조원가' / 800|800 '판매관리비', 카탈로그 실측 2026-07-04). 팀 비용구분에 따라
+# 프로젝트 기본값을 이 프로젝트로 프리셀렉트한다(사용자 확정).
+_COST_PROJECT_NO = {"제조원가": "500", "판관비": "800"}
+
+
+async def _load_cost_project(cost_type: str | None) -> dict | None:
+    """비용구분 기본 프로젝트({code,name,wbsNo,wbsNm}) — 카탈로그(kind='project')에서 조회.
+
+    제조원가→PJT_NO 500, 판관비→800. 카탈로그에 없으면 None(기존 기본지정 즐겨찾기 폴백).
+    """
+    pjt_no = _COST_PROJECT_NO.get(cost_type or "")
+    if not pjt_no:
+        return None
+    async with get_sessionmaker()() as s:
+        rows = (
+            await s.execute(
+                select(ErpCodeCatalog).where(
+                    ErpCodeCatalog.kind == "project",
+                    ErpCodeCatalog.code.like(f"{pjt_no}|%"),
+                )
+            )
+        ).scalars().all()
+    if not rows:
+        return None
+    # WBS 행이 여럿이면 wbsNo 오름차순 첫 행(500|500 처럼 프로젝트 번호와 동일한 WBS 우선).
+    rows = sorted(rows, key=lambda r: ((r.extra or {}).get("wbsNo") or ""))
+    exact = next((r for r in rows if ((r.extra or {}).get("wbsNo") or "") == pjt_no), rows[0])
+    extra = exact.extra or {}
+    return {
+        "code": exact.code,
+        "name": exact.name,
+        "wbsNo": extra.get("wbsNo", ""),
+        "wbsNm": extra.get("wbsNm", ""),
+    }
 
 
 async def _prefill_selections(
@@ -358,6 +393,7 @@ async def _prefill_selections(
     mine_units: list[dict],
     project_favs: list[dict],
     cost_prefix: str | None = None,
+    cost_project: dict | None = None,
 ) -> dict[int, dict]:
     """행별 예산단위·프로젝트 프리셀렉트 — AI 추천이 확신하면 그 항목, 아니면 기본지정 폴백.
 
@@ -410,7 +446,9 @@ async def _prefill_selections(
         or next((c for c in budget_favs if c.get("isDefault")), None)
         or (next((c for c in budget_candidates if _prefix_ok(c)), None) if cost_prefix else None)
     )
-    default_project = next((c for c in project_favs if c.get("isDefault")), None)
+    # 프로젝트 기본: 기본지정 즐겨찾기(명시 설정) 우선, 없으면 팀 비용구분 프로젝트
+    # (제조원가→500 / 판관비→800, 사용자 확정 2026-07-04).
+    default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
 
     out: dict[int, dict] = {}
     for idx in range(len(rows_list)):
@@ -562,9 +600,21 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 " (관리 페이지에서 '기본'을 지정하세요).",
                 "info",
             )
+        # 팀 비용구분 기본 프로젝트(제조원가→500/판관비→800) — 기본지정 즐겨찾기가 없을 때 폴백.
+        cost_project = None
+        try:
+            cost_project = await _load_cost_project(cost_type)
+        except Exception:  # noqa: BLE001 — 기본값 조회 실패로 런을 죽이지 않는다.
+            logger.exception("card-collect cost project load failed")
+        if cost_project and not any(f.get("isDefault") for f in project_favs):
+            await emit_log(
+                events,
+                f"팀 비용구분 '{cost_type}' → 기본 프로젝트 {cost_project['name']}({cost_project['wbsNo']}) 프리셀렉트.",
+                "info",
+            )
         preselect = await _prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
-            cost_prefix=cost_prefix,
+            cost_prefix=cost_prefix, cost_project=cost_project,
         )
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note

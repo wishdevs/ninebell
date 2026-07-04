@@ -253,3 +253,38 @@ async def test_collect_rows_recommend_exception_uses_default_fallback(monkeypatc
         assert frame["rows"][i]["budgetSource"] == "default"
 
     assert (await _drain_and_finish(task, frame, 2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
+
+
+async def test_prefill_cost_project_default_fallback():
+    """프로젝트 기본: 기본지정 즐겨찾기 없으면 팀 비용구분 프로젝트(500/800)로 폴백."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    settings = SimpleNamespace(gemini_api_key="")  # AI 스킵 → 기본 폴백 경로.
+    rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
+    cost_project = {"code": "800|800", "name": "판매관리비", "wbsNo": "800", "wbsNm": "판매관리비"}
+    out = await _prefill_selections(
+        asyncio.Queue(), settings, rows_list, {0: "적요"},
+        [], [], [],  # 즐겨찾기 없음(기본지정 없음)
+        cost_project=cost_project,
+    )
+    assert out[1]["projectSource"] == "default"
+    assert out[1]["project"]["code"] == "800|800" and out[1]["project"]["wbsNo"] == "800"
+
+
+async def test_prefill_explicit_default_favorite_beats_cost_project():
+    """기본지정 즐겨찾기(명시 설정)가 있으면 비용구분 프로젝트보다 우선한다."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    settings = SimpleNamespace(gemini_api_key="")
+    rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
+    favs = [{"code": "P9|W9", "name": "내프로젝트", "wbsNo": "W9", "wbsNm": "", "isDefault": True}]
+    out = await _prefill_selections(
+        asyncio.Queue(), settings, rows_list, {0: "적요"},
+        [], [], favs,
+        cost_project={"code": "800|800", "name": "판매관리비", "wbsNo": "800", "wbsNm": ""},
+    )
+    assert out[1]["project"]["code"] == "P9|W9"  # 명시 기본지정 우선
