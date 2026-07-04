@@ -174,3 +174,58 @@ async def test_wait_picker_closed_returns_when_gone():
     page = _PickerSeqPage([4, 4, -1])  # 열림→열림→닫힘
     await steps._wait_picker_closed(page, cap_ms=1_500, interval_ms=150)
     assert page.polls == 3
+
+
+class _CardSubPage:
+    """카드 서브팝업 fake — 돋보기·by-name·전체선택·적용을 시퀀스로 흉내낸다."""
+
+    def __init__(self, *, matched: int, total: int = 5):
+        self._matched = matched
+        self._total = total
+        self.by_name_called = False
+        self.all_called = False
+        self.clicks: list[tuple] = []
+        self.mouse = self  # click 을 자기 자신에서 받음
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def click(self, x, y):  # mouse.click
+        self.clicks.append((x, y))
+
+    async def evaluate(self, script, arg=None):
+        if script == js.CARD_SEARCH_BTN_JS:
+            return {"x": 1, "y": 2}  # 돋보기 버튼
+        if script == js.CARD_SUB_SELECT_BY_NAME_JS:
+            self.by_name_called = True
+            return {"ok": True, "n": self._total, "matched": self._matched, "checked": self._matched}
+        if script == js.CARD_SUB_SELECT_ALL_JS:
+            self.all_called = True
+            return {"ok": True, "n": self._total, "checked": self._total}
+        if script == js.CARD_SUB_APPLY_BTN_JS:
+            return {"x": 3, "y": 4}
+        return None
+
+
+async def test_select_cards_by_name_when_match():
+    """본인 이름과 일치하는 카드가 있으면 그 카드만 선택(by='name')."""
+    page = _CardSubPage(matched=2)
+    r = await steps.select_all_cards(page, owner_name="이트라이브2")
+    assert r["ok"] and r["by"] == "name" and r["checked"] == 2
+    assert page.by_name_called and not page.all_called  # 전체선택 미호출
+
+
+async def test_select_cards_falls_back_to_all_when_no_match():
+    """본인 카드 0건이면 기존 로직(전체선택)으로 폴백(by='all')."""
+    page = _CardSubPage(matched=0)
+    r = await steps.select_all_cards(page, owner_name="이트라이브2")
+    assert r["ok"] and r["by"] == "all"
+    assert page.by_name_called and page.all_called  # 매칭 0 → 전체선택 폴백
+
+
+async def test_select_cards_all_when_no_owner():
+    """owner_name 미지정이면 by-name 미호출·전체선택."""
+    page = _CardSubPage(matched=3)
+    r = await steps.select_all_cards(page, owner_name=None)
+    assert r["ok"] and r["by"] == "all"
+    assert not page.by_name_called and page.all_called

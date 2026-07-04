@@ -61,9 +61,13 @@ async def set_acct_date(page: Any, ymd_compact: str, expect_display: str) -> dic
     return {"ok": True, "display": r.get("display")}
 
 
-# ── 카드 전체선택 ────────────────────────────────────────────────────────────────
-async def select_all_cards(page: Any) -> dict:
-    """카드번호 돋보기 → '카드' 서브팝업 전체선택 → 적용. 반환 {ok, n}.
+# ── 카드 선택(본인 카드 우선, 없으면 전체) ─────────────────────────────────────────
+async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
+    """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by}.
+
+    선택 규칙(사용자 확정 2026-07-04): owner_name(=로그인ID=사용자명)이 주어지면 소유자
+    (CARD_OWNR_NM)/관리사원(KOR_NM)이 그 이름과 일치하는 카드만 선택하고, 일치 0건이면
+    기존 로직인 **전체선택**으로 폴백한다(공용카드·빈 소유자 대비). by='name'|'all'.
 
     ⚠ 증빙유형 01 적용 직후 법인카드 팝업이 **로딩 중**('데이터 처리 중')일 수 있다 — 돋보기
     버튼 출현을 폴링(실측 2026-07-04: 폴링 세분화 후 '돋보기 버튼 없음' 레이스).
@@ -79,23 +83,35 @@ async def select_all_cards(page: Any) -> dict:
     if not box:
         return {"ok": False, "reason": "돋보기 버튼 없음(법인카드 팝업 아님?)"}
     await page.mouse.click(box["x"], box["y"])
-    # 서브팝업 그리드 준비 폴링(고정 1.5s 대체) — 전체선택 JS 가 성공할 때까지 재시도.
+    # 서브팝업 그리드 준비 폴링(고정 1.5s 대체).
+    by = "all"
     sel: dict = {}
     waited = 0
     while waited < 6_000:
         await page.wait_for_timeout(300)
         waited += 300
-        sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
-        if sel.get("ok"):
-            break
+        if owner_name and (owner_name or "").strip():
+            # 본인 이름 매칭 우선 — matched>0 이면 그것으로 확정, matched==0 이면 전체선택 폴백.
+            r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owner_name)
+            if r.get("ok") and r.get("n", 0) > 0:
+                if r.get("matched", 0) > 0:
+                    sel, by = r, "name"
+                    break
+                sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)  # 매칭 0 → 전체선택
+                if sel.get("ok"):
+                    break
+        else:
+            sel = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
+            if sel.get("ok"):
+                break
     if not sel.get("ok"):
-        return {"ok": False, "reason": f"서브팝업 전체선택 실패: {sel}"}
+        return {"ok": False, "reason": f"서브팝업 카드선택 실패: {sel}"}
     apply_box = await page.evaluate(js.CARD_SUB_APPLY_BTN_JS)
     if not apply_box:
         return {"ok": False, "reason": "서브팝업 '적용' 버튼 없음", "n": sel.get("n")}
     await page.mouse.click(apply_box["x"], apply_box["y"])
     await page.wait_for_timeout(1_000)
-    return {"ok": True, "n": sel.get("n"), "checked": sel.get("checked")}
+    return {"ok": True, "n": sel.get("n"), "checked": sel.get("checked"), "by": by}
 
 
 # ── 승인일 세팅 + 조회 ───────────────────────────────────────────────────────────

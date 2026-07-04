@@ -368,3 +368,33 @@ SET_ACCT_DATE_JS = """(ymd) => {
     return { ok: true, display: String(disp.ACTG_DT || '') };
   } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
 }"""
+
+
+# '카드' 서브팝업에서 소유자(CARD_OWNR_NM) 또는 관리사원(KOR_NM)이 owner 와 정규화 일치하는
+# 행만 체크(본인 카드 우선 선택, 사용자 요청 2026-07-04). 반환 {ok, n(전체), matched(체크수)}.
+# matched==0 이면 호출부가 기존 전체선택으로 폴백한다(빈 소유자/공용카드 대비).
+CARD_SUB_SELECT_BY_NAME_JS = """(owner) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,'').toLowerCase();
+  const key = c(owner);
+  const sub = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(String((w.querySelector('.k-window-title')||{}).innerText||'').replace(/\\s+/g,' ').trim())).slice(-1)[0];
+  if (!sub) return { ok:false, reason:'no-sub' };
+  try {
+    const g = window.jQuery(sub.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    if (n <= 0) return { ok:true, n:0, matched:0 };
+    const rows = ds.getJsonRows(0, n-1);
+    try { g.checkAll(false); } catch(e) {}
+    let matched = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      if (key && (c(r.CARD_OWNR_NM) === key || c(r.KOR_NM) === key)) {
+        g.setChecked ? g.setChecked(i, true) : g.checkRow && g.checkRow(i, true);
+        matched++;
+      }
+    }
+    let checked=-1; try { checked=(g.getCheckedRows()||[]).length; } catch(e){}
+    return { ok:true, n, matched, checked };
+  } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
+}"""

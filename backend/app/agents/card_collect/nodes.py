@@ -94,11 +94,18 @@ def make_select_all_cards_node():
         page = state["page"]
         await emit_step(events, "select_all_cards", "running")
         t0 = time.monotonic()
-        r = await steps.select_all_cards(page)
+        # 로그인ID(=사용자명)와 일치하는 본인 카드만 우선 선택, 없으면 전체선택 폴백.
+        owner = state.get("userid")
+        r = await steps.select_all_cards(page, owner_name=owner)
         if not r.get("ok"):
             await emit_step(events, "select_all_cards", "failed")
-            return {"error": f"카드 전체선택 실패: {r.get('reason')}"}
-        await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 완료.", "ok")
+            return {"error": f"카드 선택 실패: {r.get('reason')}"}
+        if r.get("by") == "name":
+            await emit_log(
+                events, f"본인('{owner}') 카드 {r.get('checked')}장 선택·적용 완료.", "ok"
+            )
+        else:
+            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 완료(본인 카드 없음).", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "select_all_cards", "done", _ms(t0))
         return {}
@@ -1035,7 +1042,7 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": state["error"]}
 
-        r = await steps.select_all_cards(page)
+        r = await steps.select_all_cards(page, owner_name=state.get("userid"))
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}

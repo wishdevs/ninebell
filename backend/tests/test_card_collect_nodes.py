@@ -359,8 +359,8 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     async def _ok_close(page):
         return {"ok": True}
 
-    async def _ok_cards(page):
-        return {"ok": True, "n": 5, "checked": 5}
+    async def _ok_cards(page, owner_name=None):
+        return {"ok": True, "n": 5, "checked": 5, "by": "all"}
 
     async def _ok_period(page, s, e):
         return {"ok": True}
@@ -485,7 +485,7 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     async def _ok_close(page):
         return {"ok": True}
 
-    async def _ok_cards(page):
+    async def _ok_cards(page, owner_name=None):
         return {"ok": True}
 
     async def _ok_period(page, s, e):
