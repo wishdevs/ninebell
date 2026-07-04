@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .screencast import screencast_pump
@@ -30,6 +31,45 @@ BrowserFactory = Callable[[], Awaitable[Any]]
 # 라이브 워크플로우 페이지 뷰포트. Playwright 기본값(1280×720)은 옴니솔 그리드형 UI에 좁아
 # 셀렉터가 화면 밖으로 밀릴 수 있어, 탐색 단계에서 검증된 크기(1440×900)로 고정한다.
 LIVE_VIEWPORT: dict[str, int] = {"width": 1440, "height": 900}
+
+# ── 세션 워밍(storage_state 캐시) — Phase 2b 속도 최적화 ─────────────────────────
+# 인증 쿠키(세션 스코프)를 userid 별로 **RAM 에만** 보관한다(디스크 저장 금지 — 세션 토큰).
+# 프로브 실측(2026-07-04): 같은 상태로 컨텍스트 3개 동시 사용해도 ERP 킥 없음, 웜 진입 ~4s
+# (콜드 로그인+유형전환+메뉴 ≈ 13-20s 대체). 만료/무효 상태여도 login 노드가 로그인 폼을
+# 보면 정상 로그인하므로(자가 치유) 이 캐시는 **순수 최적화**이며 정합성에 영향 없다.
+_STATE_TTL_S = 1800.0  # 30분 — ERP 서버 세션 만료 전 재사용 확률을 높이는 보수적 TTL.
+_state_cache: dict[str, tuple[float, dict]] = {}  # userid → (saved_at monotonic, storage_state)
+# 로그인 폼 셀렉터(옴니솔 nbkit.omnisol.selectors.LOGIN_USERID 와 동일 값) — 러너는 워크플로우
+# 무관 계층이라 문자열로만 참조한다. 폼이 없으면 인증된 세션으로 보고 상태를 캐시한다.
+_LOGIN_FORM_SELECTOR = "#userid"
+
+
+def _cached_state(userid: str | None) -> dict | None:
+    """TTL 내 storage_state 반환(만료 시 제거·None)."""
+    if not userid:
+        return None
+    hit = _state_cache.get(userid)
+    if hit is None:
+        return None
+    saved_at, state = hit
+    if time.monotonic() - saved_at > _STATE_TTL_S:
+        _state_cache.pop(userid, None)
+        return None
+    return state
+
+
+async def _save_state(page: Any, userid: str | None) -> None:
+    """런 종료 시 인증돼 있으면 storage_state 를 캐시(다음 런 웜 진입). 실패는 조용히 무시."""
+    if page is None or not userid:
+        return
+    try:
+        authed = await page.evaluate(
+            "(sel) => !document.querySelector(sel)", _LOGIN_FORM_SELECTOR
+        )
+        if authed:
+            _state_cache[userid] = (time.monotonic(), await page.context.storage_state())
+    except Exception:  # noqa: BLE001 — 캐시 갱신 실패가 런 결과를 바꿔선 안 된다.
+        logger.debug("storage_state 캐시 갱신 실패(무시)", exc_info=True)
 
 
 async def run_workflow(
@@ -54,11 +94,24 @@ async def run_workflow(
     limiter = semaphore or contextlib.nullcontext()
     async with limiter:
         browser = await browser_factory()
-        try:
-            page = await browser.new_page(viewport=LIVE_VIEWPORT)
-        except Exception:
-            logger.warning("run_workflow: new_page 실패 — 페이지 없이 진행")
-            page = None
+        page = None
+        # 세션 워밍: 캐시된 storage_state 가 있으면 인증 쿠키를 실은 컨텍스트로 시작 —
+        # login 노드가 로그인 폼 없이 통과(웜 진입). 실패는 콜드 경로로 폴백.
+        warm = _cached_state(creds.get("userid"))
+        if warm is not None:
+            try:
+                ctx = await browser.new_context(storage_state=warm, viewport=LIVE_VIEWPORT)
+                page = await ctx.new_page()
+                logger.info("run_workflow: 세션 워밍 컨텍스트 사용(userid=%s)", creds.get("userid"))
+            except Exception:
+                logger.warning("세션 워밍 컨텍스트 실패 — 콜드 경로 폴백", exc_info=True)
+                page = None
+        if page is None:
+            try:
+                page = await browser.new_page(viewport=LIVE_VIEWPORT)
+            except Exception:
+                logger.warning("run_workflow: new_page 실패 — 페이지 없이 진행")
+                page = None
 
         state: dict = {
             "page": page,
@@ -108,6 +161,8 @@ async def run_workflow(
                 pass
             except Exception:
                 logger.debug("runner task 종료 예외 무시", exc_info=True)
+            # 브라우저 닫기 전에 인증 세션 상태를 캐시(다음 런 웜 진입). 실패는 무시.
+            await _save_state(page, creds.get("userid"))
             try:
                 await browser.close()
             except Exception:

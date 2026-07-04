@@ -37,6 +37,12 @@ async def omnisol_login(
     if not (userid and password):
         raise AuthError("자격증명이 비어 있습니다.")
     await page.goto(f"{base.rstrip('/')}/", wait_until="networkidle", timeout=timeout_ms)
+    # 세션 워밍(storage_state 재사용) 경로: 이미 인증된 컨텍스트면 로그인 폼이 없다 —
+    # 이때 fill 을 시도하면 타임아웃으로 실패하므로 즉시 성공 처리(프로브 실측 2026-07-04:
+    # 웜 진입 ~4s, ERP 동시세션 킥 없음). 만료된 세션이면 폼이 다시 보여 정상 로그인한다.
+    if await is_authenticated(page, login_selector=selectors.LOGIN_USERID):
+        logger.info("옴니솔 세션 재사용(웜 진입): userid=%s", userid)
+        return
     await page.fill(selectors.LOGIN_USERID, userid)
     await page.fill(selectors.LOGIN_PASSWORD, password)
     await page.click(selectors.LOGIN_SUBMIT)
