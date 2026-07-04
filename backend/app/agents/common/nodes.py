@@ -164,8 +164,15 @@ def make_open_evdn_node():
             shown = await page.evaluate(js_lib.OPEN_EVDN_EDITOR_JS)
             if not shown:
                 continue
-            await page.wait_for_timeout(700)  # 에디터가 증빙 셀로 렌더·정착할 시간
-            rect = await page.evaluate(js_lib.EVDN_EDITOR_MAGNIFIER_RECT_JS)
+            # 고정 700ms 대기 대신 돋보기 rect 가 준비되는 즉시 클릭 — 폴링(상한 1s, 동작 동일).
+            rect = None
+            waited = 0
+            while waited < 1_000:
+                await page.wait_for_timeout(100)
+                waited += 100
+                rect = await page.evaluate(js_lib.EVDN_EDITOR_MAGNIFIER_RECT_JS)
+                if rect:
+                    break
             if not rect:
                 continue
             await mouse_click(page, rect["x"], rect["y"])  # 돋보기(캔버스) 클릭

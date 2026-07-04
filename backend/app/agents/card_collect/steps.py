@@ -619,10 +619,14 @@ async def close_card_popup(page: Any) -> dict:
     if not box:
         return {"ok": False, "reason": "'닫기' 버튼 없음"}
     await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_500)
-    if await page.evaluate(js.CARD_WIN_EXISTS_JS):
-        return {"ok": False, "reason": "닫기 클릭 후에도 팝업이 남아 있음"}
-    return {"ok": True}
+    # 고정 1.5s 대기 대신 팝업이 닫히는 즉시 진행 — 폴링(상한 1.5s 유지, 동작 동일).
+    waited = 0
+    while waited < 1_500:
+        await page.wait_for_timeout(150)
+        waited += 150
+        if not await page.evaluate(js.CARD_WIN_EXISTS_JS):
+            return {"ok": True}
+    return {"ok": False, "reason": "닫기 클릭 후에도 팝업이 남아 있음"}
 
 
 # ── 행 반영(일괄적용, 해당 행들만 체크) / 저장(F7) ─────────────────────────────────
