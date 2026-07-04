@@ -82,7 +82,13 @@ async def open_user_panel(page: Any) -> None:
         await page.click(selectors.AVATAR, timeout=4_000)
     except Exception:  # noqa: BLE001 — 실클릭 실패 시 JS 폴백
         await page.evaluate(js_lib.AVATAR_CLICK_JS)
-    await page.wait_for_timeout(1_500)
+    # 고정 1.5s 대신 유형 선택기가 읽히는(패널 렌더 완료) 즉시 진행 — 폴링(상한 1.5s 유지).
+    waited = 0
+    while waited < 1_500:
+        await page.wait_for_timeout(150)
+        waited += 150
+        if await safe_evaluate(page, js_lib.USER_TYPE_READ_JS, default="?") not in ("", "?"):
+            return
 
 
 async def _switch_user_type_real(page: Any, target: str) -> bool:
