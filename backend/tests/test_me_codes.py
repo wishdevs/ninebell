@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 import app.routers.me_codes as me_codes
 import app.services.code_sync as code_sync
-from app.models import CardSeedSelection, ErpCodeCatalog, User
+from app.models import CardLearnedSelection, CardSeedSelection, ErpCodeCatalog, User
 
 
 async def _seed_catalog(sm, rows: list[dict]) -> None:
@@ -207,6 +207,46 @@ async def test_catalog_query_and_envelope(client, make_user, auth_as, sm):
     assert [i["code"] for i in filtered.json()["items"]] == ["P100"]
     by_code = await client.get("/me/catalog?kind=project&q=P200")
     assert [i["code"] for i in by_code.json()["items"]] == ["P200"]
+
+
+async def _add_learned(sm, uid, merchants: list[str]) -> list[str]:
+    ids: list[str] = []
+    async with sm() as s:
+        for m in merchants:
+            row = CardLearnedSelection(user_id=uid, norm_merchant=m, merchant=m, note="x", count=1)
+            s.add(row)
+            await s.flush()
+            ids.append(str(row.id))
+        await s.commit()
+    return ids
+
+
+async def test_card_learning_delete_one_and_clear(client, make_user, auth_as, sm):
+    """개인 학습 행별 삭제(204) + 전체 삭제({deleted:n}) — 본인 데이터만."""
+    uid = await make_user("learn-del", "user")
+    auth_as(uid)
+    ids = await _add_learned(sm, uid, ["가맹A", "가맹B"])
+
+    r = await client.delete(f"/me/card-learning/{ids[0]}")
+    assert r.status_code == 204
+    assert len((await client.get("/me/card-learning")).json()["items"]) == 1
+
+    cleared = await client.delete("/me/card-learning")
+    assert cleared.json()["deleted"] == 1
+    assert (await client.get("/me/card-learning")).json()["items"] == []
+
+
+async def test_card_learning_delete_others_returns_404(client, make_user, auth_as, sm):
+    """남의 학습 항목은 삭제할 수 없다(소유자 스코프 404)."""
+    victim = await make_user("learn-victim", "user")
+    ids = await _add_learned(sm, victim, ["가맹X"])
+    attacker = await make_user("learn-attacker", "user")
+    auth_as(attacker)
+    r = await client.delete(f"/me/card-learning/{ids[0]}")
+    assert r.status_code == 404
+    # 대상은 그대로 남는다.
+    auth_as(victim)
+    assert len((await client.get("/me/card-learning")).json()["items"]) == 1
 
 
 async def test_card_seed_list_and_search(client, make_user, auth_as, sm):

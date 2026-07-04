@@ -166,6 +166,17 @@ export async function fetchCardLearning(): Promise<LearnedSelection[]> {
   return res.items ?? [];
 }
 
+/** `DELETE /me/card-learning/{id}` — 개인 학습 1건 삭제(본인 것만). */
+export function deleteCardLearning(id: string): Promise<void> {
+  return api.delete<void>(`/me/card-learning/${encodeURIComponent(id)}`);
+}
+
+/** `DELETE /me/card-learning` — 개인 학습 전체 삭제. 반환 삭제 건수. */
+export async function clearCardLearning(): Promise<number> {
+  const res = await api.delete<{ deleted?: number }>('/me/card-learning');
+  return res?.deleted ?? 0;
+}
+
 // ── 전사 기초자료(seed, 공통) ─────────────────────────────────────────────────
 export interface SeedSelection {
   id: string;
@@ -194,9 +205,7 @@ export async function fetchCardSeed(
   if (opts.limit != null) p.set('limit', String(opts.limit));
   if (opts.offset != null) p.set('offset', String(opts.offset));
   const qs = p.toString();
-  const res = await api.get<Partial<SeedResult>>(
-    `/me/card-learning/seed${qs ? `?${qs}` : ''}`,
-  );
+  const res = await api.get<Partial<SeedResult>>(`/me/card-learning/seed${qs ? `?${qs}` : ''}`);
   return {
     total: res.total ?? 0,
     limit: res.limit ?? opts.limit ?? 50,

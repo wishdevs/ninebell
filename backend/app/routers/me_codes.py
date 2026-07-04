@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
@@ -248,6 +248,37 @@ async def list_card_learning(user: CurrentUser, db: DbSession) -> dict:
             for r in rows
         ]
     }
+
+
+@router.delete("/card-learning", status_code=status.HTTP_200_OK)
+async def clear_card_learning(user: CurrentUser, db: DbSession) -> dict:
+    """현재 사용자의 개입 학습 전체 삭제 — 개발 디버그용. 본인 데이터만. 반환 {deleted:n}."""
+    res = await db.execute(
+        delete(CardLearnedSelection).where(CardLearnedSelection.user_id == user.id)
+    )
+    await db.commit()
+    return {"deleted": int(res.rowcount or 0)}
+
+
+@router.delete("/card-learning/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_card_learning(item_id: str, user: CurrentUser, db: DbSession):
+    """개입 학습 1건 삭제(소유자 스코프) — 대상 없거나 소유자 불일치면 404."""
+    try:
+        parsed = uuid.UUID(item_id)
+    except ValueError:
+        return JSONResponse({"error": "학습 항목을 찾을 수 없습니다."}, status_code=404)
+    row = (
+        await db.execute(
+            select(CardLearnedSelection).where(
+                CardLearnedSelection.id == parsed, CardLearnedSelection.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return JSONResponse({"error": "학습 항목을 찾을 수 없습니다."}, status_code=404)
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/card-learning/seed")
