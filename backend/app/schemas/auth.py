@@ -12,6 +12,8 @@ from app.schemas.common import CamelModel
 class LoginBody(BaseModel):
     userid: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=200)
+    # '로그인 상태 유지' — true 면 연장 세션(remember_ttl), false/미지정이면 기본(12h).
+    remember: bool = False
 
 
 class SignupBody(BaseModel):

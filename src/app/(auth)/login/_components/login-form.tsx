@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,8 @@ import { ApiError, api } from '@/lib/api/client';
 
 /** 회원가입 유도 시 sessionStorage에 넘길 pending 정보 키. */
 const SIGNUP_STORAGE_KEY = 'nb_signup';
+/** '아이디 저장' 프리필 키(localStorage). 비밀번호는 절대 저장하지 않는다. */
+const REMEMBERED_ID_KEY = 'nb_remembered_userid';
 
 /**
  * `POST /auth/login` 응답 계약.
@@ -36,16 +38,30 @@ export function LoginForm() {
   const router = useRouter();
   const [userid, setUserid] = useState('');
   const [password, setPassword] = useState('');
+  const [saveId, setSaveId] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // 마운트 시 저장된 아이디를 프리필(있으면 '아이디 저장'도 체크 상태로 복원).
+  useEffect(() => {
+    const saved = localStorage.getItem(REMEMBERED_ID_KEY);
+    if (saved) {
+      setUserid(saved);
+      setSaveId(true);
+    }
+  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) return;
     setError(null);
     setSubmitting(true);
+    // 아이디 저장은 제출 시점 기준으로 반영(비밀번호는 저장하지 않는다).
+    if (saveId) localStorage.setItem(REMEMBERED_ID_KEY, userid.trim());
+    else localStorage.removeItem(REMEMBERED_ID_KEY);
     try {
-      const res = await api.post<LoginResponse>('/auth/login', { userid, password });
+      const res = await api.post<LoginResponse>('/auth/login', { userid, password, remember });
       if ('signupRequired' in res && res.signupRequired) {
         // 첫 접속 — 세션 미발급. prefill+토큰을 넘겨 회원가입 단계로 유도한다.
         sessionStorage.setItem(
@@ -109,6 +125,27 @@ export function LoginForm() {
           required
         />
       </FormField>
+
+      <div className="flex items-center justify-between gap-4">
+        <label className="text-foreground-secondary flex cursor-pointer items-center gap-2 text-[length:var(--text-body-sm)]">
+          <input
+            type="checkbox"
+            className="accent-accent h-4 w-4 cursor-pointer"
+            checked={saveId}
+            onChange={(event) => setSaveId(event.target.checked)}
+          />
+          <span>아이디 저장</span>
+        </label>
+        <label className="text-foreground-secondary flex cursor-pointer items-center gap-2 text-[length:var(--text-body-sm)]">
+          <input
+            type="checkbox"
+            className="accent-accent h-4 w-4 cursor-pointer"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+          />
+          <span>로그인 상태 유지</span>
+        </label>
+      </div>
 
       <Button type="submit" disabled={submitting}>
         {submitting ? (

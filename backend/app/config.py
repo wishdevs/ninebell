@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     auth_secret: str = "dev-insecure-change-me-please"
     jwt_algorithm: str = "HS256"
     session_ttl_hours: int = 12
+    # '로그인 상태 유지' 체크 시의 연장 세션 수명(기본 30일). 미체크는 session_ttl_hours.
+    remember_ttl_hours: int = 24 * 30
     cookie_secure: bool = False
 
     # --- 더존 옴니솔 ERP ---
@@ -79,6 +81,10 @@ class Settings(BaseSettings):
     @property
     def session_ttl_seconds(self) -> int:
         return self.session_ttl_hours * 3600
+
+    @property
+    def remember_ttl_seconds(self) -> int:
+        return self.remember_ttl_hours * 3600
 
 
 @lru_cache

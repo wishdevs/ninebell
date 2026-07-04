@@ -44,17 +44,28 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _issue_session(
-    request: Request, response: Response, *, user_id, userid: str, password: str, settings
+    request: Request,
+    response: Response,
+    *,
+    user_id,
+    userid: str,
+    password: str,
+    settings,
+    remember: bool = False,
 ) -> None:
-    """세션 JWT 쿠키를 발급하고 id/pw 를 CredCache 에 jti 키로 보관."""
-    token, jti = create_session_token(str(user_id))
+    """세션 JWT 쿠키를 발급하고 id/pw 를 CredCache 에 jti 키로 보관.
+
+    remember=True 면 '로그인 상태 유지' — 쿠키/토큰/자격증명 수명을 remember_ttl 로 연장한다.
+    """
+    ttl = settings.remember_ttl_seconds if remember else settings.session_ttl_seconds
+    token, jti = create_session_token(str(user_id), ttl_seconds=ttl)
     # 재로그인 고아 정리: 같은 계정의 이전 jti 자격증명을 먼저 무효화(last-login-wins).
     request.app.state.cred_cache.evict_user(userid)
-    request.app.state.cred_cache.put(jti, userid, password, settings.session_ttl_seconds)
+    request.app.state.cred_cache.put(jti, userid, password, ttl)
     response.set_cookie(
         SESSION_COOKIE,
         token,
-        max_age=settings.session_ttl_seconds,
+        max_age=ttl,
         httponly=True,
         samesite="lax",
         secure=settings.cookie_secure,
@@ -135,7 +146,8 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         )
         await db.commit()
         _issue_session(
-            request, response, user_id=user.id, userid=body.userid, password=body.password, settings=settings
+            request, response, user_id=user.id, userid=body.userid, password=body.password,
+            settings=settings, remember=body.remember,
         )
         return {"ok": True}
 
@@ -178,7 +190,8 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         )
         await db.commit()
         _issue_session(
-            request, response, user_id=user.id, userid=body.userid, password=body.password, settings=settings
+            request, response, user_id=user.id, userid=body.userid, password=body.password,
+            settings=settings, remember=body.remember,
         )
         return {"ok": True}
 

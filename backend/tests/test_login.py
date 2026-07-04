@@ -153,3 +153,29 @@ async def test_failed_omnisol_login_records_failed_and_401(client, sm, monkeypat
         assert rows[0].user_id is None
 
     get_settings.cache_clear()
+
+
+async def test_remember_me_extends_session_ttl(client, sm, monkeypatch):
+    """'로그인 상태 유지'(remember=true) → 쿠키 Max-Age 가 remember_ttl(기본 30일)로 연장."""
+    from app.config import get_settings
+
+    async def _must_not_call(browser, userid, password, base):
+        raise AssertionError("로컬 계정 로그인은 옴니솔을 호출하면 안 된다.")
+
+    _wire_state(monkeypatch, _must_not_call)
+    settings = get_settings()
+
+    # 기본(remember 미지정) → 12h.
+    r1 = await client.post("/auth/login", json={"userid": "admin", "password": "1111"})
+    assert r1.status_code == 200
+    sc1 = r1.headers["set-cookie"]
+    assert f"Max-Age={settings.session_ttl_seconds}" in sc1
+
+    # remember=true → 30일.
+    r2 = await client.post(
+        "/auth/login", json={"userid": "admin", "password": "1111", "remember": True}
+    )
+    assert r2.status_code == 200
+    sc2 = r2.headers["set-cookie"]
+    assert f"Max-Age={settings.remember_ttl_seconds}" in sc2
+    assert settings.remember_ttl_seconds > settings.session_ttl_seconds
