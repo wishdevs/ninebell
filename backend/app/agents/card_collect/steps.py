@@ -603,15 +603,24 @@ async def close_card_popup(page: Any) -> dict:
     return {"ok": True}
 
 
-# ── 행 반영(일괄적용, 해당 행만 체크) / 저장(F7) ──────────────────────────────────
-async def apply_row(page: Any, row: int) -> dict:
-    """그 행만 체크 후 '일괄적용' 클릭(그 행에 폼값 반영). ⚠ 저장 아님."""
-    chk = await page.evaluate(js.CHECK_ONLY_ROW_JS, row)
+# ── 행 반영(일괄적용, 해당 행들만 체크) / 저장(F7) ─────────────────────────────────
+async def apply_rows(page: Any, rows: list[int]) -> dict:
+    """대상 행들만 체크 후 '일괄적용' 1회 — 같은 (예산단위·프로젝트·적요) 그룹을 한 번에
+    반영한다(사용자 확정 2026-07-04). ⚠ 저장 아님(draft).
+
+    CHECK_ROWS_JS 는 checkAll(false) 후 지정 행만 체크하므로 이전 그룹 체크가 남지 않는다.
+    """
+    if not rows:
+        return {"ok": False, "reason": "일괄적용 대상 행이 없습니다"}
+    chk = await page.evaluate(js.CHECK_ROWS_JS, rows)
     if not chk.get("ok"):
         return {"ok": False, "reason": f"행 체크 실패: {chk}"}
-    # 정확히 대상 행 1건만 체크됐는지 검증 — 0건/다건이면 일괄적용이 엉뚱한 범위에 반영된다(리뷰 #6).
-    if chk.get("checked") != 1:
-        return {"ok": False, "reason": f"행 {row} 단일 체크 실패(checked={chk.get('checked')}) — 일괄적용 중단"}
+    # 정확히 대상 행들만 체크됐는지 검증 — 0건/과다면 일괄적용이 엉뚱한 범위에 반영된다(리뷰 #6).
+    if chk.get("checked") != len(rows):
+        return {
+            "ok": False,
+            "reason": f"행 체크 불일치(요청 {len(rows)}·체크 {chk.get('checked')}) — 일괄적용 중단",
+        }
     box = await page.evaluate(js.card_button_box_js("일괄적용"))
     if not box:
         return {"ok": False, "reason": "'일괄적용' 버튼 없음"}

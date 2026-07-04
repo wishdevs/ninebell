@@ -188,13 +188,13 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
     _stub_dumps(monkeypatch, units=[])
     calls: list[int] = []
 
-    async def _fake_apply(page, events, row, collected):
-        calls.append(row)
-        if row == 1:  # 2행(no=2, idx=1)만 실패로 만든다.
+    async def _fake_apply(page, events, rows, collected):
+        calls.extend(rows)
+        if 1 in rows:  # 2행(no=2, idx=1) 그룹만 실패로 만든다.
             return False, "예산단위 무매칭"
         return True, f"예산단위 {collected['예산단위']}"
 
-    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
@@ -228,11 +228,11 @@ async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
     _stub_dumps(monkeypatch, units=[])
     applied: list[int] = []
 
-    async def _fake_apply(page, events, row, collected):
-        applied.append(row)
+    async def _fake_apply(page, events, rows, collected):
+        applied.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
@@ -283,11 +283,11 @@ async def test_grid_submit_partitions_taxable_vs_nontax(monkeypatch):
     _stub_dumps(monkeypatch, units=[])
     calls: list[int] = []
 
-    async def _fake_apply(page, events, row, collected):
-        calls.append(row)
+    async def _fake_apply(page, events, rows, collected):
+        calls.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     rows = _mixed_rows()
@@ -410,11 +410,11 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
 async def test_apply_pass2_applies_matched_work(monkeypatch):
     calls: list[int] = []
 
-    async def _fake_apply(page, events, row, collected):
-        calls.append(row)
+    async def _fake_apply(page, events, rows, collected):
+        calls.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_row_fields", _fake_apply)
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
 
     doc_applied: list[list[int]] = []
 
@@ -687,3 +687,77 @@ async def test_apply_doc_skips_without_apply_when_no_taxable(monkeypatch):
     )
     assert out == {}  # 에러 없음 + pass1_doc_applied 미설정(2차는 기존 행에서 재선택)
     assert applied == []
+
+
+# ── 일괄적용 그룹핑(같은 예산단위·프로젝트·적요 → '일괄적용' 1회, 2026-07-04) ──────
+async def test_grid_submit_batches_same_key_rows_into_one_apply(monkeypatch):
+    """예산단위·프로젝트·적요가 같은 행들은 한 번의 그룹 호출(일괄적용 1회)로 반영된다."""
+    _stub_dumps(monkeypatch, units=[])
+    group_calls: list[list[int]] = []
+
+    async def _fake_apply(page, events, rows, collected):
+        group_calls.append(list(rows))
+        return True, "ok"
+
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+
+    bu = {"code": "2000", "name": "경영본부"}
+    resolve_hitl(
+        frame["id"],
+        {
+            "rows": [
+                {"no": 1, "budgetUnit": bu, "note": "회식"},
+                {"no": 2, "budgetUnit": bu, "note": "회식"},  # 1행과 같은 키 → 같은 그룹
+                {"no": 3, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "회식"},
+            ]
+        },
+    )
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out["filled"] == 3 and out["pass1_applied_idx"] == [0, 1, 2]
+    assert group_calls == [[0, 1], [2]]  # 그룹 2개 — 첫 그룹은 2행 일괄
+
+
+async def test_apply_group_fields_batches_and_skips_account_picker(monkeypatch):
+    """_apply_group_fields: 계정 피커를 열지 않고(자동), 그룹 행 전체를 apply_rows 1회로 반영."""
+    picked: list[str] = []
+    applied_rows: list[list[int]] = []
+
+    async def _note(page, row, text):
+        return {"ok": True}
+
+    async def _bg(page, combo):
+        picked.append("bg")
+        return {"ok": True, "code": "2006", "name": "인사기획팀"}
+
+    async def _pjt(page, combo):
+        picked.append("pjt")
+        return {"ok": True, "code": "0001", "name": "SPARES"}
+
+    async def _acct(page, *a, **k):
+        picked.append("acct")  # 호출되면 안 된다
+        return {"ok": True}
+
+    async def _apply(page, rows):
+        applied_rows.append(list(rows))
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "set_note", _note)
+    monkeypatch.setattr(steps, "fill_budget_codepicker", _bg)
+    monkeypatch.setattr(steps, "fill_project_codepicker", _pjt)
+    monkeypatch.setattr(steps, "fill_codepicker", _acct)
+    monkeypatch.setattr(steps, "apply_rows", _apply)
+
+    ok, detail = await cc_nodes._apply_group_fields(
+        object(),
+        asyncio.Queue(),
+        [0, 2, 5],
+        {"예산단위": "인사기획팀", "프로젝트": "SPARES", "적요": "회식"},
+    )
+    assert ok and "(3건 일괄)" in detail
+    assert picked == ["bg", "pjt"]  # 계정(acct) 피커 미호출
+    assert applied_rows == [[0, 2, 5]]  # 일괄적용 1회
