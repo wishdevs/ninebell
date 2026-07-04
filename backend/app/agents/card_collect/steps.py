@@ -10,6 +10,7 @@ import asyncio
 import calendar
 import logging
 import re
+import time
 from datetime import date
 from typing import Any
 
@@ -187,22 +188,28 @@ async def _wait_picker_rows_stable(
     ⚠ **0행은 조기 안정으로 인정하지 않는다** — 검색 직후 그리드가 잠깐 비는(재조회 중)
     상태를 '결과 0건'으로 오판해 후보 0건으로 전량 실패하던 실전 회귀(2026-07-04, 40/40행
     '예산단위 조합 무매칭 후보 0건'). 진짜 0건 검색은 cap 소진 후 0을 반환한다.
+
+    ⚠ cap/min 은 **실시간(monotonic)** 으로 잰다 — CARD_DELAY_SCALE 로 wait_for_timeout 이
+    줄어도 서버 재조회를 기다리는 실제 상한은 그대로 유지해야 한다(명목 카운터면 스케일 0.2 에서
+    실상한이 ~600ms 로 쪼그라들어 빈 그리드를 '후보 0건'으로 오판. 2026-07-04 실측). 폴 간격만
+    스케일되고 상한은 불변 → 피커는 스케일 무관하게 안전, 나머지 대기만 극단 축소 가능.
     """
     prev: int | None = None
-    waited = 0
+    prev_elapsed = 0.0
     last = -1
-    while waited < cap_ms:
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < cap_ms:
         await page.wait_for_timeout(interval_ms)
-        waited += interval_ms
         n = await page.evaluate(js.PICKER_ROWCOUNT_JS)
+        elapsed = (time.monotonic() - t0) * 1000
         if isinstance(n, int) and n >= 0:
             last = n
-            # 직전 관측(waited-interval)도 min_ms 이후 + 양수일 때만 조기 안정 인정.
-            if n > 0 and waited - interval_ms >= min_ms and n == prev:
+            # 두 관측이 모두 min_ms 이후(직전 관측 시각 기준) + 양수 + 동일할 때만 조기 안정.
+            if n > 0 and n == prev and prev_elapsed >= min_ms:
                 return n
-            prev = n
+            prev, prev_elapsed = n, elapsed
         else:
-            prev = None
+            prev, prev_elapsed = None, 0.0
     return last
 
 
