@@ -45,16 +45,25 @@ class _ScaledPage:
         return getattr(self._page, name)
 
 
-def _maybe_scale_page(page: Any) -> Any:
+def _resolve_scale(default_scale: float | None) -> float:
+    """대기 배율 결정 — env CARD_DELAY_SCALE 가 있으면 그것(테스트 override) 우선, 없으면
+    호출부가 준 per-run 기본값(card-collect=0.15 등), 둘 다 없으면 1.0(무변경)."""
+    env = os.environ.get("CARD_DELAY_SCALE")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            return 1.0
+    return default_scale if default_scale else 1.0
+
+
+def _maybe_scale_page(page: Any, default_scale: float | None = None) -> Any:
     if page is None:
         return None
-    try:
-        scale = float(os.environ.get("CARD_DELAY_SCALE", "1") or "1")
-    except ValueError:
-        scale = 1.0
+    scale = _resolve_scale(default_scale)
     if scale == 1.0 or scale <= 0:
         return page
-    logger.info("run_workflow: 대기 배율 CARD_DELAY_SCALE=%s 적용", scale)
+    logger.info("run_workflow: 대기 배율 scale=%s 적용", scale)
     return _ScaledPage(page, scale)
 
 # 브라우저 팩토리: fresh 헤드리스 브라우저를 반환하는 async 콜러블(playwright chromium 등).
@@ -114,6 +123,7 @@ async def run_workflow(
     screencast: bool = True,
     owner: str | None = None,
     run_id: str | None = None,
+    delay_scale: float | None = None,
 ) -> AsyncIterator[dict]:
     """그래프를 실행하며 노드 진행 이벤트를 스트리밍한다.
 
@@ -146,7 +156,8 @@ async def run_workflow(
                 page = None
 
         raw_page = page  # storage_state 저장은 원본 page.context 로(프록시 우회).
-        page = _maybe_scale_page(page)  # 대기 배율 프록시(CARD_DELAY_SCALE, 기본 1.0=무변경)
+        # 대기 배율 프록시. env(CARD_DELAY_SCALE) 우선, 없으면 per-run delay_scale(card-collect=0.15).
+        page = _maybe_scale_page(page, delay_scale)
 
         state: dict = {
             "page": page,

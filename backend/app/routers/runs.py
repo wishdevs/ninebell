@@ -249,6 +249,11 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             )
         params["template"] = tpl.selections or []
 
+    # card-collect 는 라이브 검증된 경로(피커 실시간 상한 견고화)라 대기 배율 0.15 를 상시 적용
+    # (진입·settle·모달 폴 축소, 168s→~135s). 다른 워크플로우는 미검증이라 무변경(1.0).
+    # env CARD_DELAY_SCALE 가 있으면 그것이 우선(테스트 override).
+    delay_scale = 0.15 if body.agentId == "card-collect" else None
+
     def producer():
         return run_workflow(
             factory(),
@@ -258,6 +263,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             semaphore=semaphore,
             owner=owner,
             run_id=tracked_run_id,
+            delay_scale=delay_scale,
         )
 
     async def on_terminal(status: str, note: object, logs: list) -> None:
