@@ -67,15 +67,37 @@ result_text, saved, zero_effect, db_check, screenshot, error}`.
 
 반환 dict: `{rows, all_ours, deleted, post_delete_count, error, screenshots}`.
 
-## 향후 루프(자동화 계획)
+## 1사이클 래퍼 — `smoke_cycle.py`
+
+위 5단계(모니터→실행→모니터확인→완료판정→삭제)를 **한 명령**으로 돌리고, 6단계(최적화)를 위해
+**단계별 ms·경고·에러**를 구조화해 출력한다.
+
+```bash
+cd backend
+.venv/bin/python e2e/smoke_cycle.py            # 실행 + (저장됐으면) 삭제 + 리포트
+.venv/bin/python e2e/smoke_cycle.py --no-delete # 저장분 남겨두고 리포트만(수동 정리 필요)
+```
+
+동작:
+1. 실행 전 최신 `agent_runs` id 를 마커로 기록('백엔드 모니터링' 켜기 = 새 런 식별).
+2. `phase1()` — 대시보드로 에이전트 실행·저장.
+3. 새 런의 `agent_runs.logs`(러너가 종료 시 DB 저장)를 읽어 **단계 running→done ts** 로 단계별
+   소요와 warn/error 를 파싱(별도 모니터 프로세스 불필요).
+4. 완료·저장 판정.
+5. 저장됐으면 `phase2()` 로 삭제.
+6. 리포트 출력(느린 순 단계 막대그래프 + 경고/에러) + `artifacts/smoke_cycle.json` 저장.
+
+리포트 예(실측 2026-07-04, 40건 실저장):
 
 ```
-1. 백엔드 모니터링 켜기(agent_runs/로그 감시)
-2. e2e_smoke.py run
-3. 모니터링 확인(단계·에러·타이밍)
-4. 완료 판정
-5. 완료면 e2e_smoke.py delete 로 정리
-6. 개선점/지연 축소/테스트 → 소스 수정 → 반복
+단계별 소요(총 168.2s) — 느린 순:
+  apply_doc         82718ms   ← 과세 40건 문서 반영(카드팝업 적용·모달)
+  collect_rows      52361ms   ← 그리드 40행 채움(그룹 피커·일괄적용)
+  save_final        14681ms   ← F7 + 저장 모달
+  set_gubun/login    ~4000ms
+  ...
+Phase2(삭제): deleted=True post_delete_count=0
 ```
 
-`phase1()`/`phase2()` 가 함수로 분리돼 있어 이 루프 래퍼에서 그대로 호출·판정할 수 있다.
+이 리포트가 **다음 최적화 대상**(apply_doc/collect_rows/save_final)을 바로 짚어준다.
+소스를 고친 뒤 다시 `smoke_cycle.py` 를 돌려 델타를 비교하면 6단계 루프가 짧아진다.
