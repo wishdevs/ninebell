@@ -138,6 +138,11 @@ export interface GridRowSubmit {
   project: { code: string; name: string; wbsNo?: string } | null;
   note: string;
   skip: boolean;
+  /** 개입 학습용 — 사용자가 프리필값에서 **실제로 바꾼** 필드 표시. 바꾼 것만 학습한다
+   * (프리필 그대로 수락은 학습 안 함 — 자기추천 되먹임 방지). */
+  budgetEdited?: boolean;
+  projectEdited?: boolean;
+  noteEdited?: boolean;
 }
 
 /** SSE chat 프레임(백엔드 emit_chat) — 화면 표시용 ChatMessage 로 변환된다. */

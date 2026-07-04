@@ -236,6 +236,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         return { no: r.no, budgetUnit: null, project: null, note: e.note.trim(), skip: true };
       }
       const b = budgetByCode.get(e.budgetUnitCode);
+      // 개입 학습: 프리필된 원값(r.*)과 비교해 사용자가 실제로 바꾼 필드만 표시.
+      // 바꾼 것만 학습한다(프리필 그대로 수락은 학습 대상 아님 — 자기추천 되먹임 방지).
       return {
         no: r.no,
         budgetUnit: b
@@ -246,6 +248,9 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           : null,
         note: e.note.trim(),
         skip: false,
+        budgetEdited: e.budgetUnitCode !== (r.budgetUnit?.code ?? ''),
+        projectEdited: (e.projectCode || '') !== (r.project?.code ?? ''),
+        noteEdited: e.note.trim() !== (r.note ?? '').trim(),
       };
     });
     const ok = await onSubmit(payload);

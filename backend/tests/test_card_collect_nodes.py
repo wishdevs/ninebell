@@ -225,6 +225,49 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
     assert any("2행: 예산단위 무매칭" in c for c in summary)
 
 
+async def test_grid_submit_learns_only_edited_fields(monkeypatch):
+    """개입 학습(필드 단위): 사용자가 바꾼 필드만 기록, 프리필 그대로 수락한 행/필드는 학습 안 함."""
+    from app.services import card_learning
+
+    _stub_dumps(monkeypatch, units=[])
+    captured: dict = {}
+
+    async def _capture(owner, entries):
+        captured["entries"] = entries
+        return len(entries)
+
+    monkeypatch.setattr(card_learning, "record_selections", _capture)
+
+    async def _ok_apply(page, events, rows, collected):
+        return True, "ok"
+
+    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _ok_apply)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": "x"}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    resolve_hitl(
+        frame["id"],
+        {
+            "rows": [
+                # 1행: 예산단위만 편집 → 예산단위만 학습(적요·프로젝트는 None 으로 스냅샷 보존).
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식",
+                 "budgetEdited": True, "noteEdited": False, "projectEdited": False},
+                # 2행: 아무 편집 없음(프리필 그대로 수락) → 학습 대상 아님.
+                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "소모품",
+                 "budgetEdited": False, "noteEdited": False, "projectEdited": False},
+            ]
+        },
+    )
+    await asyncio.wait_for(task, timeout=2)
+
+    entries = captured["entries"]
+    assert len(entries) == 1  # 편집한 1행만
+    assert entries[0]["budget"]["code"] == "2000"
+    assert entries[0]["note"] is None and entries[0]["project"] is None  # 미편집 필드는 None
+
+
 async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
     _stub_dumps(monkeypatch, units=[])
     applied: list[int] = []

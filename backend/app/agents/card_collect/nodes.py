@@ -842,6 +842,10 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     "budgetUnit": row.get("budgetUnit") or {},
                     "project": row.get("project") or None,
                     "note": (row.get("note") or "").strip(),
+                    # 개입 학습: 사용자가 프리필에서 실제로 바꾼 필드만 학습(프론트가 표시).
+                    "budgetEdited": bool(row.get("budgetEdited")),
+                    "projectEdited": bool(row.get("projectEdited")),
+                    "noteEdited": bool(row.get("noteEdited")),
                 }
                 if (src.get("VAT_TP") or "").strip() == "과세":
                     taxable_work.append(entry)
@@ -866,18 +870,27 @@ def make_collect_rows_node(timeout_s: int | None = None):
             )
             await emit_log(events, f"부가세구분 분류: {split_desc}", "info")
 
-            # 개입 학습: 사용자가 확정한 선택을 가맹점 단위로 누적(다음 런 추천 힌트·결정적 프리필).
-            # 예산단위 값이 있는 행만(빈 선택은 학습 대상 아님). owner 없으면 서비스가 no-op.
-            learn_entries = [
-                {
-                    "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
-                    "budget": e["budgetUnit"] or None,
-                    "project": e["project"],
-                    "note": e["note"],
-                }
-                for e in [*taxable_work, *pending_nontax]
-                if (e.get("budgetUnit") or {}).get("code")
-            ]
+            # 개입 학습(필드 단위): 사용자가 프리필에서 **실제로 바꾼 필드만** 가맹점 단위로 누적한다
+            # (사용자 확정 2026-07-05: 프리필 그대로 수락은 학습 안 함 — 자기추천 되먹임 방지).
+            # 안 바꾼 필드는 None 으로 둬 record 가 기존 스냅샷을 덮지 않게 한다. owner 없으면 no-op.
+            learn_entries = []
+            for e in [*taxable_work, *pending_nontax]:
+                budget = (
+                    e["budgetUnit"]
+                    if e["budgetEdited"] and (e["budgetUnit"] or {}).get("code")
+                    else None
+                )
+                project = e["project"] if e["projectEdited"] else None
+                note = e["note"] if (e["noteEdited"] and e["note"]) else None
+                if budget or project or note:  # 바꾼 게 하나라도 있을 때만 학습.
+                    learn_entries.append(
+                        {
+                            "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                            "budget": budget,
+                            "project": project,
+                            "note": note,
+                        }
+                    )
             _owner = state.get("owner")
             learned_n = await card_learning.record_selections(_owner, learn_entries)
             # 항상 로깅(진단): owner 유무·후보 건수·저장 결과. 0건이면 원인을 바로 좁힌다.
