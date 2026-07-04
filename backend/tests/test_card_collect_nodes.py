@@ -577,11 +577,12 @@ async def test_prefill_cost_prefix_biases_default_budget():
     assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
 
 
-async def test_prefill_skips_ai_when_all_rows_covered(monkeypatch):
-    """최적화 #2: 모든 행이 기본지정 예산단위+기본 프로젝트로 채워지면 Gemini 미호출."""
+async def test_prefill_skips_ai_only_when_all_rows_learned(monkeypatch):
+    """최적화 #2: 모든 행이 학습 Tier-1(반복 확정)일 때만 Gemini 미호출."""
     from types import SimpleNamespace
 
     from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
 
     called = {"ai": False}
 
@@ -591,24 +592,29 @@ async def test_prefill_skips_ai_when_all_rows_covered(monkeypatch):
 
     monkeypatch.setattr(cc_nodes, "recommend_selections", _boom)
 
-    settings = SimpleNamespace(gemini_api_key="k")  # 키 있어도 커버되면 스킵돼야 한다.
+    settings = SimpleNamespace(gemini_api_key="k")  # 키 있어도 학습 커버되면 스킵.
     rows_list = [
         {"i": 0, "TRAN_NM": "가맹점A", "TRAN_AMT": "1000", "VAT_TP": "과세"},
         {"i": 1, "TRAN_NM": "가맹점B", "TRAN_AMT": "2000", "VAT_TP": "과세"},
     ]
-    budget_favs = [{"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비", "isDefault": True}]
-    cost_project = {"code": "800", "name": "판관비프로젝트"}
+    min_n = card_learning.LEARNED_APPLY_MIN_COUNT
+    learned = {
+        card_learning.norm_merchant("가맹점A"): {
+            "budget": {"code": "B1", "name": "인사기획팀"}, "project": {"code": "800", "name": "판관"}, "count": min_n,
+        },
+        card_learning.norm_merchant("가맹점B"): {
+            "budget": {"code": "B2", "name": "인사기획팀"}, "project": {"code": "800", "name": "판관"}, "count": min_n,
+        },
+    }
     out = await _prefill_selections(
-        asyncio.Queue(), settings, rows_list, {0: "적요", 1: "적요"}, budget_favs, [], [],
-        cost_prefix="(판)", cost_project=cost_project,
+        asyncio.Queue(), settings, rows_list, {0: "적요", 1: "적요"}, [], [], [], learned=learned,
     )
-    assert called["ai"] is False  # 커버율 100% → AI 미호출
-    assert out[1]["budgetSource"] == "default" and out[2]["budgetSource"] == "default"
-    assert out[1]["projectSource"] == "default" and out[2]["projectSource"] == "default"
+    assert called["ai"] is False  # 전 행 학습 커버 → AI 미호출
+    assert out[1]["budgetSource"] == "learned" and out[2]["budgetSource"] == "learned"
 
 
-async def test_prefill_runs_ai_when_a_row_uncovered(monkeypatch):
-    """기본 프로젝트가 없어 커버 안 되는 행이 있으면 AI 를 호출한다."""
+async def test_prefill_runs_ai_when_only_defaults(monkeypatch):
+    """기본지정/비용구분만 있고 학습이 없으면 — 기본은 최종값이 아니므로 AI 를 호출한다."""
     from types import SimpleNamespace
 
     from app.agents.card_collect.nodes import _prefill_selections
@@ -624,13 +630,14 @@ async def test_prefill_runs_ai_when_a_row_uncovered(monkeypatch):
     settings = SimpleNamespace(gemini_api_key="k")
     rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
     budget_favs = [{"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비", "isDefault": True}]
-    # 기본 프로젝트 없음(project_favs=[], cost_project=None) → project 미커버 → AI 호출.
+    cost_project = {"code": "800", "name": "판관비프로젝트"}
+    # 기본이 모두 있어도(학습 없음) AI 는 반드시 호출돼야 한다(기본≠최종).
     out = await _prefill_selections(
         asyncio.Queue(), settings, rows_list, {0: "적요"}, budget_favs, [], [],
-        cost_prefix="(판)", cost_project=None,
+        cost_prefix="(판)", cost_project=cost_project,
     )
     assert called["ai"] is True
-    assert out[1]["budgetSource"] == "default"
+    assert out[1]["budgetSource"] == "default"  # AI 무응답 → 기본 폴백
 
 
 # ── 회계일(set_acct_date) — 수집 기간 월의 말일(규칙 2026-07-04) ────────────────
