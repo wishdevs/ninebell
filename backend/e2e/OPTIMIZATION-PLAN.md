@@ -40,10 +40,9 @@ CARD_DELAY_SCALE=0.3 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010
    추가·모달 check-first(400ms선대기 제거·150ms폴) 완료(`3f7070d`). **다음: 계측 붙은 런으로
    82s가 (a)예산현황 모달 40개 순차인지 (b)서버 단일처리인지 확인 → (a)면 모달 즉시클릭 최적화,
    (b)면 불가피(문서화).**
-2. **AI 추천 28.5s 스킵** — ✅완료. `_prefill_selections`에서 default_budget/default_project·학습
-   Tier-1 을 recommend 호출 **전에** 계산하고, 전 행이 그것으로 커버되면 Gemini 호출 자체 생략
-   (`all_covered` 판정 + emit_log). 커버 안 된 행이 하나라도 있으면 기존대로 AI 호출.
-   회귀 테스트 2건(스킵/미스킵) 추가. → 이번 케이스는 전 행 기본(판)소모품비+800 커버 → **AI 미호출**.
+2. **AI 추천 28.5s 스킵** — ⬜. 전 행이 학습/기본지정/비용구분으로 커버되면 Gemini 호출 자체 생략
+   (결정적). 커버 안 된 행만 추천. `_prefill_selections`에서 recommend 호출 전 커버율 판정.
+   → 이번 케이스는 전 행이 기본(판)소모품비+800 이라 **AI 없이도 채워짐 → 28.5s 즉시 절감**.
 3. **동일 예산단위·프로젝트 피커 중복 제거** — ⬜. `_apply_batch`가 note까지 그룹키라 같은 budget/
    project를 매 그룹 재오픈. → budget/project 피커는 (code) 단위로 **1회만** 열고, note+체크+
    일괄적용만 반복. `_apply_group_fields`/`_batch_key` 재구성. 예상 24s→~5s.
