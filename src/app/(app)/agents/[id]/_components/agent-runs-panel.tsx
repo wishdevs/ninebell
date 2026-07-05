@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RiDeleteBinLine, RiLoader4Line, RiPlayMiniLine, RiRefreshLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import { EmptyNote } from '@/components/ui/empty-note';
 import { ApiError } from '@/lib/api/client';
 import { formatDateTime } from '@/lib/data/format';
 import { deleteTemplate, fetchTemplates, type RunTemplate } from '@/lib/live/runs-api';
@@ -90,10 +91,10 @@ function TemplateList({
   if (templates === null) return <Notice>템플릿을 불러오는 중…</Notice>;
   if (templates.length === 0) {
     return (
-      <Notice>
+      <EmptyNote>
         저장된 템플릿이 없습니다. 대화형 실행을 완료한 뒤 결과에서 &lsquo;템플릿으로 저장&rsquo;할
         수 있습니다.
-      </Notice>
+      </EmptyNote>
     );
   }
   return (

@@ -50,6 +50,9 @@ function HeroPanel() {
         sizes="(min-width: 1024px) 55vw, 0px"
         className="object-cover"
       />
+      {/* 은은한 오로라 드리프트 — 정적 아트워크 위에 미세한 생동감을 더하는 앰비언스(reduced-motion 시 자동 정지). */}
+      <div aria-hidden className="animate-aurora-a" />
+      <div aria-hidden className="animate-aurora-b" />
       {/* 좌측 경계 seam 을 아주 옅게 블렌딩(브랜드 톤 유지, 과하지 않게). */}
       <div
         aria-hidden

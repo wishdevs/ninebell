@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RiCheckLine, RiSearchLine, RiStarFill, RiStarLine, RiTableLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import { EmptyNote } from '@/components/ui/empty-note';
 import { Spinner } from '@/components/ui/spinner';
 import { useFavorites } from '@/lib/live/use-favorites';
 import type {
@@ -221,9 +222,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <GridHeader title={hitl.title} prompt={hitl.prompt} />
-        <p className="text-foreground-tertiary py-10 text-center text-[12px]">
-          정리할 거래내역이 없습니다.
-        </p>
+        <EmptyNote py={10}>정리할 거래내역이 없습니다.</EmptyNote>
       </div>
     );
   }

@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip-set';
 import { EmptyHint } from '@/components/ui/empty-hint';
+import { EmptyNote } from '@/components/ui/empty-note';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SectionCard } from '@/components/ui/section-card';
 import { SentimentBadge } from '@/components/ui/sentiment-badge';
@@ -155,10 +156,10 @@ export function EmptyShowcaseSection() {
     <SectionCard
       caption="컴포넌트"
       title="빈 상태"
-      description="규모에 따라 세 단계로 사용합니다. 페이지·섹션은 EmptyState(가능하면 action 으로 다음 행동 제공), 사이드 패널·하위 카드는 EmptyHint, 테이블 셀 단위 결측은 '—' 대시 하나."
+      description="규모에 따라 단계로 사용합니다. 페이지·섹션은 EmptyState(가능하면 action 으로 다음 행동 제공), 사이드 패널·하위 카드는 EmptyHint, 인라인 리스트·패널 내부의 가벼운 안내는 EmptyNote, 테이블 셀 단위 결측은 '—' 대시 하나."
       density="comfortable"
     >
-      <div className="grid items-start gap-5 md:grid-cols-2">
+      <div className="grid items-start gap-5 md:grid-cols-3">
         <EmptyState
           icon={<RiSearchLine size={18} aria-hidden />}
           title="조건에 맞는 결과가 없습니다"
@@ -174,6 +175,9 @@ export function EmptyShowcaseSection() {
           title="알림 없음"
           description="새 활동이 도착하면 이곳에 표시됩니다."
         />
+        <div className="border-border-subtle bg-surface rounded-[var(--radius-md)] border p-4">
+          <EmptyNote>아직 로그가 없습니다.</EmptyNote>
+        </div>
       </div>
     </SectionCard>
   );

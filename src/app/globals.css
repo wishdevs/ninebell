@@ -273,9 +273,23 @@ samp {
   }
 }
 .animate-aurora-a {
+  position: absolute;
+  inset: -20%;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+  filter: blur(64px);
+  mix-blend-mode: screen;
+  pointer-events: none;
   animation: aurora-a 26s ease-in-out infinite;
 }
 .animate-aurora-b {
+  position: absolute;
+  inset: -20%;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--accent) 25%, transparent);
+  filter: blur(64px);
+  mix-blend-mode: screen;
+  pointer-events: none;
   animation: aurora-b 32s ease-in-out infinite;
 }
 

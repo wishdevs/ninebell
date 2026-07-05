@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { RiCheckLine, RiErrorWarningLine } from '@remixicon/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { EmptyNote } from '@/components/ui/empty-note';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
 import { LiveGridCard } from '@/components/live/LiveGridCard';
@@ -164,9 +165,7 @@ const LOG_LABEL: Record<LiveLogLevel, string> = {
 
 export function LiveLogList({ logs }: { logs: readonly LiveLogLine[] }) {
   if (logs.length === 0) {
-    return (
-      <p className="text-foreground-tertiary py-6 text-center text-[12px]">아직 로그가 없습니다.</p>
-    );
+    return <EmptyNote>아직 로그가 없습니다.</EmptyNote>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
