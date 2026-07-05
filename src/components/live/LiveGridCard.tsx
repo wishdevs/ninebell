@@ -162,8 +162,6 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const [edits, setEdits] = useState<Record<number, RowEdit>>(() => initEdits(rows));
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  // 저장 안전 게이트 — '입력 완료' 클릭 시 곧장 제출하지 않고 인라인 확인 단계로 전환.
-  const [confirmSave, setConfirmSave] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tableWrapRef = useRef<HTMLDivElement>(null);
 
@@ -177,7 +175,6 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     idRef.current = hitl.id;
     setEdits(initEdits(hitl.rows ?? []));
     setSubmitted(false);
-    setConfirmSave(false);
     setError(null);
     bFav.reset(hitl.budgetUnits?.favorites ?? []);
     pFav.reset(hitl.projects?.favorites ?? []);
@@ -527,24 +524,19 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           ) : null}
         </p>
 
-        {/* 저장 안전 게이트: '입력 완료' → 인라인 확인(실 ERP 저장 예고) → '저장 진행'이 실제 제출. */}
-        {confirmSave && !busy && !submitted ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-foreground-secondary text-[11px]">
-              실 더존 ERP에{' '}
-              <span className="text-foreground font-semibold tabular-nums">{nonSkip.length}건</span>
-              을 저장합니다 · 제외 {skipCount}건
+        {/* 1클릭 제출(사용자 확정 2026-07-05: 확인 단계 제거) — 저장 규모는 버튼 옆에 상시
+            표기해 '실 ERP N건 저장' 인지는 유지한다. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {!busy && !submitted ? (
+            <span className="text-foreground-tertiary text-[11px]">
+              실 ERP에{' '}
+              <span className="text-foreground-secondary font-semibold tabular-nums">
+                {nonSkip.length}건
+              </span>{' '}
+              저장{skipCount > 0 ? ` · 제외 ${skipCount}건` : ''}
             </span>
-            <Button size="sm" onClick={() => void submit()} disabled={!allValid || disabled}>
-              <RiCheckLine size={14} aria-hidden />
-              저장 진행
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setConfirmSave(false)}>
-              계속 수정
-            </Button>
-          </div>
-        ) : (
-          <Button size="sm" onClick={() => setConfirmSave(true)} disabled={!allValid || disabled}>
+          ) : null}
+          <Button size="sm" onClick={() => void submit()} disabled={!allValid || disabled}>
             {submitted ? (
               <>
                 <Spinner size={14} />
@@ -562,7 +554,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
               </>
             )}
           </Button>
-        )}
+        </div>
       </div>
 
       {error ? <span className="text-danger text-[12px]">{error}</span> : null}
