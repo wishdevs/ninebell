@@ -192,7 +192,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           <LiveSidePanel
             run={run}
             runsPanel={runsPanel}
-            workflowId={session.workflowId}
+            planSteps={agent.steps}
             resultAction={
               canSaveTemplate && run.runId ? (
                 <SaveTemplateButton

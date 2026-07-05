@@ -20,7 +20,7 @@ import type {
   LiveTransactions,
   UseLiveRunReturn,
 } from '@/lib/live/types';
-import { WORKFLOW_STEP_DEFS } from '@/lib/live/step-defs';
+import type { WorkflowStep } from '@/lib/data/agents';
 import { cn } from '@/lib/utils';
 import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionEmpty } from './intervention-empty';
@@ -31,8 +31,12 @@ interface LiveSidePanelProps {
   resultAction?: React.ReactNode;
   /** 실행 이력·템플릿 탭 데이터(하단 패널에서 우측 탭으로 이동). 없으면 두 탭을 숨긴다. */
   runsPanel?: RunsPanelProps;
-  /** 엔진에 등록된 워크플로우 id(예: `expense-card-chat`) — 단계 라벨 번역·전체 단계 표시에 쓴다. */
-  workflowId?: string;
+  /**
+   * 에이전트의 단계 계획(백엔드 `/agents/{id}` steps — 단일 소스). 라이브 단계에
+   * 한글 라벨·스킬·상세·개입 표시를 병합하고 미도달 단계까지 전체를 노출한다.
+   * 없거나 비어 있으면(DB 스텝 없는 데모 등) 도착한 라이브 단계 id 그대로 폴백.
+   */
+  planSteps?: readonly WorkflowStep[];
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
@@ -42,7 +46,7 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, resultAction, runsPanel, workflowId }: LiveSidePanelProps) {
+export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -115,7 +119,7 @@ export function LiveSidePanel({ run, resultAction, runsPanel, workflowId }: Live
         </TabsContent>
 
         <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <LiveStepList steps={run.steps} status={run.status} workflowId={workflowId} />
+          <LiveStepList steps={run.steps} status={run.status} planSteps={planSteps} />
         </TabsContent>
 
         <TabsContent value="log" className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -170,20 +174,20 @@ const STEP_LABEL: Record<DisplayStepStatus, string> = {
 };
 
 /**
- * 라이브 단계(도착한 것만)를 워크플로우 정의(전체 순서·한글 라벨)와 병합한다.
- * 정의에 없는 워크플로우/단계는 원래 id 를 라벨로 써 그대로 노출한다(안전 폴백).
+ * 라이브 단계(도착한 것만)를 에이전트 단계 계획(백엔드 steps — 전체 순서·한글 라벨)과
+ * 병합한다. 계획에 없는 단계/계획이 없는 에이전트는 원래 id 를 라벨로 그대로 노출한다
+ * (안전 폴백 — DB 스텝 없는 demo-echo 등).
  */
 function buildDisplaySteps(
-  workflowId: string | undefined,
+  planSteps: readonly WorkflowStep[] | undefined,
   steps: readonly LiveStepState[],
 ): DisplayStep[] {
-  const defs = workflowId ? WORKFLOW_STEP_DEFS[workflowId] : undefined;
-  if (!defs) {
+  if (!planSteps || planSteps.length === 0) {
     return steps.map((s) => ({ id: s.step, label: s.step, status: s.status, ms: s.ms }));
   }
   const byId = new Map(steps.map((s) => [s.step, s] as const));
-  const known = new Set(defs.map((d) => d.id));
-  const merged = defs.map((d): DisplayStep => {
+  const known = new Set(planSteps.map((d) => d.id));
+  const merged = planSteps.map((d): DisplayStep => {
     const live = byId.get(d.id);
     return {
       id: d.id,
@@ -205,13 +209,13 @@ function buildDisplaySteps(
 export function LiveStepList({
   steps,
   status,
-  workflowId,
+  planSteps,
 }: {
   steps: readonly LiveStepState[];
   status: UseLiveRunReturn['status'];
-  workflowId?: string;
+  planSteps?: readonly WorkflowStep[];
 }) {
-  const display = buildDisplaySteps(workflowId, steps);
+  const display = buildDisplaySteps(planSteps, steps);
   // 진행 중(또는 마지막으로 도착한) 단계 = 마지막 비-대기 단계. 이 단계를 자동으로 화면에
   // 스크롤해 진행 상황이 항상 보이게 한다(사용자 요청: 하단 스크롤이 안 돼 진행이 안 보임).
   let activeIndex = -1;

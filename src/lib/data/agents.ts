@@ -74,8 +74,10 @@ export interface WorkflowStep {
   id: string;
   /** 상단 React Flow 노드에 표기될 짧은 라벨. */
   label: string;
-  /** 이 단계가 사용하는 공용 스킬명. */
+  /** 이 단계가 사용하는 공용 스킬명(백엔드가 카탈로그 키를 라벨로 풀어 내려준다). */
   skill?: string;
+  /** 공용 스킬 카탈로그 키(백엔드 app/services/skills.py — /skills 역인덱스와 매칭). */
+  skillKey?: string;
   status: StepStatus;
   /** 우측 상세 워크플로우 탭에 노출될 보조 설명/하위 단계. */
   detail?: string;
@@ -418,123 +420,9 @@ export const AGENTS: readonly Agent[] = [
     successRate: 89.1,
     avgSeconds: 124,
     lastRunAt: relativeFromNow({ minutes: 6 }),
-    // steps = 실제 워크플로우(card-collect) 15개 노드 순서(backend graph.py 와 1:1). 미실행 시
-    // 상단 스텝퍼가 이 목록을 중립으로 노출하고, 라이브 실행 시 run.steps 가 진행상태를 오버레이한다.
-    steps: [
-      {
-        id: 'login',
-        label: '로그인',
-        skill: '로그인',
-        status: 'pending',
-        detail: '더존 옴니솔 인증 후 세션 확보',
-      },
-      {
-        id: 'usertype',
-        label: '회계 사용자 전환',
-        skill: '사용자 유형 확인',
-        status: 'pending',
-        detail: "사용자 유형을 '회계'로 전환",
-      },
-      {
-        id: 'menu',
-        label: '결의서입력 화면',
-        skill: '메뉴 이동',
-        status: 'pending',
-        detail: '전사공통(회계) 결의서 입력 화면 진입',
-      },
-      {
-        id: 'gubun',
-        label: '결의구분: 카드',
-        skill: '필드 입력',
-        status: 'pending',
-        detail: '결의구분 드롭다운을 카드로 설정',
-      },
-      {
-        id: 'addrow',
-        label: '상세행 추가(F3)',
-        skill: '필드 입력',
-        status: 'pending',
-        detail: 'F3로 카드 결의 상세행 생성',
-      },
-      {
-        id: 'set_acct_date',
-        label: '회계일 설정',
-        skill: '필드 입력',
-        status: 'pending',
-        detail: '수집 기간 월의 말일로 결의서 회계일 설정(전월 수집=전월 말일 / 당월=당월 말일)',
-      },
-      {
-        id: 'evdn',
-        label: '증빙유형 선택',
-        skill: '코드피커',
-        status: 'pending',
-        detail: '증빙유형 코드피커 열기',
-      },
-      {
-        id: 'card',
-        label: '법인카드 선택',
-        skill: '코드피커',
-        status: 'pending',
-        detail: '증빙유형 01 법인카드 선택 → 승인내역 팝업',
-      },
-      {
-        id: 'selectcards',
-        label: '카드 전체선택',
-        skill: '코드피커',
-        status: 'pending',
-        detail: '카드번호 돋보기 → 전체선택 → 적용',
-      },
-      {
-        id: 'period',
-        label: '승인일 기간',
-        skill: '필드 입력',
-        status: 'pending',
-        detail: '3일 이하=전월 / 4일부터=당월 기간 설정',
-      },
-      {
-        id: 'query',
-        label: '조회',
-        skill: '그리드 읽기',
-        status: 'pending',
-        detail: '승인내역 조회 → 리스트 보고',
-      },
-      {
-        id: 'collect_rows',
-        label: '건별 입력(그리드)',
-        skill: '그리드 입력',
-        status: 'pending',
-        intervention: true,
-        detail: "전 행 예산단위·프로젝트·적요를 입력하고 '입력 완료'로 제출(사용자 개입)",
-      },
-      {
-        id: 'apply_doc',
-        label: '과세분 적용',
-        skill: '문서 반영',
-        status: 'pending',
-        detail: '과세 행 체크 → 적용 → 결의서 반영(저장 전)',
-      },
-      {
-        id: 'switch_evdn',
-        label: '불공 전환',
-        skill: '코드피커',
-        status: 'pending',
-        detail: '행 추가(F3) → 증빙유형 법인카드(불공) 선택 → 재조회·행 매칭',
-      },
-      {
-        id: 'apply_pass2',
-        label: '불공분 반영·적용',
-        skill: '그리드 입력',
-        status: 'pending',
-        detail: '입력해둔 값을 불공 행에 자동 반영 후 결의서 적용',
-      },
-      {
-        id: 'save_final',
-        label: '저장(F7)',
-        skill: '저장',
-        status: 'pending',
-        detail: '과세·불공 반영분을 마지막에 한 번만 저장',
-      },
-    ],
+    // steps 는 백엔드 /agents/{id} 가 단일 소스다(backend/app/services/agent_fixtures.py 시드
+    // → DB). 프론트 픽스처에는 더 이상 단계 계획을 두지 않는다(삼중 정의 해소).
+    steps: [],
     logs: [
       {
         id: 'l1',

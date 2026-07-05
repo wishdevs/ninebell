@@ -82,6 +82,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' },
       // 개입 학습(가맹점→선택) 디버그 — 개발 환경에서만 노출.
       { href: '/dev/card-learning', label: '개입 학습(디버그)', icon: 'learning', devOnly: true },
+      // 공용 스킬 카탈로그 + 사용 에이전트 역인덱스 — 개발 환경에서만 노출.
+      { href: '/skills', label: '스킬', icon: 'works', devOnly: true },
     ],
   },
 ];

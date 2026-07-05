@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONVariant
@@ -34,6 +34,10 @@ class AgentStep(Base):
     # done | active | pending | error
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # true 면 이 단계에서 사용자 개입(HITL)이 필요하다 — UI '개입 필요' 배지의 소스.
+    intervention: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     substeps: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
 

@@ -26,7 +26,7 @@ from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, assistant, auth, logs, me_codes, org_units, runs, users
+from app.routers import agents, assistant, auth, logs, me_codes, org_units, runs, skills, users
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -126,6 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(runs.router)
     app.include_router(assistant.router)
     app.include_router(me_codes.router)
+    app.include_router(skills.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:

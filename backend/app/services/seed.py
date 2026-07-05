@@ -125,6 +125,16 @@ async def seed_agents(db: AsyncSession) -> None:
             row = existing[fx["id"]]
             if row.workflow_id is None and fx.get("workflow_id"):
                 row.workflow_id = fx["workflow_id"]
+            # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention 을 픽스처와 동기화.
+            fixture_steps = {s["key"]: s for s in fx["steps"]}
+            for st in row.steps:
+                fs = fixture_steps.get(st.key)
+                if fs is None:
+                    continue
+                if st.skill != fs.get("skill"):
+                    st.skill = fs.get("skill")
+                if st.intervention != fs.get("intervention", False):
+                    st.intervention = fs.get("intervention", False)
             continue
         agent = Agent(
             id=fx["id"],
@@ -156,6 +166,7 @@ async def seed_agents(db: AsyncSession) -> None:
                     skill=step.get("skill"),
                     status=step["status"],
                     detail=step.get("detail"),
+                    intervention=step.get("intervention", False),
                     position=pos,
                     substeps=step.get("substeps"),
                 )
