@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { EmptyState } from '@/components/ui/empty-state';
+import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { SectionCard } from '@/components/ui/section-card';
 import { Spinner } from '@/components/ui/spinner';
 import { Td, Th } from '@/components/ui/table-cell';
@@ -87,24 +88,13 @@ export function CardLearningTable() {
           {rows.length}건
         </span>
         {confirmClear ? (
-          <div className="flex items-center gap-2 text-[length:var(--text-body-sm)]">
-            <span className="text-foreground-secondary">전체 삭제할까요?</span>
-            <button
-              type="button"
-              onClick={clearAll}
-              disabled={busyId !== null}
-              className="text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] px-2 py-1 font-medium disabled:opacity-40"
-            >
-              삭제
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmClear(false)}
-              className="text-foreground-secondary hover:bg-muted rounded-[var(--radius-sm)] px-2 py-1"
-            >
-              취소
-            </button>
-          </div>
+          <InlineConfirm
+            question="전체 삭제할까요?"
+            confirmLabel="삭제"
+            onConfirm={clearAll}
+            onCancel={() => setConfirmClear(false)}
+            disabled={busyId !== null}
+          />
         ) : (
           <button
             type="button"

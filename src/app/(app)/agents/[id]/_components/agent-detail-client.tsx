@@ -13,6 +13,7 @@ import {
   RiStopLine,
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { cn } from '@/lib/utils';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
@@ -362,28 +363,15 @@ function LiveControls({
   }
   if (confirmStop) {
     return (
-      <div className="flex items-center gap-2 text-[length:var(--text-body-sm)]">
-        <span className="text-foreground-secondary">
-          실행을 중단할까요? 진행 중 작업이 끊깁니다
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            setConfirmStop(false);
-            onStop();
-          }}
-          className="text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] px-2 py-1 font-medium"
-        >
-          중단
-        </button>
-        <button
-          type="button"
-          onClick={() => setConfirmStop(false)}
-          className="text-foreground-secondary hover:bg-muted rounded-[var(--radius-sm)] px-2 py-1"
-        >
-          취소
-        </button>
-      </div>
+      <InlineConfirm
+        question="실행을 중단할까요? 진행 중 작업이 끊깁니다"
+        confirmLabel="중단"
+        onConfirm={() => {
+          setConfirmStop(false);
+          onStop();
+        }}
+        onCancel={() => setConfirmStop(false)}
+      />
     );
   }
   return (

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
+import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -33,6 +34,7 @@ export function InteractiveDemos() {
   const [memo, setMemo] = useState('user.login.success');
   const [notify, setNotify] = useState(true);
   const [range, setRange] = useState('30d');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div className="grid gap-8 lg:grid-cols-2">
@@ -110,6 +112,33 @@ export function InteractiveDemos() {
             재사용합니다.
           </TabsContent>
         </Tabs>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
+          인라인 확인 · InlineConfirm
+        </p>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          모달 없이 되돌릴 수 없는 동작(삭제·중단)을 트리거 버튼 자리에서 바로 한 번 더 확인시킬 때
+          사용합니다.
+        </p>
+        <div>
+          {confirmDelete ? (
+            <InlineConfirm
+              question="삭제할까요?"
+              confirmLabel="삭제"
+              onConfirm={() => {
+                setConfirmDelete(false);
+                toast.success('삭제했습니다.');
+              }}
+              onCancel={() => setConfirmDelete(false)}
+            />
+          ) : (
+            <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
+              삭제
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
