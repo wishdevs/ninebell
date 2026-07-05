@@ -42,11 +42,41 @@ interface StatusToken extends ColorToken {
 }
 
 const STATUS_TOKENS: ReadonlyArray<StatusToken> = [
-  { name: 'accent', bg: 'bg-accent', chip: 'bg-accent/10 text-accent', sample: '진행 중', cssVar: '--color-accent' },
-  { name: 'success', bg: 'bg-success', chip: 'bg-success/10 text-success', sample: '성공', cssVar: '--color-success' },
-  { name: 'warning', bg: 'bg-warning', chip: 'bg-warning/10 text-warning', sample: '경고', cssVar: '--color-warning' },
-  { name: 'danger', bg: 'bg-danger', chip: 'bg-danger/10 text-danger', sample: '오류', cssVar: '--color-danger' },
-  { name: 'info', bg: 'bg-info', chip: 'bg-info/10 text-info', sample: '정보', cssVar: '--color-info' },
+  {
+    name: 'accent',
+    bg: 'bg-accent',
+    chip: 'bg-accent/10 text-accent',
+    sample: '진행 중',
+    cssVar: '--color-accent',
+  },
+  {
+    name: 'success',
+    bg: 'bg-success',
+    chip: 'bg-success/10 text-success',
+    sample: '성공',
+    cssVar: '--color-success',
+  },
+  {
+    name: 'warning',
+    bg: 'bg-warning',
+    chip: 'bg-warning/10 text-warning',
+    sample: '경고',
+    cssVar: '--color-warning',
+  },
+  {
+    name: 'danger',
+    bg: 'bg-danger',
+    chip: 'bg-danger/10 text-danger',
+    sample: '오류',
+    cssVar: '--color-danger',
+  },
+  {
+    name: 'info',
+    bg: 'bg-info',
+    chip: 'bg-info/10 text-info',
+    sample: '정보',
+    cssVar: '--color-info',
+  },
 ];
 
 const SENTIMENT_TOKENS: ReadonlyArray<ColorToken> = [
@@ -281,6 +311,17 @@ export function TypographySection() {
           모든 페이지 상단은 이 3단(캡션 → 타이틀 → 설명)을 <strong>PageHeader 컴포넌트</strong>로
           조립합니다 — 페이지에서 h1 · 캡션을 직접 만들지 마세요. 우측 액션이 필요하면{' '}
           <code className="font-mono text-[11px]">action</code> 슬롯을 사용합니다.
+        </p>
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          <strong>예외 — (auth) 레이아웃</strong>: 로그인·회원가입은 사이드바 없는 별도 레이아웃(
+          <code className="font-mono text-[11px]">max-w-md</code> 고정폭 카드)이라{' '}
+          <code className="font-mono text-[11px]">PageHeader</code>를 쓰지 않습니다. 타이틀 토큰{' '}
+          <code className="font-mono text-[11px]">--text-section</code>은 뷰포트 폭 기준
+          `clamp()`라 대시보드의 넓은 캔버스에 맞춰져 있고, 고정폭 카드에선 큰 화면에서 카드 대비
+          제목이 과도하게 커진다. 대신{' '}
+          <code className="font-mono text-[11px]">(auth)/_components/auth-page-header.tsx</code>
+          의 전용 <code className="font-mono text-[11px]">AuthPageHeader</code>(고정 크기{' '}
+          <code className="font-mono text-[11px]">--text-heading</code>)를 두 페이지가 공유한다.
         </p>
       </div>
 
