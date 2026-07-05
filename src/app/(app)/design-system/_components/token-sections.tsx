@@ -22,12 +22,22 @@ const SURFACE_TOKENS: ReadonlyArray<ColorToken> = [
   { name: 'foreground-tertiary', bg: 'bg-foreground-tertiary', cssVar: '--color-foreground-tertiary' },
 ];
 
-const ACCENT_TOKENS: ReadonlyArray<ColorToken> = [
-  { name: 'accent', bg: 'bg-accent', cssVar: '--color-accent' },
-  { name: 'success', bg: 'bg-success', cssVar: '--color-success' },
-  { name: 'warning', bg: 'bg-warning', cssVar: '--color-warning' },
-  { name: 'danger', bg: 'bg-danger', cssVar: '--color-danger' },
-  { name: 'info', bg: 'bg-info', cssVar: '--color-info' },
+/* 상태 토큰 — 인앱 실사용은 풀채도 블록이 아니라 "bg-{token}/10 + text-{token}" 틴트 칩이다.
+   가이드도 틴트 칩을 1차 스펙으로 보여주고, 풀채도 원색은 raw token 참조로 강등한다.
+   (Tailwind JIT가 클래스를 인식하도록 문자열은 리터럴로 유지.) */
+interface StatusToken extends ColorToken {
+  /** 인앱 실사용 형태: /10 틴트 배경 + 본색 텍스트 */
+  chip: string;
+  /** 칩 안에 보여줄 실사용 라벨 예시 */
+  sample: string;
+}
+
+const STATUS_TOKENS: ReadonlyArray<StatusToken> = [
+  { name: 'accent', bg: 'bg-accent', chip: 'bg-accent/10 text-accent', sample: '진행 중', cssVar: '--color-accent' },
+  { name: 'success', bg: 'bg-success', chip: 'bg-success/10 text-success', sample: '성공', cssVar: '--color-success' },
+  { name: 'warning', bg: 'bg-warning', chip: 'bg-warning/10 text-warning', sample: '경고', cssVar: '--color-warning' },
+  { name: 'danger', bg: 'bg-danger', chip: 'bg-danger/10 text-danger', sample: '오류', cssVar: '--color-danger' },
+  { name: 'info', bg: 'bg-info', chip: 'bg-info/10 text-info', sample: '정보', cssVar: '--color-info' },
 ];
 
 const SENTIMENT_TOKENS: ReadonlyArray<ColorToken> = [
@@ -43,6 +53,29 @@ function Swatch({ name, bg, cssVar }: ColorToken) {
         aria-hidden
         className={cn('border-border h-14 w-full rounded-[var(--radius-md)] border', bg)}
       />
+      <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+        {name}
+      </span>
+      <span className="text-foreground-tertiary truncate font-mono text-[10px]">{cssVar}</span>
+    </div>
+  );
+}
+
+/** 상태 토큰 스와치 — 1차: 실사용 틴트 칩, 2차: raw 원색 스트립(참조용). */
+function StatusSwatch({ name, bg, chip, sample, cssVar }: StatusToken) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span
+        aria-hidden
+        className={cn(
+          'border-border flex h-14 w-full items-center justify-center rounded-[var(--radius-md)] border',
+          chip,
+        )}
+      >
+        <span className="text-[length:var(--text-body-sm)] font-semibold">{sample}</span>
+      </span>
+      {/* raw token(풀채도) — 배경 대면적 사용 금지, 텍스트·아이콘·틴트의 원료로만 */}
+      <span aria-hidden className={cn('h-1.5 w-full rounded-full', bg)} />
       <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
         {name}
       </span>
@@ -75,7 +108,20 @@ export function ColorSection() {
       density="comfortable"
     >
       <SwatchGroup label="표면 · 텍스트 계열" tokens={SURFACE_TOKENS} />
-      <SwatchGroup label="액센트 · 상태 계열" tokens={ACCENT_TOKENS} />
+      <div className="flex flex-col gap-3">
+        <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
+          액센트 · 상태 계열 — 실사용은 /10 틴트 칩
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          {STATUS_TOKENS.map((t) => (
+            <StatusSwatch key={t.name} {...t} />
+          ))}
+        </div>
+        <p className="text-foreground-tertiary text-[length:var(--text-caption)]">
+          상태색은 <code className="font-mono">bg-*/10 text-*</code> 틴트 형태가 1차 스펙입니다.
+          풀채도 원색(아래 스트립)은 raw token으로, 대면적 배경에 직접 쓰지 않습니다.
+        </p>
+      </div>
       <SwatchGroup label="감정 데이터 팔레트" tokens={SENTIMENT_TOKENS} />
     </SectionCard>
   );

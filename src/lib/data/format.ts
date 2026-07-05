@@ -36,6 +36,13 @@ export function formatSeconds(total: number): string {
   return `${m}분 ${s.toString().padStart(2, '0')}초`;
 }
 
+/* ── 시간 표기 규칙 (비주얼 토론 합의) ────────────────────────────────────
+ * 1. 목록·로그·피드: 상대시간("N분 전")을 본문으로, 절대시각은 `title` 툴팁으로.
+ *    → formatRelativeWithTitle() 사용: <time title={title}>{relative}</time>
+ * 2. 상세 화면·감사 기록: 절대시각("2026. 6. 29. 16:24")을 본문으로.
+ *    → formatDateTime() 사용.
+ * 같은 화면 안에서 상대/절대를 섞지 않는다 — 목록은 상대, 상세는 절대로 통일. */
+
 /**
  * ISO 타임스탬프를 한국어 상대시간으로. 분/시간/일 단위로 거칠게 — 초 단위
  * 갱신은 하이드레이션 불일치를 유발하므로 피한다.
@@ -81,6 +88,17 @@ export function formatDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return DATETIME_FMT.format(d);
+}
+
+/**
+ * 목록/로그용 페어 — 본문은 상대시간, `title`엔 절대시각(위 표기 규칙 1번).
+ * 사용 예: `<time title={title}>{relative}</time>`
+ */
+export function formatRelativeWithTitle(
+  iso: string,
+  now: Date = NOW_ANCHOR,
+): { relative: string; title: string } {
+  return { relative: formatRelativeKorean(iso, now), title: formatDateTime(iso) };
 }
 
 interface Offset {

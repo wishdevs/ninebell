@@ -86,7 +86,8 @@
 
 /* ---- Light theme (default) ---- */
 :root {
-  --background: oklch(97% 0 0);
+  /* 깊이: 캔버스를 95.5%로 낮춰 surface(100%) 카드가 실제로 떠 보이게 한다(비주얼 토론 P1). */
+  --background: oklch(95.5% 0 0);
   --foreground: oklch(14% 0 0);
   --foreground-secondary: oklch(36% 0 0);
   --foreground-tertiary: oklch(50% 0 0);
@@ -101,8 +102,9 @@
   --accent: oklch(56% 0.21 258);
   --accent-foreground: oklch(98% 0 0);
   --success: oklch(55% 0.18 150);
-  --warning: oklch(68% 0.18 72);
-  --danger: oklch(56% 0.22 27);
+  /* 상태 팔레트 정합: warning·danger 채도를 감채해 success·info와 톤을 맞춘다(hue 유지). */
+  --warning: oklch(68% 0.15 72);
+  --danger: oklch(56% 0.18 27);
   --info: oklch(56% 0.16 240);
   /* Sentiment (low-chroma, harmonised for side-by-side data viz) */
   --sentiment-positive: oklch(45% 0.14 150);
@@ -140,8 +142,9 @@
   --accent: oklch(72% 0.16 258);
   --accent-foreground: oklch(14% 0 0);
   --success: oklch(72% 0.16 150);
-  --warning: oklch(82% 0.16 72);
-  --danger: oklch(70% 0.2 27);
+  /* 상태 팔레트 정합: 라이트와 동일 원리로 warning·danger 감채(hue 유지). */
+  --warning: oklch(82% 0.15 72);
+  --danger: oklch(70% 0.18 27);
   --info: oklch(72% 0.14 240);
   /* Sentiment (low-chroma, harmonised for side-by-side data viz) */
   --sentiment-positive: oklch(72% 0.12 150);
