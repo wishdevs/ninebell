@@ -2,15 +2,17 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { RiArrowRightLine, RiSafariLine, RiStarFill } from '@remixicon/react';
+import { RiArrowRightLine, RiStarFill } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { MetaChip } from '@/components/ui/meta-chip';
 import { Spinner } from '@/components/ui/spinner';
 import { errorMessage } from '@/lib/api/client';
 import { fetchFavorites, removeFavorite, type Favorite } from '@/lib/api/me-codes';
 import type { Agent } from '@/lib/data/agents';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
+import { AgentCardHeader } from '@/app/(app)/agents/_components/agent-card';
 import { cn } from '@/lib/utils';
 
 /** 홈에 노출할 즐겨찾기 에이전트 수(초과분은 '전체 보기'로 유도). */
@@ -126,46 +128,27 @@ export function HomeFavoriteAgents() {
 function FavoriteAgentCard({ agent, onUnfavorite }: { agent: Agent; onUnfavorite: () => void }) {
   return (
     <div className="card-interactive border-border bg-surface group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden
-          className="bg-accent/10 text-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)]"
-        >
-          <RiSafariLine size={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-foreground truncate text-[length:var(--text-body-lg)] font-semibold tracking-tight">
-            <Link
-              href={`/agents/${agent.id}`}
-              aria-label={`${agent.name} 실행`}
-              className="focus-visible:after:ring-accent/40 outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:content-[''] focus-visible:after:ring-2"
-            >
-              {agent.name}
-            </Link>
-          </h3>
-          <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-relaxed">
-            {agent.description}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onUnfavorite}
-          aria-pressed
-          aria-label="자주쓰는 해제"
-          title="자주쓰는 해제"
-          className={cn(
-            'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-            'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
-          )}
-        >
-          <RiStarFill size={15} aria-hidden />
-        </button>
-      </div>
+      <AgentCardHeader
+        agent={agent}
+        action={
+          <button
+            type="button"
+            onClick={onUnfavorite}
+            aria-pressed
+            aria-label="자주쓰는 해제"
+            title="자주쓰는 해제"
+            className={cn(
+              'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+              'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+            )}
+          >
+            <RiStarFill size={15} aria-hidden />
+          </button>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="border-border bg-surface-raised text-foreground-secondary inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium">
-          {agent.targetSystem}
-        </span>
+        <MetaChip>{agent.targetSystem}</MetaChip>
       </div>
     </div>
   );

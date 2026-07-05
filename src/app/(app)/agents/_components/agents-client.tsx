@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { MetaChip } from '@/components/ui/meta-chip';
 import type { Agent } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
@@ -123,9 +124,7 @@ export function AgentsClient() {
                       <h2 className="text-foreground text-[length:var(--text-body-lg)] font-semibold tracking-tight">
                         {section.group?.name ?? '단독 에이전트'}
                       </h2>
-                      <span className="border-border bg-surface-raised text-foreground-secondary inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums">
-                        {section.agents.length}
-                      </span>
+                      <MetaChip className="tabular-nums">{section.agents.length}</MetaChip>
                     </div>
                     {section.group?.description ? (
                       <p className="text-muted-foreground truncate text-xs leading-relaxed">

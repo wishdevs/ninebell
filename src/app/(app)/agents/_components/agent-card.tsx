@@ -7,6 +7,7 @@ import {
   RiStarLine,
   RiTimerLine,
 } from '@remixicon/react';
+import { MetaChip } from '@/components/ui/meta-chip';
 import { AGENT_DRIVE_LABEL, AGENT_INTERACTION_LABEL, type Agent } from '@/lib/data/agents';
 import { formatRelativeKorean, formatSeconds } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
@@ -32,55 +33,40 @@ interface AgentCardProps {
 export function AgentCard({ agent, favorite }: AgentCardProps) {
   return (
     <div className="card-interactive border-border bg-surface group relative flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden
-          className="bg-accent/10 text-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)]"
-        >
-          <RiSafariLine size={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-foreground truncate text-[length:var(--text-body-lg)] font-semibold tracking-tight">
-            <Link
-              href={`/agents/${agent.id}`}
-              aria-label={`${agent.name} 실행`}
-              className="focus-visible:after:ring-accent/40 outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:content-[''] focus-visible:after:ring-2"
-            >
-              {agent.name}
-            </Link>
-          </h3>
-          <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-relaxed">
-            {agent.description}
-          </p>
-        </div>
-        {favorite ? (
-          <button
-            type="button"
-            onClick={favorite.onToggle}
-            aria-pressed={favorite.active}
-            aria-label={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
-            title={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
-            className={cn(
-              'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-              'focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
-              favorite.active
-                ? 'text-warning hover:bg-warning/10'
-                : 'text-foreground-tertiary hover:bg-muted',
-            )}
-          >
-            {favorite.active ? (
-              <RiStarFill size={15} aria-hidden />
-            ) : (
-              <RiStarLine size={15} aria-hidden />
-            )}
-          </button>
-        ) : null}
-        <RiArrowRightUpLine
-          size={15}
-          aria-hidden
-          className="text-foreground-tertiary group-hover:text-accent mt-0.5 shrink-0 transition-colors"
-        />
-      </div>
+      <AgentCardHeader
+        agent={agent}
+        action={
+          <>
+            {favorite ? (
+              <button
+                type="button"
+                onClick={favorite.onToggle}
+                aria-pressed={favorite.active}
+                aria-label={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+                title={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+                className={cn(
+                  'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+                  'focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+                  favorite.active
+                    ? 'text-warning hover:bg-warning/10'
+                    : 'text-foreground-tertiary hover:bg-muted',
+                )}
+              >
+                {favorite.active ? (
+                  <RiStarFill size={15} aria-hidden />
+                ) : (
+                  <RiStarLine size={15} aria-hidden />
+                )}
+              </button>
+            ) : null}
+            <RiArrowRightUpLine
+              size={15}
+              aria-hidden
+              className="text-foreground-tertiary group-hover:text-accent mt-0.5 shrink-0 transition-colors"
+            />
+          </>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-1.5">
         <MetaChip>{AGENT_DRIVE_LABEL[agent.drive]}</MetaChip>
@@ -103,23 +89,41 @@ export function AgentCard({ agent, favorite }: AgentCardProps) {
   );
 }
 
-function MetaChip({
-  children,
-  tone = 'default',
-}: {
-  children: React.ReactNode;
-  tone?: 'default' | 'soft';
-}) {
+interface AgentCardHeaderProps {
+  agent: Agent;
+  /** 우측 오버레이 슬롯(★ 버튼·화살표 아이콘 등) — stretched-link 위 z-10에 뜬다. */
+  action?: React.ReactNode;
+}
+
+/**
+ * 카드 헤더 쉘(아이콘 아바타 + 제목 stretched-link + 설명 2줄) — 이 파일의 `AgentCard`와
+ * 홈 '자주쓰는 에이전트' 경량 카드가 공유한다. 배지·통계 등 본문 구성은 각자 다르므로
+ * 헤더까지만 공유하고 나머지는 호출부에서 조립한다.
+ */
+export function AgentCardHeader({ agent, action }: AgentCardHeaderProps) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium',
-        tone === 'soft'
-          ? 'border-border-subtle text-foreground-tertiary border-dashed'
-          : 'border-border bg-surface-raised text-foreground-secondary',
-      )}
-    >
-      {children}
-    </span>
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden
+        className="bg-accent/10 text-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)]"
+      >
+        <RiSafariLine size={18} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-foreground truncate text-[length:var(--text-body-lg)] font-semibold tracking-tight">
+          <Link
+            href={`/agents/${agent.id}`}
+            aria-label={`${agent.name} 실행`}
+            className="focus-visible:after:ring-accent/40 outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:content-[''] focus-visible:after:ring-2"
+          >
+            {agent.name}
+          </Link>
+        </h3>
+        <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-relaxed">
+          {agent.description}
+        </p>
+      </div>
+      {action}
+    </div>
   );
 }
