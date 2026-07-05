@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: 'AI 어시스턴트' };
 export default function AssistantPage() {
   return (
     <div className="flex w-full max-w-[var(--content-max)] flex-1 flex-col">
-      <div className="border-border bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-lg)] border">
+      <div className="border-border bg-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
         <ChatPanel layout="full" />
       </div>
     </div>

@@ -5,6 +5,7 @@ import { RiArrowRightSLine, RiHistoryLine, RiPlayLine, RiRobot2Line } from '@rem
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { cn } from '@/lib/utils';
+import { StatusBadge } from '@/components/ui/status-badge';
 import type { AssistantAction, AssistantSnapshot } from '@/lib/assistant/types';
 
 const CHIP =
@@ -31,7 +32,8 @@ export function AgentActionCard({
         <p className="text-accent text-[10px] font-semibold tracking-widest uppercase">실행</p>
         <div className="text-foreground mt-1 flex items-center gap-2 text-[13px]">
           <span className="font-mono font-semibold">{run.id}</span>
-          <span className="text-muted-foreground">· {run.status}</span>
+          {/* 런 상태 원문 노출 대신 공용 배지 사용(디자인시스템 정리 WS6) */}
+          <StatusBadge status={run.status} />
         </div>
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           <Link
