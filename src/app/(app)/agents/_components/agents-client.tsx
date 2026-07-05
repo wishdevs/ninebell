@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect } from 'react';
-import { RiErrorWarningLine } from '@remixicon/react';
+import Link from 'next/link';
+import { RiDatabase2Line, RiErrorWarningLine } from '@remixicon/react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -17,6 +18,23 @@ interface GroupSection {
   group: NonNullable<Agent['group']> | null;
   agents: Agent[];
 }
+
+interface GroupTool {
+  label: string;
+  href: string;
+}
+
+/**
+ * 그룹별 기준정보(공유 관리 데이터) 진입점 — 사이드바 최상위 '관리'에서 내려, 그룹 문맥에서 연다.
+ * '결의서 작성'의 예산단위·프로젝트는 소속 에이전트(카드·출장·경조금·학자금)가 공유하는 프리필
+ * 소스라 특정 에이전트가 아니라 그룹에 속한다. 새 그룹은 여기 한 줄로 자기 기준정보를 선언한다.
+ */
+const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
+  resolution: [
+    { label: '예산단위 관리', href: '/manage/budget-units' },
+    { label: '프로젝트 관리', href: '/manage/projects' },
+  ],
+};
 
 /**
  * 그룹별 섹션으로 묶는다(등장 순서 유지). 그룹 소속 섹션이 먼저, 단독(group null)은
@@ -131,6 +149,9 @@ export function AgentsClient() {
                         {section.group.description}
                       </p>
                     ) : null}
+                    {section.group && GROUP_TOOLS[section.group.id] ? (
+                      <GroupTools tools={GROUP_TOOLS[section.group.id]} />
+                    ) : null}
                   </div>
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                     {section.agents.map((agent) => (
@@ -150,6 +171,30 @@ export function AgentsClient() {
           );
         })()
       )}
+    </div>
+  );
+}
+
+/**
+ * 그룹 기준정보 진입점 — 그룹 섹션 헤더에 붙는 경량 링크 칩. 관리 화면(/manage/*)으로 이동하되
+ * 사이드바가 아니라 '일하는 자리(그룹)'에서 열도록 한다.
+ */
+function GroupTools({ tools }: { tools: readonly GroupTool[] }) {
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <span className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
+        기준정보
+      </span>
+      {tools.map((tool) => (
+        <Link
+          key={tool.href}
+          href={tool.href}
+          className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors"
+        >
+          <RiDatabase2Line size={12} aria-hidden />
+          {tool.label}
+        </Link>
+      ))}
     </div>
   );
 }

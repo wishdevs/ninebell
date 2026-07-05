@@ -57,14 +57,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
     ],
   },
-  {
-    label: '관리',
-    items: [
-      // 개인 즐겨찾기/카탈로그 — 로그인한 모든 사용자에게 노출(게이트 없음).
-      { href: '/manage/budget-units', label: '예산단위 관리', icon: 'budget' },
-      { href: '/manage/projects', label: '프로젝트 관리', icon: 'projects' },
-    ],
-  },
+  // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
+  // 에이전트 목록의 그룹 섹션에서 연다(agents-client.tsx GROUP_TOOLS). URL(/manage/*)은 유지.
   {
     label: '운영',
     items: [
