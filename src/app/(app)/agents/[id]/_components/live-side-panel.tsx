@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { RiCheckLine, RiErrorWarningLine } from '@remixicon/react';
+import { RiArrowRightUpLine, RiCheckLine, RiErrorWarningLine } from '@remixicon/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
@@ -31,6 +31,11 @@ interface LiveSidePanelProps {
    * 없거나 비어 있으면(DB 스텝 없는 데모 등) 도착한 라이브 단계 id 그대로 폴백.
    */
   planSteps?: readonly WorkflowStep[];
+  /**
+   * 완료 후 사람이 이어서 할 일(에이전트 handoff_note). 성공 종료 시 결과 탭에서 성공
+   * 박스와 구분된 안내로 보여준다(예: 저장된 결의서를 옴니솔에서 결제 상신). 없으면 미표시.
+   */
+  handoffNote?: string | null;
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
@@ -40,7 +45,13 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveSidePanelProps) {
+export function LiveSidePanel({
+  run,
+  resultAction,
+  runsPanel,
+  planSteps,
+  handoffNote,
+}: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -129,6 +140,9 @@ export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveS
         {hasResult ? (
           <TabsContent value="result" className="min-h-0 flex-1 overflow-y-auto p-4">
             <LiveResult result={run.result} error={run.error} transactions={run.transactions} />
+            {run.status === 'succeeded' && handoffNote ? (
+              <HandoffNote note={handoffNote} />
+            ) : null}
             {resultAction ? (
               <div className="border-border mt-4 border-t pt-4">{resultAction}</div>
             ) : null}
@@ -221,6 +235,24 @@ export function LiveResult({
       ) : null}
 
       {transactions ? <TxTable table={transactions} /> : null}
+    </div>
+  );
+}
+
+/**
+ * 완료 후 사람이 이어서 할 일(핸드오프 안내) — 성공 결과(초록) 아래에 info 톤으로 구분해
+ * 보여준다. "에이전트는 여기까지, 이후는 사람 몫"임을 명확히 한다. 성공 종료 시에만 렌더.
+ */
+function HandoffNote({ note }: { note: string }) {
+  return (
+    <div className="border-info/30 bg-info/10 mt-3 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
+      <RiArrowRightUpLine size={16} aria-hidden className="text-info mt-0.5 shrink-0" />
+      <div className="flex flex-col gap-0.5">
+        <p className="text-info text-[length:var(--text-caption)] font-semibold tracking-[0.04em]">
+          다음 할 일
+        </p>
+        <p className="text-foreground text-[length:var(--text-body-sm)] leading-relaxed">{note}</p>
+      </div>
     </div>
   );
 }

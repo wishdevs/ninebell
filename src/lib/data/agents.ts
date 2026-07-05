@@ -153,6 +153,11 @@ export interface Agent {
   group?: { id: string; name: string; description?: string | null } | null;
   name: string;
   description: string;
+  /**
+   * 완료 후 사람이 이어서 할 일(핸드오프 안내). 에이전트는 자동화 지점까지만 실행하고,
+   * 이후는 사람 몫임을 완료 화면에서 안내한다(예: 카드=저장 후 옴니솔 결제 상신). 없으면 미표시.
+   */
+  handoffNote?: string | null;
   drive: AgentDrive;
   interaction: AgentInteraction;
   /** 대상 시스템 — 현재는 더존 옴니솔. */

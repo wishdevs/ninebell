@@ -86,6 +86,9 @@ def serialize_agent(agent: Agent, *, include_flow: bool = False) -> dict:
         "logs": [_serialize_log(log) for log in agent.logs],
         "intervention": _serialize_intervention(agent.intervention) if agent.intervention else None,
     }
+    if agent.handoff_note:
+        # 완료 후 사람이 이어서 할 일 — 완료 화면에서 성공 결과와 구분해 안내한다(값 있을 때만).
+        out["handoffNote"] = agent.handoff_note
     if include_flow and agent.flow_graph:
         out["flowGraph"] = agent.flow_graph
     return out

@@ -221,6 +221,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             run={run}
             runsPanel={runsPanel}
             planSteps={agent.steps}
+            handoffNote={agent.handoffNote}
             resultAction={
               canSaveTemplate && run.runId ? (
                 <SaveTemplateButton

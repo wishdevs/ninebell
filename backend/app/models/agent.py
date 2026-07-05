@@ -37,6 +37,9 @@ class Agent(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 완료 후 사람이 이어서 할 일(핸드오프 안내). 에이전트는 여기까지만 자동화하고, 이후는
+    # 사람 몫임을 완료 화면에 안내한다(예: 카드 결의서=저장 후 옴니솔에서 결제 상신). NULL=없음.
+    handoff_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     # browser | api | hybrid
     drive: Mapped[str] = mapped_column(String(32), nullable=False)
     # readonly | approval | conversational | autonomous
