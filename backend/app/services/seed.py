@@ -125,6 +125,12 @@ async def seed_agents(db: AsyncSession) -> None:
             row = existing[fx["id"]]
             if row.workflow_id is None and fx.get("workflow_id"):
                 row.workflow_id = fx["workflow_id"]
+            # 에이전트 런타임 표시 필드 동기화 — 픽스처가 유일 소스(런타임에 쓰는 코드 없음).
+            # 목업 시절의 가짜 진행 상태(waiting_input·progress 72)가 DB 에 눌어붙는 것 방지
+            # (2026-07-05 사용자 지적: 열자마자 '개입 필요·진행 중'으로 보임).
+            for f in ("status", "progress", "elapsed_seconds", "current_action"):
+                if getattr(row, f) != fx[f]:
+                    setattr(row, f, fx[f])
             # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention 을 픽스처와 동기화.
             # ⚠ 픽스처 스텝 정의가 통째로 바뀌면(키 셋 불일치 — 예: 옛 flow_graph 기반
             # access/kind/… → 실행 그래프 기반 login/…) 키 매칭 보강은 no-op 이 되어 낡은
@@ -157,6 +163,14 @@ async def seed_agents(db: AsyncSession) -> None:
                     st.skill = fs.get("skill")
                 if st.intervention != fs.get("intervention", False):
                     st.intervention = fs.get("intervention", False)
+                # label/detail/status 도 픽스처를 따른다(목업 done/active 잔존 방지 — 계획은
+                # 전부 pending, 진행 상태는 라이브 스텝이 담당).
+                if st.label != fs["label"]:
+                    st.label = fs["label"]
+                if st.detail != fs.get("detail"):
+                    st.detail = fs.get("detail")
+                if st.status != fs["status"]:
+                    st.status = fs["status"]
             continue
         agent = Agent(
             id=fx["id"],
