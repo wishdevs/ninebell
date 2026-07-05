@@ -29,7 +29,7 @@ from app.core.permissions import AGENTS_RUN, LOGS_READ, ROLE_ADMIN, ROLE_RANK, r
 from app.core.security import InvalidTokenError, decode_session_token
 from app.live import store
 from app.live.hitl import hitl_owner, hitl_run_id, resolve_hitl
-from app.live.registry import get_workflow
+from app.live.registry import get_spec
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
 from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate, OrgUnit
@@ -215,11 +215,12 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
                     status_code=403,
                 )
 
-    factory = get_workflow(body.agentId)
-    if factory is None:
+    spec = get_spec(body.agentId)
+    if spec is None:
         return JSONResponse(
             {"error": f"알 수 없는 워크플로우입니다: {body.agentId}"}, status_code=404
         )
+    factory = spec.factory
 
     tracked_run_id = body.runId
     if tracked_run_id:
@@ -255,21 +256,21 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             )
         params["template"] = tpl.selections or []
 
-    # card-collect 는 라이브 검증된 경로(피커 실시간 상한 견고화)라 대기 배율 0.15 를 상시 적용
-    # (진입·settle·모달 폴 축소, 168s→~135s). 다른 워크플로우는 미검증이라 무변경(1.0).
-    # env CARD_DELAY_SCALE 가 있으면 그것이 우선(테스트 override).
-    delay_scale = 0.15 if body.agentId == "card-collect" else None
-
+    # 에이전트별 실행 노브(대기 배율·브라우저 필요 여부·웜캐시 스코프)는 WorkflowSpec 이
+    # 단일소스다(app/live/registry.py — 코드와 함께 버전). env CARD_DELAY_SCALE 은 여전히
+    # 우선(테스트 override). needs_browser=False 면 브라우저 경로 전체를 생략(순수 API/LLM).
     def producer():
         return run_workflow(
             factory(),
-            browser_factory,
+            browser_factory if spec.needs_browser else None,
             creds,
             params,
             semaphore=semaphore,
             owner=owner,
             run_id=tracked_run_id,
-            delay_scale=delay_scale,
+            delay_scale=spec.delay_scale,
+            site=spec.site,
+            login_form_selector=spec.login_form_selector,
         )
 
     async def on_terminal(status: str, note: object, logs: list) -> None:

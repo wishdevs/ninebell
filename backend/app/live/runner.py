@@ -79,43 +79,52 @@ LIVE_VIEWPORT: dict[str, int] = {"width": 1440, "height": 900}
 # (콜드 로그인+유형전환+메뉴 ≈ 13-20s 대체). 만료/무효 상태여도 login 노드가 로그인 폼을
 # 보면 정상 로그인하므로(자가 치유) 이 캐시는 **순수 최적화**이며 정합성에 영향 없다.
 _STATE_TTL_S = 1800.0  # 30분 — ERP 서버 세션 만료 전 재사용 확률을 높이는 보수적 TTL.
-_state_cache: dict[str, tuple[float, dict]] = {}  # userid → (saved_at monotonic, storage_state)
-# 로그인 폼 셀렉터(옴니솔 nbkit.omnisol.selectors.LOGIN_USERID 와 동일 값) — 러너는 워크플로우
-# 무관 계층이라 문자열로만 참조한다. 폼이 없으면 인증된 세션으로 보고 상태를 캐시한다.
+# (site, userid) → (saved_at monotonic, storage_state). site 로 스코프해 타 사이트 워크플로우와
+# 쿠키가 섞이지 않는다(스케일링: 옴니솔 외 사이트 에이전트 대비).
+_state_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+# 웜 판정용 로그인 폼 셀렉터 기본값(옴니솔 nbkit.omnisol.selectors.LOGIN_USERID 와 동일 값) —
+# 러너는 워크플로우 무관 계층이라 문자열로만 참조한다. WorkflowSpec.login_form_selector 로
+# 사이트별 재정의(None=캐시 비활성). 폼이 없으면 인증된 세션으로 보고 상태를 캐시한다.
 _LOGIN_FORM_SELECTOR = "#userid"
 
 
-def _cached_state(userid: str | None) -> dict | None:
+def _cached_state(site: str, userid: str | None) -> dict | None:
     """TTL 내 storage_state 반환(만료 시 제거·None)."""
     if not userid:
         return None
-    hit = _state_cache.get(userid)
+    key = (site, userid)
+    hit = _state_cache.get(key)
     if hit is None:
         return None
     saved_at, state = hit
     if time.monotonic() - saved_at > _STATE_TTL_S:
-        _state_cache.pop(userid, None)
+        _state_cache.pop(key, None)
         return None
     return state
 
 
-async def _save_state(page: Any, userid: str | None) -> None:
+async def _save_state(
+    page: Any, site: str, userid: str | None, login_form_selector: str | None
+) -> None:
     """런 종료 시 인증돼 있으면 storage_state 를 캐시(다음 런 웜 진입). 실패는 조용히 무시."""
-    if page is None or not userid:
+    if page is None or not userid or not login_form_selector:
         return
     try:
         authed = await page.evaluate(
-            "(sel) => !document.querySelector(sel)", _LOGIN_FORM_SELECTOR
+            "(sel) => !document.querySelector(sel)", login_form_selector
         )
         if authed:
-            _state_cache[userid] = (time.monotonic(), await page.context.storage_state())
+            _state_cache[(site, userid)] = (
+                time.monotonic(),
+                await page.context.storage_state(),
+            )
     except Exception:  # noqa: BLE001 — 캐시 갱신 실패가 런 결과를 바꿔선 안 된다.
         logger.debug("storage_state 캐시 갱신 실패(무시)", exc_info=True)
 
 
 async def run_workflow(
     graph: Any,
-    browser_factory: BrowserFactory,
+    browser_factory: BrowserFactory | None,
     creds: dict | None,
     params: dict | None,
     *,
@@ -124,22 +133,27 @@ async def run_workflow(
     owner: str | None = None,
     run_id: str | None = None,
     delay_scale: float | None = None,
+    site: str = "omnisol",
+    login_form_selector: str | None = _LOGIN_FORM_SELECTOR,
 ) -> AsyncIterator[dict]:
     """그래프를 실행하며 노드 진행 이벤트를 스트리밍한다.
 
     yield: `app.live.events` 계약의 프레임들(step/log/screenshot/hitl/chat/transactions),
            그리고 최종 result/error. 그래프가 state 에 result/error 만 남기고 이벤트를 안
            내면 여기서 최종 프레임을 방출한다(노드가 이미 냈으면 중복 없이 종료).
+
+    browser_factory=None(WorkflowSpec.needs_browser=False) 이면 브라우저·스크린캐스트·세션캐시
+    경로를 전부 생략한다 — 순수 API/LLM 워크플로우용. state 의 page/browser 는 None.
     """
     creds = creds or {}
     events: asyncio.Queue = asyncio.Queue()
     limiter = semaphore or contextlib.nullcontext()
     async with limiter:
-        browser = await browser_factory()
+        browser = await browser_factory() if browser_factory is not None else None
         page = None
         # 세션 워밍: 캐시된 storage_state 가 있으면 인증 쿠키를 실은 컨텍스트로 시작 —
         # login 노드가 로그인 폼 없이 통과(웜 진입). 실패는 콜드 경로로 폴백.
-        warm = _cached_state(creds.get("userid"))
+        warm = _cached_state(site, creds.get("userid")) if browser is not None else None
         if warm is not None:
             try:
                 ctx = await browser.new_context(storage_state=warm, viewport=LIVE_VIEWPORT)
@@ -148,7 +162,7 @@ async def run_workflow(
             except Exception:
                 logger.warning("세션 워밍 컨텍스트 실패 — 콜드 경로 폴백", exc_info=True)
                 page = None
-        if page is None:
+        if page is None and browser is not None:
             try:
                 page = await browser.new_page(viewport=LIVE_VIEWPORT)
             except Exception:
@@ -208,8 +222,9 @@ async def run_workflow(
             except Exception:
                 logger.debug("runner task 종료 예외 무시", exc_info=True)
             # 브라우저 닫기 전에 인증 세션 상태를 캐시(다음 런 웜 진입). 실패는 무시.
-            await _save_state(raw_page, creds.get("userid"))
-            try:
-                await browser.close()
-            except Exception:
-                logger.debug("browser.close 예외 무시", exc_info=True)
+            await _save_state(raw_page, site, creds.get("userid"), login_form_selector)
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    logger.debug("browser.close 예외 무시", exc_info=True)

@@ -19,6 +19,7 @@ _expense_card_chat_graph = build_expense_card_chat_graph()
 register_workflow("expense-card-chat", lambda: _expense_card_chat_graph)
 
 _card_collect_graph = build_card_collect_graph()
-register_workflow("card-collect", lambda: _card_collect_graph)
+# delay_scale 0.15: 라이브 검증된 대기 배율(피커 실시간 상한 견고화 후 168s→~135s, 2026-07-04).
+register_workflow("card-collect", lambda: _card_collect_graph, delay_scale=0.15)
 
 __all__ = ["build_card_collect_graph", "build_expense_card_chat_graph"]
