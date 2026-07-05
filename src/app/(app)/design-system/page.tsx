@@ -99,16 +99,18 @@ export default function DesignSystemPage() {
         >
           <div className="text-foreground-secondary flex flex-col gap-3 text-[length:var(--text-body-sm)] leading-relaxed">
             <p>
-              <span className="text-foreground font-semibold">Sticky 헤더 테이블</span> —
-              헤더 행에 <span className="font-mono text-xs">sticky top-0 z-10</span>, 스크롤
-              컨테이너에 <span className="font-mono text-xs">max-h-[520px] overflow-y-auto</span>를
-              적용해 긴 목록에서도 컬럼 라벨이 항상 보이게 한다. 참고 구현:{' '}
+              <span className="text-foreground font-semibold">Sticky 헤더 테이블</span> — 헤더 행에{' '}
+              <span className="font-mono text-xs">sticky top-0 z-10</span>, 스크롤 컨테이너에{' '}
+              <span className="font-mono text-xs">max-h-[520px] overflow-y-auto</span>를 적용해 긴
+              목록에서도 컬럼 라벨이 항상 보이게 한다. 참고 구현:{' '}
               <span className="font-mono text-xs">code-catalog-manager.tsx</span>.
             </p>
             <p>
-              <span className="text-foreground font-semibold">셀 내 인라인 Select · Popover 행 메뉴</span>{' '}
-              — 테이블 셀 안에서 바로 값을 바꾸는 인라인 Select와, 행 끝의 케밥 버튼에서 여는 Popover
-              기반 행 액션 메뉴 조합. 참고 구현:{' '}
+              <span className="text-foreground font-semibold">
+                셀 내 인라인 Select · Popover 행 메뉴
+              </span>{' '}
+              — 테이블 셀 안에서 바로 값을 바꾸는 인라인 Select와, 행 끝의 케밥 버튼에서 여는
+              Popover 기반 행 액션 메뉴 조합. 참고 구현:{' '}
               <span className="font-mono text-xs">members-table.tsx</span> /{' '}
               <span className="font-mono text-xs">member-row-actions.tsx</span>.
             </p>

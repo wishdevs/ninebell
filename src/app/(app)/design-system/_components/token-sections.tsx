@@ -316,11 +316,11 @@ export function TypographySection() {
           <strong>예외 — (auth) 레이아웃</strong>: 로그인·회원가입은 사이드바 없는 별도 레이아웃(
           <code className="font-mono text-[11px]">max-w-md</code> 고정폭 카드)이라{' '}
           <code className="font-mono text-[11px]">PageHeader</code>를 쓰지 않습니다. 타이틀 토큰{' '}
-          <code className="font-mono text-[11px]">--text-section</code>은 뷰포트 폭 기준
-          `clamp()`라 대시보드의 넓은 캔버스에 맞춰져 있고, 고정폭 카드에선 큰 화면에서 카드 대비
-          제목이 과도하게 커진다. 대신{' '}
-          <code className="font-mono text-[11px]">(auth)/_components/auth-page-header.tsx</code>
-          의 전용 <code className="font-mono text-[11px]">AuthPageHeader</code>(고정 크기{' '}
+          <code className="font-mono text-[11px]">--text-section</code>은 뷰포트 폭 기준 `clamp()`라
+          대시보드의 넓은 캔버스에 맞춰져 있고, 고정폭 카드에선 큰 화면에서 카드 대비 제목이
+          과도하게 커진다. 대신{' '}
+          <code className="font-mono text-[11px]">(auth)/_components/auth-page-header.tsx</code>의
+          전용 <code className="font-mono text-[11px]">AuthPageHeader</code>(고정 크기{' '}
           <code className="font-mono text-[11px]">--text-heading</code>)를 두 페이지가 공유한다.
         </p>
       </div>
