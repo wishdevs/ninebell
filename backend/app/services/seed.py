@@ -21,6 +21,7 @@ from app.core.security import hash_password, verify_password
 logger = logging.getLogger("app.services.seed")
 from app.models import (
     Agent,
+    AgentGroup,
     AgentIntervention,
     AgentLog,
     AgentStep,
@@ -30,7 +31,7 @@ from app.models import (
     RolePermission,
     User,
 )
-from app.services.agent_fixtures import AGENT_FIXTURES
+from app.services.agent_fixtures import AGENT_FIXTURES, AGENT_GROUP_FIXTURES
 
 # 조직구분 기준 데이터 — alembic 0005 와 동일. create_all 부트스트랩/SQLite 테스트 경로에서도
 # 동일하게 존재하도록 여기서도 멱등 시드한다(리뷰 #5·#12: 마이그레이션에만 있으면 경로 불일치).
@@ -117,6 +118,30 @@ async def seed_roles(db: AsyncSession, permissions: dict[str, Permission]) -> No
     await db.flush()
 
 
+async def seed_agent_groups(db: AsyncSession) -> None:
+    """에이전트 그룹 멱등 upsert — 기존 행도 name/description/sort_order 를 픽스처와 동기화."""
+    existing = {g.id: g for g in (await db.execute(select(AgentGroup))).scalars()}
+    for fx in AGENT_GROUP_FIXTURES:
+        group = existing.get(fx["id"])
+        if group is None:
+            db.add(
+                AgentGroup(
+                    id=fx["id"],
+                    name=fx["name"],
+                    description=fx.get("description"),
+                    sort_order=fx.get("sort_order", 0),
+                )
+            )
+            continue
+        if group.name != fx["name"]:
+            group.name = fx["name"]
+        if group.description != fx.get("description"):
+            group.description = fx.get("description")
+        if group.sort_order != fx.get("sort_order", 0):
+            group.sort_order = fx.get("sort_order", 0)
+    await db.flush()
+
+
 async def seed_agents(db: AsyncSession) -> None:
     existing = {a.id: a for a in (await db.execute(select(Agent))).scalars()}
     for fx in AGENT_FIXTURES:
@@ -131,6 +156,9 @@ async def seed_agents(db: AsyncSession) -> None:
             for f in ("status", "progress", "elapsed_seconds", "current_action"):
                 if getattr(row, f) != fx[f]:
                     setattr(row, f, fx[f])
+            # 그룹 소속(0016 그룹 도입분) 동기화.
+            if row.group_id != fx.get("group_id"):
+                row.group_id = fx.get("group_id")
             # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention·phase 를 픽스처와 동기화.
             # ⚠ 픽스처 스텝 정의가 통째로 바뀌면(키 셋 불일치 — 예: 옛 flow_graph 기반
             # access/kind/… → 실행 그래프 기반 login/…) 키 매칭 보강은 no-op 이 되어 낡은
@@ -178,6 +206,7 @@ async def seed_agents(db: AsyncSession) -> None:
         agent = Agent(
             id=fx["id"],
             workflow_id=fx.get("workflow_id"),
+            group_id=fx.get("group_id"),
             name=fx["name"],
             description=fx["description"],
             drive=fx["drive"],
@@ -313,5 +342,6 @@ async def seed_all(db: AsyncSession) -> None:
     permissions = await seed_permissions(db)
     await seed_roles(db, permissions)
     await seed_local_admin(db)
+    await seed_agent_groups(db)  # FK: seed_agents 의 group_id 보다 먼저.
     await seed_agents(db)
     await seed_org_units(db)

@@ -11,10 +11,41 @@ import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
 
+interface GroupSection {
+  /** null = 단독 에이전트 섹션. */
+  group: NonNullable<Agent['group']> | null;
+  agents: Agent[];
+}
+
+/**
+ * 그룹별 섹션으로 묶는다(등장 순서 유지). 그룹 소속 섹션이 먼저, 단독(group null)은
+ * 마지막 섹션. 그룹이 하나도 없으면 빈 배열을 반환해 기존 플랫 그리드로 렌더한다.
+ */
+function groupSections(agents: readonly Agent[]): GroupSection[] {
+  if (!agents.some((a) => a.group)) return [];
+  const byId = new Map<string, GroupSection>();
+  const standalone: Agent[] = [];
+  for (const agent of agents) {
+    if (!agent.group) {
+      standalone.push(agent);
+      continue;
+    }
+    const section = byId.get(agent.group.id);
+    if (section) {
+      section.agents.push(agent);
+    } else {
+      byId.set(agent.group.id, { group: agent.group, agents: [agent] });
+    }
+  }
+  const sections = [...byId.values()];
+  if (standalone.length > 0) sections.push({ group: null, agents: standalone });
+  return sections;
+}
+
 /**
  * 에이전트 카탈로그. 저장된 에이전트 정의를 `GET /agents`로 불러와 카드로 보여준다.
  * 에이전트는 워커로 상주하지 않으며(카드를 열 때 라이브 세션 시작, 화면을 벗어나면
- * 종료), 리스트에서는 실행 이력만 노출한다.
+ * 종료), 리스트에서는 실행 이력만 노출한다. 그룹(2뎁스 분류)이 있으면 섹션으로 묶는다.
  *
  * 카드 우상단 ★ = 자주쓰는 에이전트 토글(kind='agent', 낙관적 반영+실패 롤백) —
  * 홈 '자주쓰는 에이전트' 섹션의 소스가 된다.
@@ -59,18 +90,66 @@ export function AgentsClient() {
           description="아직 사용할 수 있는 에이전트가 없습니다."
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {data?.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              favorite={{
-                active: fav.has(agent.id),
-                onToggle: () => void fav.toggle(agent.id, agent.name),
-              }}
-            />
-          ))}
-        </div>
+
+        (() => {
+          const sections = groupSections(data ?? []);
+          if (sections.length === 0) {
+            // 그룹이 전혀 없으면 기존처럼 플랫 그리드(헤더 없음).
+            return (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {data?.map((agent) => (
+                  <AgentCard
+                    key={agent.id}
+                    agent={agent}
+                    favorite={{
+                      active: fav.has(agent.id),
+                      onToggle: () => void fav.toggle(agent.id, agent.name),
+                    }}
+                  />
+                ))}
+              </div>
+            );
+          }
+          return (
+            <div className="flex flex-col gap-8">
+              {sections.map((section) => (
+                <section
+                  key={section.group?.id ?? '__standalone'}
+                  aria-label={section.group?.name ?? '단독 에이전트'}
+                  className="flex flex-col gap-3"
+                >
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-foreground text-[length:var(--text-body-lg)] font-semibold tracking-tight">
+                        {section.group?.name ?? '단독 에이전트'}
+                      </h2>
+                      <span className="border-border bg-surface-raised text-foreground-secondary inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums">
+                        {section.agents.length}
+                      </span>
+                    </div>
+                    {section.group?.description ? (
+                      <p className="text-muted-foreground truncate text-xs leading-relaxed">
+                        {section.group.description}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    {section.agents.map((agent) => (
+                      <AgentCard
+                        key={agent.id}
+                        agent={agent}
+                        favorite={{
+                          active: fav.has(agent.id),
+                          onToggle: () => void fav.toggle(agent.id, agent.name),
+                        }}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          );
+        })()
       )}
     </div>
   );

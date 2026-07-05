@@ -146,6 +146,11 @@ export interface Agent {
    * 지정된 에이전트만 라이브 실행 가능하고, 없으면 실행 컨트롤이 비활성화된다.
    */
   workflowId?: string;
+  /**
+   * 소속 그룹(2뎁스 분류 — 서버 agent_groups). 목록 섹션·디테일 브레드크럼 표기 전용이며
+   * 실행·권한과 무관하다. null/미지정 = 단독 에이전트.
+   */
+  group?: { id: string; name: string; description?: string | null } | null;
   name: string;
   description: string;
   drive: AgentDrive;

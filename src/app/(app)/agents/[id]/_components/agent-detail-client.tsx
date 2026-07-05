@@ -134,13 +134,24 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
       {/* 헤더 */}
       <div className="flex flex-col gap-3">
-        <Link
-          href="/agents"
-          className="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-[length:var(--text-body-sm)] font-medium transition-colors"
-        >
-          <RiArrowLeftSLine size={15} aria-hidden />
-          에이전트
-        </Link>
+        {/* 브레드크럼 — 그룹 소속이면 "에이전트 › 그룹명"(그룹명은 비링크 표기). */}
+        <div className="text-muted-foreground inline-flex w-fit items-center gap-1 text-[length:var(--text-body-sm)] font-medium">
+          <Link
+            href="/agents"
+            className="hover:text-foreground inline-flex items-center gap-1 transition-colors"
+          >
+            <RiArrowLeftSLine size={15} aria-hidden />
+            에이전트
+          </Link>
+          {agent.group ? (
+            <>
+              <span aria-hidden className="text-foreground-tertiary">
+                ›
+              </span>
+              <span>{agent.group.name}</span>
+            </>
+          ) : null}
+        </div>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">

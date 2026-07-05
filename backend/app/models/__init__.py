@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.models.access_log import AccessLog
 from app.models.agent import Agent
+from app.models.agent_group import AgentGroup
 from app.models.agent_intervention import AgentIntervention
 from app.models.agent_log import AgentLog
 from app.models.agent_run import AgentRun
@@ -28,6 +29,7 @@ __all__ = [
     "RolePermission",
     "AccessLog",
     "Agent",
+    "AgentGroup",
     "AgentStep",
     "AgentLog",
     "AgentIntervention",

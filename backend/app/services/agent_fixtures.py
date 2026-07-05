@@ -72,11 +72,25 @@ CORPORATE_CARD_FLOW: dict = {
 }
 
 
+# ── 에이전트 그룹 (2뎁스 분류 — 실행 불가, 목록 섹션·브레드크럼 전용) ────────
+# '결의서 작성' 문서군: 현재 실존하는 card-chat 만 소속. 향후 출장(국내/자차·해외/정산서)·
+# 경조금·학자금 에이전트가 추가되면 같은 그룹으로 들어온다(미리 만들지 않음).
+AGENT_GROUP_FIXTURES: list[dict] = [
+    {
+        "id": "resolution",
+        "name": "결의서 작성",
+        "description": "더존 옴니솔 결의서(GLDDOC00300) 문서군 — 카드·출장·경조금·학자금",
+        "sort_order": 0,
+    },
+]
+
+
 # ── 1개 에이전트 (card-chat 만 유지) ─────────────────────────────────────────
 AGENT_FIXTURES: list[dict] = [
     {
         "id": "card-chat",
         "workflow_id": "card-collect",  # 실행 레지스트리 워크플로우 id(유일 실동작).
+        "group_id": "resolution",  # '결의서 작성' 그룹 소속.
         "name": "결의서 입력 - 카드",
         "description": "법인카드 승인내역을 조회해 건별 그리드로 예산단위·프로젝트·적요를 입력받고, 부가세구분에 따라 과세(법인카드)·불공(법인카드불공) 2패스로 반영한 뒤 마지막에 한 번 저장(F7)한다.",
         "drive": "browser",

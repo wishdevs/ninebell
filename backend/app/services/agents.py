@@ -60,6 +60,13 @@ def serialize_agent(agent: Agent, *, include_flow: bool = False) -> dict:
     out: dict = {
         "id": agent.id,
         "workflowId": agent.workflow_id,  # 실행 워크플로우 id(없으면 실행 불가) — 프론트 게이트.
+        # 소속 그룹(2뎁스 분류) — 목록 섹션·브레드크럼 전용. 단독 에이전트는 null.
+        # description 은 목록 섹션 헤더의 설명 한 줄에 쓰인다(없으면 null).
+        "group": (
+            {"id": agent.group.id, "name": agent.group.name, "description": agent.group.description}
+            if agent.group
+            else None
+        ),
         "name": agent.name,
         "description": agent.description,
         "drive": agent.drive,

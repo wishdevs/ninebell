@@ -10,12 +10,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, false, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONVariant
 
 if TYPE_CHECKING:
+    from app.models.agent_group import AgentGroup
     from app.models.agent_intervention import AgentIntervention
     from app.models.agent_log import AgentLog
     from app.models.agent_step import AgentStep
@@ -29,6 +30,10 @@ class Agent(Base):
     # 잇는 서버측 단일 소스 — 프론트 하드코딩 매핑(WORKFLOW_BY_AGENT) 대체. 없으면 실행 불가.
     workflow_id: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True, index=True
+    )
+    # 소속 그룹(2뎁스 분류). NULL = 단독 에이전트. 그룹 삭제 시 단독으로 승격(SET NULL).
+    group_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_groups.id", ondelete="SET NULL"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -63,6 +68,9 @@ class Agent(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+    # 그룹은 에이전트 수가 적어 selectin 1회 추가 조회로 충분(N+1 아님).
+    group: Mapped[AgentGroup | None] = relationship(lazy="selectin")
 
     steps: Mapped[list[AgentStep]] = relationship(
         back_populates="agent",
