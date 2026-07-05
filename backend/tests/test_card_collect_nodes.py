@@ -15,6 +15,7 @@ import pytest
 from app.agents.card_collect import nodes as cc_nodes
 from app.agents.card_collect import steps
 from app.agents.card_collect.nodes import _fmt_won, make_collect_rows_node, recommend_note
+from app.agents.card_collect.nodes import batch, catalog, pass2, prefill, save
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def _stub_recommend(monkeypatch):
     async def _none(*args, **kwargs):
         return {}
 
-    monkeypatch.setattr(cc_nodes, "recommend_selections", _none)
+    monkeypatch.setattr(prefill, "recommend_selections", _none)
 
 
 # ── compute_period(D2 10일 규칙 — 2026-07-04 변경: 10일 미만=전월, 10일부터=당월) ──
@@ -135,7 +136,7 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
             "인사/기획팀",
         )
 
-    monkeypatch.setattr(cc_nodes, "_load_user_favorites", _fake_favs)
+    monkeypatch.setattr(catalog, "_load_user_favorites", _fake_favs)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": None}
@@ -195,7 +196,7 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
             return False, "예산단위 무매칭"
         return True, f"예산단위 {collected['예산단위']}"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
@@ -244,7 +245,7 @@ async def test_grid_submit_learns_only_edited_fields(monkeypatch):
     async def _ok_apply(page, events, rows, collected):
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _ok_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _ok_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": "x"}
@@ -279,7 +280,7 @@ async def test_grid_invalid_submit_warns_and_reemits(monkeypatch):
         applied.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
@@ -334,7 +335,7 @@ async def test_grid_submit_partitions_taxable_vs_nontax(monkeypatch):
         calls.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     rows = _mixed_rows()
@@ -392,7 +393,7 @@ async def test_apply_doc_failure_surfaces_modal_text(monkeypatch):
     async def _noop_shot(put, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(pass2, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
     out = await make_apply_doc_node()(
         {"events": events, "page": object(), "filled": 1, "pass1_applied_idx": [0]}
@@ -434,8 +435,8 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     async def _noop_node(state):
         return {}
 
-    monkeypatch.setattr(cc_nodes, "make_open_evdn_node", lambda: _noop_node)
-    monkeypatch.setattr(cc_nodes, "make_select_evdn_node", lambda code="01": _noop_node)
+    monkeypatch.setattr(pass2, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(pass2, "make_select_evdn_node", lambda code="01": _noop_node)
 
     events: asyncio.Queue = asyncio.Queue()
     pending = [
@@ -461,7 +462,7 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
         calls.extend(rows)
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
 
     doc_applied: list[list[int]] = []
 
@@ -474,7 +475,7 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
     async def _noop_shot(put, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(pass2, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
     rows2 = _mixed_rows()
     state = {
@@ -502,7 +503,7 @@ async def test_save_final_saves_without_confirmation(monkeypatch):
     async def _noop_shot(put, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
     out = await make_save_final_node()(
         {"events": events, "page": object(), "filled": 3, "pass2_filled": 1}
@@ -553,7 +554,7 @@ async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
     async def _noop_shot(put, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
 
     # 1차 실패(save_retries 0) → 재시도 신호 + 카운터 1.
     out1 = await make_save_final_node()(
@@ -636,8 +637,8 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     async def _noop_node(state):
         return {}
 
-    monkeypatch.setattr(cc_nodes, "make_open_evdn_node", lambda: _noop_node)
-    monkeypatch.setattr(cc_nodes, "make_select_evdn_node", lambda code="01": _noop_node)
+    monkeypatch.setattr(pass2, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(pass2, "make_select_evdn_node", lambda code="01": _noop_node)
 
     key = _row_key(rows2[0])
     pending = [
@@ -661,8 +662,10 @@ def test_graph_state_declares_all_node_output_keys():
 
     실전 런 회귀: pass1_applied_idx 미선언 → save 노드에서 '적용할 행이 없습니다' 실패.
     새 반환 키를 추가하면 이 목록과 TypedDict 둘 다 갱신할 것.
+    검증은 support.state_contract(get_type_hints 기반 — BaseAgentState 상속 키 포함)로 한다.
     """
     from app.agents.card_collect.graph import CardCollectState
+    from tests.support.state_contract import assert_keys_declared
 
     node_output_keys = {
         "period", "rows_list", "filled", "pending_nontax", "pass1_applied_idx",
@@ -670,9 +673,22 @@ def test_graph_state_declares_all_node_output_keys():
         "pass2_unmatched", "pass2_unmatched_desc", "pass2_filled", "pass2_applied_idx",
         "result", "error",
     }
-    declared = set(CardCollectState.__annotations__)
-    missing = node_output_keys - declared
-    assert not missing, f"CardCollectState 미선언 키(그래프 전달 누락됨): {missing}"
+    assert_keys_declared(CardCollectState, dict.fromkeys(node_output_keys))
+
+
+def test_graph_compiles_and_channels_include_inherited_base_keys():
+    """BaseAgentState 상속 키(page/result 등)가 State 계약·컴파일 채널에 모두 실린다.
+
+    LangGraph 는 get_type_hints 로 채널을 수집하므로 상속 키도 채널이 된다 — 상속 구조
+    전환(BaseAgentState) 후에도 러너 주입 키가 노드 간 전달됨을 회귀 방지한다.
+    """
+    from app.agents.card_collect.graph import CardCollectState, build_card_collect_graph
+    from tests.support.state_contract import all_declared_keys
+
+    keys = all_declared_keys(CardCollectState)
+    assert {"page", "browser", "events", "owner", "run_id", "result", "error"} <= keys
+    g = build_card_collect_graph()  # 컴파일 자체가 State 스키마 검증
+    assert {"page", "result"} <= set(g.channels)
 
 
 async def test_prefill_cost_prefix_biases_default_budget():
@@ -787,7 +803,7 @@ async def test_save_final_saves_when_no_nontax(monkeypatch):
     async def _noop_shot(emit, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
     out = await cc_nodes.make_save_final_node()(
         {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 0}
     )
@@ -808,7 +824,7 @@ async def test_save_final_saves_when_no_taxable(monkeypatch):
     async def _noop_shot(emit, page):
         return None
 
-    monkeypatch.setattr(cc_nodes, "emit_shot", _noop_shot)
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
     out = await cc_nodes.make_save_final_node()(
         {"events": asyncio.Queue(), "page": object(), "filled": 0, "pass2_filled": 2}
     )
@@ -858,7 +874,7 @@ async def test_grid_submit_batches_same_key_rows_into_one_apply(monkeypatch):
         group_calls.append(list(rows))
         return True, "ok"
 
-    monkeypatch.setattr(cc_nodes, "_apply_group_fields", _fake_apply)
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
@@ -911,7 +927,7 @@ async def test_apply_group_fields_batches_and_skips_account_picker(monkeypatch):
     monkeypatch.setattr(steps, "fill_codepicker", _acct)
     monkeypatch.setattr(steps, "apply_rows", _apply)
 
-    ok, detail = await cc_nodes._apply_group_fields(
+    ok, detail = await batch._apply_group_fields(
         object(),
         asyncio.Queue(),
         [0, 2, 5],

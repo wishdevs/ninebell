@@ -12,8 +12,6 @@ state 계약(러너 주입): page/browser/events/userid/password/params. 종료�
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
-
 from langgraph.graph import END, StateGraph
 
 from app.agents.common.nodes import (
@@ -25,6 +23,7 @@ from app.agents.common.nodes import (
     make_set_gubun_node,
     make_user_type_node,
 )
+from app.agents.common.state import BaseAgentState
 
 from .nodes import (
     make_apply_doc_node,
@@ -39,15 +38,9 @@ from .nodes import (
 )
 
 
-class CardCollectState(TypedDict, total=False):
-    page: Any
-    browser: Any
-    events: Any
-    userid: str | None
-    password: str | None
-    params: dict
-    owner: str | None  # HITL 소유자(세션 사용자 id) — 채널 오픈 시 바인딩(러너 주입)
-    run_id: str | None  # 세션/런 id — HITL 런바인딩(러너 주입)
+class CardCollectState(BaseAgentState, total=False):
+    """러너 주입 공통 키는 BaseAgentState 상속(page/browser/events/…/result/error)."""
+
     period: list[str]
     rows_list: list[dict]
     filled: int
@@ -71,8 +64,6 @@ class CardCollectState(TypedDict, total=False):
     save_error_msg: str  # 직전 저장 실패 사유(재진입한 그리드에 표시)
     save_error_issues: list[dict]  # 파싱된 조치 안내 [{aprvlNo, requiredAccount, rowNo, merchant, raw}]
     retry_prefill: dict  # {row_key: {budgetUnit, project, note, skip}} — 재시도 시 이전 선택 보존
-    result: str | dict
-    error: str
 
 
 def build_card_collect_graph():

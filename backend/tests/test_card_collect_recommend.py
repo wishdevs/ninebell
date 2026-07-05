@@ -13,9 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.card_collect import nodes as cc_nodes
 from app.agents.card_collect import recommend, steps
-from app.agents.card_collect.nodes import make_collect_rows_node
+from app.agents.card_collect.nodes import catalog, make_collect_rows_node, prefill
 from app.config import get_settings
 from app.live.hitl import resolve_hitl
 
@@ -137,7 +136,7 @@ async def _drain_and_finish(task: asyncio.Task, frame: dict, n: int) -> dict:
 async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
     _stub_dumps(monkeypatch, units=[])
     monkeypatch.setattr(
-        cc_nodes,
+        catalog,
         "_load_user_favorites",
         _favs_loader([{"code": "2101", "name": "인사기획팀"}], [], None),
     )
@@ -145,7 +144,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
     async def _rec(rec_rows, budget_c, project_c, *, http, settings):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.9}}
 
-    monkeypatch.setattr(cc_nodes, "recommend_selections", _rec)
+    monkeypatch.setattr(prefill, "recommend_selections", _rec)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": None}
@@ -165,7 +164,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
 async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
     _stub_dumps(monkeypatch, units=[])
     monkeypatch.setattr(
-        cc_nodes,
+        catalog,
         "_load_user_favorites",
         _favs_loader(
             [
@@ -180,7 +179,7 @@ async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
     async def _rec(rec_rows, budget_c, project_c, *, http, settings):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.3}}
 
-    monkeypatch.setattr(cc_nodes, "recommend_selections", _rec)
+    monkeypatch.setattr(prefill, "recommend_selections", _rec)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
@@ -198,7 +197,7 @@ async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
     """예산단위는 AI, 프로젝트는 기본 — 두 필드가 독립적으로 결정된다."""
     _stub_dumps(monkeypatch, units=[])
     monkeypatch.setattr(
-        cc_nodes,
+        catalog,
         "_load_user_favorites",
         _favs_loader(
             [{"code": "2101", "name": "인사기획팀"}],
@@ -211,7 +210,7 @@ async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
         # 예산단위만 확신, 프로젝트는 빈 코드 → 프로젝트는 기본지정 폴백.
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.95}}
 
-    monkeypatch.setattr(cc_nodes, "recommend_selections", _rec)
+    monkeypatch.setattr(prefill, "recommend_selections", _rec)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
@@ -232,7 +231,7 @@ async def test_collect_rows_recommend_exception_uses_default_fallback(monkeypatc
     """추천 호출이 내부에서 실패해도(예외) 런은 살고, 전 행이 기본지정으로 프리필된다."""
     _stub_dumps(monkeypatch, units=[])
     monkeypatch.setattr(
-        cc_nodes,
+        catalog,
         "_load_user_favorites",
         _favs_loader([{"code": "9000", "name": "기본예산", "isDefault": True}], [], None),
     )
