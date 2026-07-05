@@ -109,7 +109,6 @@ export function AgentsClient() {
           description="아직 사용할 수 있는 에이전트가 없습니다."
         />
       ) : (
-
         (() => {
           const sections = groupSections(data ?? []);
           if (sections.length === 0) {
@@ -137,18 +136,20 @@ export function AgentsClient() {
                   aria-label={section.group?.name ?? '단독 에이전트'}
                   className="flex flex-col gap-3"
                 >
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-foreground text-[length:var(--text-body-lg)] font-semibold tracking-tight">
-                        {section.group?.name ?? '단독 에이전트'}
-                      </h2>
-                      <MetaChip className="tabular-nums">{section.agents.length}</MetaChip>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-foreground text-[length:var(--text-body-lg)] font-semibold tracking-tight">
+                          {section.group?.name ?? '단독 에이전트'}
+                        </h2>
+                        <MetaChip className="tabular-nums">{section.agents.length}</MetaChip>
+                      </div>
+                      {section.group?.description ? (
+                        <p className="text-muted-foreground truncate text-xs leading-relaxed">
+                          {section.group.description}
+                        </p>
+                      ) : null}
                     </div>
-                    {section.group?.description ? (
-                      <p className="text-muted-foreground truncate text-xs leading-relaxed">
-                        {section.group.description}
-                      </p>
-                    ) : null}
                     {section.group && GROUP_TOOLS[section.group.id] ? (
                       <GroupTools tools={GROUP_TOOLS[section.group.id]} />
                     ) : null}
@@ -176,24 +177,19 @@ export function AgentsClient() {
 }
 
 /**
- * 그룹 기준정보 진입점 — 그룹 섹션 헤더에 붙는 경량 링크 칩. 관리 화면(/manage/*)으로 이동하되
- * 사이드바가 아니라 '일하는 자리(그룹)'에서 열도록 한다.
+ * 그룹 기준정보 진입점 — 그룹 섹션 헤더 우측의 관리 버튼. 관리 화면(/manage/*)으로 이동하되
+ * 사이드바가 아니라 '일하는 자리(그룹)'에서 열도록 한다. secondary 버튼으로 뚜렷이 노출한다.
  */
 function GroupTools({ tools }: { tools: readonly GroupTool[] }) {
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      <span className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
-        기준정보
-      </span>
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
       {tools.map((tool) => (
-        <Link
-          key={tool.href}
-          href={tool.href}
-          className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors"
-        >
-          <RiDatabase2Line size={12} aria-hidden />
-          {tool.label}
-        </Link>
+        <Button key={tool.href} asChild variant="secondary" size="sm">
+          <Link href={tool.href}>
+            <RiDatabase2Line size={14} aria-hidden />
+            {tool.label}
+          </Link>
+        </Button>
       ))}
     </div>
   );
