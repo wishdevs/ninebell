@@ -159,7 +159,9 @@ export function MotionSection() {
           'transform · opacity 만 애니메이션 — 컴포지터에서 처리되어 리플로우가 없습니다.',
           <>
             지속시간·이징은{' '}
-            <code className="font-mono text-[11px]">duration-[var(--duration-*)]</code> +{' '}
+            {/* ⚠ 와일드카드(-*) 문자열은 Tailwind JIT 가 클래스로 오인해 잘못된 CSS 를
+                생성하므로(빌드 실패 실측 2026-07-05) 구체 토큰 예시로 표기한다. */}
+            <code className="font-mono text-[11px]">duration-[var(--duration-fast)]</code> +{' '}
             <code className="font-mono text-[11px]">ease-[var(--ease-out)]</code> 토큰으로.
           </>,
           '무한 루프 애니메이션은 스피너(animate-spin)와 라이브 인디케이터(animate-pulse) 두 곳에만 허용합니다.',
