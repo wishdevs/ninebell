@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
+import { RunStatusBadge } from '@/components/ui/run-status-badge';
 import { cn } from '@/lib/utils';
 import { ApiError, toApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
@@ -27,7 +28,6 @@ import {
   type ChatSelection,
   type RunDetail,
   type RunLogEntry,
-  type RunStatus,
   type RunSummary,
 } from '@/lib/live/runs-api';
 
@@ -389,29 +389,3 @@ function RunLogLines({ logs }: { logs: readonly RunLogEntry[] }) {
   );
 }
 
-// ── 상태 배지 ────────────────────────────────────────────────────────
-
-const STATUS_STYLE: Record<string, { className: string; label: string }> = {
-  running: { className: 'border-accent/30 bg-accent/10 text-accent', label: '실행 중' },
-  waiting_input: { className: 'border-warning/30 bg-warning/10 text-warning', label: '개입 대기' },
-  succeeded: { className: 'border-success/30 bg-success/10 text-success', label: '완료' },
-  failed: { className: 'border-danger/30 bg-danger/10 text-danger', label: '실패' },
-  cancelled: { className: 'border-border bg-muted text-muted-foreground', label: '종료됨' },
-};
-
-function RunStatusBadge({ status }: { status: RunStatus }) {
-  const style = STATUS_STYLE[status] ?? {
-    className: 'border-border bg-muted text-muted-foreground',
-    label: status,
-  };
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wider',
-        style.className,
-      )}
-    >
-      {style.label}
-    </span>
-  );
-}

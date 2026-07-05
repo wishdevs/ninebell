@@ -3,6 +3,7 @@
 import { RiLockLine, RiPlayCircleLine, RiPlayLine, RiRestartLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
+import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
 import type { LiveRunStatus } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
@@ -142,56 +143,17 @@ function StageRunCta({
   );
 }
 
+/**
+ * 상태 배지 — 공용 RunStatusBadge 에 위임한다(색 의미는 domain-vocab-sections.tsx 기준).
+ * 소켓 미연결(재연결 시도)만 이 컴포넌트가 로컬로 얹는 예외 — 런 상태값이 아니라
+ * 연결성 표시이므로 status 를 'reconnecting' 으로 바꿔치기해 같은 배지를 재사용한다.
+ */
 function StatusBadge({ status, connected }: { status: LiveRunStatus; connected: boolean }) {
-  if (status === 'idle') {
-    return (
-      <Badge className="border-border bg-muted text-muted-foreground">
-        <span className="bg-muted-foreground size-1.5 rounded-full" aria-hidden />
-        대기
-      </Badge>
-    );
-  }
-  if (status === 'succeeded') {
-    return (
-      <Badge className="border-success/30 bg-success/10 text-success">
-        <span className="bg-success size-1.5 rounded-full" aria-hidden />
-        완료
-      </Badge>
-    );
-  }
-  if (status === 'failed') {
-    return (
-      <Badge className="border-danger/30 bg-danger/10 text-danger">
-        <span className="bg-danger size-1.5 rounded-full" aria-hidden />
-        실패
-      </Badge>
-    );
-  }
-  if (!connected && (status === 'running' || status === 'waiting_input')) {
-    return (
-      <Badge className="border-warning/30 bg-warning/10 text-warning">
-        <span className="bg-warning size-1.5 animate-pulse rounded-full" aria-hidden />
-        재연결 중
-      </Badge>
-    );
-  }
-  return (
-    <Badge className="border-danger/30 bg-danger/10 text-danger">
-      <span className="bg-danger size-1.5 animate-pulse rounded-full" aria-hidden />
-      LIVE
-    </Badge>
-  );
-}
-
-function Badge({ className, children }: { className?: string; children: React.ReactNode }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wider',
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
+  const reconnecting = !connected && (status === 'running' || status === 'waiting_input');
+  const effective: RunBadgeStatus = reconnecting ? 'reconnecting' : status;
+  const dot: 'static' | 'pulse' =
+    effective === 'idle' || effective === 'succeeded' || effective === 'failed'
+      ? 'static'
+      : 'pulse';
+  return <RunStatusBadge status={effective} dot={dot} />;
 }
