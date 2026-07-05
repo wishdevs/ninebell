@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RiCheckLine, RiSearchLine, RiStarFill, RiStarLine, RiTableLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -377,11 +377,11 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                     </Td>
                   ))}
 
-                  {/* 예산단위 select + ★ */}
+                  {/* 예산단위 combobox + ★ */}
                   <Td>
                     <div className="flex items-center gap-1.5">
                       {e.budgetSource ? <SourceBadge source={e.budgetSource} /> : null}
-                      <BudgetSelect
+                      <BudgetCombobox
                         value={e.budgetUnitCode}
                         favorites={bFavList}
                         mineExclFav={bMineExclFav}
@@ -617,15 +617,17 @@ function BulkBar({
       <span className="text-foreground-tertiary text-[10px] font-semibold tracking-wider uppercase">
         일괄 지정
       </span>
-      <BudgetSelect
+      <BudgetCombobox
         value=""
         favorites={budgetFavs}
         mineExclFav={budgetMineExclFav}
         allExclFav={budgetAllExclFav}
         disabled={disabled}
         placeholder="예산단위 전체 적용"
-        className="h-8 w-48 text-[11px]"
-        onChange={(code) => code && onBulkBudget(code)}
+        className="w-48 text-[11px]"
+        onChange={(code) => {
+          if (code) onBulkBudget(code);
+        }}
       />
       <select
         value=""
@@ -671,9 +673,33 @@ function BulkBar({
   );
 }
 
-// ── 예산단위 select ──────────────────────────────────────────────────
+// ── 예산단위 combobox ────────────────────────────────────────────────
 
-function BudgetSelect({
+/** 예산단위 트리거 라벨 — 선택 단위 = 조합 행이라 이름·사업계획명·예산계정명을 함께 보여준다. */
+function budgetLabel(o: BudgetUnitOption): string {
+  return o.bgacctNm || o.bizplanNm
+    ? `${o.name} · ${o.bizplanNm || '-'} · ${o.bgacctNm || '-'}`
+    : `${o.name} (${o.code})`;
+}
+
+/** 검색 정규화 — 소문자화 + 공백 전부 제거(대소문자·공백 관대 부분일치). */
+function normalizeQuery(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, '');
+}
+
+/** 이름·사업계획명·예산계정명(+코드) 어느 쪽이든 부분일치하면 매칭. */
+function budgetMatches(o: BudgetUnitOption, q: string): boolean {
+  if (!q) return true;
+  return normalizeQuery(`${o.name} ${o.bizplanNm ?? ''} ${o.bgacctNm ?? ''} ${o.code}`).includes(q);
+}
+
+/**
+ * 예산단위 검색형 combobox — ProjectCombobox 와 같은 상호작용 모델(트리거 → 팝오버 →
+ * 검색 입력). 프레임에 favorites+mine+all 전체 목록이 이미 있으므로 클라이언트 필터링만
+ * 한다(ERP 재검색 불필요). 그룹(자주쓰는 → 내 부서 → 전체)은 유지하되 빈 그룹은 숨긴다.
+ * 키보드: ↑↓ 이동 · Enter 선택 · Esc 닫기. 트리거는 data-budget-trigger 로 식별한다.
+ */
+function BudgetCombobox({
   value,
   favorites,
   mineExclFav = [],
@@ -690,7 +716,7 @@ function BudgetSelect({
   /** 내 부서 매칭(자주쓰는 제외분). */
   mineExclFav?: BudgetUnitOption[];
   allExclFav: BudgetUnitOption[];
-  /** 현재 값의 옵션 — 그룹 밖(프리셀렉트) 코드일 때 라벨을 표시하려 별도 옵션을 끼운다. */
+  /** 현재 값의 옵션 — 그룹 밖(프리셀렉트) 코드여도 트리거 라벨을 표시하기 위함. */
   selectedOption?: BudgetUnitOption;
   disabled?: boolean;
   invalid?: boolean;
@@ -698,58 +724,183 @@ function BudgetSelect({
   className?: string;
   onChange: (code: string) => void;
 }) {
-  // 선택 단위 = 조합 행 — 예산단위명·사업계획명·예산계정명을 모두 보여줘야 고를 수 있다.
-  const label = (o: BudgetUnitOption) =>
-    o.bgacctNm || o.bizplanNm
-      ? `${o.name} · ${o.bizplanNm || '-'} · ${o.bgacctNm || '-'}`
-      : `${o.name} (${o.code})`;
-  const inGroups =
-    value !== '' && [...favorites, ...mineExclFav, ...allExclFav].some((o) => o.code === value);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [activeIdx, setActiveIdx] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+
+  // 바깥 클릭 시 닫기(ProjectCombobox 와 동일 패턴).
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (ev: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(ev.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const q = normalizeQuery(text);
+  // 그룹 순서 유지(자주쓰는 → 내 부서 → 전체), 필터 후 빈 그룹은 숨김.
+  const groups = [
+    { label: '자주쓰는', items: favorites.filter((o) => budgetMatches(o, q)) },
+    { label: '내 부서', items: mineExclFav.filter((o) => budgetMatches(o, q)) },
+    { label: '전체', items: allExclFav.filter((o) => budgetMatches(o, q)) },
+  ].filter((g) => g.items.length > 0);
+  const flat = groups.flatMap((g) => g.items);
+  // 필터로 목록이 줄어도 활성 인덱스가 범위를 벗어나지 않게 클램프.
+  const active = flat.length === 0 ? -1 : Math.min(activeIdx, flat.length - 1);
+
+  // 키보드 이동 시 활성 옵션이 보이도록 스크롤.
+  useEffect(() => {
+    if (!open || active < 0) return;
+    document.getElementById(`${listId}-opt-${active}`)?.scrollIntoView({ block: 'nearest' });
+  }, [open, active, listId]);
+
+  // 트리거 라벨 — selectedOption(그룹 밖 프리셀렉트 포함) 우선, 없으면 그룹에서 조회.
+  const current =
+    selectedOption ??
+    (value
+      ? [...favorites, ...mineExclFav, ...allExclFav].find((o) => o.code === value)
+      : undefined);
+  const triggerLabel = value ? (current ? budgetLabel(current) : value) : null;
+
+  const close = () => {
+    setOpen(false);
+    setText('');
+    setActiveIdx(0);
+  };
+
+  const pick = (code: string) => {
+    onChange(code);
+    close();
+  };
+
   return (
-    <select
-      value={value}
-      disabled={disabled}
-      aria-invalid={invalid}
-      onChange={(ev) => onChange(ev.target.value)}
-      className={cn(
-        'border-border bg-surface text-foreground h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none',
-        'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
-        'aria-invalid:border-danger disabled:opacity-50',
-        className,
-      )}
-    >
-      <option value="">{placeholder}</option>
-      {!inGroups && value !== '' && selectedOption ? (
-        <option value={value}>{label(selectedOption)}</option>
+    <div ref={wrapRef} className={cn('relative min-w-0 flex-1', className)}>
+      <button
+        type="button"
+        data-budget-trigger
+        disabled={disabled}
+        aria-invalid={invalid}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? close() : setOpen(true))}
+        className={cn(
+          'border-border bg-surface flex h-8 w-full items-center rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
+          'aria-invalid:border-danger disabled:opacity-50',
+        )}
+      >
+        <span
+          className={cn('truncate', triggerLabel ? 'text-foreground' : 'text-muted-foreground')}
+        >
+          {triggerLabel ?? placeholder}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="border-border bg-surface absolute left-0 z-20 mt-1 w-[320px] rounded-[var(--radius-md)] border p-2 shadow-[var(--shadow-card)]">
+          <input
+            autoFocus
+            role="combobox"
+            aria-expanded
+            aria-controls={listId}
+            aria-activedescendant={active >= 0 ? `${listId}-opt-${active}` : undefined}
+            value={text}
+            onChange={(ev) => {
+              setText(ev.target.value);
+              setActiveIdx(0);
+            }}
+            onKeyDown={(ev) => {
+              if (ev.key === 'ArrowDown') {
+                ev.preventDefault();
+                setActiveIdx(Math.min(active + 1, flat.length - 1));
+              } else if (ev.key === 'ArrowUp') {
+                ev.preventDefault();
+                setActiveIdx(Math.max(active - 1, 0));
+              } else if (ev.key === 'Enter') {
+                ev.preventDefault();
+                if (active >= 0) pick(flat[active].code);
+              } else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                close();
+              }
+            }}
+            placeholder="이름·사업계획·예산계정 검색"
+            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2"
+          />
+
+          <div
+            id={listId}
+            role="listbox"
+            aria-label="예산단위"
+            className="mt-2 max-h-60 overflow-y-auto"
+          >
+            {value !== '' ? (
+              <button
+                type="button"
+                onClick={() => pick('')}
+                className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
+              >
+                선택 해제
+              </button>
+            ) : null}
+
+            {groups.map((g, gi) => {
+              // 그룹 경계를 넘는 전역(flat) 인덱스 — 키보드 활성 표시와 id 매칭에 사용.
+              const offset = groups.slice(0, gi).reduce((n, x) => n + x.items.length, 0);
+              return (
+                <div key={g.label} role="group" aria-label={g.label}>
+                  <p className="text-foreground-tertiary px-2 py-1 text-[10px] font-semibold tracking-wider uppercase">
+                    {g.label}
+                  </p>
+                  {g.items.map((o, i) => {
+                    const idx = offset + i;
+                    const selected = o.code === value;
+                    return (
+                      <button
+                        key={o.code}
+                        type="button"
+                        id={`${listId}-opt-${idx}`}
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() => pick(o.code)}
+                        onMouseEnter={() => setActiveIdx(idx)}
+                        className={cn(
+                          'flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]',
+                          idx === active && 'bg-muted/60',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'leading-snug',
+                            selected ? 'text-accent font-semibold' : 'text-foreground',
+                          )}
+                        >
+                          {o.name}
+                        </span>
+                        {o.bizplanNm || o.bgacctNm ? (
+                          <span className="text-foreground-tertiary leading-snug">
+                            {[o.bizplanNm, o.bgacctNm].filter(Boolean).join(' · ')}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            {flat.length === 0 ? (
+              <p className="text-foreground-tertiary px-2 py-2 text-[11px]">
+                일치하는 예산단위가 없습니다.
+              </p>
+            ) : null}
+          </div>
+        </div>
       ) : null}
-      {favorites.length > 0 ? (
-        <optgroup label="자주쓰는">
-          {favorites.map((o) => (
-            <option key={`f-${o.code}`} value={o.code}>
-              {label(o)}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-      {mineExclFav.length > 0 ? (
-        <optgroup label="내 부서">
-          {mineExclFav.map((o) => (
-            <option key={`m-${o.code}`} value={o.code}>
-              {label(o)}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-      {allExclFav.length > 0 ? (
-        <optgroup label="전체">
-          {allExclFav.map((o) => (
-            <option key={`a-${o.code}`} value={o.code}>
-              {label(o)}
-            </option>
-          ))}
-        </optgroup>
-      ) : null}
-    </select>
+    </div>
   );
 }
 
