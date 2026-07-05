@@ -59,8 +59,10 @@ def make_collect_rows_node(timeout_s: int | None = None):
         if not rows_list:
             period = state.get("period") or []
             period_txt = f"{period[0]} ~ {period[1]}" if len(period) == 2 else "이번 조회 기간"
-            # 조회는 정상 실행됐지만 결과가 0건인 경우 — 채팅에 명확히 알린다(조용히 끝나면
-            # 사용자가 '먹통'으로 오해하기 쉽다). 로그 탭 warn 만으론 부족(리뷰).
+            # 조회는 정상 실행됐지만 결과가 0건인 경우 — 채팅에 명확히 알리고 **그래프를 여기서
+            # 종료**한다(no_rows 조건부 엣지 → END, 사용자 확정 2026-07-05: 뒤 단계(문서 반영·
+            # 저장)를 돌리지 않고 '처리할 내역이 없습니다'로 즉시 끝낸다). 이미 전표로 처리된
+            # 승인내역은 재조회에 안 나오므로, 직전 저장 후 재실행하면 이 경로가 정상이다.
             await emit_chat(
                 events,
                 chat_id="cc-empty",
@@ -70,7 +72,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
             )
             await emit_log(events, "처리할 승인내역이 없습니다.", "warn")
             await emit_step(events, "collect_rows", "done", _shared._ms(t0))
-            return {"filled": 0}
+            return {
+                "filled": 0,
+                "no_rows": True,
+                "result": f"처리할 내역이 없습니다 — {period_txt} 승인내역 0건.",
+            }
 
         settings = get_settings()
         wait_timeout = timeout_s if timeout_s is not None else settings.hitl_timeout_s

@@ -44,6 +44,7 @@ class CardCollectState(BaseAgentState, total=False):
     period: list[str]
     rows_list: list[dict]
     filled: int
+    no_rows: bool  # 조회 0건 — collect_rows 가 결과 메시지와 함께 그래프를 조기 종료(→END)
     # 부가세구분 2패스 — 1차 그리드 입력 중 불공 대기분(입력값+복합키)과 2차 산출물.
     # ⚠ 노드가 반환하는 키는 여기 선언돼야 다음 노드로 전달된다(미선언 키는 LangGraph 가
     #   조용히 누락 — 실전 런 '적용할 행이 없습니다' 원인).
@@ -104,12 +105,18 @@ def build_card_collect_graph():
         ("select_all_cards", "set_period"),
         ("set_period", "query"),
         ("query", "collect_rows"),
-        ("collect_rows", "apply_doc"),
         ("apply_doc", "switch_evdn"),
         ("switch_evdn", "apply_pass2"),
         ("apply_pass2", "save_final"),
     ]:
         g.add_edge(a, b)
+
+    # 조회 0건: collect_rows 가 '처리할 내역이 없습니다' 결과를 남기고 즉시 종료 —
+    # 뒤 단계(문서 반영·저장)를 돌리지 않는다(사용자 확정 2026-07-05).
+    def _after_collect(state: CardCollectState) -> str:
+        return END if state.get("no_rows") else "apply_doc"
+
+    g.add_conditional_edges("collect_rows", _after_collect, {"apply_doc": "apply_doc", END: END})
 
     # 저장 실패 재시도(방식 1): retry_save 가 켜지면 menu_nav 로 되돌려 문서를 새로 만들고
     # (딥링크 재로드로 저장 안 된 초안 폐기) 그리드부터 재입력한다. 아니면 종료.

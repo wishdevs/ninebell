@@ -71,9 +71,10 @@ def test_fmt_won_formats_thousands():
 async def test_collect_rows_empty_list_announces_and_returns_zero():
     events: asyncio.Queue = asyncio.Queue()
     node = make_collect_rows_node()
-    # rows_list 없음 → gemini/page 미사용 조기 종료.
+    # rows_list 없음 → gemini/page 미사용 조기 종료 + no_rows(그래프 END 라우팅)·결과 메시지.
     out = await node({"events": events, "page": None, "rows_list": []})
-    assert out == {"filled": 0}
+    assert out["filled"] == 0 and out["no_rows"] is True
+    assert "처리할 내역이 없습니다" in out["result"]
     # 안내 채팅(cc-empty)이 방출됐는지 — 조용히 끝나지 않는다.
     frames = []
     while not events.empty():
