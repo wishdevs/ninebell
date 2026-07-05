@@ -18,8 +18,8 @@
 
 import { api } from './client';
 
-/** 코드 종류 — 예산단위 / 프로젝트. */
-export type CatalogKind = 'budget_unit' | 'project';
+/** 코드 종류 — 예산단위 / 프로젝트 / 에이전트(즐겨찾기 전용 — 카탈로그·동기화 없음). */
+export type CatalogKind = 'budget_unit' | 'project' | 'agent';
 
 /** 부가 데이터 — 백엔드 JSON 객체.
  * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),

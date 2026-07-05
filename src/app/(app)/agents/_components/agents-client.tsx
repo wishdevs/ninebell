@@ -1,11 +1,13 @@
 'use client';
 
+import { useEffect } from 'react';
 import { RiErrorWarningLine } from '@remixicon/react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import type { Agent } from '@/lib/data/agents';
+import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
 
@@ -13,9 +15,19 @@ import { AgentCard } from './agent-card';
  * 에이전트 카탈로그. 저장된 에이전트 정의를 `GET /agents`로 불러와 카드로 보여준다.
  * 에이전트는 워커로 상주하지 않으며(카드를 열 때 라이브 세션 시작, 화면을 벗어나면
  * 종료), 리스트에서는 실행 이력만 노출한다.
+ *
+ * 카드 우상단 ★ = 자주쓰는 에이전트 토글(kind='agent', 낙관적 반영+실패 롤백) —
+ * 홈 '자주쓰는 에이전트' 섹션의 소스가 된다.
  */
 export function AgentsClient() {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
+  const fav = useFavorites('agent');
+  const { loadIds } = fav;
+
+  // 마운트 시 내 즐겨찾기(kind=agent)를 불러와 ★ 상태를 채운다.
+  useEffect(() => {
+    void loadIds();
+  }, [loadIds]);
 
   return (
     <div className="flex max-w-[var(--content-max)] flex-col gap-6">
@@ -49,7 +61,14 @@ export function AgentsClient() {
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {data?.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              favorite={{
+                active: fav.has(agent.id),
+                onToggle: () => void fav.toggle(agent.id, agent.name),
+              }}
+            />
           ))}
         </div>
       )}

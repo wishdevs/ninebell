@@ -1,22 +1,37 @@
 import Link from 'next/link';
-import { RiArrowRightUpLine, RiSafariLine, RiRepeatLine, RiTimerLine } from '@remixicon/react';
+import {
+  RiArrowRightUpLine,
+  RiRepeatLine,
+  RiSafariLine,
+  RiStarFill,
+  RiStarLine,
+  RiTimerLine,
+} from '@remixicon/react';
 import { AGENT_DRIVE_LABEL, AGENT_INTERACTION_LABEL, type Agent } from '@/lib/data/agents';
 import { formatRelativeKorean, formatSeconds } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
+
+interface AgentCardProps {
+  agent: Agent;
+  /** 자주쓰는 ★ 토글 — 주어지면 카드 우상단에 ★ 버튼을 노출한다(홈 '자주쓰는 에이전트' 소스). */
+  favorite?: {
+    active: boolean;
+    onToggle: () => void;
+  };
+}
 
 /**
  * 에이전트 카탈로그 카드. 에이전트는 워커로 상주 실행되지 않고, 상세 화면을 열 때
  * 비로소 라이브 세션이 시작되고 화면을 벗어나면 큐를 반납하며 종료된다. 따라서
  * 리스트에서는 "실행 중/개입 대기" 같은 상주 상태 대신, 실행 이력(성공률·횟수·
  * 평균·최근 실행)만 보여준다.
+ *
+ * 카드 전체 클릭 = 상세 이동(제목 링크의 stretched-link). ★ 버튼은 링크 안에 중첩되지
+ * 않도록 오버레이 위(z-10)의 별도 버튼으로 둔다.
  */
-export function AgentCard({ agent }: { agent: Agent }) {
+export function AgentCard({ agent, favorite }: AgentCardProps) {
   return (
-    <Link
-      href={`/agents/${agent.id}`}
-      aria-label={`${agent.name} 실행`}
-      className="card-interactive border-border bg-surface group flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors"
-    >
+    <div className="card-interactive border-border bg-surface group relative flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
       <div className="flex items-start gap-3">
         <span
           aria-hidden
@@ -26,12 +41,40 @@ export function AgentCard({ agent }: { agent: Agent }) {
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-foreground truncate text-[length:var(--text-body-lg)] font-semibold tracking-tight">
-            {agent.name}
+            <Link
+              href={`/agents/${agent.id}`}
+              aria-label={`${agent.name} 실행`}
+              className="focus-visible:after:ring-accent/40 outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:content-[''] focus-visible:after:ring-2"
+            >
+              {agent.name}
+            </Link>
           </h3>
           <p className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-relaxed">
             {agent.description}
           </p>
         </div>
+        {favorite ? (
+          <button
+            type="button"
+            onClick={favorite.onToggle}
+            aria-pressed={favorite.active}
+            aria-label={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+            title={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+            className={cn(
+              'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+              'focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+              favorite.active
+                ? 'text-warning hover:bg-warning/10'
+                : 'text-foreground-tertiary hover:bg-muted',
+            )}
+          >
+            {favorite.active ? (
+              <RiStarFill size={15} aria-hidden />
+            ) : (
+              <RiStarLine size={15} aria-hidden />
+            )}
+          </button>
+        ) : null}
         <RiArrowRightUpLine
           size={15}
           aria-hidden
@@ -56,7 +99,7 @@ export function AgentCard({ agent }: { agent: Agent }) {
         </span>
         <span className="ml-auto tabular-nums">최근 {formatRelativeKorean(agent.lastRunAt)}</span>
       </div>
-    </Link>
+    </div>
   );
 }
 

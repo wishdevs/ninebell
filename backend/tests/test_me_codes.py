@@ -61,6 +61,33 @@ async def test_favorite_crud_roundtrip(client, make_user, auth_as):
     assert (await client.get("/me/favorites?kind=budget_unit")).json() == {"items": []}
 
 
+async def test_favorite_agent_kind_crud_roundtrip(client, make_user, auth_as):
+    """kind='agent' 즐겨찾기 CRUD 왕복 — 홈 '자주쓰는 에이전트'용(code=에이전트 id)."""
+    uid = await make_user("fav-agent", "user")
+    auth_as(uid)
+
+    resp = await client.get("/me/favorites?kind=agent")
+    assert resp.status_code == 200
+    assert resp.json() == {"items": []}
+
+    created = await client.post(
+        "/me/favorites",
+        json={"kind": "agent", "code": "card-chat", "name": "법인카드 승인내역 정리 — 대화형"},
+    )
+    assert created.status_code == 201
+    item = created.json()
+    assert item["kind"] == "agent"
+    assert item["code"] == "card-chat"
+    fav_id = item["id"]
+
+    listed = await client.get("/me/favorites?kind=agent")
+    assert [i["code"] for i in listed.json()["items"]] == ["card-chat"]
+
+    deleted = await client.delete(f"/me/favorites/{fav_id}")
+    assert deleted.status_code == 204
+    assert (await client.get("/me/favorites?kind=agent")).json() == {"items": []}
+
+
 async def test_favorite_duplicate_is_idempotent(client, make_user, auth_as):
     uid = await make_user("fav-dup", "user")
     auth_as(uid)

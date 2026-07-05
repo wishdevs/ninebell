@@ -33,9 +33,11 @@ from app.services.code_sync import dept_matches_budget_name, sync_catalog
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["me-codes"])
 
+# 카탈로그/동기화 kind — ERP 코드만(에이전트는 카탈로그·동기화 대상이 아님).
 _VALID_KINDS = ("budget_unit", "project")
-# 즐겨찾기/동기화 kind — 스키마 레벨에서 강제(무효 kind 행 축적 방지, 리뷰 MEDIUM #4).
-CodeKind = Literal["budget_unit", "project"]
+# 즐겨찾기 kind — 스키마 레벨에서 강제(무효 kind 행 축적 방지, 리뷰 MEDIUM #4).
+# 'agent' = 홈 '자주쓰는 에이전트'(code=에이전트 id, name=에이전트명) — 즐겨찾기 전용.
+CodeKind = Literal["budget_unit", "project", "agent"]
 
 # 백그라운드 동기화 태스크 강참조 — 무참조 태스크는 GC 대상이라(파이썬 asyncio 규약) 실행 중
 # 소멸하면 브라우저 누수 + 세마포어 미반납으로 영구 409 가 될 수 있다(리뷰 MEDIUM #2).

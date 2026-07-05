@@ -42,8 +42,11 @@ const PAGE_SIZE = 50;
 const SYNC_POLL_MS = 3000;
 const SEARCH_DEBOUNCE_MS = 300;
 
+/** 이 화면이 다루는 kind — ERP 카탈로그가 있는 코드만('agent' 는 즐겨찾기 전용이라 제외). */
+type CatalogOnlyKind = Exclude<CatalogKind, 'agent'>;
+
 interface CodeCatalogManagerProps {
-  kind: CatalogKind;
+  kind: CatalogOnlyKind;
   caption: string;
   title: string;
   description: string;
@@ -52,12 +55,12 @@ interface CodeCatalogManagerProps {
 }
 
 /** 카탈로그 테이블 컬럼 헤더(주 컬럼이 첫 컬럼). */
-const CATALOG_HEADERS: Record<CatalogKind, readonly string[]> = {
+const CATALOG_HEADERS: Record<CatalogOnlyKind, readonly string[]> = {
   budget_unit: ['예산계정명', '예산단위명', '사업계획명'],
   project: ['프로젝트', 'WBS요소', '위치'],
 };
 
-const SEARCH_PLACEHOLDER: Record<CatalogKind, string> = {
+const SEARCH_PLACEHOLDER: Record<CatalogOnlyKind, string> = {
   budget_unit: '예산계정·예산단위·사업계획 검색',
   project: '프로젝트·WBS·위치 검색',
 };
