@@ -126,7 +126,29 @@ async def seed_agents(db: AsyncSession) -> None:
             if row.workflow_id is None and fx.get("workflow_id"):
                 row.workflow_id = fx["workflow_id"]
             # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention 을 픽스처와 동기화.
+            # ⚠ 픽스처 스텝 정의가 통째로 바뀌면(키 셋 불일치 — 예: 옛 flow_graph 기반
+            # access/kind/… → 실행 그래프 기반 login/…) 키 매칭 보강은 no-op 이 되어 낡은
+            # 스텝이 영구 잔존한다(2026-07-05 실측: 워크플로우 탭이 옛 플랜(대기) + raw 영어
+            # 라이브 스텝으로 이중 표시). 키 셋이 다르면 스텝 전체를 픽스처로 교체한다.
             fixture_steps = {s["key"]: s for s in fx["steps"]}
+            if {st.key for st in row.steps} != set(fixture_steps):
+                for st in list(row.steps):
+                    await db.delete(st)
+                for pos, step in enumerate(fx["steps"]):
+                    db.add(
+                        AgentStep(
+                            agent_id=row.id,
+                            key=step["key"],
+                            label=step["label"],
+                            skill=step.get("skill"),
+                            status=step["status"],
+                            detail=step.get("detail"),
+                            intervention=step.get("intervention", False),
+                            position=pos,
+                            substeps=step.get("substeps"),
+                        )
+                    )
+                continue
             for st in row.steps:
                 fs = fixture_steps.get(st.key)
                 if fs is None:

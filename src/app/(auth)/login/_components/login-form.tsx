@@ -7,6 +7,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, api } from '@/lib/api/client';
+import { requestHitlNotificationPermission } from '@/lib/live/use-hitl-notification';
 
 /** 회원가입 유도 시 sessionStorage에 넘길 pending 정보 키. */
 const SIGNUP_STORAGE_KEY = 'nb_signup';
@@ -64,6 +65,9 @@ export function LoginForm() {
     if (submitting) return;
     setError(null);
     setSubmitting(true);
+    // 알림 권한은 로그인 클릭(사용자 제스처) 시점에 바로 요청 — 개입(HITL) 브라우저 알림용.
+    // (실행 버튼 시점 요청은 폴백으로 유지. 사용자 피드백 2026-07-05)
+    requestHitlNotificationPermission();
     // 아이디 저장은 제출 시점 기준으로 반영(비밀번호는 저장하지 않는다).
     if (saveId) localStorage.setItem(REMEMBERED_ID_KEY, uid.trim());
     else localStorage.removeItem(REMEMBERED_ID_KEY);

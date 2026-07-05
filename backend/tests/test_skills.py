@@ -91,3 +91,46 @@ async def test_agent_steps_expose_skill_label_key_and_intervention(client, make_
     # HITL 스텝만 intervention=True.
     assert steps["collect_rows"]["intervention"] is True
     assert all(not s["intervention"] for k, s in steps.items() if k != "collect_rows")
+
+
+async def test_seed_replaces_stale_step_set(sm):
+    """스텝 키 셋이 픽스처와 다르면(옛 flow_graph 기반 잔존) 시드가 전체 교체한다.
+
+    회귀(2026-07-05): 키 매칭 보강만으로는 낡은 스텝(access/kind/…)이 영구 잔존해
+    워크플로우 탭이 '옛 플랜 + raw 영어 라이브 스텝' 이중 표시됐다.
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.models import AgentStep
+    from app.services.seed import seed_agents
+
+    async with sm() as s:
+        # 낡은 스텝 셋 시뮬레이션: card-chat 스텝을 옛 키로 통째로 바꿔치기.
+        rows = (
+            await s.execute(sa_select(AgentStep).where(AgentStep.agent_id == "card-chat"))
+        ).scalars().all()
+        for r in rows:
+            await s.delete(r)
+        s.add(AgentStep(agent_id="card-chat", key="access", label="결의서 입력 접속",
+                        skill="로그인·메뉴 이동", status="done", position=0))
+        s.add(AgentStep(agent_id="card-chat", key="kind", label="결의구분 = 카드",
+                        skill="필드 입력", status="done", position=1))
+        await s.commit()
+
+    async with sm() as s:
+        await seed_agents(s)
+        await s.commit()
+
+    async with sm() as s:
+        keys = [
+            r.key
+            for r in (
+                await s.execute(
+                    sa_select(AgentStep)
+                    .where(AgentStep.agent_id == "card-chat")
+                    .order_by(AgentStep.position)
+                )
+            ).scalars()
+        ]
+    assert keys[0] == "login" and "access" not in keys  # 낡은 셋 → 픽스처(실행 그래프)로 교체
+    assert "collect_rows" in keys and len(keys) == 16

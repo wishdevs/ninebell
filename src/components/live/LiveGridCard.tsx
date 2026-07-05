@@ -185,10 +185,13 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     void pFav.loadIds();
   }, [hitl.id, hitl.rows, hitl.budgetUnits, hitl.projects, bFav, pFav]);
 
-  // 그리드 도착(HITL) 시 첫 행 예산단위 select 로 포커스 — 키보드 진입·40행 이동 개선.
+  // 그리드 도착(HITL) 시 첫 행 예산단위 콤보박스 트리거로 포커스 — 키보드 진입·40행 이동 개선.
+  // (BudgetSelect→BudgetCombobox 교체로 select 가 사라져 data-budget-trigger 로 식별)
   useEffect(() => {
-    const sel = tableWrapRef.current?.querySelector<HTMLSelectElement>('tbody tr select');
-    sel?.focus();
+    const trigger = tableWrapRef.current?.querySelector<HTMLButtonElement>(
+      'tbody tr [data-budget-trigger]',
+    );
+    trigger?.focus();
   }, [hitl.id]);
 
   // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선. 프리셀렉트가 그룹 밖 코드여도
