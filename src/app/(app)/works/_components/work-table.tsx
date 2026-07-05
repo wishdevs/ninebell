@@ -35,7 +35,7 @@ export function WorkTable({ works, selectedId, onSelect }: WorkTableProps) {
     <div className="border-border bg-surface overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
       <table className="w-full border-collapse text-[length:var(--text-body-sm)]">
         <thead>
-          <tr className="border-border-subtle text-foreground-tertiary border-b text-[length:var(--text-caption)] tracking-[0.04em] uppercase">
+          <tr className="border-border-subtle text-foreground-tertiary border-b text-[length:var(--text-caption)] tracking-[0.04em]">
             <th className={TH}>제목</th>
             <th className={TH}>상태</th>
             <th className={cn(TH, 'hidden sm:table-cell')}>우선순위</th>

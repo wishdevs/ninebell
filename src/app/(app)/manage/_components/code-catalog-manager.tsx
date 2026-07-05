@@ -406,14 +406,14 @@ export function CodeCatalogManager({
                     <Th
                       key={h}
                       className={cn(
-                        'bg-surface text-foreground-tertiary border-border-subtle sticky top-0 z-10 border-b text-left',
+                        'bg-surface text-foreground-tertiary border-border-subtle sticky top-0 z-10 border-b text-left text-[length:var(--text-caption)] tracking-[0.04em]',
                         idx === 0 && 'text-foreground-secondary',
                       )}
                     >
                       {h}
                     </Th>
                   ))}
-                  <Th className="bg-surface border-border-subtle sticky top-0 z-10 w-12 border-b text-center">
+                  <Th className="bg-surface border-border-subtle sticky top-0 z-10 w-12 border-b text-center text-[length:var(--text-caption)] tracking-[0.04em]">
                     자주쓰는
                   </Th>
                 </tr>

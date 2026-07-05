@@ -67,7 +67,7 @@ export function SkillsTable() {
     <SectionCard>
       <div className="overflow-x-auto">
         <table className="w-full text-[length:var(--text-body-sm)]">
-          <thead>
+          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
             <tr>
               <Th>스킬</Th>
               <Th>설명</Th>

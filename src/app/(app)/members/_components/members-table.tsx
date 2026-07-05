@@ -92,7 +92,7 @@ export function MembersTable({
 
       <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
         <table className="w-full min-w-[960px] text-left text-sm">
-          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium">
+          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
             <tr>
               <Th>이름</Th>
               <Th>역할</Th>

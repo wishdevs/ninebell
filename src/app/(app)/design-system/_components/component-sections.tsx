@@ -198,13 +198,13 @@ export function TableLoadingSection() {
     <SectionCard
       caption="컴포넌트"
       title="테이블 · 로딩"
-      description="관리 테이블은 공용 Th/Td(패딩·정렬 규격 단일 소유)로 만듭니다. 숫자 열은 tabular-nums + 우측 정렬, 행 hover 는 .row-hover, 셀 결측은 '—' 하나."
+      description="관리 테이블은 공용 Th/Td(패딩·정렬 규격 단일 소유)로 만듭니다. 헤더 행은 text-foreground-tertiary·--text-caption·font-medium·tracking-[0.04em](대문자 변환은 한글에 무의미해 쓰지 않음). 숫자 열은 tabular-nums + 우측 정렬, 행 hover 는 .row-hover, 셀 결측은 '—' 하나."
       density="comfortable"
     >
       <div className="border-border bg-background overflow-x-auto rounded-[var(--radius-md)] border">
         <table className="w-full text-[length:var(--text-body-sm)]">
-          <thead>
-            <tr className="text-foreground-tertiary text-left">
+          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
+            <tr className="text-left">
               <Th>에이전트</Th>
               <Th className="text-right">실행 수</Th>
               <Th className="text-right">평균 소요</Th>
