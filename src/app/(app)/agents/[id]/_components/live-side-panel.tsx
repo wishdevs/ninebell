@@ -80,6 +80,11 @@ export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveS
             {hasHitl ? (
               <span className="bg-warning size-1.5 animate-pulse rounded-full" aria-hidden />
             ) : null}
+            {/* 펄스 점은 시각 전용 — 같은 정보를 스크린리더에도 알린다(항상 렌더해 두어야
+                aria-live 가 텍스트 변경을 감지한다). */}
+            <span role="status" aria-live="polite" className="sr-only">
+              {hasHitl ? '개입 1건 대기 중' : ''}
+            </span>
           </TabsTrigger>
           <TabsTrigger value="workflow">워크플로우</TabsTrigger>
           <TabsTrigger value="log">

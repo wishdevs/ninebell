@@ -16,6 +16,10 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
+import {
+  requestHitlNotificationPermission,
+  useHitlNotification,
+} from '@/lib/live/use-hitl-notification';
 import type { RunsPanelProps } from './agent-runs-panel';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage } from './live-browser-stage';
@@ -92,14 +96,20 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     enabled: session.enabled,
     templateId: session.enabled ? session.templateId : undefined,
   });
-  const startRun = (workflowId: string, templateId?: string) =>
+  const startRun = (workflowId: string, templateId?: string) => {
+    // 알림 권한은 사용자 제스처(실행 버튼 클릭) 컨텍스트에서 1회 요청해야 프롬프트가 뜬다.
+    requestHitlNotificationPermission();
     setSession({ workflowId, runId: newRunId(), enabled: true, templateId });
+  };
   const stopRun = () => setSession((s) => ({ ...s, enabled: false }));
   const isLive = session.enabled;
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   // 개입(HITL) 대기 중이면 우측 패널을 넓혀 개입 카드에 화면을 양보한다(브라우저 열은 축소).
   // 종류(chat/choice/grid) 무관하게 개입 자체에 적용 — 스테이지는 컨테이너 쿼리로 자가 적응한다.
   const interventionActive = isLive && run.hitl != null;
+
+  // 개입 대기 알림 — 탭 제목 접두 + (백그라운드 탭이면) 브라우저 알림. 해소·종료 시 원복.
+  useHitlNotification(interventionActive ? (run.hitl?.id ?? null) : null);
 
   // 이력·템플릿 새로고침 트리거 — 런이 끝나거나 템플릿을 저장하면 올려서 재조회한다.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -289,7 +299,8 @@ interface LiveControlsProps {
 
 /**
  * 라이브 실행 컨트롤. 브라우저 큐(헤드리스 세션 슬롯)가 한정돼 일시정지는 없다 —
- * 진행 중에는 "종료"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 전에는 "실행".
+ * 진행 중에는 "실행 중단"(슬롯 반납)만, 종료 후에는 "닫기/다시 실행". 시작 전에는 "실행".
+ * 중단은 진행 중 작업이 끊기는 파괴적 동작이라 인라인 확인을 거친다(원클릭 즉시 종료 방지).
  */
 function LiveControls({
   enabled,
@@ -299,6 +310,12 @@ function LiveControls({
   onRestart,
   onStop,
 }: LiveControlsProps) {
+  // 실행 중단 인라인 확인 — 개입학습 '전체 삭제'와 같은 패턴. 실행 상태가 바뀌면 초기화.
+  const [confirmStop, setConfirmStop] = useState(false);
+  useEffect(() => {
+    setConfirmStop(false);
+  }, [enabled, terminal]);
+
   if (!enabled) {
     return (
       <Button
@@ -326,15 +343,41 @@ function LiveControls({
       </div>
     );
   }
+  if (confirmStop) {
+    return (
+      <div className="flex items-center gap-2 text-[length:var(--text-body-sm)]">
+        <span className="text-foreground-secondary">
+          실행을 중단할까요? 진행 중 작업이 끊깁니다
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            setConfirmStop(false);
+            onStop();
+          }}
+          className="text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] px-2 py-1 font-medium"
+        >
+          중단
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirmStop(false)}
+          className="text-foreground-secondary hover:bg-muted rounded-[var(--radius-sm)] px-2 py-1"
+        >
+          취소
+        </button>
+      </div>
+    );
+  }
   return (
     <Button
       size="sm"
       variant="secondary"
       className="text-danger border-danger/30 hover:bg-danger/10 hover:text-danger"
-      onClick={onStop}
+      onClick={() => setConfirmStop(true)}
     >
       <RiStopLine size={13} aria-hidden />
-      종료
+      실행 중단
     </Button>
   );
 }
