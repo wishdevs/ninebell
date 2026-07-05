@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { cn } from '@/lib/utils';
 
@@ -18,8 +19,16 @@ const SURFACE_TOKENS: ReadonlyArray<ColorToken> = [
   { name: 'muted', bg: 'bg-muted', cssVar: '--color-muted' },
   { name: 'border', bg: 'bg-border', cssVar: '--color-border' },
   { name: 'foreground', bg: 'bg-foreground', cssVar: '--color-foreground' },
-  { name: 'foreground-secondary', bg: 'bg-foreground-secondary', cssVar: '--color-foreground-secondary' },
-  { name: 'foreground-tertiary', bg: 'bg-foreground-tertiary', cssVar: '--color-foreground-tertiary' },
+  {
+    name: 'foreground-secondary',
+    bg: 'bg-foreground-secondary',
+    cssVar: '--color-foreground-secondary',
+  },
+  {
+    name: 'foreground-tertiary',
+    bg: 'bg-foreground-tertiary',
+    cssVar: '--color-foreground-tertiary',
+  },
 ];
 
 /* 상태 토큰 — 인앱 실사용은 풀채도 블록이 아니라 "bg-{token}/10 + text-{token}" 틴트 칩이다.
@@ -44,6 +53,32 @@ const SENTIMENT_TOKENS: ReadonlyArray<ColorToken> = [
   { name: 'sentiment-positive', bg: 'bg-sentiment-positive', cssVar: '--color-sentiment-positive' },
   { name: 'sentiment-neutral', bg: 'bg-sentiment-neutral', cssVar: '--color-sentiment-neutral' },
   { name: 'sentiment-negative', bg: 'bg-sentiment-negative', cssVar: '--color-sentiment-negative' },
+  { name: 'sentiment-mixed', bg: 'bg-sentiment-mixed', cssVar: '--color-sentiment-mixed' },
+];
+
+/* 지식그래프 감정/추세선/토픽 공유 팔레트 — 분석 탭 --sentiment-* 와 분리 운용
+   (긍정/언급 = teal, 부정/미언급 = rose). globals.css 주석 참조. */
+const GRAPH_SENTIMENT_TOKENS: ReadonlyArray<ColorToken> = [
+  {
+    name: 'graph-sentiment-positive',
+    bg: 'bg-graph-sentiment-positive',
+    cssVar: '--color-graph-sentiment-positive',
+  },
+  {
+    name: 'graph-sentiment-neutral',
+    bg: 'bg-graph-sentiment-neutral',
+    cssVar: '--color-graph-sentiment-neutral',
+  },
+  {
+    name: 'graph-sentiment-negative',
+    bg: 'bg-graph-sentiment-negative',
+    cssVar: '--color-graph-sentiment-negative',
+  },
+  {
+    name: 'graph-sentiment-mixed',
+    bg: 'bg-graph-sentiment-mixed',
+    cssVar: '--color-graph-sentiment-mixed',
+  },
 ];
 
 function Swatch({ name, bg, cssVar }: ColorToken) {
@@ -122,7 +157,16 @@ export function ColorSection() {
           풀채도 원색(아래 스트립)은 raw token으로, 대면적 배경에 직접 쓰지 않습니다.
         </p>
       </div>
-      <SwatchGroup label="감정 데이터 팔레트" tokens={SENTIMENT_TOKENS} />
+      <SwatchGroup label="감정 데이터 팔레트 (분석 탭)" tokens={SENTIMENT_TOKENS} />
+      <SwatchGroup
+        label="그래프 감정 팔레트 (지식그래프 · 추세선 공유)"
+        tokens={GRAPH_SENTIMENT_TOKENS}
+      />
+      <p className="text-muted-foreground border-border-subtle border-t pt-4 text-xs leading-relaxed">
+        규칙 — 상태 색(accent/success/warning/danger/info)은 <strong>의미가 있을 때만</strong>{' '}
+        사용하고, 데이터 시각화에는 채도를 낮춘 sentiment 계열을 씁니다. 컴포넌트에서 hex·oklch 값을
+        직접 쓰지 마세요: 토큰을 우회하면 다크 테마에서 즉시 깨집니다.
+      </p>
     </SectionCard>
   );
 }
@@ -133,6 +177,8 @@ interface TypeToken {
   cssVar: string;
   sample: string;
   cls: string;
+  /** 어디에 쓰는 크기인지 — 한 줄 용도 규칙. */
+  usage: string;
 }
 
 const TYPE_SCALE: ReadonlyArray<TypeToken> = [
@@ -141,48 +187,56 @@ const TYPE_SCALE: ReadonlyArray<TypeToken> = [
     cssVar: '--text-hero',
     sample: 'Aa 안녕하세요',
     cls: 'text-[length:var(--text-hero)] font-semibold leading-none tracking-tight',
+    usage: '인증 화면 · 랜딩의 단일 헤드라인 — 앱 내부에선 쓰지 않음',
   },
   {
     name: 'section',
     cssVar: '--text-section',
     sample: 'Aa 디자인 시스템',
     cls: 'text-[length:var(--text-section)] font-semibold tracking-tight',
+    usage: '페이지 타이틀(h1) — PageHeader 가 소유',
   },
   {
     name: 'heading',
     cssVar: '--text-heading',
     sample: 'Aa 섹션 제목',
     cls: 'text-[length:var(--text-heading)] font-semibold',
+    usage: '큰 카운터 · 강조 수치 헤더',
   },
   {
     name: 'heading-sm',
     cssVar: '--text-heading-sm',
     sample: 'Aa 서브 제목',
     cls: 'text-[length:var(--text-heading-sm)] font-semibold',
+    usage: '카드 그룹 제목 · 다이얼로그 타이틀',
   },
   {
     name: 'body-lg',
     cssVar: '--text-body-lg',
     sample: '본문 16px — 여유로운 가독성',
     cls: 'text-[length:var(--text-body-lg)]',
+    usage: '카드 타이틀(h3) · 읽기 중심 본문',
   },
   {
     name: 'body',
     cssVar: '--text-body',
     sample: '본문 14px — 대시보드 기본 크기',
     cls: 'text-[length:var(--text-body)]',
+    usage: '기본 본문 — body 태그 기본값(14px)',
   },
   {
     name: 'body-sm',
     cssVar: '--text-body-sm',
     sample: '보조 정보 13px',
     cls: 'text-[length:var(--text-body-sm)]',
+    usage: '테이블 본문 · 보조 설명',
   },
   {
     name: 'caption',
     cssVar: '--text-caption',
     sample: 'KICKER · 11PX',
     cls: 'text-[length:var(--text-caption)] font-medium uppercase tracking-[0.08em]',
+    usage: '아이브로우(캡션) — uppercase + tracking 0.08em 고정 조합',
   },
 ];
 
@@ -201,9 +255,33 @@ export function TypographySection() {
               {t.cssVar}
             </span>
             <span className={cn('min-w-0 flex-1 truncate', t.cls)}>{t.sample}</span>
-            <span className="text-foreground-tertiary shrink-0 font-mono text-[11px]">{t.name}</span>
+            <span className="hidden shrink-0 flex-col items-end sm:flex">
+              <span className="text-foreground-tertiary font-mono text-[11px]">{t.name}</span>
+              <span className="text-foreground-tertiary max-w-[15rem] text-right text-[10px] leading-snug">
+                {t.usage}
+              </span>
+            </span>
           </div>
         ))}
+      </div>
+
+      {/* 페이지 헤더 3단 구조 — 실제 PageHeader 컴포넌트 렌더(살아있는 문서) */}
+      <div className="flex flex-col gap-2">
+        <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
+          페이지 헤더 3단 구조 — 캡션 → 타이틀 → 설명
+        </p>
+        <div className="border-border bg-background rounded-[var(--radius-md)] border p-5">
+          <PageHeader
+            caption="캡션 · --text-caption uppercase"
+            title="타이틀 · --text-section"
+            description="설명 · text-sm text-muted-foreground max-w-2xl — 페이지가 무엇을 하는 곳인지 한두 문장."
+          />
+        </div>
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          모든 페이지 상단은 이 3단(캡션 → 타이틀 → 설명)을 <strong>PageHeader 컴포넌트</strong>로
+          조립합니다 — 페이지에서 h1 · 캡션을 직접 만들지 마세요. 우측 액션이 필요하면{' '}
+          <code className="font-mono text-[11px]">action</code> 슬롯을 사용합니다.
+        </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

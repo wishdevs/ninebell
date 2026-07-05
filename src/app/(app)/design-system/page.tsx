@@ -5,18 +5,32 @@ import {
   BadgeShowcaseSection,
   ButtonShowcaseSection,
   EmptyShowcaseSection,
+  TableLoadingSection,
 } from './_components/component-sections';
+import { DepthSection, MotionSection } from './_components/depth-motion-sections';
+import { PrefillSkillSection, RunLifecycleSection } from './_components/domain-vocab-sections';
 import { InteractiveDemos } from './_components/interactive-demos';
+import { DesignSystemToc } from './_components/toc';
 import {
   ColorSection,
   RadiusSection,
   ShadowSection,
   TypographySection,
 } from './_components/token-sections';
+import { VoiceToneSection } from './_components/voice-tone-section';
 
 export const metadata: Metadata = {
   title: '디자인 시스템',
 };
+
+/** 앵커 래퍼 — 목차(toc.tsx TOC_ITEMS)와 id 를 1:1 로 맞춘다. */
+function Anchor({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <div id={id} className="flex scroll-mt-6 flex-col gap-8">
+      {children}
+    </div>
+  );
+}
 
 export default function DesignSystemPage() {
   return (
@@ -33,26 +47,66 @@ export default function DesignSystemPage() {
         }
       />
 
-      <ColorSection />
-      <TypographySection />
+      <DesignSystemToc />
 
-      <div className="grid gap-8 lg:grid-cols-2">
-        <RadiusSection />
-        <ShadowSection />
-      </div>
+      <Anchor id="colors">
+        <ColorSection />
+      </Anchor>
 
-      <ButtonShowcaseSection />
-      <BadgeShowcaseSection />
-      <EmptyShowcaseSection />
+      <Anchor id="typography">
+        <TypographySection />
+      </Anchor>
 
-      <SectionCard
-        caption="인터랙션"
-        title="폼 컨트롤 · 탭"
-        description="상태를 가진 컴포넌트 데모입니다. 클라이언트 컴포넌트(_components/interactive-demos.tsx)로 분리되어 page.tsx 는 서버 컴포넌트로 유지됩니다."
-        density="comfortable"
-      >
-        <InteractiveDemos />
-      </SectionCard>
+      <Anchor id="depth">
+        <DepthSection />
+      </Anchor>
+
+      <Anchor id="radius-shadow">
+        <div className="grid gap-8 lg:grid-cols-2">
+          <RadiusSection />
+          <ShadowSection />
+        </div>
+      </Anchor>
+
+      <Anchor id="motion">
+        <MotionSection />
+      </Anchor>
+
+      <Anchor id="buttons">
+        <ButtonShowcaseSection />
+      </Anchor>
+
+      <Anchor id="badges">
+        <BadgeShowcaseSection />
+      </Anchor>
+
+      <Anchor id="domain-vocab">
+        <RunLifecycleSection />
+        <PrefillSkillSection />
+      </Anchor>
+
+      <Anchor id="empty">
+        <EmptyShowcaseSection />
+      </Anchor>
+
+      <Anchor id="table-loading">
+        <TableLoadingSection />
+      </Anchor>
+
+      <Anchor id="forms">
+        <SectionCard
+          caption="인터랙션"
+          title="폼 컨트롤 · 탭"
+          description="상태를 가진 컴포넌트 데모입니다. 클라이언트 컴포넌트(_components/interactive-demos.tsx)로 분리되어 page.tsx 는 서버 컴포넌트로 유지됩니다."
+          density="comfortable"
+        >
+          <InteractiveDemos />
+        </SectionCard>
+      </Anchor>
+
+      <Anchor id="voice">
+        <VoiceToneSection />
+      </Anchor>
     </div>
   );
 }
