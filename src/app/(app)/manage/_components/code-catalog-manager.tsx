@@ -8,12 +8,11 @@ import {
   RiErrorWarningLine,
   RiRefreshLine,
   RiSearchLine,
-  RiStarFill,
-  RiStarLine,
 } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import { SectionCard } from '@/components/ui/section-card';
@@ -400,7 +399,7 @@ export function CodeCatalogManager({
             ref={listScrollRef}
             className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border"
           >
-            <table className="w-full border-separate border-spacing-0 text-[12px]">
+            <table className="w-full text-[12px]">
               <thead>
                 <tr>
                   {headers.map((h, idx) => (
@@ -421,13 +420,16 @@ export function CodeCatalogManager({
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.code} className="hover:bg-muted/40 transition-colors">
+                  <tr
+                    key={item.code}
+                    className="border-border-subtle hover:bg-muted/40 border-b transition-colors last:border-0"
+                  >
                     <CatalogRowCells kind={kind} item={item} />
-                    <Td className="border-border-subtle border-b text-center">
-                      <StarButton
+                    <Td className="text-center">
+                      <FavoriteToggle
                         active={favByCode.has(item.code)}
                         disabled={busy}
-                        onClick={() => toggleFav(item)}
+                        onToggle={() => toggleFav(item)}
                       />
                     </Td>
                   </tr>
@@ -450,7 +452,7 @@ export function CodeCatalogManager({
  * 프로젝트 = 프로젝트(이름/번호) · WBS요소(번호/이름) · 위치. */
 function CatalogRowCells({ kind, item }: { kind: CatalogKind; item: CatalogItem }) {
   const extra = item.extra ?? {};
-  const cellBorder = 'border-border-subtle border-b align-top';
+  const cellBorder = 'align-top';
   if (kind === 'budget_unit') {
     return (
       <>
@@ -570,33 +572,6 @@ function IconBtn({
       )}
     >
       {children}
-    </button>
-  );
-}
-
-function StarButton({
-  active,
-  disabled,
-  onClick,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-pressed={active}
-      aria-label={active ? '자주쓰는 해제' : '자주쓰는 추가'}
-      title={active ? '자주쓰는 해제' : '자주쓰는 추가'}
-      className={cn(
-        'flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        active ? 'text-warning hover:bg-warning/10' : 'text-foreground-tertiary hover:bg-muted',
-      )}
-    >
-      {active ? <RiStarFill size={16} aria-hidden /> : <RiStarLine size={16} aria-hidden />}
     </button>
   );
 }

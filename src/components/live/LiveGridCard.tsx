@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { RiCheckLine, RiSearchLine, RiStarFill, RiStarLine, RiTableLine } from '@remixicon/react';
+import { RiCheckLine, RiSearchLine, RiTableLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { EmptyNote } from '@/components/ui/empty-note';
+import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { Spinner } from '@/components/ui/spinner';
 import { useFavorites } from '@/lib/live/use-favorites';
 import type {
@@ -321,10 +322,10 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                           setRow(r.no, { budgetUnitCode: code, budgetSource: null })
                         }
                       />
-                      <StarButton
+                      <FavoriteToggle
                         active={bFav.has(e.budgetUnitCode)}
                         disabled={e.skip || disabled || e.budgetUnitCode === ''}
-                        onClick={() => {
+                        onToggle={() => {
                           const o = budgetByCode.get(e.budgetUnitCode);
                           void bFav.toggle(
                             e.budgetUnitCode,
@@ -371,10 +372,10 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         }
                         onSearch={onQuery}
                       />
-                      <StarButton
+                      <FavoriteToggle
                         active={pFav.has(e.projectCode)}
                         disabled={e.skip || disabled || e.projectCode === ''}
-                        onClick={() =>
+                        onToggle={() =>
                           void pFav.toggle(e.projectCode, e.projectName || e.projectCode, {
                             wbsNo: e.projectWbsNo,
                             wbsNm: '',
@@ -995,35 +996,6 @@ function ProjectOptionRow({ option, onClick }: { option: ProjectOption; onClick:
       ) : option.wbsNo ? (
         <span className="text-foreground-tertiary shrink-0 font-mono">{option.wbsNo}</span>
       ) : null}
-    </button>
-  );
-}
-
-// ── 자주쓰는 ★ 토글 ──────────────────────────────────────────────────
-
-function StarButton({
-  active,
-  disabled,
-  onClick,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-pressed={active}
-      aria-label={active ? '자주쓰는 해제' : '자주쓰는 추가'}
-      title={active ? '자주쓰는 해제' : '자주쓰는 추가'}
-      className={cn(
-        'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors disabled:cursor-not-allowed disabled:opacity-30',
-        active ? 'text-warning hover:bg-warning/10' : 'text-foreground-tertiary hover:bg-muted',
-      )}
-    >
-      {active ? <RiStarFill size={14} aria-hidden /> : <RiStarLine size={14} aria-hidden />}
     </button>
   );
 }
