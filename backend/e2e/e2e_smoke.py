@@ -295,6 +295,22 @@ async def phase1() -> dict:
         await page.screenshot(path=shot_path, full_page=True)
         report["screenshot"] = shot_path
         print(f"[P1] screenshot: {shot_path}", flush=True)
+
+        # 완료 후 핸드오프 안내('다음 할 일' 박스) 검증 — 성공 종료 시에만 렌더된다.
+        # 결과 탭이 자동 전환돼 있으므로 data-testid 로 잡아 박스만 타이트하게 캡처한다.
+        handoff = page.locator('[data-testid="handoff-note"]')
+        if await handoff.count() > 0 and await handoff.first.is_visible():
+            report["handoff_visible"] = True
+            report["handoff_text"] = (await handoff.first.inner_text()).strip()
+            ho_path = str(SCRATCH / "e2e_p1_handoff.png")
+            await handoff.first.scroll_into_view_if_needed()
+            await handoff.first.screenshot(path=ho_path)
+            report["handoff_shot"] = ho_path
+            print(f"[P1] 핸드오프 안내 표시됨 — screenshot: {ho_path}\n[P1] handoff_text: {report['handoff_text']}", flush=True)
+        else:
+            report["handoff_visible"] = False
+            print("[P1] 핸드오프 안내 미표시(succeeded 아님 또는 handoff_note 없음)", flush=True)
+
         await page.wait_for_timeout(2000)
 
     except Exception as exc:  # noqa: BLE001

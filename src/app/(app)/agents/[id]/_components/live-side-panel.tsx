@@ -140,9 +140,7 @@ export function LiveSidePanel({
         {hasResult ? (
           <TabsContent value="result" className="min-h-0 flex-1 overflow-y-auto p-4">
             <LiveResult result={run.result} error={run.error} transactions={run.transactions} />
-            {run.status === 'succeeded' && handoffNote ? (
-              <HandoffNote note={handoffNote} />
-            ) : null}
+            {run.status === 'succeeded' && handoffNote ? <HandoffNote note={handoffNote} /> : null}
             {resultAction ? (
               <div className="border-border mt-4 border-t pt-4">{resultAction}</div>
             ) : null}
@@ -245,7 +243,10 @@ export function LiveResult({
  */
 function HandoffNote({ note }: { note: string }) {
   return (
-    <div className="border-info/30 bg-info/10 mt-3 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
+    <div
+      data-testid="handoff-note"
+      className="border-info/30 bg-info/10 mt-3 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5"
+    >
       <RiArrowRightUpLine size={16} aria-hidden className="text-info mt-0.5 shrink-0" />
       <div className="flex flex-col gap-0.5">
         <p className="text-info text-[length:var(--text-caption)] font-semibold tracking-[0.04em]">
