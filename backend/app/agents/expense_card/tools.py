@@ -11,6 +11,9 @@ ninebell-bak `erp/graph.py` 의 `_CHAT_TOOLS` + `_do_fill_search`/`_do_fill_drop
 ⚠ 저장(F7)·상신·전표생성 액션은 어디서도 수행하지 않는다 — 모달 '적용'까지만.
 """
 
+# 자체 피커 구현(아래 CARD_PICKER_BOX_JS 등)은 라이브 검증본이라 유지 — 신규 에이전트는
+# nbkit.omnisol.codepicker 를 사용할 것(승격 2026-07-05).
+
 from __future__ import annotations
 
 import re
