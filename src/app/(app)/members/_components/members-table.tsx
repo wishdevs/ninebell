@@ -13,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select-dropdown';
-import { cn } from '@/lib/utils';
 import { Td, Th } from '@/components/ui/table-cell';
 import type { Role } from '@/lib/auth/permissions';
 import {
@@ -93,7 +92,7 @@ export function MembersTable({
 
       <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
         <table className="w-full min-w-[960px] text-left text-sm">
-          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
+          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium">
             <tr>
               <Th>이름</Th>
               <Th>역할</Th>
@@ -156,7 +155,11 @@ export function MembersTable({
                         </SelectContent>
                       </Select>
                     ) : (
-                      <RoleBadge role={member.role} />
+                      <StatusPill
+                        label={MEMBER_ROLE_LABEL[member.role]}
+                        variant="custom"
+                        toneClassName={ROLE_BADGE[member.role]}
+                      />
                     )}
                   </Td>
 
@@ -239,18 +242,5 @@ export function MembersTable({
         </table>
       </div>
     </div>
-  );
-}
-
-function RoleBadge({ role }: { role: Role }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
-        ROLE_BADGE[role],
-      )}
-    >
-      {MEMBER_ROLE_LABEL[role]}
-    </span>
   );
 }

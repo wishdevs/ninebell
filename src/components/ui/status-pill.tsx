@@ -35,13 +35,20 @@ export function StatusDotPill({
   );
 }
 
+type StatusPillTone = 'warn' | 'info' | 'success' | 'danger';
+
 interface StatusPillProps {
   label: string;
-  variant: 'warn' | 'info' | 'success' | 'danger';
+  variant: StatusPillTone | 'custom';
+  /**
+   * variant='custom'일 때 톤 색상 클래스(예: 'bg-accent/10 text-accent')를 직접 지정.
+   * 역할·비용구분처럼 임의 라벨+색이 필요해 4-variant로 표현 안 되는 경우 사용.
+   */
+  toneClassName?: string;
   className?: string;
 }
 
-const STATUS_PILL_VARIANTS: Record<StatusPillProps['variant'], string> = {
+const STATUS_PILL_VARIANTS: Record<StatusPillTone, string> = {
   warn: 'bg-warning/10 text-warning',
   info: 'bg-accent/10 text-accent',
   success: 'bg-success/10 text-success',
@@ -56,12 +63,12 @@ const STATUS_PILL_VARIANTS: Record<StatusPillProps['variant'], string> = {
  * (completed / failed / running / pending / paused / batch_submitted) and
  * adds spinner + counter affordances.
  */
-export function StatusPill({ label, variant, className }: StatusPillProps) {
+export function StatusPill({ label, variant, toneClassName, className }: StatusPillProps) {
   return (
     <span
       className={cn(
         'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-        STATUS_PILL_VARIANTS[variant],
+        variant === 'custom' ? toneClassName : STATUS_PILL_VARIANTS[variant],
         className,
       )}
     >

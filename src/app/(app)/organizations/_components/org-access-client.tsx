@@ -14,8 +14,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { ApiError, api, errorMessage } from '@/lib/api/client';
@@ -44,16 +47,7 @@ const COST_TYPE_TONE: Record<OrgUnitCostType, string> = {
 };
 
 function CostTypeBadge({ costType }: { costType: OrgUnitCostType }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold',
-        COST_TYPE_TONE[costType],
-      )}
-    >
-      {costType}
-    </span>
-  );
+  return <StatusPill label={costType} variant="custom" toneClassName={COST_TYPE_TONE[costType]} />;
 }
 
 /**
@@ -235,7 +229,11 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
   return (
     <div className="flex flex-col gap-4">
       <div className="border-border bg-surface flex items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
-        <input
+        <Label htmlFor="new-parent-label" className="sr-only">
+          새 본부 이름
+        </Label>
+        <Input
+          id="new-parent-label"
           value={newParentLabel}
           onChange={(e) => setNewParentLabel(e.target.value)}
           onKeyDown={(e) => {
@@ -243,7 +241,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
           }}
           placeholder="새 본부 이름"
           maxLength={120}
-          className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+          className="min-w-0 flex-1"
         />
         <Button
           size="sm"
@@ -273,17 +271,23 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
                   {pIndex + 1}
                 </span>
                 {editing?.id === parent.id ? (
-                  <input
-                    autoFocus
-                    value={editing.label}
-                    onChange={(e) => setEditing({ ...editing, label: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void saveRename();
-                      if (e.key === 'Escape') setEditing(null);
-                    }}
-                    maxLength={120}
-                    className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-2 py-1 text-sm focus-visible:ring-2 focus-visible:outline-none"
-                  />
+                  <>
+                    <Label htmlFor={`rename-parent-${parent.id}`} className="sr-only">
+                      본부 이름
+                    </Label>
+                    <Input
+                      id={`rename-parent-${parent.id}`}
+                      autoFocus
+                      value={editing.label}
+                      onChange={(e) => setEditing({ ...editing, label: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void saveRename();
+                        if (e.key === 'Escape') setEditing(null);
+                      }}
+                      maxLength={120}
+                      className="min-w-0 flex-1"
+                    />
+                  </>
                 ) : (
                   <span className="text-foreground min-w-0 flex-1 truncate text-sm font-semibold">
                     {parent.label}
@@ -358,7 +362,11 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
                       </span>
                       {editing?.id === child.id ? (
                         <>
-                          <input
+                          <Label htmlFor={`rename-child-${child.id}`} className="sr-only">
+                            팀 이름
+                          </Label>
+                          <Input
+                            id={`rename-child-${child.id}`}
                             autoFocus
                             value={editing.label}
                             onChange={(e) => setEditing({ ...editing, label: e.target.value })}
@@ -367,7 +375,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
                               if (e.key === 'Escape') setEditing(null);
                             }}
                             maxLength={120}
-                            className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-2 py-1 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                            className="min-w-0 flex-1"
                           />
                           <Select
                             value={editing.costType ?? '판관비'}
@@ -452,7 +460,11 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 
               {addChildFor === parent.id ? (
                 <div className="border-border-subtle bg-muted/10 flex items-center gap-2 border-t px-4 py-3 pl-10">
-                  <input
+                  <Label htmlFor={`new-child-label-${parent.id}`} className="sr-only">
+                    새 팀 이름
+                  </Label>
+                  <Input
+                    id={`new-child-label-${parent.id}`}
                     autoFocus
                     value={newChildLabel}
                     onChange={(e) => setNewChildLabel(e.target.value)}
@@ -462,7 +474,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
                     }}
                     placeholder="새 팀 이름"
                     maxLength={120}
-                    className="border-border focus-visible:ring-accent/40 min-w-0 flex-1 rounded-[var(--radius-sm)] border bg-transparent px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+                    className="min-w-0 flex-1"
                   />
                   <Select
                     value={newChildCostType}
