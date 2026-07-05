@@ -27,7 +27,7 @@ interface LiveGridCardProps {
 
 /** 행별 사용자 입력(예산단위·프로젝트·적요·제외). budgetUnitCode='' = 미선택.
  * projectWbsNo = 선택한 WBS 행의 WBS_NO(반영 시 정확 선택용).
- * budgetSource/projectSource = 프리셀렉트 출처 배지(AI/기본) — 사용자가 값을 바꾸면 null 로 지운다. */
+ * budgetSource/projectSource/noteSource = 프리필 출처 배지 — 사용자가 값을 바꾸면 null 로 지운다. */
 interface RowEdit {
   budgetUnitCode: string;
   projectCode: string;
@@ -37,6 +37,7 @@ interface RowEdit {
   skip: boolean;
   budgetSource: PrefillSource | null;
   projectSource: PrefillSource | null;
+  noteSource: PrefillSource | null;
 }
 
 function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
@@ -53,6 +54,7 @@ function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
         skip: false,
         budgetSource: r.budgetUnit ? (r.budgetSource ?? null) : null,
         projectSource: r.project ? (r.projectSource ?? null) : null,
+        noteSource: r.note ? (r.noteSource ?? null) : null,
       },
     ]),
   );
@@ -160,7 +162,10 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const [edits, setEdits] = useState<Record<number, RowEdit>>(() => initEdits(rows));
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // 저장 안전 게이트 — '입력 완료' 클릭 시 곧장 제출하지 않고 인라인 확인 단계로 전환.
+  const [confirmSave, setConfirmSave] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const tableWrapRef = useRef<HTMLDivElement>(null);
 
   const bFav = useFavorites('budget_unit');
   const pFav = useFavorites('project');
@@ -172,12 +177,19 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     idRef.current = hitl.id;
     setEdits(initEdits(hitl.rows ?? []));
     setSubmitted(false);
+    setConfirmSave(false);
     setError(null);
     bFav.reset(hitl.budgetUnits?.favorites ?? []);
     pFav.reset(hitl.projects?.favorites ?? []);
     void bFav.loadIds();
     void pFav.loadIds();
   }, [hitl.id, hitl.rows, hitl.budgetUnits, hitl.projects, bFav, pFav]);
+
+  // 그리드 도착(HITL) 시 첫 행 예산단위 select 로 포커스 — 키보드 진입·40행 이동 개선.
+  useEffect(() => {
+    const sel = tableWrapRef.current?.querySelector<HTMLSelectElement>('tbody tr select');
+    sel?.focus();
+  }, [hitl.id]);
 
   // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선. 프리셀렉트가 그룹 밖 코드여도
   // 라벨·★ 가 풀리도록 행 프리셀렉트를 맵에 보강한다.
@@ -225,6 +237,19 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const nonSkip = rows.filter((r) => !edits[r.no]?.skip);
   const validCount = nonSkip.filter((r) => isRowValid(r.no)).length;
   const allValid = nonSkip.length > 0 && validCount === nonSkip.length;
+  const skipCount = rows.length - nonSkip.length;
+  const firstInvalidNo = nonSkip.find((r) => !isRowValid(r.no))?.no ?? null;
+
+  // 오류 내비게이션 — 첫 무효 행으로 스크롤 + 그 행 예산단위 select 에 포커스.
+  const jumpToFirstInvalid = useCallback(() => {
+    if (firstInvalidNo == null) return;
+    const rowEl = tableWrapRef.current?.querySelector<HTMLTableRowElement>(
+      `tr[data-row-no="${firstInvalidNo}"]`,
+    );
+    if (!rowEl) return;
+    rowEl.scrollIntoView({ block: 'center' });
+    rowEl.querySelector<HTMLSelectElement>('select')?.focus();
+  }, [firstInvalidNo]);
 
   async function submit() {
     if (!allValid || disabled) return;
@@ -278,7 +303,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     <div className="flex h-full min-h-0 flex-col gap-3">
       <GridHeader title={hitl.title} prompt={hitl.prompt} />
 
-      {/* 일괄 지정 — 비제외 행 전체에 같은 예산단위·프로젝트를 한 번에 채운다(이후 개별 수정 가능). */}
+      {/* 일괄 지정 — 비제외 행 전체에 같은 예산단위·프로젝트·적요를 한 번에 채운다(이후 개별 수정 가능). */}
       <BulkBar
         budgetFavs={bFavList}
         budgetMineExclFav={bMineExclFav}
@@ -289,9 +314,16 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         onBulkProject={(code, name, wbsNo) =>
           applyAll({ projectCode: code, projectName: name, projectWbsNo: wbsNo })
         }
+        onBulkNote={(note) => applyAll({ note, noteSource: null })}
       />
 
-      <div className="border-border min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border">
+      {/* 출처 배지 범례 — 툴팁 없이도 배지 의미를 알 수 있게 한 줄로 상시 노출. */}
+      <SourceLegend />
+
+      <div
+        ref={tableWrapRef}
+        className="border-border min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border"
+      >
         <table className="w-full min-w-[1080px] border-collapse text-[11px]">
           <thead className="bg-muted/70 text-foreground-tertiary sticky top-0 z-10">
             <tr>
@@ -318,11 +350,13 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                 skip: false,
                 budgetSource: null,
                 projectSource: null,
+                noteSource: null,
               };
               const rowInvalid = !e.skip && !isRowValid(r.no);
               return (
                 <tr
                   key={r.no}
+                  data-row-no={r.no}
                   className={cn(
                     'border-border/50 border-t align-top',
                     e.skip && 'opacity-40',
@@ -422,21 +456,24 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                     </div>
                   </Td>
 
-                  {/* 적요 */}
+                  {/* 적요 — 프리필 출처 배지(학습/전사) 표시, 사용자가 바꾸면 배지 제거. */}
                   <Td>
-                    <input
-                      value={e.note}
-                      onChange={(ev) => setRow(r.no, { note: ev.target.value })}
-                      disabled={e.skip || disabled}
-                      maxLength={200}
-                      placeholder="적요"
-                      aria-invalid={rowInvalid && e.note.trim() === ''}
-                      className={cn(
-                        'border-border bg-surface text-foreground placeholder:text-muted-foreground h-8 w-full rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none',
-                        'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
-                        'aria-invalid:border-danger disabled:opacity-50',
-                      )}
-                    />
+                    <div className="flex items-center gap-1.5">
+                      {e.noteSource ? <SourceBadge source={e.noteSource} /> : null}
+                      <input
+                        value={e.note}
+                        onChange={(ev) => setRow(r.no, { note: ev.target.value, noteSource: null })}
+                        disabled={e.skip || disabled}
+                        maxLength={200}
+                        placeholder="적요"
+                        aria-invalid={rowInvalid && e.note.trim() === ''}
+                        className={cn(
+                          'border-border bg-surface text-foreground placeholder:text-muted-foreground h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none',
+                          'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
+                          'aria-invalid:border-danger disabled:opacity-50',
+                        )}
+                      />
+                    </div>
                   </Td>
 
                   {/* 제외 */}
@@ -457,7 +494,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         </table>
       </div>
 
-      {/* 검증 요약 + 적용 */}
+      {/* 검증 요약 + 적용(저장 안전 게이트) */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-foreground-secondary text-[11px]">
           {nonSkip.length}행 중{' '}
@@ -468,30 +505,65 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           </span>{' '}
           입력 완료
           {nonSkip.length - validCount > 0 ? (
-            <span className="text-foreground-tertiary">
+            <>
               {' '}
-              · 예산단위·적요 미입력 {nonSkip.length - validCount}행
-            </span>
+              ·{' '}
+              <button
+                type="button"
+                onClick={jumpToFirstInvalid}
+                title="첫 미입력 행으로 이동"
+                className="text-warning cursor-pointer underline underline-offset-2 hover:opacity-80"
+              >
+                예산단위·적요 미입력 {nonSkip.length - validCount}행
+              </button>
+              <span className="text-foreground-tertiary">
+                {' '}
+                — 해당 행을 &lsquo;제외&rsquo;하면 나머지만 저장됩니다.
+              </span>
+            </>
           ) : null}
         </p>
-        <Button size="sm" onClick={() => void submit()} disabled={!allValid || disabled}>
-          {submitted ? (
-            <>
-              <Spinner size={14} />
-              반영·저장 진행 중…
-            </>
-          ) : busy ? (
-            <>
-              <Spinner size={14} />
-              전송 중…
-            </>
-          ) : (
-            <>
+
+        {/* 저장 안전 게이트: '입력 완료' → 인라인 확인(실 ERP 저장 예고) → '저장 진행'이 실제 제출. */}
+        {confirmSave && !busy && !submitted ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-foreground-secondary text-[11px]">
+              실 더존 ERP에{' '}
+              <span className="text-foreground font-semibold tabular-nums">{nonSkip.length}건</span>
+              을 저장합니다 · 제외 {skipCount}건
+            </span>
+            <Button size="sm" onClick={() => void submit()} disabled={!allValid || disabled}>
               <RiCheckLine size={14} aria-hidden />
-              입력 완료
-            </>
-          )}
-        </Button>
+              저장 진행
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setConfirmSave(false)}>
+              계속 수정
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            onClick={() => setConfirmSave(true)}
+            disabled={!allValid || disabled}
+          >
+            {submitted ? (
+              <>
+                <Spinner size={14} />
+                반영·저장 진행 중…
+              </>
+            ) : busy ? (
+              <>
+                <Spinner size={14} />
+                전송 중…
+              </>
+            ) : (
+              <>
+                <RiCheckLine size={14} aria-hidden />
+                입력 완료
+              </>
+            )}
+          </Button>
+        )}
       </div>
 
       {error ? <span className="text-danger text-[12px]">{error}</span> : null}
@@ -527,6 +599,7 @@ function BulkBar({
   disabled,
   onBulkBudget,
   onBulkProject,
+  onBulkNote,
 }: {
   budgetFavs: BudgetUnitOption[];
   budgetMineExclFav: BudgetUnitOption[];
@@ -535,7 +608,10 @@ function BulkBar({
   disabled: boolean;
   onBulkBudget: (code: string) => void;
   onBulkProject: (code: string, name: string, wbsNo: string) => void;
+  onBulkNote: (note: string) => void;
 }) {
+  // 적요 일괄 입력값 — '적요 전체 적용' 클릭 시 비제외 행 전체의 적요를 이 값으로 채운다.
+  const [bulkNote, setBulkNote] = useState('');
   return (
     <div className="border-border-subtle bg-muted/40 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border px-2.5 py-2">
       <span className="text-foreground-tertiary text-[10px] font-semibold tracking-wider uppercase">
@@ -568,6 +644,29 @@ function BulkBar({
           </option>
         ))}
       </select>
+      <input
+        value={bulkNote}
+        onChange={(ev) => setBulkNote(ev.target.value)}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter' && bulkNote.trim()) {
+            ev.preventDefault();
+            onBulkNote(bulkNote);
+          }
+        }}
+        disabled={disabled}
+        maxLength={200}
+        placeholder="적요 일괄 입력"
+        className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-40 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
+      />
+      <Button
+        size="sm"
+        variant="secondary"
+        className="h-8 px-2"
+        disabled={disabled || !bulkNote.trim()}
+        onClick={() => onBulkNote(bulkNote)}
+      >
+        적요 전체 적용
+      </Button>
     </div>
   );
 }
@@ -892,6 +991,28 @@ function SourceBadge({ source }: { source: PrefillSource }) {
     >
       {meta.label}
     </span>
+  );
+}
+
+/** 출처 배지 범례 — 그리드 상단 한 줄. 툴팁에 의존하지 않고 배지 의미를 상시 노출한다. */
+const LEGEND_ITEMS: { source: PrefillSource; desc: string }[] = [
+  { source: 'ai', desc: 'AI 추천' },
+  { source: 'learned', desc: '과거 내 확정(개입 학습)' },
+  { source: 'seed', desc: '전사 기초자료 관례' },
+  { source: 'default', desc: '기본지정' },
+];
+
+function SourceLegend() {
+  return (
+    <div className="text-foreground-tertiary flex flex-wrap items-center gap-x-3 gap-y-1 px-0.5 text-[10px]">
+      <span className="font-semibold tracking-wider uppercase">배지 안내</span>
+      {LEGEND_ITEMS.map(({ source, desc }) => (
+        <span key={source} className="flex items-center gap-1">
+          <SourceBadge source={source} />
+          {desc}
+        </span>
+      ))}
+    </div>
   );
 }
 

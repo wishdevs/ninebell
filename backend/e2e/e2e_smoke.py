@@ -2,8 +2,9 @@
 
 Phase 1 (dashboard): drives the REAL product UI at :3101 — login, navigate to
   /agents/card-chat, click 실행, wait for the HITL grid card, click 입력 완료
-  (accepting whatever is prefilled), wait for terminal result, report whether
-  the result indicates a real save (입력·저장) or a no-op (반영 0건).
+  (accepting whatever is prefilled), then click 저장 진행 (inline save-gate
+  confirmation), wait for terminal result, report whether the result indicates
+  a real save (입력·저장) or a no-op (반영 0건).
 
 Phase 2 (ERP): separate browser context, logs into ERP directly, opens
   GLDDOC00300, filters 결의구분=카드, verifies every row is today's date +
@@ -228,14 +229,38 @@ async def phase1() -> dict:
 
         await submit_btn.first.click()
         report["submit_clicked"] = True
-        print("[P1] clicked 입력 완료", flush=True)
+        print("[P1] clicked 입력 완료 — waiting for save-gate (저장 진행) button...", flush=True)
+
+        # 저장 안전 게이트: '입력 완료'는 인라인 확인 단계로 전환될 뿐 제출하지 않는다.
+        # '저장 진행' 버튼이 나타나면 클릭해야 실제 제출이 이뤄진다.
+        # exact=True — 제출 후 버튼 '반영·저장 진행 중…'과의 부분일치 오탐 방지.
+        confirm_btn = page.get_by_role("button", name="저장 진행", exact=True)
+        confirm_appeared = False
+        elapsed = 0
+        while elapsed < 15:
+            if await confirm_btn.count() > 0 and await confirm_btn.first.is_visible():
+                confirm_appeared = True
+                break
+            await page.wait_for_timeout(1000)
+            elapsed += 1
+        if not confirm_appeared:
+            report["error"] = "save-gate button (저장 진행) never appeared within 15s after 입력 완료"
+            await page.screenshot(path=str(SCRATCH / "e2e_p1_no_save_gate.png"))
+            print(f"[P1][ERROR] {report['error']}", flush=True)
+            return report
+
+        await confirm_btn.first.click()
+        report["confirm_clicked"] = True
+        print("[P1] clicked 저장 진행 (save-gate confirmed)", flush=True)
         await page.wait_for_timeout(5000)
 
-        if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
+        still_confirm = await confirm_btn.count() > 0 and await confirm_btn.first.is_visible()
+        still_submit = await submit_btn.count() > 0 and await submit_btn.first.is_visible()
+        if still_confirm or still_submit:
             report["stuck_after_click"] = True
             report["error"] = (
-                "입력 완료 still present ~5s after click — server validation likely rejected "
-                "(e.g. empty 예산단위) and re-emitted the grid"
+                "저장 진행/입력 완료 still present ~5s after click — server validation likely "
+                "rejected (e.g. empty 예산단위) and re-emitted the grid"
             )
             await page.screenshot(path=str(SCRATCH / "e2e_p1_stuck_validation.png"))
             print(f"[P1][FINDING] {report['error']}", flush=True)

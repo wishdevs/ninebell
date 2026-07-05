@@ -67,6 +67,8 @@ export interface LiveGridRow {
   budgetSource?: PrefillSource | null;
   /** 프로젝트 프리셀렉트 출처 — 'ai'=AI 추천, 'default'=기본지정 즐겨찾기. */
   projectSource?: PrefillSource | null;
+  /** 적요 프리필 출처 — 'learned'=개입 학습, 'seed'=전사 기초자료. 키워드 휴리스틱은 null. */
+  noteSource?: PrefillSource | null;
   /** 저장 실패 재시도 시 이 행의 조치 안내(예: 예산계정이 무엇과 같아야 하는지). 있으면 강조. */
   error?: string;
 }

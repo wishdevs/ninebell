@@ -154,10 +154,50 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
     assert frame["budgetUnits"]["favorites"] == [{"code": "1000", "name": "영업본부"}]
     assert frame["projects"]["favorites"] == [{"code": "P1", "name": "공통"}]
     assert frame["projects"]["searchResults"] is None and frame["projects"]["query"] is None
+    # 적요 출처: 학습·seed 없음 → 키워드 휴리스틱 → noteSource=None(배지 없음). 키는 항상 실린다.
+    assert all("noteSource" in row for row in frame["rows"])
+    assert frame["rows"][0]["noteSource"] is None
 
     # 전부 skip 제출로 노드를 정상 종료시킨다.
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
     assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
+
+
+async def test_grid_rows_carry_note_source_badge(monkeypatch):
+    """적요 프리필 출처 배지: 개인 학습→'learned', 전사 seed→'seed', 키워드 휴리스틱→None."""
+    from app.services import card_learning
+
+    _stub_dumps(monkeypatch)
+
+    async def _fake_favs(owner):
+        return ([], [], "")
+
+    monkeypatch.setattr(catalog, "_load_user_favorites", _fake_favs)
+
+    async def _fake_learned(owner, merchants):
+        return {card_learning.norm_merchant("가맹점0"): {"note": "야근 식대"}}
+
+    async def _fake_seed(merchants):
+        # 가맹점0 은 개인 학습이 있으므로 seed 가 있어도 learned 가 우선해야 한다.
+        return {
+            card_learning.norm_merchant("가맹점0"): {"note": "전사 관례 적요"},
+            card_learning.norm_merchant("가맹점1"): {"note": "소모품 구입"},
+        }
+
+    monkeypatch.setattr(card_learning, "retrieve_for_merchants", _fake_learned)
+    monkeypatch.setattr(card_learning, "retrieve_seed_for_merchants", _fake_seed)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(3), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+
+    assert frame["rows"][0]["noteSource"] == "learned" and frame["rows"][0]["note"] == "야근 식대"
+    assert frame["rows"][1]["noteSource"] == "seed" and frame["rows"][1]["note"] == "소모품 구입"
+    assert frame["rows"][2]["noteSource"] is None  # 키워드 휴리스틱 — 배지 없음
+
+    resolve_hitl(frame["id"], {"rows": [{"no": i, "skip": True} for i in (1, 2, 3)]})
+    await asyncio.wait_for(task, timeout=2)
 
 
 async def test_grid_query_message_reemits_with_search_results(monkeypatch):

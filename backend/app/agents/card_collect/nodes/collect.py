@@ -161,22 +161,28 @@ def make_collect_rows_node(timeout_s: int | None = None):
         if seed:
             await emit_log(events, f"전사 기초자료 {len(seed)}개 가맹점 매칭 — 개인 학습 없는 행에 반영.", "info")
         # 적요 반영: 개인 학습 적요 > 전사 seed 적요 > 키워드 휴리스틱(사용자의 실제 표현 우선).
-        # recs(그리드 표시) · notes(반영/현황) 둘 다 갱신.
+        # recs(그리드 표시) · notes(반영/현황) 둘 다 갱신. 행별 출처(note_sources)를 함께 기록해
+        # 프론트 배지(학습/전사)로 노출한다 — 키워드 휴리스틱은 None(배지 없음).
+        note_sources: dict[int, str | None] = {
+            r.get("i", idx): None for idx, r in enumerate(rows_list)
+        }
         for idx, r in enumerate(rows_list):
             norm = card_learning.norm_merchant(r.get("TRAN_NM"))
-            note_hint = ((learned.get(norm) or {}).get("note")
-                         or (seed.get(norm) or {}).get("note"))
+            learned_note = (learned.get(norm) or {}).get("note")
+            seed_note = (seed.get(norm) or {}).get("note")
+            note_hint = learned_note or seed_note
             if note_hint and note_hint.strip():
                 key = r.get("i", idx)
                 recs[key] = note_hint.strip()
                 notes[key] = note_hint.strip()
+                note_sources[key] = "learned" if (learned_note or "").strip() else "seed"
         preselect = await prefill._prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
         )
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note
-        #  + 프리셀렉트 budgetUnit/project·출처 budgetSource/projectSource).
+        #  + 프리셀렉트 budgetUnit/project·출처 budgetSource/projectSource/noteSource).
         grid_rows = [
             {
                 "no": idx + 1,
@@ -188,6 +194,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 "approved": r.get("APRVL_YN") or "",
                 "vatType": r.get("VAT_TP") or "",
                 "note": recs[r.get("i", idx)],
+                "noteSource": note_sources[r.get("i", idx)],
                 **preselect[idx + 1],
             }
             for idx, r in enumerate(rows_list)
@@ -207,7 +214,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 if prev.get("project"):
                     gr["project"], gr["projectSource"] = prev["project"], None
                 if prev.get("note"):
-                    gr["note"] = prev["note"]
+                    gr["note"], gr["noteSource"] = prev["note"], None
                 restored += 1
             if restored:
                 await emit_log(events, f"이전 선택 {restored}건 복원(저장 실패 재시도) — 틀린 행만 고쳐 주세요.", "info")
