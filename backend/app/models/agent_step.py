@@ -38,6 +38,8 @@ class AgentStep(Base):
     intervention: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # 큰 단계(카테고리) 라벨 — UI Phase 아코디언 그룹핑의 소스(예: '접속', '결의서 준비').
+    phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     substeps: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
 

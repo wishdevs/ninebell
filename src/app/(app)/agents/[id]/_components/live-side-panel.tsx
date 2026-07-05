@@ -1,13 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  RiCheckLine,
-  RiCloseLine,
-  RiErrorWarningLine,
-  RiUserLine,
-  RiLoader4Line,
-} from '@remixicon/react';
+import { RiCheckLine, RiErrorWarningLine } from '@remixicon/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
@@ -15,8 +9,6 @@ import { LiveGridCard } from '@/components/live/LiveGridCard';
 import type {
   LiveLogLevel,
   LiveLogLine,
-  LiveStepState,
-  LiveStepStatus,
   LiveTransactions,
   UseLiveRunReturn,
 } from '@/lib/live/types';
@@ -24,6 +16,7 @@ import type { WorkflowStep } from '@/lib/data/agents';
 import { cn } from '@/lib/utils';
 import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionEmpty } from './intervention-empty';
+import { PhaseStepPanel } from './phase-step-panel';
 
 interface LiveSidePanelProps {
   run: UseLiveRunReturn;
@@ -123,8 +116,9 @@ export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveS
           )}
         </TabsContent>
 
-        <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <LiveStepList steps={run.steps} status={run.status} planSteps={planSteps} />
+        {/* Phase 아코디언 — 자체 sticky 진행 헤더가 있어 패딩 없이 스크롤 컨테이너만 준다. */}
+        <TabsContent value="workflow" className="min-h-0 flex-1 overflow-y-auto">
+          <PhaseStepPanel planSteps={planSteps} liveSteps={run.steps} runStatus={run.status} />
         </TabsContent>
 
         <TabsContent value="log" className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -150,167 +144,7 @@ export function LiveSidePanel({ run, resultAction, runsPanel, planSteps }: LiveS
   );
 }
 
-// ── 라이브 단계 목록 ─────────────────────────────────────────────────
-
-type DisplayStepStatus = LiveStepStatus | 'pending';
-
-interface DisplayStep {
-  id: string;
-  label: string;
-  status: DisplayStepStatus;
-  ms?: number;
-  skill?: string;
-  detail?: string;
-  intervention?: boolean;
-}
-
-const STEP_DOT: Record<DisplayStepStatus, string> = {
-  running: 'bg-accent/15 text-accent',
-  done: 'bg-success/15 text-success',
-  failed: 'bg-danger/15 text-danger',
-  pending: 'bg-muted text-muted-foreground',
-};
-
-const STEP_LABEL: Record<DisplayStepStatus, string> = {
-  running: '진행 중',
-  done: '완료',
-  failed: '실패',
-  pending: '대기',
-};
-
-/**
- * 라이브 단계(도착한 것만)를 에이전트 단계 계획(백엔드 steps — 전체 순서·한글 라벨)과
- * 병합한다. 계획에 없는 단계/계획이 없는 에이전트는 원래 id 를 라벨로 그대로 노출한다
- * (안전 폴백 — DB 스텝 없는 demo-echo 등).
- */
-function buildDisplaySteps(
-  planSteps: readonly WorkflowStep[] | undefined,
-  steps: readonly LiveStepState[],
-): DisplayStep[] {
-  if (!planSteps || planSteps.length === 0) {
-    return steps.map((s) => ({ id: s.step, label: s.step, status: s.status, ms: s.ms }));
-  }
-  const byId = new Map(steps.map((s) => [s.step, s] as const));
-  const known = new Set(planSteps.map((d) => d.id));
-  const merged = planSteps.map((d): DisplayStep => {
-    const live = byId.get(d.id);
-    return {
-      id: d.id,
-      label: d.label,
-      status: live?.status ?? 'pending',
-      ms: live?.ms,
-      skill: d.skill,
-      detail: d.detail,
-      intervention: d.intervention,
-    };
-  });
-  // 정의에 없는(향후 추가된) 단계는 도착 순서 그대로 뒤에 붙인다.
-  const extra = steps
-    .filter((s) => !known.has(s.step))
-    .map((s): DisplayStep => ({ id: s.step, label: s.step, status: s.status, ms: s.ms }));
-  return [...merged, ...extra];
-}
-
-export function LiveStepList({
-  steps,
-  status,
-  planSteps,
-}: {
-  steps: readonly LiveStepState[];
-  status: UseLiveRunReturn['status'];
-  planSteps?: readonly WorkflowStep[];
-}) {
-  const display = buildDisplaySteps(planSteps, steps);
-  // 진행 중(또는 마지막으로 도착한) 단계 = 마지막 비-대기 단계. 이 단계를 자동으로 화면에
-  // 스크롤해 진행 상황이 항상 보이게 한다(사용자 요청: 하단 스크롤이 안 돼 진행이 안 보임).
-  let activeIndex = -1;
-  display.forEach((s, i) => {
-    if (s.status !== 'pending') activeIndex = i;
-  });
-  const activeRef = useRef<HTMLLIElement | null>(null);
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    // display 는 매 렌더 새 배열이므로 steps/상태 변화에만 반응하도록 활성 인덱스로 좁힌다.
-  }, [activeIndex, display[activeIndex]?.status]);
-
-  if (display.length === 0) {
-    return (
-      <p className="text-foreground-tertiary py-6 text-center text-[12px]">
-        {status === 'connecting' ? '세션에 연결하는 중…' : '아직 단계가 없습니다.'}
-      </p>
-    );
-  }
-  return (
-    <ol className="flex flex-col">
-      {display.map((step, i) => (
-        <li
-          key={step.id}
-          ref={i === activeIndex ? activeRef : undefined}
-          className="relative flex gap-3 pb-4 last:pb-0"
-        >
-          {i < display.length - 1 ? (
-            <span
-              aria-hidden
-              className="bg-border absolute top-6 left-[11px] h-[calc(100%-1rem)] w-px"
-            />
-          ) : null}
-          <span
-            className={cn(
-              'relative z-10 mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full',
-              STEP_DOT[step.status],
-            )}
-          >
-            {step.status === 'done' ? (
-              <RiCheckLine size={12} aria-hidden />
-            ) : step.status === 'failed' ? (
-              <RiCloseLine size={12} aria-hidden />
-            ) : step.status === 'pending' ? (
-              <span className="text-[10px] font-bold tabular-nums">{i + 1}</span>
-            ) : (
-              <RiLoader4Line size={12} className="animate-spin" aria-hidden />
-            )}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-semibold">
-                  {step.label}
-                </span>
-                {step.intervention ? (
-                  <span className="bg-warning/15 text-warning inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
-                    <RiUserLine size={10} aria-hidden />
-                    개입 필요
-                  </span>
-                ) : null}
-              </span>
-              <span
-                className={cn(
-                  'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-                  STEP_DOT[step.status],
-                )}
-              >
-                {STEP_LABEL[step.status]}
-              </span>
-            </div>
-            {step.skill ? (
-              <span className="text-foreground-tertiary border-border-subtle mt-0.5 mr-1.5 inline-block rounded border px-1.5 py-0.5 text-[10px]">
-                {step.skill}
-              </span>
-            ) : null}
-            {step.ms != null ? (
-              <span className="text-foreground-tertiary text-[10px] tabular-nums">{step.ms}ms</span>
-            ) : null}
-            {step.detail ? (
-              <p className="text-muted-foreground mt-1 text-[11px] leading-relaxed">
-                {step.detail}
-              </p>
-            ) : null}
-          </div>
-        </li>
-      ))}
-    </ol>
-  );
-}
+// (구 LiveStepList 는 PhaseStepPanel — phase-step-panel.tsx — 로 대체되어 제거됐다.)
 
 // ── 라이브 로그 ──────────────────────────────────────────────────────
 

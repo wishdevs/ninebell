@@ -1,6 +1,7 @@
 'use client';
 
-import { RiLockLine } from '@remixicon/react';
+import { RiLockLine, RiPlayCircleLine, RiPlayLine, RiRestartLine } from '@remixicon/react';
+import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
 import type { LiveRunStatus } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
@@ -10,6 +11,10 @@ interface LiveBrowserStageProps {
   status: LiveRunStatus;
   screenshot: string | null;
   connected: boolean;
+  /** 실행 워크플로우가 매핑돼 있는지 — false 면 스테이지 CTA 를 비활성화한다. */
+  canRun?: boolean;
+  /** 스테이지 중앙 CTA(실행/다시 실행) 클릭 — 상단 실행 컨트롤과 동일 동작. */
+  onStart?: () => void;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -29,6 +34,8 @@ export function LiveBrowserStage({
   status,
   screenshot,
   connected,
+  canRun = false,
+  onStart,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
   return (
@@ -54,8 +61,83 @@ export function LiveBrowserStage({
             이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
         <div className="bg-muted/30 relative aspect-[16/10] w-full">
           <LiveScreen src={screenshot} live={live} />
+          {/* 실행 CTA — 우상단 버튼이 안 보인다는 피드백에 따라, 세션이 없거나(idle)
+              종료됐을 때 화면 중앙에 대형 실행 진입점을 겹쳐 보여준다(실행 중엔 숨김). */}
+          {onStart && !live ? (
+            <StageRunCta status={status} canRun={canRun} onStart={onStart} />
+          ) : null}
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * 스테이지 중앙 실행 CTA — idle 은 시작, succeeded/failed 는 재실행.
+ * 종료 상태에서는 마지막 스크린샷 위에 살짝 어둡게 얹어 결과 화면 맥락을 유지한다.
+ */
+function StageRunCta({
+  status,
+  canRun,
+  onStart,
+}: {
+  status: LiveRunStatus;
+  canRun: boolean;
+  onStart: () => void;
+}) {
+  const terminal = status === 'succeeded' || status === 'failed';
+  const title =
+    status === 'succeeded' ? '실행 완료' : status === 'failed' ? '실행 실패' : '에이전트 실행';
+  const description = terminal
+    ? '같은 워크플로우를 새 세션으로 다시 실행할 수 있습니다.'
+    : '라이브 브라우저 세션을 시작해 워크플로우를 단계별로 실행합니다.';
+  return (
+    <div
+      className={cn(
+        'absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center',
+        // idle 은 불투명 배경 — 밑의 LiveScreen 플레이스홀더('라이브 화면 없음')와 글자 겹침 방지.
+        // 종료 상태는 마지막 스크린샷 맥락을 살려 dim+blur 로만 얹는다.
+        terminal ? 'bg-background/60 backdrop-blur-[2px]' : 'bg-surface',
+      )}
+    >
+      <RiPlayCircleLine
+        size={44}
+        aria-hidden
+        className={cn(
+          status === 'failed'
+            ? 'text-danger'
+            : status === 'succeeded'
+              ? 'text-success'
+              : 'text-accent',
+        )}
+      />
+      <div className="flex flex-col gap-1">
+        <p className="text-foreground text-[length:var(--text-heading-sm)] font-semibold">
+          {title}
+        </p>
+        <p className="text-muted-foreground max-w-[36ch] text-[length:var(--text-body-sm)] leading-relaxed">
+          {description}
+        </p>
+      </div>
+      <Button
+        size="lg"
+        onClick={onStart}
+        disabled={!canRun}
+        title={canRun ? undefined : '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'}
+        className="mt-1 min-w-40"
+      >
+        {terminal ? (
+          <>
+            <RiRestartLine size={16} aria-hidden />
+            다시 실행
+          </>
+        ) : (
+          <>
+            <RiPlayLine size={16} aria-hidden />
+            실행
+          </>
+        )}
+      </Button>
     </div>
   );
 }

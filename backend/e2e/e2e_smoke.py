@@ -186,6 +186,8 @@ async def phase1() -> dict:
         await page.goto(f"{FRONTEND_BASE}/agents/card-chat")
         await page.wait_for_timeout(1500)
 
+        # '실행' 버튼은 상단 컨트롤 + 라이브 스테이지 중앙 CTA 두 곳에 있다(동작 동일).
+        # strict mode 충돌을 피하려고 .first 로 첫 번째(상단)를 클릭한다.
         run_btn = page.get_by_role("button", name="실행", exact=True)
         if await run_btn.count() == 0:
             run_btn = page.get_by_role("button", name="다시 실행", exact=True)

@@ -544,11 +544,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
             </Button>
           </div>
         ) : (
-          <Button
-            size="sm"
-            onClick={() => setConfirmSave(true)}
-            disabled={!allValid || disabled}
-          >
+          <Button size="sm" onClick={() => setConfirmSave(true)} disabled={!allValid || disabled}>
             {submitted ? (
               <>
                 <Spinner size={14} />

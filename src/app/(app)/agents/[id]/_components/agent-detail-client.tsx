@@ -191,12 +191,18 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         )}
       >
         {/* 브라우저는 항상 라이브 스테이지 — 미실행 시 run 은 idle 상태라 중립 대기 화면을
-            보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). */}
+            보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). idle/종료엔 스테이지
+            중앙에 대형 실행 CTA 를 겹친다(우상단 버튼이 안 보인다는 피드백 반영, 동작 동일). */}
         <LiveBrowserStage
           targetUrl={agent.targetUrl}
           status={run.status}
           screenshot={run.screenshot}
           connected={run.connected}
+          canRun={canRun}
+          onStart={() => {
+            const workflowId = (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
+            if (workflowId) startRun(workflowId);
+          }}
         />
         {isLive ? (
           <LiveSidePanel

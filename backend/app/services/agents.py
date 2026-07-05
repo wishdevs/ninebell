@@ -25,6 +25,9 @@ def _serialize_step(step: AgentStep) -> dict:
         out["skillKey"] = step.skill
     if step.detail:
         out["detail"] = step.detail
+    if step.phase:
+        # 큰 단계(카테고리) 라벨 — 프론트 Phase 아코디언 그룹핑 소스.
+        out["phase"] = step.phase
     if step.substeps:
         out["substeps"] = step.substeps
     return out

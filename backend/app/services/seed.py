@@ -131,7 +131,7 @@ async def seed_agents(db: AsyncSession) -> None:
             for f in ("status", "progress", "elapsed_seconds", "current_action"):
                 if getattr(row, f) != fx[f]:
                     setattr(row, f, fx[f])
-            # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention 을 픽스처와 동기화.
+            # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention·phase 를 픽스처와 동기화.
             # ⚠ 픽스처 스텝 정의가 통째로 바뀌면(키 셋 불일치 — 예: 옛 flow_graph 기반
             # access/kind/… → 실행 그래프 기반 login/…) 키 매칭 보강은 no-op 이 되어 낡은
             # 스텝이 영구 잔존한다(2026-07-05 실측: 워크플로우 탭이 옛 플랜(대기) + raw 영어
@@ -150,6 +150,7 @@ async def seed_agents(db: AsyncSession) -> None:
                             status=step["status"],
                             detail=step.get("detail"),
                             intervention=step.get("intervention", False),
+                            phase=step.get("phase"),
                             position=pos,
                             substeps=step.get("substeps"),
                         )
@@ -163,14 +164,16 @@ async def seed_agents(db: AsyncSession) -> None:
                     st.skill = fs.get("skill")
                 if st.intervention != fs.get("intervention", False):
                     st.intervention = fs.get("intervention", False)
-                # label/detail/status 도 픽스처를 따른다(목업 done/active 잔존 방지 — 계획은
-                # 전부 pending, 진행 상태는 라이브 스텝이 담당).
+                # label/detail/status/phase 도 픽스처를 따른다(목업 done/active 잔존 방지 —
+                # 계획은 전부 pending, 진행 상태는 라이브 스텝이 담당).
                 if st.label != fs["label"]:
                     st.label = fs["label"]
                 if st.detail != fs.get("detail"):
                     st.detail = fs.get("detail")
                 if st.status != fs["status"]:
                     st.status = fs["status"]
+                if st.phase != fs.get("phase"):
+                    st.phase = fs.get("phase")
             continue
         agent = Agent(
             id=fx["id"],
@@ -203,6 +206,7 @@ async def seed_agents(db: AsyncSession) -> None:
                     status=step["status"],
                     detail=step.get("detail"),
                     intervention=step.get("intervention", False),
+                    phase=step.get("phase"),
                     position=pos,
                     substeps=step.get("substeps"),
                 )

@@ -84,6 +84,8 @@ export interface WorkflowStep {
   substeps?: readonly SubStep[];
   /** true 면 이 단계에서 사용자 개입(HITL)이 필요하다 — '개입 필요' 표시. */
   intervention?: boolean;
+  /** 큰 단계(카테고리) 라벨 — Phase 아코디언 그룹핑(백엔드 agent_steps.phase). */
+  phase?: string;
 }
 
 // ── 로그 ─────────────────────────────────────────────────────────────

@@ -51,6 +51,19 @@ def test_skill_label_falls_back_to_raw_key():
     assert skill_label("과거 자유 문자열") == "과거 자유 문자열"
 
 
+def test_every_fixture_step_has_phase():
+    """모든 스텝에 phase(큰 단계 카테고리)가 있고, 순서대로 연속 구간을 이룬다."""
+    for fx in AGENT_FIXTURES:
+        phases = [s.get("phase") for s in fx["steps"]]
+        assert all(phases), f"{fx['id']} 에 phase 없는 스텝이 있음"
+        # 같은 phase 는 연속 구간이어야 아코디언 그룹핑이 순서를 보존한다.
+        seen: list[str] = []
+        for p in phases:
+            if not seen or seen[-1] != p:
+                assert p not in seen, f"{fx['id']} phase '{p}' 가 비연속으로 재등장"
+                seen.append(p)
+
+
 # ── GET /skills ───────────────────────────────────────────────────────────────
 async def test_list_skills_returns_catalog_with_reverse_index(client, make_user, auth_as):
     uid = await make_user("skills-user", "user")
@@ -91,6 +104,11 @@ async def test_agent_steps_expose_skill_label_key_and_intervention(client, make_
     # HITL 스텝만 intervention=True.
     assert steps["collect_rows"]["intervention"] is True
     assert all(not s["intervention"] for k, s in steps.items() if k != "collect_rows")
+    # phase(큰 단계)가 직렬화에 노출된다 — Phase 아코디언 그룹핑 소스.
+    assert steps["login"]["phase"] == "접속"
+    assert steps["collect_rows"]["phase"] == "건별 입력"
+    assert steps["save_final"]["phase"] == "저장"
+    assert all(s.get("phase") for s in steps.values())
 
 
 async def test_seed_replaces_stale_step_set(sm):
