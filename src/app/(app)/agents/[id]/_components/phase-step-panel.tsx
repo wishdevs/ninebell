@@ -9,6 +9,7 @@ import {
   RiUserLine,
 } from '@remixicon/react';
 import type { WorkflowStep } from '@/lib/data/agents';
+import { formatEta } from '@/lib/data/format';
 import type { LiveRunStatus, LiveStepState } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
@@ -44,6 +45,8 @@ interface DisplayStep {
   skill?: string;
   detail?: string;
   intervention?: boolean;
+  /** 예상 소요(ms, 계획 스텝에서). 자동 스텝 전부에 있어야 예상 시간 UI 를 켠다. */
+  expectedMs?: number;
 }
 
 type PhaseStatus = DisplayStepStatus;
@@ -88,6 +91,7 @@ function buildDisplaySteps(
       skill: d.skill,
       detail: d.detail,
       intervention: d.intervention,
+      expectedMs: d.expectedMs,
     },
     phase: d.phase ?? FALLBACK_PHASE,
   }));
@@ -148,6 +152,87 @@ function formatMs(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}초`;
 }
 
+// ── 예상 시간 세그먼트 타임라인 (승인 시안) ──────────────────────────
+//
+// 런 전체를 하나의 가로 바로 본다: 연속된 자동 스텝 묶음 = 자동 세그먼트(accent,
+// 폭 = expectedMs 합 비례) · 개입 스텝 = 개입 세그먼트(warning 줄무늬, 폭 고정 —
+// 사람 시간은 예측에서 제외) + 현재 위치 마커. 자동 스텝 중 expectedMs 가 하나라도
+// 없으면 타임라인·예고 전체를 숨긴다(부분 데이터로 엉터리 합계 금지).
+
+/** 개입 세그먼트 고정폭(%). 사람 시간은 예측 불가라 비례 배분에서 뺀다. */
+const INTERVENTION_SEG_PCT = 12;
+/** 실행 중 스텝의 세그먼트 내부 부분 채움 상한 — 실측이 예상보다 길어져도 안 넘친다. */
+const RUNNING_FILL_CAP = 0.95;
+
+interface EtaSegment {
+  id: string;
+  kind: 'auto' | 'intervention';
+  steps: DisplayStep[];
+  /** 전체 바 대비 폭(%). */
+  widthPct: number;
+  /** 0..1 채움 비율(자동=expectedMs 기준 진행, 개입=완료 여부). */
+  fill: number;
+}
+
+/** 실행 중 자동 스텝의 진행분(ms) — 로컬 타이머 경과를 expectedMs×상한으로 캡. */
+function runningProgressMs(step: DisplayStep, runningElapsedMs: number): number {
+  return Math.min(runningElapsedMs, (step.expectedMs ?? 0) * RUNNING_FILL_CAP);
+}
+
+/** planSteps(표시 스텝)로 세그먼트를 만든다 — 연속 자동 묶음 + 개입 고정폭. */
+function buildEtaSegments(steps: readonly DisplayStep[], runningElapsedMs: number): EtaSegment[] {
+  const raw: { kind: 'auto' | 'intervention'; steps: DisplayStep[] }[] = [];
+  for (const s of steps) {
+    const last = raw[raw.length - 1];
+    if (s.intervention) raw.push({ kind: 'intervention', steps: [s] });
+    else if (last?.kind === 'auto') last.steps.push(s);
+    else raw.push({ kind: 'auto', steps: [s] });
+  }
+  const interventionCount = raw.filter((r) => r.kind === 'intervention').length;
+  // 개입 고정폭을 뺀 나머지를 자동 세그먼트가 expectedMs 합 비례로 나눠 갖는다.
+  const autoTotalPct = Math.max(100 - interventionCount * INTERVENTION_SEG_PCT, 0);
+  const sumExpected = (ss: readonly DisplayStep[]) =>
+    ss.reduce((acc, s) => acc + (s.expectedMs ?? 0), 0);
+  const autoTotalMs = raw.reduce(
+    (acc, r) => (r.kind === 'auto' ? acc + sumExpected(r.steps) : acc),
+    0,
+  );
+  return raw.map((r, i) => {
+    if (r.kind === 'intervention') {
+      return {
+        id: `seg-${i}`,
+        kind: r.kind,
+        steps: r.steps,
+        widthPct: INTERVENTION_SEG_PCT,
+        fill: r.steps[0].status === 'done' ? 1 : 0,
+      };
+    }
+    const expected = sumExpected(r.steps);
+    const doneMs = r.steps.reduce((acc, s) => {
+      if (s.status === 'done') return acc + (s.expectedMs ?? 0);
+      if (s.status === 'running') return acc + runningProgressMs(s, runningElapsedMs);
+      return acc;
+    }, 0);
+    return {
+      id: `seg-${i}`,
+      kind: r.kind,
+      steps: r.steps,
+      widthPct: autoTotalMs > 0 ? (expected / autoTotalMs) * autoTotalPct : 0,
+      fill: expected > 0 ? Math.min(doneMs / expected, 1) : 0,
+    };
+  });
+}
+
+/** 미완료 자동 스텝의 남은 예상 합(ms) — 실행 중 스텝은 진행분을 뺀다. */
+function remainingAutoMs(steps: readonly DisplayStep[], runningElapsedMs: number): number {
+  return steps.reduce((acc, s) => {
+    if (s.intervention || s.expectedMs == null || s.status === 'done') return acc;
+    if (s.status === 'running')
+      return acc + Math.max(s.expectedMs - runningProgressMs(s, runningElapsedMs), 0);
+    return acc + s.expectedMs;
+  }, 0);
+}
+
 const STEP_DOT: Record<DisplayStepStatus, string> = {
   running: 'bg-accent/15 text-accent',
   done: 'bg-success/15 text-success',
@@ -181,6 +266,59 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
   const runningStep = allSteps.find((s) => s.status === 'running');
   const lastTouched = [...allSteps].reverse().find((s) => s.status !== 'pending');
   const currentStep = runningStep ?? lastTouched;
+
+  // ── 예상 시간 타임라인 데이터 ──
+  // 계획(planSteps)에서 온 표시 스텝만 대상 — 계획에 없는 라이브 스텝(뒤에 붙는 extra)은
+  // 예상치가 없으므로 타임라인 축에 넣지 않는다.
+  const planDisplaySteps = useMemo(
+    () =>
+      planSteps && planSteps.length > 0
+        ? entries.slice(0, planSteps.length).map((e) => e.step)
+        : [],
+    [entries, planSteps],
+  );
+  const autoPlanSteps = planDisplaySteps.filter((s) => !s.intervention);
+  // 자동 스텝 전부에 expectedMs 가 있어야 켠다(이력 없는 에이전트 = 기존 진행 바 그대로).
+  const etaReady = autoPlanSteps.length > 0 && autoPlanSteps.every((s) => s.expectedMs != null);
+
+  // 실행 중 자동 스텝의 로컬 타이머(1초 틱) — 세그먼트 내부를 expectedMs 기준으로 부분
+  // 채운다. waiting_input(개입 대기)이면 진행 중 자동 스텝이 없으므로 자연히 정지한다.
+  const runningAutoStep =
+    etaReady && runStatus === 'running'
+      ? planDisplaySteps.find((s) => s.status === 'running' && !s.intervention)
+      : undefined;
+  const runningAutoStepId = runningAutoStep?.id ?? null;
+  const [runningElapsedMs, setRunningElapsedMs] = useState(0);
+  useEffect(() => {
+    setRunningElapsedMs(0);
+    if (runningAutoStepId == null) return;
+    const timer = setInterval(() => setRunningElapsedMs((v) => v + 1000), 1000);
+    return () => clearInterval(timer);
+  }, [runningAutoStepId]);
+
+  const etaSegments = useMemo(
+    () => (etaReady ? buildEtaSegments(planDisplaySteps, runningElapsedMs) : []),
+    [etaReady, planDisplaySteps, runningElapsedMs],
+  );
+  const etaRemainingMs = etaReady ? remainingAutoMs(planDisplaySteps, runningElapsedMs) : 0;
+
+  // 시점별 상태 메시지 — 개입 전 예고 / 개입 완료 후 마무리 안내.
+  // 개입 중(waiting_input)엔 생략(개입 카드가 이미 말한다), 계획 보기·종료 상태도 생략.
+  let etaMessage: string | null = null;
+  if (etaReady && runStatus === 'running') {
+    const firstPendingIntervention = planDisplaySteps.findIndex(
+      (s) => s.intervention && s.status !== 'done',
+    );
+    if (firstPendingIntervention >= 0) {
+      const beforeMs = remainingAutoMs(
+        planDisplaySteps.slice(0, firstPendingIntervention),
+        runningElapsedMs,
+      );
+      etaMessage = `곧 입력을 요청합니다 — ${formatEta(beforeMs)} 후`;
+    } else if (planDisplaySteps.some((s) => s.intervention)) {
+      etaMessage = '남은 단계는 자동 — 완료되면 알려드립니다';
+    }
+  }
 
   // 개입 대기: HITL 스텝이 진행 중 + 런이 입력 대기 상태 → 해당 phase 를 강하게 알린다.
   const urgentGroupId =
@@ -257,29 +395,42 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
             {percent}%{elapsedMs > 0 ? <span> · {formatMs(elapsedMs)}</span> : null}
           </p>
         </div>
-        {/* 굵은 진행 바 — 실패는 danger, 개입 대기는 warning 으로 상태를 색으로도 말한다. */}
-        <div
-          className="bg-muted mt-2 h-2 overflow-hidden rounded-full"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          aria-label="전체 진행률"
-        >
-          <div
-            className={cn(
-              'h-full rounded-full transition-[width] duration-500 ease-out',
-              runStatus === 'failed'
-                ? 'bg-danger'
-                : runStatus === 'waiting_input'
-                  ? 'bg-warning'
-                  : runStatus === 'succeeded'
-                    ? 'bg-success'
-                    : 'bg-accent',
-            )}
-            style={{ width: `${isPlanOnly ? 0 : Math.max(percent, runningStep ? 3 : 0)}%` }}
+        {etaReady ? (
+          /* 세그먼트 타임라인 — 자동(accent, 폭=expectedMs 비례)·개입(warning 줄무늬,
+             고정폭) 구간 + 현재 위치 마커. expectedMs 가 갖춰진 에이전트에서만 진행 바를
+             대체한다(없으면 아래 기존 바 그대로 — 회귀 없음). */
+          <EtaTimeline
+            segments={etaSegments}
+            runStatus={runStatus}
+            isPlanOnly={isPlanOnly}
+            remainingMs={etaRemainingMs}
+            message={etaMessage}
           />
-        </div>
+        ) : (
+          /* 굵은 진행 바 — 실패는 danger, 개입 대기는 warning 으로 상태를 색으로도 말한다. */
+          <div
+            className="bg-muted mt-2 h-2 overflow-hidden rounded-full"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            aria-label="전체 진행률"
+          >
+            <div
+              className={cn(
+                'h-full rounded-full transition-[width] duration-500 ease-out',
+                runStatus === 'failed'
+                  ? 'bg-danger'
+                  : runStatus === 'waiting_input'
+                    ? 'bg-warning'
+                    : runStatus === 'succeeded'
+                      ? 'bg-success'
+                      : 'bg-accent',
+              )}
+              style={{ width: `${isPlanOnly ? 0 : Math.max(percent, runningStep ? 3 : 0)}%` }}
+            />
+          </div>
+        )}
       </header>
 
       {/* ── Phase 아코디언 ──────────────────────────────────────────── */}
@@ -298,6 +449,113 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
         ))}
       </ol>
     </div>
+  );
+}
+
+// ── 예상 시간 세그먼트 타임라인(진행 헤더용) ─────────────────────────
+
+interface EtaTimelineProps {
+  segments: readonly EtaSegment[];
+  runStatus: LiveRunStatus;
+  /** 실행 전 계획 보기 — 채움·마커 없이 구간 구조만 보여준다. */
+  isPlanOnly: boolean;
+  /** 미완료 자동 스텝의 남은 예상 합(ms). */
+  remainingMs: number;
+  /** 타임라인 아래 한 줄 상태 메시지(개입 예고 등). 없으면 생략. */
+  message: string | null;
+}
+
+/** 개입 세그먼트 줄무늬 — warning 토큰 기반(라이트/다크 공용). */
+const INTERVENTION_STRIPES = {
+  backgroundImage:
+    'repeating-linear-gradient(135deg, color-mix(in oklab, var(--warning) 45%, transparent) 0 3px, transparent 3px 7px)',
+} as const;
+
+/**
+ * 세그먼트 타임라인 — 색 의미는 기존 어휘 그대로(accent=진행, warning=개입, success=완료).
+ * 개입 대기 펄스(animate-pulse)는 globals.css 의 prefers-reduced-motion 전역 블록이
+ * 자동으로 무력화하므로 여기서 별도 분기하지 않는다.
+ */
+function EtaTimeline({ segments, runStatus, isPlanOnly, remainingMs, message }: EtaTimelineProps) {
+  const succeeded = runStatus === 'succeeded';
+  const failed = runStatus === 'failed';
+  const waiting = runStatus === 'waiting_input';
+  // 마커 위치 = 각 세그먼트 폭×채움의 합(채움은 항상 앞에서부터 차므로 누적이 곧 위치).
+  const markerPct = segments.reduce((acc, seg) => acc + seg.widthPct * seg.fill, 0);
+  const showMarker = !isPlanOnly && !succeeded && !failed;
+  return (
+    <>
+      <div
+        className="relative mt-2 flex h-2 gap-px overflow-hidden rounded-full"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(succeeded ? 100 : markerPct)}
+        aria-label="실행 예상 타임라인"
+      >
+        {segments.map((seg) => {
+          const isWaitingHere =
+            waiting && seg.kind === 'intervention' && seg.steps[0].status === 'running';
+          return (
+            <div
+              key={seg.id}
+              className={cn(
+                'relative h-full overflow-hidden',
+                seg.kind === 'intervention' ? 'bg-warning/10' : 'bg-muted',
+                // 개입 대기 중인 개입 세그먼트 펄스 — reduced-motion 은 전역 블록이 차단.
+                isWaitingHere && 'animate-pulse',
+              )}
+              style={{
+                width: `${seg.widthPct}%`,
+                ...(seg.kind === 'intervention' && !succeeded ? INTERVENTION_STRIPES : null),
+              }}
+              title={seg.kind === 'intervention' ? '사용자 개입 구간(예상시간 제외)' : undefined}
+            >
+              <div
+                className={cn(
+                  'h-full transition-[width] duration-500 ease-out',
+                  succeeded
+                    ? 'bg-success'
+                    : failed
+                      ? 'bg-danger'
+                      : seg.kind === 'intervention'
+                        ? 'bg-warning/60'
+                        : 'bg-accent',
+                )}
+                style={{ width: `${(succeeded ? 1 : seg.fill) * 100}%` }}
+              />
+            </div>
+          );
+        })}
+        {showMarker ? (
+          <span
+            aria-hidden
+            className="bg-foreground absolute top-0 h-full w-0.5 rounded-full transition-[left] duration-500 ease-out"
+            style={{ left: `calc(${Math.min(markerPct, 99.5)}% - 1px)` }}
+          />
+        ) : null}
+      </div>
+      {/* 타임라인 캡션 — 좌: 시점별 메시지, 우: 남은 예상(개입 대기면 일시정지 표시). */}
+      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+        <p className="text-foreground-tertiary min-w-0 truncate text-[11px] tracking-[0.04em]">
+          {message ?? ''}
+        </p>
+        <p className="text-foreground-tertiary shrink-0 text-[11px] tracking-[0.04em] tabular-nums">
+          {succeeded ? (
+            <span className="text-success font-semibold">완료</span>
+          ) : failed ? null : waiting ? (
+            <span className="text-warning font-semibold">입력 중 ⏸ — 예상시간 일시정지</span>
+          ) : (
+            <>
+              {isPlanOnly ? '총 예상 ' : '남은 예상 '}
+              <span className="text-foreground-secondary font-semibold">
+                {formatEta(remainingMs)}
+              </span>
+            </>
+          )}
+        </p>
+      </div>
+    </>
   );
 }
 

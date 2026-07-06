@@ -84,6 +84,13 @@ export interface WorkflowStep {
   substeps?: readonly SubStep[];
   /** true 면 이 단계에서 사용자 개입(HITL)이 필요하다 — '개입 필요' 표시. */
   intervention?: boolean;
+  /**
+   * 실행 이력 기반 예상 소요(밀리초) — 백엔드 /agents/{id} 가 이력이 있을 때만 내려준다.
+   * 자동(비개입) 스텝 중 하나라도 이 값이 없으면 예상 시간 UI(세그먼트 타임라인·CTA 소요
+   * 예고) 전체를 숨긴다 — 부분 데이터로 엉터리 합계를 만들지 않기 위함. 개입 스텝의 값은
+   * 예측에 쓰지 않는다(사람 시간은 예측 대상이 아님 — 타임라인에서 고정폭으로 표시).
+   */
+  expectedMs?: number;
   /** 큰 단계(카테고리) 라벨 — Phase 아코디언 그룹핑(백엔드 agent_steps.phase). */
   phase?: string;
 }

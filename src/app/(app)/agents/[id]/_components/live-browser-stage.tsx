@@ -4,8 +4,20 @@ import { RiLockLine, RiPlayCircleLine, RiPlayLine, RiRestartLine } from '@remixi
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
+import { formatEta } from '@/lib/data/format';
 import type { LiveRunStatus } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
+
+/**
+ * 실행 전 소요 예고 — 이력 기반 expectedMs 합(agent-detail-client 가 계산해 내려준다).
+ * null 이면(이력 없는 스텝 존재) 예고를 숨기고 기존 문구만 보여준다.
+ */
+export interface StageEtaHint {
+  /** 전 자동 스텝 expectedMs 합(ms). */
+  totalMs: number;
+  /** 첫 개입(intervention) 스텝 앞까지의 자동 스텝 합(ms). 개입 없는 에이전트면 null. */
+  toFirstInterventionMs: number | null;
+}
 
 interface LiveBrowserStageProps {
   targetUrl: string;
@@ -16,6 +28,8 @@ interface LiveBrowserStageProps {
   canRun?: boolean;
   /** 스테이지 중앙 CTA(실행/다시 실행) 클릭 — 상단 실행 컨트롤과 동일 동작. */
   onStart?: () => void;
+  /** 실행 전 CTA 아래 소요 예고("약 2분 소요 · 첫 입력 요청까지 ~30초"). null=미표시. */
+  etaHint?: StageEtaHint | null;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -37,6 +51,7 @@ export function LiveBrowserStage({
   connected,
   canRun = false,
   onStart,
+  etaHint = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
   return (
@@ -65,7 +80,7 @@ export function LiveBrowserStage({
           {/* 실행 CTA — 우상단 버튼이 안 보인다는 피드백에 따라, 세션이 없거나(idle)
               종료됐을 때 화면 중앙에 대형 실행 진입점을 겹쳐 보여준다(실행 중엔 숨김). */}
           {onStart && !live ? (
-            <StageRunCta status={status} canRun={canRun} onStart={onStart} />
+            <StageRunCta status={status} canRun={canRun} onStart={onStart} etaHint={etaHint} />
           ) : null}
         </div>
       </section>
@@ -81,10 +96,12 @@ function StageRunCta({
   status,
   canRun,
   onStart,
+  etaHint,
 }: {
   status: LiveRunStatus;
   canRun: boolean;
   onStart: () => void;
+  etaHint: StageEtaHint | null;
 }) {
   const terminal = status === 'succeeded' || status === 'failed';
   const title =
@@ -92,6 +109,15 @@ function StageRunCta({
   const description = terminal
     ? '같은 워크플로우를 새 세션으로 다시 실행할 수 있습니다.'
     : '라이브 브라우저 세션을 시작해 워크플로우를 단계별로 실행합니다.';
+  // 소요 예고(실행 전에만) — "약 2분 소요 · 첫 입력 요청까지 ~30초"(승인 마이크로카피).
+  // formatEta 는 "~2분" 형태라 총 소요는 접두 '~'를 '약 '으로 바꿔 카피를 맞춘다.
+  const etaLine =
+    !terminal && etaHint
+      ? `약 ${formatEta(etaHint.totalMs).replace(/^~/, '')} 소요` +
+        (etaHint.toFirstInterventionMs != null
+          ? ` · 첫 입력 요청까지 ${formatEta(etaHint.toFirstInterventionMs)}`
+          : '')
+      : null;
   return (
     <div
       className={cn(
@@ -119,6 +145,11 @@ function StageRunCta({
         <p className="text-muted-foreground max-w-[36ch] text-[length:var(--text-body-sm)] leading-relaxed">
           {description}
         </p>
+        {etaLine ? (
+          <p className="text-foreground-tertiary text-[11px] tracking-[0.04em] tabular-nums">
+            {etaLine}
+          </p>
+        ) : null}
       </div>
       <Button
         size="lg"

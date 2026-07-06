@@ -69,3 +69,70 @@ export function useHitlNotification(hitlId: string | null): void {
     };
   }, [hitlId]);
 }
+
+// ── 완료 알림 ────────────────────────────────────────────────────────
+
+/** 종료 상태별 탭 제목 접두어 — HITL 의 '● 입력 필요 — ' 컨벤션을 따른다. */
+const TERMINAL_TITLE_PREFIX = {
+  succeeded: '✅ 완료 — ',
+  failed: '❌ 실패 — ',
+} as const;
+
+const TERMINAL_MESSAGE = {
+  succeeded: '실행 완료 — 결과를 확인하세요',
+  failed: '실행 실패 — 원인을 확인하세요',
+} as const;
+
+/**
+ * 런 종료(terminal) 알림 훅 — HITL 대기 알림과 동일 채널(탭 제목 접두 + 토스트 +
+ * 백그라운드 탭이면 브라우저 알림)로 완료/실패를 알린다.
+ *
+ * 탭 제목 접두는 사용자가 탭으로 돌아오면(확인한 것으로 간주) 즉시 원복하고,
+ * 세션 종료·재실행(status → null)시에도 cleanup 으로 원복한다.
+ *
+ * @param status 종료 상태. 실행 중·미실행이면 null — 새 런의 종료마다 재알림한다.
+ */
+export function useRunTerminalNotification(status: 'succeeded' | 'failed' | null): void {
+  const originalTitle = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (status == null || typeof document === 'undefined') return;
+
+    const restoreTitle = () => {
+      if (originalTitle.current != null) {
+        document.title = originalTitle.current;
+        originalTitle.current = null;
+      }
+    };
+
+    // 탭 제목 접두 — 백그라운드 탭에서도 결과가 보이게. 포커스 복귀 시 원복.
+    if (originalTitle.current == null) originalTitle.current = document.title;
+    document.title = TERMINAL_TITLE_PREFIX[status] + originalTitle.current;
+    const onReturn = () => {
+      if (isTabFocused()) restoreTitle();
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+
+    // 인앱 토스트 — HITL 알림과 동일하게 포커스 여부와 무관하게 항상.
+    const notify = status === 'succeeded' ? toast.success : toast.error;
+    notify(TERMINAL_MESSAGE[status]);
+
+    // 브라우저 알림 — 탭이 백그라운드일 때(권한 granted). 포커스 중엔 토스트가 대신한다.
+    if (!isTabFocused() && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(status === 'succeeded' ? '실행 완료' : '실행 실패', {
+          body: TERMINAL_MESSAGE[status],
+        });
+      } catch {
+        /* 알림 생성 실패는 치명적이지 않다 — 조용히 무시 */
+      }
+    }
+
+    return () => {
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+      restoreTitle();
+    };
+  }, [status]);
+}

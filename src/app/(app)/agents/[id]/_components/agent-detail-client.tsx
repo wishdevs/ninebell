@@ -20,10 +20,11 @@ import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
 import {
   requestHitlNotificationPermission,
   useHitlNotification,
+  useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
 import type { RunsPanelProps } from './agent-runs-panel';
 import { AgentSidePanel } from './agent-side-panel';
-import { LiveBrowserStage } from './live-browser-stage';
+import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
 import { SaveTemplateButton } from './save-template-button';
 import { SessionStatus } from './session-status';
@@ -111,6 +112,26 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
   // 개입 대기 알림 — 탭 제목 접두 + (백그라운드 탭이면) 브라우저 알림. 해소·종료 시 원복.
   useHitlNotification(interventionActive ? (run.hitl?.id ?? null) : null);
+
+  // 완료 알림 — 런이 종료(성공/실패)로 전환되면 동일 채널(탭 제목·토스트·브라우저 알림)로.
+  useRunTerminalNotification(isLive && terminal ? (run.status as 'succeeded' | 'failed') : null);
+
+  // 실행 전 소요 예고(ETA) — 이력 기반 expectedMs 가 모든 자동 스텝에 있을 때만 계산한다
+  // (하나라도 없으면 null → 부분 데이터로 엉터리 합계를 만들지 않는다. 개입 스텝은 사람
+  // 시간이라 예측에서 제외). 스테이지 CTA 아래 "약 N분 소요 · 첫 입력 요청까지 ~N초"에 쓴다.
+  const etaHint = useMemo<StageEtaHint | null>(() => {
+    const autos = agent.steps.filter((s) => !s.intervention);
+    if (autos.length === 0 || autos.some((s) => s.expectedMs == null)) return null;
+    const totalMs = autos.reduce((acc, s) => acc + (s.expectedMs ?? 0), 0);
+    const firstInterventionIdx = agent.steps.findIndex((s) => s.intervention);
+    const toFirstInterventionMs =
+      firstInterventionIdx < 0
+        ? null
+        : agent.steps
+            .slice(0, firstInterventionIdx)
+            .reduce((acc, s) => (s.intervention ? acc : acc + (s.expectedMs ?? 0)), 0);
+    return { totalMs, toFirstInterventionMs };
+  }, [agent.steps]);
 
   // 이력·템플릿 새로고침 트리거 — 런이 끝나거나 템플릿을 저장하면 올려서 재조회한다.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -211,6 +232,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           screenshot={run.screenshot}
           connected={run.connected}
           canRun={canRun}
+          etaHint={etaHint}
           onStart={() => {
             const workflowId = (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
             if (workflowId) startRun(workflowId);

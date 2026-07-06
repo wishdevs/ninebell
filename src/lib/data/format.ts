@@ -36,6 +36,20 @@ export function formatSeconds(total: number): string {
   return `${m}분 ${s.toString().padStart(2, '0')}초`;
 }
 
+/**
+ * 예상 소요(밀리초)를 근사 표기로 — 숫자는 항상 근사(~) + 10초 단위 반올림(승인 시안).
+ * <60초 → "~40초", ≥60초 → "~1분 30초"(초가 0이면 "~2분"). 최소 "~10초"
+ * ("~0초"는 무의미하므로 바닥을 둔다).
+ */
+export function formatEta(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '~10초';
+  const sec = Math.max(Math.round(ms / 10_000) * 10, 10);
+  if (sec < 60) return `~${sec}초`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s === 0 ? `~${m}분` : `~${m}분 ${s}초`;
+}
+
 /* ── 시간 표기 규칙 (비주얼 토론 합의) ────────────────────────────────────
  * 1. 목록·로그·피드: 상대시간("N분 전")을 본문으로, 절대시각은 `title` 툴팁으로.
  *    → formatRelativeWithTitle() 사용: <time title={title}>{relative}</time>
