@@ -144,6 +144,27 @@ export interface Intervention {
   placeholder?: string;
 }
 
+// ── 에이전트 세부설정 ─────────────────────────────────────────────────
+
+/**
+ * 에이전트별 세부설정 한 항목의 스키마(백엔드 settingsSchema 원소).
+ * 관리자 '에이전트 관리' 화면이 이 스키마만 보고 폼을 자동 렌더한다.
+ * 현재는 number 타입만 지원한다(예: card-chat 의 acct_cutoff_day).
+ */
+export interface AgentSettingDef {
+  key: string;
+  label: string;
+  type: 'number';
+  /** 기본값 — 저장된 값이 없을 때 백엔드가 병합해 내려주는 값과 동일. */
+  default: number;
+  min?: number | null;
+  max?: number | null;
+  /** 라벨 옆에 표기할 단위(예: '일'). */
+  unit?: string | null;
+  /** 필드 하단 힌트로 노출되는 설명. */
+  description: string;
+}
+
 // ── 에이전트 ─────────────────────────────────────────────────────────
 
 export interface Agent {
@@ -187,6 +208,13 @@ export interface Agent {
   steps: readonly WorkflowStep[];
   logs: readonly LogEntry[];
   intervention?: Intervention | null;
+  /**
+   * 세부설정 유효값(기본값 병합 완료) — 백엔드 GET /agents(·/{id})가
+   * settingsSchema 가 있는 에이전트에만 내려준다.
+   */
+  settings?: Record<string, number | string | boolean>;
+  /** 세부설정 스키마 — 없으면(빈 배열 포함) '에이전트 관리'에 노출되지 않는다. */
+  settingsSchema?: readonly AgentSettingDef[];
 }
 
 // 공통 단계 라벨(공용 스킬 기반)
