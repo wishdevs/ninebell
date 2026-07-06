@@ -6,22 +6,20 @@ import type { Agent, LogEntry, LogLevel } from '@/lib/data/agents';
 import { LOG_LEVEL_LABEL } from '@/lib/data/agents';
 import { formatRelativeKorean } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
-import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionEmpty } from './intervention-empty';
 import { PhaseStepPanel } from './phase-step-panel';
 
 interface AgentSidePanelProps {
   agent: Agent;
-  /** 템플릿 탭 데이터. (실행 이력은 top-level /logs 페이지와 중복이라 여기선 노출하지 않는다.) */
-  runsPanel?: RunsPanelProps;
 }
 
 /**
- * 브라우저 오른쪽 영역(미실행 상태) — 개입 · 워크플로우 · 로그 · 템플릿 탭.
+ * 브라우저 오른쪽 영역(미실행 상태) — 개입 · 워크플로우 · 로그 탭.
  * 개입은 라이브 실행이 요청할 때만 생기므로, 미실행에서는 픽스처 목업 대화 대신 중립 빈 상태를
  * 보여준다(가짜 채팅 노출 금지). 기본 탭은 워크플로우(상단 스텝퍼와 함께 단계를 노출).
+ * (템플릿 탭·'템플릿으로 저장'은 사용자 요청으로 제거 — 2026-07-06.)
  */
-export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
+export function AgentSidePanel({ agent }: AgentSidePanelProps) {
   const [tab, setTab] = useState('workflow');
 
   return (
@@ -36,7 +34,6 @@ export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
               {agent.logs.length}
             </span>
           </TabsTrigger>
-          {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
         <TabsContent value="intervention" className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -51,12 +48,6 @@ export function AgentSidePanel({ agent, runsPanel }: AgentSidePanelProps) {
         <TabsContent value="log" className="min-h-0 flex-1 overflow-y-auto p-3">
           <LogList logs={agent.logs} />
         </TabsContent>
-
-        {runsPanel ? (
-          <TabsContent value="templates" className="min-h-0 flex-1 overflow-y-auto p-3">
-            <TemplatesTab {...runsPanel} />
-          </TabsContent>
-        ) : null}
       </Tabs>
     </section>
   );

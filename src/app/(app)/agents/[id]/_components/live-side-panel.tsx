@@ -15,16 +15,11 @@ import type {
 } from '@/lib/live/types';
 import type { WorkflowStep } from '@/lib/data/agents';
 import { cn } from '@/lib/utils';
-import { TemplatesTab, type RunsPanelProps } from './agent-runs-panel';
 import { InterventionEmpty } from './intervention-empty';
 import { PhaseStepPanel } from './phase-step-panel';
 
 interface LiveSidePanelProps {
   run: UseLiveRunReturn;
-  /** 결과 탭 하단에 덧붙일 액션(예: '템플릿으로 저장'). 종료·결과가 있을 때만 표시된다. */
-  resultAction?: React.ReactNode;
-  /** 실행 이력·템플릿 탭 데이터(하단 패널에서 우측 탭으로 이동). 없으면 두 탭을 숨긴다. */
-  runsPanel?: RunsPanelProps;
   /**
    * 에이전트의 단계 계획(백엔드 `/agents/{id}` steps — 단일 소스). 라이브 단계에
    * 한글 라벨·스킬·상세·개입 표시를 병합하고 미도달 단계까지 전체를 노출한다.
@@ -38,20 +33,14 @@ interface LiveSidePanelProps {
   handoffNote?: string | null;
 }
 
-type TabKey = 'intervention' | 'workflow' | 'log' | 'result' | 'templates';
+type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
 
 /**
  * 라이브 사이드 패널 — 라이브 스트림에서 파생한 개입/워크플로우/로그/결과 탭.
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({
-  run,
-  resultAction,
-  runsPanel,
-  planSteps,
-  handoffNote,
-}: LiveSidePanelProps) {
+export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -99,7 +88,6 @@ export function LiveSidePanel({
             </span>
           </TabsTrigger>
           {hasResult ? <TabsTrigger value="result">결과</TabsTrigger> : null}
-          {runsPanel ? <TabsTrigger value="templates">템플릿</TabsTrigger> : null}
         </TabsList>
 
         <TabsContent value="intervention" className="min-h-0 flex-1 overflow-hidden p-4">
@@ -139,17 +127,10 @@ export function LiveSidePanel({
 
         {hasResult ? (
           <TabsContent value="result" className="min-h-0 flex-1 overflow-y-auto p-4">
-            <LiveResult result={run.result} error={run.error} transactions={run.transactions} />
+            {/* 핸드오프 안내를 맨 위에 — 저장 내역이 많으면 아래로 밀려 안 보인다는 피드백
+                (2026-07-06). '다음에 할 일'이 먼저, 성공 상세는 그 아래. */}
             {run.status === 'succeeded' && handoffNote ? <HandoffNote note={handoffNote} /> : null}
-            {resultAction ? (
-              <div className="border-border mt-4 border-t pt-4">{resultAction}</div>
-            ) : null}
-          </TabsContent>
-        ) : null}
-
-        {runsPanel ? (
-          <TabsContent value="templates" className="min-h-0 flex-1 overflow-y-auto p-3">
-            <TemplatesTab {...runsPanel} />
+            <LiveResult result={run.result} error={run.error} transactions={run.transactions} />
           </TabsContent>
         ) : null}
       </Tabs>
@@ -245,7 +226,7 @@ function HandoffNote({ note }: { note: string }) {
   return (
     <div
       data-testid="handoff-note"
-      className="border-info/30 bg-info/10 mt-3 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5"
+      className="border-info/30 bg-info/10 mb-3 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5"
     >
       <RiArrowRightUpLine size={16} aria-hidden className="text-info mt-0.5 shrink-0" />
       <div className="flex flex-col gap-0.5">

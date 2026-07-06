@@ -22,11 +22,9 @@ import {
   useHitlNotification,
   useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
-import type { RunsPanelProps } from './agent-runs-panel';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
-import { SaveTemplateButton } from './save-template-button';
 import { SessionStatus } from './session-status';
 
 /** 디버그 단계 이동 바 노출 여부. 필요할 때 true로. */
@@ -86,8 +84,6 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     workflowId: string;
     runId: string;
     enabled: boolean;
-    /** 지정되면 이 런은 템플릿 AUTO 재생(대화 없이 저장된 selections 적용). */
-    templateId?: string;
   }>({
     workflowId: defaultWorkflow ?? '',
     runId: '',
@@ -96,12 +92,11 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const run = useLiveRun(session.workflowId, {
     runId: session.enabled ? session.runId : undefined,
     enabled: session.enabled,
-    templateId: session.enabled ? session.templateId : undefined,
   });
-  const startRun = (workflowId: string, templateId?: string) => {
+  const startRun = (workflowId: string) => {
     // 알림 권한은 사용자 제스처(실행 버튼 클릭) 컨텍스트에서 1회 요청해야 프롬프트가 뜬다.
     requestHitlNotificationPermission();
-    setSession({ workflowId, runId: newRunId(), enabled: true, templateId });
+    setSession({ workflowId, runId: newRunId(), enabled: true });
   };
   const stopRun = () => setSession((s) => ({ ...s, enabled: false }));
   const isLive = session.enabled;
@@ -133,24 +128,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     return { totalMs, toFirstInterventionMs };
   }, [agent.steps]);
 
-  // 이력·템플릿 새로고침 트리거 — 런이 끝나거나 템플릿을 저장하면 올려서 재조회한다.
-  const [refreshKey, setRefreshKey] = useState(0);
-  const bumpRefresh = () => setRefreshKey((k) => k + 1);
-  useEffect(() => {
-    if (terminal) setRefreshKey((k) => k + 1);
-  }, [terminal]);
-
-  // 대화형 런이 성공적으로 끝났을 때만 '템플릿으로 저장'을 노출(재생/데모는 selections 없음).
-  const canSaveTemplate =
-    isLive && run.status === 'succeeded' && !session.templateId && !!run.runId;
-
-  // 실행 이력·템플릿 — 우측 사이드 패널의 탭으로 주입(하단 별도 패널에서 이동).
-  const runsPanel: RunsPanelProps = {
-    agentId: defaultWorkflow ?? '',
-    refreshKey,
-    onReplay: (templateId) => defaultWorkflow && startRun(defaultWorkflow, templateId),
-    replayDisabled: (isLive && !terminal) || !canRun,
-  };
+  // (템플릿 탭·'템플릿으로 저장'은 사용자 요청으로 제거 — 2026-07-06. 백엔드 템플릿
+  //  API 는 유지되며 UI 진입점만 없다.)
 
   return (
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
@@ -239,23 +218,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           }}
         />
         {isLive ? (
-          <LiveSidePanel
-            run={run}
-            runsPanel={runsPanel}
-            planSteps={agent.steps}
-            handoffNote={agent.handoffNote}
-            resultAction={
-              canSaveTemplate && run.runId ? (
-                <SaveTemplateButton
-                  runId={run.runId}
-                  agentId={session.workflowId}
-                  onSaved={bumpRefresh}
-                />
-              ) : undefined
-            }
-          />
+          <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
         ) : (
-          <AgentSidePanel agent={view} runsPanel={runsPanel} />
+          <AgentSidePanel agent={view} />
         )}
       </div>
     </div>
