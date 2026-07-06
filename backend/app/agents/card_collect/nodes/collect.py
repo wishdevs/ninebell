@@ -54,7 +54,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
         events = state["events"]
         page = state["page"]
         rows_list: list[dict] = state.get("rows_list") or []
-        await emit_step(events, "collect_rows", "running")
+        # 'AI 추천 준비(prefill)' — 이 노드에서 그리드가 뜨기 전 가장 오래 걸리는 자동 구간
+        # (카탈로그·개입학습 로드 + Gemini 추천 콜). 화면이 멈춰 보인다는 피드백(2026-07-06)에
+        # 따라 별도 스텝으로 방출해 레일·ETA 타임라인에 진행이 보이게 한다. 그래프 노드는
+        # 아니고 노드 내부(intra-node) 스텝 — 픽스처·1:1 테스트에 같은 이름으로 선언돼 있다.
+        await emit_step(events, "prefill", "running")
         t0 = time.monotonic()
         if not rows_list:
             period = state.get("period") or []
@@ -71,7 +75,9 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 streaming=False,
             )
             await emit_log(events, "처리할 승인내역이 없습니다.", "warn")
-            await emit_step(events, "collect_rows", "done", _shared._ms(t0))
+            await emit_step(events, "prefill", "done", _shared._ms(t0))
+            await emit_step(events, "collect_rows", "running")
+            await emit_step(events, "collect_rows", "done", 0)
             return {
                 "filled": 0,
                 "no_rows": True,
@@ -186,6 +192,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
         )
+        # AI 추천 준비 끝 → 그리드(사람 개입) 구간 시작. 분리 측정해야 ETA 가 정직해진다
+        # (prefill=자동·예측 대상, collect_rows=사람 시간·예측 제외).
+        await emit_step(events, "prefill", "done", _shared._ms(t0))
+        await emit_step(events, "collect_rows", "running")
+        t_grid = time.monotonic()
 
         # 그리드 행(프론트 계약: no·card·merchant·amount·date·time·approved·vatType·note
         #  + 프리셀렉트 budgetUnit/project·출처 budgetSource/projectSource/noteSource).
@@ -310,6 +321,13 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 logger.debug("card-collect grid: 무시된 메시지 %r", resp)
                 continue
 
+            # 제출 수락 = 사람 몫 끝. 개입 스텝(collect_rows)을 여기서 닫고, 이후 그리드 행
+            # 실입력(~수십 초 기계 작업)은 'fill_rows' 스텝으로 분리 방출한다 — 제출 후에도
+            # "건별 입력에 머묾 + 남은 예상 정지"로 보이던 문제 수정(사용자 피드백 2026-07-06).
+            await emit_step(events, "collect_rows", "done", _shared._ms(t_grid))
+            await emit_step(events, "fill_rows", "running")
+            t_fill = time.monotonic()
+
             # ── 부가세구분 분할: 과세 → 1차(법인카드) 즉시 반영, 그 외 → 2차(불공) 대기 ──
             # 사용자 입력은 이 그리드 1회가 전부 — 2차는 여기 보존한 입력을 재조회 행에
             # (APRVL_NO+일자+금액) 키로 매칭해 자동 적용한다(재입력 없음).
@@ -416,7 +434,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
             streaming=False,
         )
         await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")
-        await emit_step(events, "collect_rows", "done", _shared._ms(t0))
+        await emit_step(events, "fill_rows", "done", _shared._ms(t_fill))
         # 저장 실패 시 재시도 그리드에서 복원할 수 있게 이번 제출 선택을 행 identity 로 보존.
         # 제외(skip) 행은 복원 대상 아님(재시도 시 사용자가 다시 정함) → 실입력 행만.
         retry_prefill = {

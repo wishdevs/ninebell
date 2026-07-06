@@ -245,6 +245,64 @@ samp {
   animation: page-enter var(--duration-normal) var(--ease-out) both;
 }
 
+/* ETA 타임라인 — 실행 중 세그먼트의 shimmer(작업 중 시각 신호). AI 추천처럼 화면 변화가
+   없는 긴 자동 구간이 멈춰 보이지 않게 한다. 컴포지터 속성(transform)만 사용, reduced-motion
+   은 아래 전역 블록이 차단한다. */
+@keyframes eta-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.animate-eta-shimmer {
+  animation: eta-shimmer 1.4s ease-in-out infinite;
+}
+
+/* AI 작업 중 라벨 — 그라데이션이 흐르는 텍스트 + 반짝임. AI 추천(ai-recommend) 스텝이
+   도는 동안 진행 헤더에서 "AI가 일하는 중"을 특별하게 알린다(정지감 해소, 사용자 피드백
+   2026-07-06). reduced-motion 은 전역 블록이 차단(정지 그라데이션 텍스트로 남는다). */
+@keyframes ai-gradient {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 200% 50%;
+  }
+}
+.ai-working-text {
+  /* background 숏핸드를 쓰면 최적화 단계에서 clip 과 병합되며 text 클립이 유실된다
+     (실측 2026-07-06: 글자 대신 통짜 그라데이션 막대로 렌더) — 롱핸드로 고정. */
+  background-image: linear-gradient(
+    90deg,
+    var(--accent),
+    oklch(62% 0.19 300),
+    var(--info),
+    var(--accent)
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: ai-gradient 2.2s linear infinite;
+}
+@keyframes ai-sparkle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82) rotate(12deg);
+  }
+}
+.animate-ai-sparkle {
+  animation: ai-sparkle 1.5s ease-in-out infinite;
+}
+
 /* ==========================================================================
    Aurora — barely-visible drift used as auth hero ambience.
    Two layers translate + rotate slowly out of phase. Pause when the user

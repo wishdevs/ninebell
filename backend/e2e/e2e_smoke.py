@@ -199,12 +199,25 @@ async def phase1() -> dict:
         submit_btn = page.get_by_role("button", name="입력 완료")
         appeared = False
         elapsed = 0
+        ai_shot_done = False
         while elapsed < GRID_WAIT_TIMEOUT_S:
             if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
                 appeared = True
                 break
             await page.wait_for_timeout(5000)
             elapsed += 5
+            # ~20초 시점 = prefill(AI 추천) 구간 — 워크플로우 탭의 'AI 계산 중' 특별 표시 캡처.
+            if not ai_shot_done and elapsed >= 20:
+                ai_shot_done = True
+                try:
+                    await page.get_by_role("tab", name="워크플로우").click()
+                    await page.wait_for_timeout(600)
+                    ai_path = str(SCRATCH / "e2e_p1_ai.png")
+                    await page.screenshot(path=ai_path)
+                    report["ai_shot"] = ai_path
+                    print(f"[P1] AI 작업 중 표시 screenshot: {ai_path}", flush=True)
+                except Exception as exc:  # noqa: BLE001 — 캡처 실패는 판정에 영향 없음.
+                    print(f"[P1] ai shot skipped: {exc!r}", flush=True)
             if elapsed % 20 == 0:
                 print(f"[P1] ...waiting for grid ({elapsed}s elapsed)", flush=True)
 
@@ -217,6 +230,20 @@ async def phase1() -> dict:
         report["grid_appeared"] = True
         print("[P1] grid appeared", flush=True)
         await page.wait_for_timeout(2000)
+
+        # ETA 세그먼트 타임라인 확인 — 개입 중 워크플로우 탭 sticky 헤더에 렌더된다(있으면 캡처).
+        # 이력(expectedMs)이 모든 자동 스텝에 있어야 켜지므로, 없으면 기존 진행 바가 찍힌다.
+        try:
+            await page.get_by_role("tab", name="워크플로우").click()
+            await page.wait_for_timeout(800)
+            eta_path = str(SCRATCH / "e2e_p1_eta.png")
+            await page.screenshot(path=eta_path)
+            report["eta_shot"] = eta_path
+            print(f"[P1] 워크플로우 탭(ETA 타임라인) screenshot: {eta_path}", flush=True)
+            await page.get_by_role("tab", name="개입").click()
+            await page.wait_for_timeout(500)
+        except Exception as exc:  # noqa: BLE001 — 캡처 실패는 스모크 판정에 영향 없음.
+            print(f"[P1] eta shot skipped: {exc!r}", flush=True)
 
         is_disabled = await submit_btn.first.is_disabled()
         if is_disabled:

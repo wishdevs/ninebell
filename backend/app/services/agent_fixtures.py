@@ -124,12 +124,18 @@ AGENT_FIXTURES: list[dict] = [
             {"key": "select_all_cards", "label": "카드 전체선택", "skill": "codepicker", "status": "pending", "phase": "승인내역 조회", "detail": "카드번호 돋보기 → 전체선택 → 적용"},
             {"key": "set_period", "label": "승인일 기간", "skill": "field-input", "status": "pending", "phase": "승인내역 조회", "detail": "10일 미만=전월 / 10일부터=당월 기간 설정"},
             {"key": "query", "label": "조회", "skill": "grid-read", "status": "pending", "phase": "승인내역 조회", "detail": "승인내역 조회 → 리스트 보고"},
+            # collect_rows 노드 내부(intra-node) 스텝 — 그리드가 뜨기 전 AI 추천 콜이 수십 초
+            # 걸려 멈춰 보이는 문제를 별도 스텝으로 가시화(ETA 타임라인의 자동 세그먼트).
+            {"key": "prefill", "label": "AI 추천 준비", "skill": "ai-recommend", "status": "pending", "phase": "건별 입력", "detail": "행별 예산단위·프로젝트·적요 추천을 계산합니다 — 건수에 따라 수십 초 걸릴 수 있어요"},
             {
                 "key": "collect_rows", "label": "건별 입력(그리드)", "skill": "grid-input", "status": "pending",
                 "intervention": True,
                 "phase": "건별 입력",
                 "detail": "전 행 예산단위·프로젝트·적요를 입력하고 '입력 완료'로 제출(사용자 개입).",
             },
+            # collect_rows 노드 내부(intra-node) 스텝 — 제출 후 그리드 실입력(기계 작업 ~수십 초)을
+            # 개입과 분리 가시화. 제출 순간 개입이 끝났음을 레일·ETA 가 정직하게 반영한다.
+            {"key": "fill_rows", "label": "입력값 반영", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "제출된 예산단위·프로젝트·적요를 그리드 행별로 실제 입력"},
             {"key": "apply_doc", "label": "과세분 적용", "skill": "doc-apply", "status": "pending", "phase": "문서 반영", "detail": "과세 행 체크 → 적용 → 결의서 반영(저장 전)"},
             {"key": "switch_evdn", "label": "불공 전환", "skill": "codepicker", "status": "pending", "phase": "문서 반영", "detail": "행 추가(F3) → 증빙유형 법인카드(불공) 선택 → 재조회·행 매칭"},
             {"key": "apply_pass2", "label": "불공분 반영·적용", "skill": "grid-input", "status": "pending", "phase": "문서 반영", "detail": "입력해둔 값을 불공 행에 자동 반영 후 결의서 적용"},

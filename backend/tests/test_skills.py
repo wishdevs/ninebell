@@ -32,6 +32,25 @@ CARD_COLLECT_NODES = [
     "save_final",
 ]
 
+# 노드 내부(intra-node) 스텝 — 그래프 노드는 아니지만 노드 안에서 emit_step 으로 별도 방출되는
+# 가시화 스텝. key = 스텝, value = (방출 노드, 'before'|'after'). 둘 다 collect_rows 안의
+# 정체 구간 분리(2026-07-06): prefill = 그리드 전 AI 추천 콜, fill_rows = 제출 후 그리드 실입력.
+CARD_COLLECT_INTRA_NODE_STEPS: dict[str, tuple[str, str]] = {
+    "prefill": ("collect_rows", "before"),
+    "fill_rows": ("collect_rows", "after"),
+}
+
+# 픽스처 스텝 기대 순서 = 그래프 노드 순서에 intra-node 스텝을 소속 노드 앞/뒤에 삽입한 것.
+CARD_COLLECT_EXPECTED_STEPS = [
+    key
+    for node in CARD_COLLECT_NODES
+    for key in (
+        [k for k, (owner, pos) in CARD_COLLECT_INTRA_NODE_STEPS.items() if owner == node and pos == "before"]
+        + [node]
+        + [k for k, (owner, pos) in CARD_COLLECT_INTRA_NODE_STEPS.items() if owner == node and pos == "after"]
+    )
+]
+
 
 # ── 카탈로그 정합성 ───────────────────────────────────────────────────────────
 def test_every_fixture_step_skill_is_in_catalog():
@@ -43,7 +62,7 @@ def test_every_fixture_step_skill_is_in_catalog():
 
 def test_card_collect_fixture_step_keys_match_graph_nodes():
     fx = next(f for f in AGENT_FIXTURES if f["id"] == "card-chat")
-    assert [s["key"] for s in fx["steps"]] == CARD_COLLECT_NODES
+    assert [s["key"] for s in fx["steps"]] == CARD_COLLECT_EXPECTED_STEPS
 
 
 def test_skill_label_falls_back_to_raw_key():
@@ -151,4 +170,4 @@ async def test_seed_replaces_stale_step_set(sm):
             ).scalars()
         ]
     assert keys[0] == "login" and "access" not in keys  # 낡은 셋 → 픽스처(실행 그래프)로 교체
-    assert "collect_rows" in keys and len(keys) == 16
+    assert "collect_rows" in keys and len(keys) == len(CARD_COLLECT_EXPECTED_STEPS)

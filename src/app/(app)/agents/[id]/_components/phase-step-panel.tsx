@@ -6,8 +6,10 @@ import {
   RiCheckLine,
   RiCloseLine,
   RiLoader4Line,
+  RiSparkling2Fill,
   RiUserLine,
 } from '@remixicon/react';
+import { Spinner } from '@/components/ui/spinner';
 import type { WorkflowStep } from '@/lib/data/agents';
 import { formatEta } from '@/lib/data/format';
 import type { LiveRunStatus, LiveStepState } from '@/lib/live/types';
@@ -43,6 +45,8 @@ interface DisplayStep {
   status: DisplayStepStatus;
   ms?: number;
   skill?: string;
+  /** 스킬 카탈로그 키 — 'ai-recommend' 스텝은 진행 헤더에서 특별 AI 표시를 켠다. */
+  skillKey?: string;
   detail?: string;
   intervention?: boolean;
   /** 예상 소요(ms, 계획 스텝에서). 자동 스텝 전부에 있어야 예상 시간 UI 를 켠다. */
@@ -89,6 +93,7 @@ function buildDisplaySteps(
       status: byId.get(d.id)?.status ?? ('pending' as const),
       ms: byId.get(d.id)?.ms,
       skill: d.skill,
+      skillKey: d.skillKey,
       detail: d.detail,
       intervention: d.intervention,
       expectedMs: d.expectedMs,
@@ -306,12 +311,19 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
   // 개입 중(waiting_input)엔 생략(개입 카드가 이미 말한다), 계획 보기·종료 상태도 생략.
   let etaMessage: string | null = null;
   if (etaReady && runStatus === 'running') {
-    const firstPendingIntervention = planDisplaySteps.findIndex(
-      (s) => s.intervention && s.status !== 'done',
+    // '다가오는' 개입 = pending 만. running 인 개입 스텝(제출 직후 서버가 닫는 찰나 포함)은
+    // 예고 대상이 아니다 — 제출했는데도 "곧 입력을 요청합니다"가 남던 버그 수정(2026-07-06).
+    const interventionRunning = planDisplaySteps.some(
+      (s) => s.intervention && s.status === 'running',
     );
-    if (firstPendingIntervention >= 0) {
+    const firstUpcomingIntervention = planDisplaySteps.findIndex(
+      (s) => s.intervention && s.status === 'pending',
+    );
+    if (interventionRunning) {
+      etaMessage = null;
+    } else if (firstUpcomingIntervention >= 0) {
       const beforeMs = remainingAutoMs(
-        planDisplaySteps.slice(0, firstPendingIntervention),
+        planDisplaySteps.slice(0, firstUpcomingIntervention),
         runningElapsedMs,
       );
       etaMessage = `곧 입력을 요청합니다 — ${formatEta(beforeMs)} 후`;
@@ -381,10 +393,30 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
                   <span className="text-foreground"> · {currentStep.label}</span>
                 </>
               ) : currentStep ? (
-                <>
-                  <span className="text-foreground-tertiary font-medium">지금: </span>
-                  {currentStep.label}
-                </>
+                runningStep?.skillKey === 'ai-recommend' ? (
+                  /* AI 작업 중 특별 표시 — 반짝임 + 흐르는 그라데이션 텍스트. 화면 변화가
+                     없는 긴 AI 콜 구간이 멈춰 보이지 않게 눈에 띄는 신호를 준다. */
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <RiSparkling2Fill
+                      size={14}
+                      aria-hidden
+                      className="animate-ai-sparkle text-accent shrink-0"
+                    />
+                    <span className="ai-working-text truncate">
+                      {currentStep.label} — AI가 계산하는 중…
+                    </span>
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-foreground-tertiary font-medium">지금: </span>
+                    {currentStep.label}
+                    {/* 진행 중 시각 신호 — 화면 변화 없는 긴 자동 구간에서 멈춘 게 아님을
+                        보여준다(사용자 피드백 2026-07-06). */}
+                    {runningStep ? (
+                      <Spinner size={12} className="text-accent ml-1.5 inline-block align-[-2px]" />
+                    ) : null}
+                  </>
+                )
               ) : (
                 '시작하는 중…'
               )}
@@ -496,6 +528,12 @@ function EtaTimeline({ segments, runStatus, isPlanOnly, remainingMs, message }: 
         {segments.map((seg) => {
           const isWaitingHere =
             waiting && seg.kind === 'intervention' && seg.steps[0].status === 'running';
+          // 실행 중인 자동 세그먼트 — 채움 위에 shimmer 를 흘려 "일하는 중"을 보여준다
+          // (AI 추천처럼 화면 변화 없는 긴 구간의 정지감 해소, 사용자 피드백 2026-07-06).
+          const isRunningAuto =
+            runStatus === 'running' &&
+            seg.kind === 'auto' &&
+            seg.steps.some((s) => s.status === 'running');
           return (
             <div
               key={seg.id}
@@ -513,17 +551,28 @@ function EtaTimeline({ segments, runStatus, isPlanOnly, remainingMs, message }: 
             >
               <div
                 className={cn(
-                  'h-full transition-[width] duration-500 ease-out',
+                  'relative h-full overflow-hidden transition-[width] duration-500 ease-out',
                   succeeded
                     ? 'bg-success'
                     : failed
                       ? 'bg-danger'
-                      : seg.kind === 'intervention'
-                        ? 'bg-warning/60'
-                        : 'bg-accent',
+                      : waiting
+                        ? // 개입 대기 — 채움 전체를 warning 으로(구 진행 바의 '입력 대기 = 바
+                          // 전체 호박색' 관례 복원, 사용자 피드백 2026-07-06).
+                          'bg-warning'
+                        : seg.kind === 'intervention'
+                          ? 'bg-warning/60'
+                          : 'bg-accent',
                 )}
                 style={{ width: `${(succeeded ? 1 : seg.fill) * 100}%` }}
-              />
+              >
+                {isRunningAuto ? (
+                  <span
+                    aria-hidden
+                    className="animate-eta-shimmer absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/45 to-transparent"
+                  />
+                ) : null}
+              </div>
             </div>
           );
         })}
