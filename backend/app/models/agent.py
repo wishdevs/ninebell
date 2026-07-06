@@ -57,6 +57,9 @@ class Agent(Base):
     avg_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     flow_graph: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    # 에이전트별 세부설정 저장값(관리자 PATCH). 정의(스키마)는 코드가 단일 소스
+    # (app/services/agent_settings.py). NULL = 저장값 없음(스키마 기본값 사용).
+    settings: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
     # 조직구분 접근이 명시 설정됐는지. false = 최초(전체 조직구분 허용), true = agent_org_access 행이 진실.
     access_configured: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()

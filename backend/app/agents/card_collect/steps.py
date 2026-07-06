@@ -19,12 +19,18 @@ logger = logging.getLogger(__name__)
 # ── D2: 승인일 기간 계산 ─────────────────────────────────────────────────────────
 # 오늘이 매월 10일 미만(1~9일)이면 전월(1일~말일), 10일부터는 당월(1일~오늘).
 # (규칙 변경 2026-07-04: 3일 기준 → 10일 기준, 사용자 확정)
+# 2026-07-06: 에이전트 설정 '회계시점 결정일(acct_cutoff_day)'로 파라미터화 —
+# 설정 N = "N일까지 전월, N+1일부터 당월"(현행 동작은 N=9 와 동치, 스키마 기본값 9).
 DAY_CUTOFF = 10
 
 
-def compute_period(today: date) -> tuple[str, str]:
-    """(start, end) YYYY-MM-DD. 10일 미만=전월 전체, 10일부터=당월 1일~오늘."""
-    if today.day < DAY_CUTOFF:
+def compute_period(today: date, cutoff_day: int | None = None) -> tuple[str, str]:
+    """(start, end) YYYY-MM-DD. cutoff_day 일까지=전월 전체, 그 다음 날부터=당월 1일~오늘.
+
+    cutoff_day 미지정(None)이면 레거시 규칙(DAY_CUTOFF=10 미만=전월) 유지 — 하위호환.
+    """
+    is_prev = today.day <= cutoff_day if cutoff_day is not None else today.day < DAY_CUTOFF
+    if is_prev:
         year = today.year - 1 if today.month == 1 else today.year
         month = 12 if today.month == 1 else today.month - 1
         last = calendar.monthrange(year, month)[1]

@@ -163,6 +163,8 @@ async def seed_agents(db: AsyncSession) -> None:
             # 여기서 픽스처 값을 따라가게 한다.
             if row.handoff_note != fx.get("handoff_note"):
                 row.handoff_note = fx.get("handoff_note")
+            # ⚠ settings(0018)는 시드가 동기화하지 않는다 — 관리자가 저장한 값을 시드가
+            #   덮으면 안 된다. 정의(스키마·기본값)는 app/services/agent_settings.py 가 소스.
             # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention·phase 를 픽스처와 동기화.
             # ⚠ 픽스처 스텝 정의가 통째로 바뀌면(키 셋 불일치 — 예: 옛 flow_graph 기반
             # access/kind/… → 실행 그래프 기반 login/…) 키 매칭 보강은 no-op 이 되어 낡은

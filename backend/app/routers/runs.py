@@ -33,6 +33,7 @@ from app.live.registry import get_spec
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
 from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate, OrgUnit
+from app.services.agent_settings import effective_settings
 
 logger = logging.getLogger(__name__)
 # 전 엔드포인트 AGENTS_RUN 강제(라우터 레벨) — 인증 + 실행 권한. 조직구분 접근은 collect 에서 추가.
@@ -235,7 +236,13 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 세션 자격증명(비밀번호)을 CredCache(jti)에서 조회해 실 워크플로우(expense-card-chat)에
     # 주입한다. demo-echo 는 비밀번호를 쓰지 않으므로 None 이어도 무해하다.
     creds = {"userid": user.omnisol_userid, "password": _omnisol_password(request)}
-    params = dict(body.params or {})
+    # 에이전트별 세부설정(스키마 기본값+관리자 저장값)을 개별 키로 평탄화해 params 에 먼저
+    # 깔고, 요청 body.params 가 같은 키를 덮을 수 있게 한다(테스트 override 등 기존 규약 보존).
+    # agent_row 는 위 allowlist 검증(workflow_id 역조회)에서 이미 확보했다.
+    params = {
+        **effective_settings(agent_row.id, agent_row.settings),
+        **(body.params or {}),
+    }
 
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).

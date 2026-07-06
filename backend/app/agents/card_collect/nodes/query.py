@@ -55,7 +55,9 @@ def make_set_acct_date_node():
         page = state["page"]
         await emit_step(events, "set_acct_date", "running")
         t0 = time.monotonic()
-        start, _end = steps.compute_period(_shared._params_today(state))
+        start, _end = steps.compute_period(
+            _shared._params_today(state), _shared._params_cutoff_day(state)
+        )
         compact, dashed = steps.period_month_end(start)
         r = await steps.set_acct_date(page, compact, dashed)
         if not r.get("ok"):
@@ -86,12 +88,14 @@ def make_set_period_node():
                 today = date.fromisoformat(str(raw_today))
             except (ValueError, TypeError):
                 await emit_log(events, f"params.today 형식 오류({raw_today!r}) — 오늘 날짜로 진행.", "warn")
-        start, end = steps.compute_period(today)
+        cutoff_day = _shared._params_cutoff_day(state)  # 회계시점 결정일(에이전트 설정).
+        start, end = steps.compute_period(today, cutoff_day)
         r = await steps.set_period(page, start, end)
         if not r.get("ok"):
             await emit_step(events, "set_period", "failed")
             return {"error": f"승인일 기간 설정 실패({start}~{end}): {r}"}
-        rule = "전월" if today.day < steps.DAY_CUTOFF else "당월"
+        # 기간 시작 월 == 오늘 월이면 당월 규칙, 아니면 전월 규칙(라벨은 계산 결과에서 유도).
+        rule = "당월" if start[:7] == today.isoformat()[:7] else "전월"
         await emit_log(events, f"승인일 기간 = {start} ~ {end} ({rule} 규칙).", "info")
         await emit_step(events, "set_period", "done", _shared._ms(t0))
         return {"period": [start, end]}

@@ -8,6 +8,7 @@ logs[].at 는 logged_at(ISO), 옵셔널 필드(skill/detail/substeps/interventio
 from __future__ import annotations
 
 from app.models import Agent, AgentIntervention, AgentLog, AgentStep
+from app.services.agent_settings import effective_settings, settings_schema_dicts
 from app.services.skills import skill_label
 
 
@@ -97,6 +98,12 @@ def serialize_agent(
     if agent.handoff_note:
         # 완료 후 사람이 이어서 할 일 — 완료 화면에서 성공 결과와 구분해 안내한다(값 있을 때만).
         out["handoffNote"] = agent.handoff_note
+    schema = settings_schema_dicts(agent.id)
+    if schema is not None:
+        # 세부설정: 실효값(기본값+저장값 오버레이) + 선언 스키마 — 스키마 있는 에이전트만
+        # 포함(옵셔널 컨벤션). 스키마는 소량이라 목록·상세 모두 내려도 부담 없다.
+        out["settings"] = effective_settings(agent.id, agent.settings)
+        out["settingsSchema"] = schema
     if include_flow and agent.flow_graph:
         out["flowGraph"] = agent.flow_graph
     return out

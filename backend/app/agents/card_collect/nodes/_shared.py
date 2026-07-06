@@ -61,6 +61,21 @@ def _params_today(state: dict) -> date:
     return date.today()
 
 
+def _params_cutoff_day(state: dict) -> int | None:
+    """params['acct_cutoff_day'](회계시점 결정일 — 에이전트 설정에서 주입) 안전 파싱.
+
+    없거나 정수 변환 불가면 None(compute_period 레거시 규칙 폴백).
+    """
+    params = state.get("params") or {}
+    raw = params.get("acct_cutoff_day")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 # ── 리스트 표 / 항목 지정 파서 ─────────────────────────────────────────────────
 def _md_cell(v: object) -> str:
     """마크다운 표 셀 안전화(파이프·개행 제거)."""

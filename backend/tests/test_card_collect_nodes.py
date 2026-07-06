@@ -50,6 +50,25 @@ def test_compute_period_january_rolls_to_previous_year():
     assert steps.compute_period(date(2026, 1, 2)) == ("2025-12-01", "2025-12-31")
 
 
+# ── compute_period 파라미터화(회계시점 결정일 — 설정 N=N일까지 전월, N+1일부터 당월) ──
+def test_compute_period_cutoff_day_4_boundary():
+    # 설정 4: 7/4까지 전월(6월), 7/5부터 당월(사용자 예시 그대로).
+    assert steps.compute_period(date(2026, 7, 4), cutoff_day=4) == ("2026-06-01", "2026-06-30")
+    assert steps.compute_period(date(2026, 7, 5), cutoff_day=4) == ("2026-07-01", "2026-07-05")
+
+
+def test_compute_period_cutoff_day_9_equals_legacy_rule():
+    # 설정 9(스키마 기본값) = 기존 10일 규칙과 동치 — 경계 전후 모두 동일.
+    for d in (date(2026, 7, 1), date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 31)):
+        assert steps.compute_period(d, cutoff_day=9) == steps.compute_period(d)
+
+
+def test_compute_period_none_cutoff_keeps_legacy():
+    # cutoff_day=None(미주입) → 레거시 DAY_CUTOFF 규칙 유지(하위호환).
+    assert steps.compute_period(date(2026, 7, 9), None) == ("2026-06-01", "2026-06-30")
+    assert steps.compute_period(date(2026, 7, 10), None) == ("2026-07-01", "2026-07-10")
+
+
 # ── 휴리스틱 ──────────────────────────────────────────────────────────────────
 def test_recommend_note_matches_keyword():
     assert recommend_note("행복푸드", "10000") == "식대(법인카드)"

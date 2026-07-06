@@ -140,7 +140,9 @@ def make_switch_evdn_node():
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}
-        period = state.get("period") or list(steps.compute_period(date.today()))
+        period = state.get("period") or list(
+            steps.compute_period(date.today(), _shared._params_cutoff_day(state))
+        )
         pr = await steps.set_period(page, period[0], period[1])
         if not pr.get("ok"):
             await emit_step(events, "switch_evdn", "failed")

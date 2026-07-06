@@ -122,7 +122,7 @@ AGENT_FIXTURES: list[dict] = [
             {"key": "open_evdn", "label": "증빙유형 선택", "skill": "codepicker", "status": "pending", "phase": "결의서 준비", "detail": "증빙유형 코드피커 열기"},
             {"key": "select_evdn", "label": "법인카드 선택", "skill": "codepicker", "status": "pending", "phase": "결의서 준비", "detail": "증빙유형 01 법인카드 선택 → 승인내역 팝업"},
             {"key": "select_all_cards", "label": "카드 전체선택", "skill": "codepicker", "status": "pending", "phase": "승인내역 조회", "detail": "카드번호 돋보기 → 전체선택 → 적용"},
-            {"key": "set_period", "label": "승인일 기간", "skill": "field-input", "status": "pending", "phase": "승인내역 조회", "detail": "10일 미만=전월 / 10일부터=당월 기간 설정"},
+            {"key": "set_period", "label": "승인일 기간", "skill": "field-input", "status": "pending", "phase": "승인내역 조회", "detail": "회계시점 결정일(설정)까지=전월 / 이후=당월 기간 설정"},
             {"key": "query", "label": "조회", "skill": "grid-read", "status": "pending", "phase": "승인내역 조회", "detail": "승인내역 조회 → 리스트 보고"},
             # collect_rows 노드 내부(intra-node) 스텝 — 그리드가 뜨기 전 AI 추천 콜이 수십 초
             # 걸려 멈춰 보이는 문제를 별도 스텝으로 가시화(ETA 타임라인의 자동 세그먼트).
