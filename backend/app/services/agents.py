@@ -11,7 +11,7 @@ from app.models import Agent, AgentIntervention, AgentLog, AgentStep
 from app.services.skills import skill_label
 
 
-def _serialize_step(step: AgentStep) -> dict:
+def _serialize_step(step: AgentStep, expected_ms: dict[str, int] | None = None) -> dict:
     out: dict = {
         "id": step.key,
         "label": step.label,
@@ -30,6 +30,9 @@ def _serialize_step(step: AgentStep) -> dict:
         out["phase"] = step.phase
     if step.substeps:
         out["substeps"] = step.substeps
+    if expected_ms and step.key in expected_ms:
+        # 최근 성공 런 실측 평균(ms) — ETA 타임라인용. 표본 있는 단계만 포함(옵셔널 컨벤션).
+        out["expectedMs"] = expected_ms[step.key]
     return out
 
 
@@ -56,7 +59,12 @@ def _serialize_intervention(iv: AgentIntervention) -> dict:
     return out
 
 
-def serialize_agent(agent: Agent, *, include_flow: bool = False) -> dict:
+def serialize_agent(
+    agent: Agent,
+    *,
+    include_flow: bool = False,
+    step_expected_ms: dict[str, int] | None = None,
+) -> dict:
     out: dict = {
         "id": agent.id,
         "workflowId": agent.workflow_id,  # 실행 워크플로우 id(없으면 실행 불가) — 프론트 게이트.
@@ -82,7 +90,7 @@ def serialize_agent(agent: Agent, *, include_flow: bool = False) -> dict:
         "successRate": agent.success_rate,
         "avgSeconds": agent.avg_seconds,
         "lastRunAt": agent.last_run_at.isoformat() if agent.last_run_at else None,
-        "steps": [_serialize_step(s) for s in agent.steps],
+        "steps": [_serialize_step(s, step_expected_ms) for s in agent.steps],
         "logs": [_serialize_log(log) for log in agent.logs],
         "intervention": _serialize_intervention(agent.intervention) if agent.intervention else None,
     }

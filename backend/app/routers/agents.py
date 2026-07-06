@@ -15,6 +15,7 @@ from app.core.deps import DbSession, require_permission
 from app.core.permissions import AGENTS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
 from app.models import Agent, AgentOrgAccess, User
 from app.services.agents import serialize_agent
+from app.services.step_timings import expected_step_ms
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -70,4 +71,6 @@ async def get_agent(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다."
             )
-    return serialize_agent(agent, include_flow=True)
+    # 상세에서만 단계별 예상 소요(최근 성공 런 실측 평균) 계산 — 목록은 부하상 미계산.
+    step_ms = await expected_step_ms(db, agent.workflow_id) if agent.workflow_id else None
+    return serialize_agent(agent, include_flow=True, step_expected_ms=step_ms)
