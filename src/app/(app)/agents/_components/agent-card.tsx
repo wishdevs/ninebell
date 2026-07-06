@@ -83,7 +83,11 @@ export function AgentCard({ agent, favorite }: AgentCardProps) {
           <RiTimerLine size={12} aria-hidden />
           <span className="tabular-nums">평균 {formatSeconds(agent.avgSeconds)}</span>
         </span>
-        <span className="ml-auto tabular-nums">최근 {formatRelativeKorean(agent.lastRunAt)}</span>
+        {/* 실행 이력 없는 에이전트(준비 중 더미 등)는 '—' — null 이 1970년 기준 상대시간
+            ('2947주 전')으로 포맷되는 오표시 방지. */}
+        <span className="ml-auto tabular-nums">
+          최근 {agent.lastRunAt ? formatRelativeKorean(agent.lastRunAt) : '—'}
+        </span>
       </div>
     </div>
   );

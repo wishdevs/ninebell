@@ -23,7 +23,10 @@ async def test_agents_read_allowed_for_user_role(client, make_user, auth_as):
     auth_as(uid)
     resp = await client.get("/agents")
     assert resp.status_code == 200
-    assert len(resp.json()) == 1  # card-chat 만 유지(나머지 4개 픽스처 제거)
+    # 픽스처 개수와 동기 — 카드(실동작) + 결의서입력 더미 4개(출장 2·경조금·학자금).
+    from app.services.agent_fixtures import AGENT_FIXTURES
+
+    assert len(resp.json()) == len(AGENT_FIXTURES)
 
 
 async def test_agent_detail_includes_flowgraph(client, make_user, auth_as):

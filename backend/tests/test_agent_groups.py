@@ -27,7 +27,7 @@ async def test_seed_agent_groups_is_idempotent(sm):
 
     assert count == len(AGENT_GROUP_FIXTURES)
     assert group is not None
-    assert group.name == "결의서 작성"
+    assert group.name == "결의서입력"
     assert group.sort_order == 0
 
 
@@ -77,7 +77,7 @@ async def test_agent_serializes_group(client, make_user, auth_as):
     assert resp.status_code == 200
     assert resp.json()["group"] == {
         "id": "resolution",
-        "name": "결의서 작성",
+        "name": "결의서입력",
         "description": "더존 옴니솔 결의서(GLDDOC00300) 문서군 — 카드·출장·경조금·학자금",
     }
 
@@ -92,4 +92,4 @@ async def test_standalone_agent_group_is_null(client, make_user, auth_as, make_a
     by_id = {a["id"]: a for a in resp.json()}
     assert by_id["standalone-x"]["group"] is None
     assert by_id["card-chat"]["group"]["id"] == "resolution"
-    assert by_id["card-chat"]["group"]["name"] == "결의서 작성"
+    assert by_id["card-chat"]["group"]["name"] == "결의서입력"

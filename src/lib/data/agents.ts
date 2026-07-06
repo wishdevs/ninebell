@@ -204,7 +204,8 @@ export interface Agent {
   runCount: number;
   successRate: number;
   avgSeconds: number;
-  lastRunAt: string;
+  /** 마지막 실행 시각(ISO). 실행 이력 없는 에이전트(준비 중 더미 등)는 null. */
+  lastRunAt: string | null;
   steps: readonly WorkflowStep[];
   logs: readonly LogEntry[];
   intervention?: Intervention | null;

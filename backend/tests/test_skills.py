@@ -99,7 +99,7 @@ async def test_list_skills_returns_catalog_with_reverse_index(client, make_user,
         assert item["layer"] in ("omnisol", "common", "llm")
         assert item["description"]
     # 역인덱스: 시드된 card-chat 이 codepicker 스킬 사용자로 잡혀야 한다.
-    assert {"id": "card-chat", "name": "결의서 입력 - 카드"} in by_key["codepicker"]["agents"]
+    assert {"id": "card-chat", "name": "카드"} in by_key["codepicker"]["agents"]
     # 코드피커는 여러 스텝에서 쓰이지만 distinct 로 에이전트는 1번만 나온다.
     assert [a["id"] for a in by_key["codepicker"]["agents"]].count("card-chat") == 1
 

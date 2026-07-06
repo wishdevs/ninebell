@@ -159,6 +159,11 @@ async def seed_agents(db: AsyncSession) -> None:
             # 그룹 소속(0016 그룹 도입분) 동기화.
             if row.group_id != fx.get("group_id"):
                 row.group_id = fx.get("group_id")
+            # 이름·설명 동기화 — 픽스처가 단일 소스(개명: '결의서 입력 - 카드' → '카드' 등).
+            if row.name != fx["name"]:
+                row.name = fx["name"]
+            if row.description != fx["description"]:
+                row.description = fx["description"]
             # 완료 후 핸드오프 안내(0017) 동기화 — 신규 컬럼은 기존 DB 행에 자동 반영되지 않으므로
             # 여기서 픽스처 값을 따라가게 한다.
             if row.handoff_note != fx.get("handoff_note"):

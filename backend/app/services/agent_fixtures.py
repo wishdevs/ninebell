@@ -73,12 +73,12 @@ CORPORATE_CARD_FLOW: dict = {
 
 
 # ── 에이전트 그룹 (2뎁스 분류 — 실행 불가, 목록 섹션·브레드크럼 전용) ────────
-# '결의서 작성' 문서군: 현재 실존하는 card-chat 만 소속. 향후 출장(국내/자차·해외/정산서)·
-# 경조금·학자금 에이전트가 추가되면 같은 그룹으로 들어온다(미리 만들지 않음).
+# '결의서입력' 문서군: 카드(실동작) + 출장(국내/자차·해외/정산서)·경조금·학자금(더미 —
+# 아래 _RESOLUTION_DUMMY 참조, 구현되면 workflow_id·steps 를 채워 실동작으로 승격).
 AGENT_GROUP_FIXTURES: list[dict] = [
     {
         "id": "resolution",
-        "name": "결의서 작성",
+        "name": "결의서입력",
         "description": "더존 옴니솔 결의서(GLDDOC00300) 문서군 — 카드·출장·경조금·학자금",
         "sort_order": 0,
     },
@@ -90,8 +90,8 @@ AGENT_FIXTURES: list[dict] = [
     {
         "id": "card-chat",
         "workflow_id": "card-collect",  # 실행 레지스트리 워크플로우 id(유일 실동작).
-        "group_id": "resolution",  # '결의서 작성' 그룹 소속.
-        "name": "결의서 입력 - 카드",
+        "group_id": "resolution",  # '결의서입력' 그룹 소속.
+        "name": "카드",
         "description": "법인카드 승인내역을 조회해 건별 그리드로 예산단위·프로젝트·적요를 입력받고, 부가세구분에 따라 과세(법인카드)·불공(법인카드불공) 2패스로 반영한 뒤 마지막에 한 번 저장(F7)한다.",
         # 완료 후 사람 몫: 저장까지가 에이전트 몫이고, 저장된 결의서의 결제(승인) 상신은 사람이 한다.
         "handoff_note": "저장된 결의서는 아직 상신 전입니다. 옴니솔 결의서 화면에서 저장된 건을 확인하고, 직접 결제(승인) 상신을 진행해 주세요.",
@@ -161,3 +161,44 @@ AGENT_FIXTURES: list[dict] = [
         },
     },
 ]
+
+
+def _resolution_dummy(agent_id: str, name: str) -> dict:
+    """'결의서입력' 그룹 더미 에이전트 — 아직 미구현, 자리만 잡는다(억지 장식 없음).
+
+    workflow_id 없음 = 실행 컨트롤 비활성화(프론트 게이트), steps/logs 비움 = 계획·이력
+    미표시. 구현 시 workflow_id·steps·handoff_note 를 채워 이 더미를 실동작으로 승격한다.
+    """
+    return {
+        "id": agent_id,
+        "workflow_id": None,
+        "group_id": "resolution",
+        "name": name,
+        "description": "준비 중 — 아직 실행할 수 없습니다.",
+        "drive": "browser",
+        "interaction": "conversational",
+        "target_system": "더존 옴니솔",
+        "target_url": "erp.ninebell.co.kr",
+        "status": "idle",
+        "progress": 0,
+        "timeout_seconds": 240,
+        "elapsed_seconds": 0,
+        "current_action": "준비 중 — 아직 실행할 수 없습니다",
+        "run_count": 0,
+        "success_rate": 0.0,
+        "avg_seconds": 0,
+        "last_run_at": None,
+        "flow_graph": None,
+        "steps": [],
+        "logs": [],
+    }
+
+
+AGENT_FIXTURES.extend(
+    [
+        _resolution_dummy("trip-domestic", "출장(국내/자차)"),
+        _resolution_dummy("trip-overseas", "출장(해외/정산서)"),
+        _resolution_dummy("family-event", "경조금"),
+        _resolution_dummy("scholarship", "학자금"),
+    ]
+)
