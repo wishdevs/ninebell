@@ -88,6 +88,34 @@ async def test_favorite_agent_kind_crud_roundtrip(client, make_user, auth_as):
     assert (await client.get("/me/favorites?kind=agent")).json() == {"items": []}
 
 
+async def test_favorite_partner_kind_crud_roundtrip(client, make_user, auth_as):
+    """kind='partner' 즐겨찾기 CRUD 왕복 — 거래처 관리(통행료 거래처 기본지정)용."""
+    uid = await make_user("fav-partner", "user")
+    auth_as(uid)
+
+    resp = await client.get("/me/favorites?kind=partner")
+    assert resp.status_code == 200
+    assert resp.json() == {"items": []}
+
+    created = await client.post(
+        "/me/favorites",
+        json={"kind": "partner", "code": "P0001", "name": "한국도로공사", "extra": {"bizNo": "1234"}},
+    )
+    assert created.status_code == 201
+    item = created.json()
+    assert item["kind"] == "partner"
+    assert item["code"] == "P0001"
+    assert item["extra"] == {"bizNo": "1234"}
+    fav_id = item["id"]
+
+    listed = await client.get("/me/favorites?kind=partner")
+    assert [i["code"] for i in listed.json()["items"]] == ["P0001"]
+
+    deleted = await client.delete(f"/me/favorites/{fav_id}")
+    assert deleted.status_code == 204
+    assert (await client.get("/me/favorites?kind=partner")).json() == {"items": []}
+
+
 async def test_favorite_duplicate_is_idempotent(client, make_user, auth_as):
     uid = await make_user("fav-dup", "user")
     auth_as(uid)
@@ -234,6 +262,43 @@ async def test_catalog_query_and_envelope(client, make_user, auth_as, sm):
     assert [i["code"] for i in filtered.json()["items"]] == ["P100"]
     by_code = await client.get("/me/catalog?kind=project&q=P200")
     assert [i["code"] for i in by_code.json()["items"]] == ["P200"]
+
+
+async def test_catalog_partner_query_by_name_and_code(client, make_user, auth_as, sm):
+    """거래처 카탈로그 — q 는 거래처명(name)·코드 부분 매칭, 정렬은 기본 이름순."""
+    uid = await make_user("cat-partner", "user")
+    auth_as(uid)
+    now = datetime.now(timezone.utc)
+    await _seed_catalog(
+        sm,
+        [
+            {"kind": "partner", "dept": "", "code": "P0001", "name": "한국도로공사",
+             "extra": {"bizNo": "111"}, "synced_at": now},
+            {"kind": "partner", "dept": "", "code": "P0002", "name": "서울시설공단",
+             "extra": {"bizNo": "222"}, "synced_at": now},
+        ],
+    )
+    body = (await client.get("/me/catalog?kind=partner")).json()
+    assert body["total"] == 2
+    assert body["syncedAt"] is not None
+    # 이름순 정렬(서울… < 한국…).
+    assert [i["code"] for i in body["items"]] == ["P0002", "P0001"]
+
+    # q 는 거래처명 ILIKE.
+    by_name = await client.get("/me/catalog?kind=partner&q=도로")
+    assert [i["code"] for i in by_name.json()["items"]] == ["P0001"]
+    # q 는 코드도 매칭.
+    by_code = await client.get("/me/catalog?kind=partner&q=P0002")
+    assert [i["code"] for i in by_code.json()["items"]] == ["P0002"]
+
+
+async def test_catalog_invalid_kind_returns_422(client, make_user, auth_as):
+    """카탈로그 조회 kind 화이트리스트 — partner 추가 후에도 미지원 kind 는 422."""
+    uid = await make_user("cat-badkind", "user")
+    auth_as(uid)
+    resp = await client.get("/me/catalog?kind=vendor")
+    assert resp.status_code == 422
+    assert "vendor" in resp.json()["error"]
 
 
 async def _add_learned(sm, uid, merchants: list[str]) -> list[str]:
@@ -515,6 +580,173 @@ async def test_sync_catalog_projects_wbs_rows(sm, monkeypatch):
     assert by_code["PJ1|W1"].extra["wbsNm"] == "정비"
     assert by_code["PJ1|W1"].extra["loc"] == "부산"
     assert by_code["PJ1|W1"].extra["pjtNo"] == "PJ1"
+
+
+async def test_sync_partner_dump_seam_is_wired():
+    """Track A 연결 완료 — _sync_partners 의 지연 import 가 실제 dump_partners 로 해석된다.
+
+    (미구현 시 RuntimeError('거래처 덤프 미구현')로 실패하던 자리. Track A steps.py 도입 후
+    실제 코루틴이 연결됐음을 계약으로 고정한다 — code/name/bizNo 반환.)
+    """
+    import inspect
+
+    from app.agents.trip_domestic.steps import dump_partners
+
+    assert inspect.iscoroutinefunction(dump_partners)
+    params = inspect.signature(dump_partners).parameters
+    assert "page" in params  # _sync_partners 가 dump_partners(page) 로 호출.
+
+
+async def test_sync_catalog_partners_upsert_and_stale_delete(sm, monkeypatch):
+    """Track A 연결 시나리오 — dump_partners 가 있으면 upsert + stale 삭제(partner 스코프)."""
+    import sys
+    import types
+
+    await _seed_catalog(
+        sm,
+        [
+            {"kind": "partner", "dept": "", "code": "OLD", "name": "옛거래처",
+             "synced_at": datetime.now(timezone.utc)},
+        ],
+    )
+
+    async def _noop_chain(page, userid, password):  # noqa: ANN001
+        return None
+
+    async def _fake_dump(page):  # noqa: ANN001
+        return [
+            {"code": "P1", "name": "한국도로공사", "bizNo": "111"},
+            {"code": "P2", "name": "서울시설공단", "bizNo": "222"},
+        ]
+
+    # 아직 존재하지 않는 steps 모듈을 가짜로 주입 — 지연 import 가 이 모듈에서 dump_partners 를 찾는다.
+    fake_steps = types.ModuleType("app.agents.trip_domestic.steps")
+    fake_steps.dump_partners = _fake_dump
+    monkeypatch.setitem(sys.modules, "app.agents.trip_domestic.steps", fake_steps)
+
+    browser = _FakeBrowser()
+
+    async def _factory():
+        return browser
+
+    monkeypatch.setattr(code_sync, "_run_entry_chain", _noop_chain)
+
+    result = await code_sync.sync_catalog("partner", "u", "p", _factory, sm)
+    assert result["count"] == 2
+
+    async with sm() as s:
+        rows = (
+            (await s.execute(select(ErpCodeCatalog).where(ErpCodeCatalog.kind == "partner")))
+            .scalars()
+            .all()
+        )
+    by_code = {r.code: r for r in rows}
+    assert set(by_code) == {"P1", "P2"}  # OLD 는 stale 삭제됨.
+    assert by_code["P1"].name == "한국도로공사"
+    assert by_code["P1"].extra["bizNo"] == "111"
+    assert by_code["P1"].dept == ""
+
+
+async def test_sync_status_partner_kind_accepted(client, make_user, auth_as):
+    """partner 는 동기화 가능 kind 화이트리스트에 포함 — sync-status 가 422 가 아니어야 한다."""
+    uid = await make_user("sync-partner", "user")
+    auth_as(uid)
+    resp = await client.get("/me/catalog/sync-status?kind=partner")
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+def _inject_fake_partner_dump(monkeypatch, rows: list[dict]):
+    """app.agents.trip_domestic.steps.dump_partners 를 가짜로 주입(sys.modules)."""
+    import sys
+    import types
+
+    async def _fake_dump(page):  # noqa: ANN001
+        return rows
+
+    fake_steps = types.ModuleType("app.agents.trip_domestic.steps")
+    fake_steps.dump_partners = _fake_dump
+    monkeypatch.setitem(sys.modules, "app.agents.trip_domestic.steps", fake_steps)
+
+
+async def test_sync_partners_partial_dump_skips_stale_delete(sm, monkeypatch):
+    """부분 덤프(수집 < 기존) — stale 삭제 생략으로 기존 거래처 보존(리뷰 HIGH, _sync_projects 미러)."""
+    now = datetime.now(timezone.utc)
+    await _seed_catalog(
+        sm,
+        [
+            {"kind": "partner", "dept": "", "code": "P1", "name": "가", "synced_at": now},
+            {"kind": "partner", "dept": "", "code": "P2", "name": "나", "synced_at": now},
+            {"kind": "partner", "dept": "", "code": "P3", "name": "다", "synced_at": now},
+        ],
+    )
+
+    async def _noop_chain(page, userid, password):  # noqa: ANN001
+        return None
+
+    _inject_fake_partner_dump(monkeypatch, [{"code": "P1", "name": "가", "bizNo": ""}])  # 1건만
+    monkeypatch.setattr(code_sync, "_run_entry_chain", _noop_chain)
+    browser = _FakeBrowser()
+
+    async def _factory():
+        return browser
+
+    result = await code_sync.sync_catalog("partner", "u", "p", _factory, sm)
+    assert result["count"] == 1
+    async with sm() as s:
+        rows = (
+            (await s.execute(select(ErpCodeCatalog).where(ErpCodeCatalog.kind == "partner")))
+            .scalars()
+            .all()
+        )
+    # P2·P3 는 부분 덤프 보호로 삭제되지 않는다(대량삭제 사고 방지).
+    assert {r.code for r in rows} == {"P1", "P2", "P3"}
+
+
+async def test_sync_partners_empty_dump_when_populated_raises(sm, monkeypatch):
+    """덤프 0건인데 기존 카탈로그 있음 — 중단/실패로 보고 예외(카탈로그 보존, sync_state.error)."""
+    now = datetime.now(timezone.utc)
+    await _seed_catalog(
+        sm, [{"kind": "partner", "dept": "", "code": "P1", "name": "가", "synced_at": now}]
+    )
+
+    async def _noop_chain(page, userid, password):  # noqa: ANN001
+        return None
+
+    _inject_fake_partner_dump(monkeypatch, [])  # 빈 결과(중단/실패 의심)
+    monkeypatch.setattr(code_sync, "_run_entry_chain", _noop_chain)
+    browser = _FakeBrowser()
+
+    async def _factory():
+        return browser
+
+    with pytest.raises(RuntimeError, match="비어 있습니다"):
+        await code_sync.sync_catalog("partner", "u", "p", _factory, sm)
+    # 기존 카탈로그는 예외로 보존된다(삭제/미커밋).
+    async with sm() as s:
+        rows = (
+            (await s.execute(select(ErpCodeCatalog).where(ErpCodeCatalog.kind == "partner")))
+            .scalars()
+            .all()
+        )
+    assert {r.code for r in rows} == {"P1"}
+
+
+async def test_sync_partners_empty_dump_first_load_returns_zero(sm, monkeypatch):
+    """첫 적재(기존 0건)에서 진짜 0건이면 예외 없이 정상 종료(0 반환)."""
+
+    async def _noop_chain(page, userid, password):  # noqa: ANN001
+        return None
+
+    _inject_fake_partner_dump(monkeypatch, [])
+    monkeypatch.setattr(code_sync, "_run_entry_chain", _noop_chain)
+    browser = _FakeBrowser()
+
+    async def _factory():
+        return browser
+
+    result = await code_sync.sync_catalog("partner", "u", "p", _factory, sm)
+    assert result["count"] == 0
 
 
 async def test_default_favorite_toggles_off_on_second_click(client, make_user, auth_as):

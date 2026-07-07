@@ -88,6 +88,70 @@ async def test_collect_sse_happy_path(client, make_user, make_agent, auth_as):
 
 
 @pytest.mark.asyncio
+async def test_body_params_cannot_override_server_authoritative_keys(
+    client, make_user, make_agent, auth_as, monkeypatch
+):
+    """리뷰 HIGH — body.params 는 관리자 설정 스키마 키·department·cost_type 를 덮을 수 없다.
+
+    사용자가 유류비 단가/부서/비용구분을 조작해 금액·예산계정을 바꾸는 권한상승을 차단한다.
+    권위 키 집합은 effective_settings 가 반환하는 키(스키마 유일소스) + department/cost_type 이라
+    에이전트별 하드코딩이 없다. 비권위 키(trip 네임스페이스 등)는 정상 통과한다.
+    """
+    from app.services import agent_settings
+
+    uid = await make_user("escalator", "user")
+    auth_as(uid)
+    # 신규 agent id(시드 미충돌) + 그 id 로 fuel_* 스키마를 주입 → effective_settings 가 권위 키를 안다.
+    await make_agent("settings-esc-agent", workflow_id="test-fuel-wf")
+    monkeypatch.setitem(
+        agent_settings.AGENT_SETTINGS_SCHEMA,
+        "settings-esc-agent",
+        [
+            agent_settings.SettingDef(
+                key="fuel_unit_price", label="단가", type="number", default=2000, description=""
+            ),
+            agent_settings.SettingDef(
+                key="fuel_eff_under_1000", label="연비", type="number", default=14, description=""
+            ),
+        ],
+    )
+
+    captured: dict = {}
+
+    class _CaptureGraph:
+        async def ainvoke(self, state: dict) -> dict:
+            captured.update(state.get("params") or {})
+            await state["events"].put({"step": "x", "status": "done"})
+            return {"result": "ok"}
+
+    register_workflow("test-fuel-wf", lambda: _CaptureGraph())
+    fastapi_app.state.browser_factory = _fake_browser_factory
+
+    r = await client.post(
+        "/runs/collect",
+        json={
+            "agentId": "test-fuel-wf",
+            "params": {
+                "fuel_unit_price": 999999,  # 관리자 단가 조작 시도
+                "fuel_eff_under_1000": 1,  # 연비 1 → 금액 폭증 시도
+                "cost_type": "제조원가",  # 예산계정 (제) 강제 시도
+                "department": "임원실",  # 부서 위조 시도
+                "trip": {"acctDate": "2026-07-03", "rows": []},  # 정상 페이로드
+            },
+        },
+    )
+    assert r.status_code == 200
+    # 서버 권위 값이 승리 — 스키마 기본값(단가 2000·연비 14) 유지, 조작값 무시.
+    assert captured.get("fuel_unit_price") == 2000
+    assert captured.get("fuel_eff_under_1000") == 14
+    # 사용자 org/부서 미설정 → 조작 department/cost_type 은 제거돼 아예 없어야 한다(서버 주입도 없음).
+    assert "cost_type" not in captured
+    assert "department" not in captured
+    # 비권위 키(trip 네임스페이스)는 정상 통과.
+    assert captured.get("trip") == {"acctDate": "2026-07-03", "rows": []}
+
+
+@pytest.mark.asyncio
 async def test_hitl_unknown_decision_returns_not_resolved(client, make_user, auth_as):
     uid = await make_user("dave", "user")
     auth_as(uid)

@@ -33,6 +33,15 @@ def test_card_collect_spec_has_delay_scale():
     assert get_spec("demo-echo").delay_scale is None
 
 
+def test_trip_domestic_spec_registered_with_defaults():
+    # 라이브 실측(Phase 6) 전이라 delay_scale 미지정(None=1.0), 브라우저 필요.
+    spec = get_spec("trip-domestic")
+    assert spec is not None
+    assert spec.needs_browser is True
+    assert spec.delay_scale is None
+    assert spec.site == "omnisol"
+
+
 async def test_runner_skips_browser_when_factory_none():
     """browser_factory=None(needs_browser=False) → 브라우저 미런치, page/browser=None 로 실행."""
     seen: dict = {}

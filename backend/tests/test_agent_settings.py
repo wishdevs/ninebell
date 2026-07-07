@@ -188,10 +188,13 @@ async def test_run_params_include_effective_settings(
 
 
 @pytest.mark.asyncio
-async def test_run_params_body_overrides_settings(
+async def test_run_params_body_cannot_override_settings(
     client, make_user, auth_as, capture_run_params
 ):
-    """저장값(4)이 주입되고, body.params 의 같은 키(3)가 최종 우선한다."""
+    """리뷰 HIGH — 저장된 관리자 설정(4)이 승리하고, body.params 의 같은 스키마 키(3)는 무시된다.
+
+    (이전 규약: body.params 우선 → 사용자가 관리자 설정을 덮어 권한상승. 보안 수정으로 서버 권위.)
+    """
     wire, captured = capture_run_params
     await wire()
     uid = await make_user("s-run2", "admin")
@@ -205,4 +208,4 @@ async def test_run_params_body_overrides_settings(
         json={"agentId": "settings-wf", "params": {"acct_cutoff_day": 3}},
     )
     assert r.status_code == 200
-    assert captured and captured[0]["acct_cutoff_day"] == 3
+    assert captured and captured[0]["acct_cutoff_day"] == 4  # 서버 저장값 승리(조작 무시)
