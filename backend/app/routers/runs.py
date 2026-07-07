@@ -236,13 +236,17 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 세션 자격증명(비밀번호)을 CredCache(jti)에서 조회해 실 워크플로우(expense-card-chat)에
     # 주입한다. demo-echo 는 비밀번호를 쓰지 않으므로 None 이어도 무해하다.
     creds = {"userid": user.omnisol_userid, "password": _omnisol_password(request)}
-    # 에이전트별 세부설정(스키마 기본값+관리자 저장값)을 개별 키로 평탄화해 params 에 먼저
-    # 깔고, 요청 body.params 가 같은 키를 덮을 수 있게 한다(테스트 override 등 기존 규약 보존).
-    # agent_row 는 위 allowlist 검증(workflow_id 역조회)에서 이미 확보했다.
-    params = {
-        **effective_settings(agent_row.id, agent_row.settings),
-        **(body.params or {}),
+    # 에이전트별 세부설정(스키마 기본값+관리자 저장값)을 개별 키로 평탄화해 params 에 먼저 깐다.
+    # ⚠ body.params 는 **서버 권위 키를 덮을 수 없다** — 사용자가 관리자 설정(fuel_* 단가/연비 등
+    # AGENT_SETTINGS_SCHEMA 키)·department·cost_type 을 조작해 유류비 금액이나 예산계정을 바꾸는
+    # 권한 상승을 차단한다(리뷰 HIGH). 권위 키 집합 = effective_settings 가 그 에이전트에 대해
+    # 반환하는 키(스키마 유일소스라 에이전트별 하드코딩 없음) + department/cost_type(서버 주입).
+    server_settings = effective_settings(agent_row.id, agent_row.settings)
+    authoritative_keys = set(server_settings) | {"department", "cost_type"}
+    user_params = {
+        k: v for k, v in (body.params or {}).items() if k not in authoritative_keys
     }
+    params = {**server_settings, **user_params}
 
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).
@@ -250,6 +254,10 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
         team = await db.get(OrgUnit, user.org_unit_id)
         if team is not None and team.cost_type:
             params.setdefault("cost_type", team.cost_type)
+    # 사용자 부서(BG_NM) 주입 → 출장 자동화가 예산단위(여비교통비-국내출장) 조합을 부서×비용구분
+    # 으로 특정한다(카드 경로는 department 를 읽지 않아 불변). body.params 가 있으면 우선.
+    if user.department:
+        params.setdefault("department", user.department)
 
     # AUTO 재생(회수): templateId 가 있으면 소유자·워크플로우를 검증하고 저장된 selections 를
     # params["template"] 로 주입한다. chat_form 이 이를 보면 대화 없이 순서대로 적용한다.

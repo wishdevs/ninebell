@@ -22,6 +22,7 @@ import {
   useHitlNotification,
   useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
+import { PRE_RUN_FORMS } from '@/components/live/pre-run';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -78,12 +79,18 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 실행 불가(하드코딩 매핑·demo-echo 폴백 제거) → 실행 컨트롤을 비활성화한다.
   const defaultWorkflow = agent.workflowId;
   const canRun = !!defaultWorkflow;
+  // 실행 전 입력 폼 — 이 워크플로우가 폼 레지스트리에 있으면 idle 에서 폼으로 파라미터를
+  // 받아 실행한다(card-chat 등 폼 없는 에이전트는 종전대로 바로 실행). 없으면 undefined.
+  const PreRunForm = canRun ? PRE_RUN_FORMS[defaultWorkflow] : undefined;
+  const usePreRun = !!PreRunForm;
   // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
   // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
   const [session, setSession] = useState<{
     workflowId: string;
     runId: string;
     enabled: boolean;
+    /** 실행 전 폼이 구성한 워크플로우 파라미터(그래프 state.params). 폼 없는 에이전트는 undefined. */
+    params?: Record<string, unknown>;
   }>({
     workflowId: defaultWorkflow ?? '',
     runId: '',
@@ -92,13 +99,23 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const run = useLiveRun(session.workflowId, {
     runId: session.enabled ? session.runId : undefined,
     enabled: session.enabled,
+    params: session.enabled ? session.params : undefined,
   });
-  const startRun = (workflowId: string) => {
+  const startRun = (workflowId: string, params?: Record<string, unknown>) => {
     // 알림 권한은 사용자 제스처(실행 버튼 클릭) 컨텍스트에서 1회 요청해야 프롬프트가 뜬다.
     requestHitlNotificationPermission();
-    setSession({ workflowId, runId: newRunId(), enabled: true });
+    setSession({ workflowId, runId: newRunId(), enabled: true, params });
   };
-  const stopRun = () => setSession((s) => ({ ...s, enabled: false }));
+  // 실행 전 폼 제출 → 마지막 값을 폼 시드로 보관(종료 후 값 수정 재실행)하고 실행 시작.
+  const [formSeed, setFormSeed] = useState<Record<string, unknown> | undefined>(undefined);
+  const [formRunSeq, setFormRunSeq] = useState(0);
+  const startFromForm = (params: Record<string, unknown>) => {
+    setFormSeed(params);
+    setFormRunSeq((n) => n + 1); // remount 키 — 시드가 폼 초기값으로 다시 반영되게.
+    startRun(defaultWorkflow!, params);
+  };
+  // 세션 종료 시 실행 파라미터를 비운다(stale params 로 실저장 재발 방지). 폼 시드는 별도 유지.
+  const stopRun = () => setSession((s) => ({ ...s, enabled: false, params: undefined }));
   const isLive = session.enabled;
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   // 개입(HITL) 대기 중이면 우측 패널을 넓혀 개입 카드에 화면을 양보한다(브라우저 열은 축소).
@@ -167,8 +184,13 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
               enabled={isLive}
               terminal={terminal}
               canRun={canRun}
+              // 실행 전 폼 에이전트는 헤더 실행을 막고 폼 제출로 시작하게 안내한다.
+              preRunHint={usePreRun ? '아래 입력을 완료하고 실행하세요.' : undefined}
+              // 무개입 실저장 에이전트는 원클릭 '다시 실행'을 막는다 — 종료 후 '닫기'로
+              // 폼에 복귀해 값을 검토·수정하고 다시 실행(중복 저장 방지).
+              hideRestart={usePreRun}
               onStartReal={() => defaultWorkflow && startRun(defaultWorkflow)}
-              onRestart={() => startRun(session.workflowId)}
+              onRestart={() => startRun(session.workflowId, session.params)}
               onStop={stopRun}
             />
           </div>
@@ -212,13 +234,28 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           connected={run.connected}
           canRun={canRun}
           etaHint={etaHint}
-          onStart={() => {
-            const workflowId = (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
-            if (workflowId) startRun(workflowId);
-          }}
+          // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
+          // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
+          onStart={
+            usePreRun
+              ? undefined
+              : () => {
+                  const workflowId =
+                    (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
+                  if (workflowId) startRun(workflowId, session.params);
+                }
+          }
         />
         {isLive ? (
           <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
+        ) : PreRunForm ? (
+          // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
+          <PreRunForm
+            key={formRunSeq}
+            agent={agent}
+            initialParams={formSeed}
+            onStart={startFromForm}
+          />
         ) : (
           <AgentSidePanel agent={view} />
         )}
@@ -298,6 +335,13 @@ interface LiveControlsProps {
   terminal: boolean;
   /** 실행 워크플로우가 매핑돼 있는지. false 면 '실행' 비활성화(이 에이전트는 실행 불가). */
   canRun: boolean;
+  /**
+   * 실행 전 입력 폼이 있는 에이전트면 헤더 '실행'을 비활성화하고 이 문구를 툴팁으로 보여준다
+   * (실행은 폼 제출로 시작). 없으면(undefined) 종전 동작 그대로.
+   */
+  preRunHint?: string;
+  /** true 면 종료 후 원클릭 '다시 실행'을 숨긴다(무개입 실저장 에이전트 — '닫기'로 폼 복귀만). */
+  hideRestart?: boolean;
   onStartReal: () => void;
   onRestart: () => void;
   onStop: () => void;
@@ -312,6 +356,8 @@ function LiveControls({
   enabled,
   terminal,
   canRun,
+  preRunHint,
+  hideRestart,
   onStartReal,
   onRestart,
   onStop,
@@ -323,13 +369,12 @@ function LiveControls({
   }, [enabled, terminal]);
 
   if (!enabled) {
+    const disabled = !canRun || !!preRunHint;
+    const title = !canRun
+      ? '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'
+      : (preRunHint ?? undefined);
     return (
-      <Button
-        size="sm"
-        onClick={onStartReal}
-        disabled={!canRun}
-        title={canRun ? undefined : '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'}
-      >
+      <Button size="sm" onClick={onStartReal} disabled={disabled} title={title}>
         <RiPlayLine size={14} aria-hidden />
         실행
       </Button>
@@ -338,14 +383,16 @@ function LiveControls({
   if (terminal) {
     return (
       <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={onStop}>
+        <Button size="sm" variant={hideRestart ? 'primary' : 'secondary'} onClick={onStop}>
           <RiCloseLine size={14} aria-hidden />
           닫기
         </Button>
-        <Button size="sm" onClick={onRestart}>
-          <RiRestartLine size={14} aria-hidden />
-          다시 실행
-        </Button>
+        {hideRestart ? null : (
+          <Button size="sm" onClick={onRestart}>
+            <RiRestartLine size={14} aria-hidden />
+            다시 실행
+          </Button>
+        )}
       </div>
     );
   }
