@@ -57,11 +57,13 @@ interface CodeCatalogManagerProps {
 const CATALOG_HEADERS: Record<CatalogOnlyKind, readonly string[]> = {
   budget_unit: ['예산계정명', '예산단위명', '사업계획명'],
   project: ['프로젝트', 'WBS요소', '위치'],
+  partner: ['거래처명', '코드'],
 };
 
 const SEARCH_PLACEHOLDER: Record<CatalogOnlyKind, string> = {
   budget_unit: '예산계정·예산단위·사업계획 검색',
   project: '프로젝트·WBS·위치 검색',
+  partner: '거래처명·코드 검색',
 };
 
 /**
@@ -462,6 +464,16 @@ function CatalogRowCells({ kind, item }: { kind: CatalogKind; item: CatalogItem 
       </>
     );
   }
+  if (kind === 'partner') {
+    return (
+      <>
+        <Td className={cn(cellBorder, 'text-foreground font-medium')}>{item.name || '-'}</Td>
+        <Td className={cn(cellBorder, 'text-foreground-tertiary font-mono text-[11px]')}>
+          {item.code || '-'}
+        </Td>
+      </>
+    );
+  }
   return (
     <>
       <Td className={cellBorder}>
@@ -509,6 +521,16 @@ function CodeRowInfo({
           <span className="text-foreground-tertiary mr-1 text-[11px]">예산계정명</span>
           {extra?.bgacctNm || '-'}
         </p>
+      </div>
+    );
+  }
+  if (kind === 'partner') {
+    return (
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+          {name}
+        </p>
+        <p className="text-foreground-tertiary truncate font-mono text-[11px]">{code}</p>
       </div>
     );
   }

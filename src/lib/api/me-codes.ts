@@ -18,12 +18,13 @@
 
 import { api } from './client';
 
-/** 코드 종류 — 예산단위 / 프로젝트 / 에이전트(즐겨찾기 전용 — 카탈로그·동기화 없음). */
-export type CatalogKind = 'budget_unit' | 'project' | 'agent';
+/** 코드 종류 — 예산단위 / 프로젝트 / 거래처 / 에이전트(즐겨찾기 전용 — 카탈로그·동기화 없음). */
+export type CatalogKind = 'budget_unit' | 'project' | 'partner' | 'agent';
 
 /** 부가 데이터 — 백엔드 JSON 객체.
  * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),
- * 프로젝트 = {pjtNo, wbsNo, wbsNm, loc, useYn, partnerNm} (선택 단위 = WBS 행, code=PJT_NO|WBS_NO).
+ * 프로젝트 = {pjtNo, wbsNo, wbsNm, loc, useYn, partnerNm} (선택 단위 = WBS 행, code=PJT_NO|WBS_NO),
+ * 거래처 = {bizNo} (선택 단위 = 거래처 행, code=거래처코드·name=거래처명).
  * deptNm 은 과거 데이터 하위호환. */
 export interface CodeExtra {
   deptNm?: string;
@@ -37,6 +38,7 @@ export interface CodeExtra {
   wbsNo?: string;
   wbsNm?: string;
   loc?: string;
+  bizNo?: string;
 }
 
 /** 자주쓰는(즐겨찾기) 한 항목. extra 는 부서명 등 부가 표시(예산단위=deptNm). */

@@ -33,6 +33,7 @@ const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
   resolution: [
     { label: '예산단위 관리', href: '/manage/budget-units' },
     { label: '프로젝트 관리', href: '/manage/projects' },
+    { label: '거래처 관리', href: '/manage/partners' },
   ],
 };
 

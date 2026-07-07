@@ -34,10 +34,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["me-codes"])
 
 # 카탈로그/동기화 kind — ERP 코드만(에이전트는 카탈로그·동기화 대상이 아님).
-_VALID_KINDS = ("budget_unit", "project")
+_VALID_KINDS = ("budget_unit", "project", "partner")
 # 즐겨찾기 kind — 스키마 레벨에서 강제(무효 kind 행 축적 방지, 리뷰 MEDIUM #4).
 # 'agent' = 홈 '자주쓰는 에이전트'(code=에이전트 id, name=에이전트명) — 즐겨찾기 전용.
-CodeKind = Literal["budget_unit", "project", "agent"]
+CodeKind = Literal["budget_unit", "project", "partner", "agent"]
 
 # 백그라운드 동기화 태스크 강참조 — 무참조 태스크는 GC 대상이라(파이썬 asyncio 규약) 실행 중
 # 소멸하면 브라우저 누수 + 세마포어 미반납으로 영구 409 가 될 수 있다(리뷰 MEDIUM #2).
@@ -384,7 +384,7 @@ async def get_catalog(
                 or ql in str((r.extra or {}).get("bizplanNm", "")).lower()
                 or ql in str((r.extra or {}).get("bgacctNm", "")).lower()
             ]
-    elif q:
+    elif kind == "project" and q:
         # 프로젝트 — 프로젝트명(name)·코드 + WBS요소명·위치·프로젝트번호(extra)까지 부분 매칭.
         ql = q.strip().lower()
         rows = [
@@ -395,6 +395,16 @@ async def get_catalog(
             or ql in str((r.extra or {}).get("wbsNm", "")).lower()
             or ql in str((r.extra or {}).get("loc", "")).lower()
             or ql in str((r.extra or {}).get("pjtNo", "")).lower()
+        ]
+    elif kind == "partner" and q:
+        # 거래처 — 거래처명(name)·코드 + 사업자번호(extra)까지 부분 매칭. 정렬은 기본 이름순.
+        ql = q.strip().lower()
+        rows = [
+            r
+            for r in rows
+            if ql in r.name.lower()
+            or ql in r.code.lower()
+            or ql in str((r.extra or {}).get("bizNo", "")).lower()
         ]
 
     if kind == "project":

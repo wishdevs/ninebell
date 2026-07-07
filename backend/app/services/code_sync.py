@@ -195,6 +195,66 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
     return len(rows)
 
 
+async def _sync_partners(page, sessionmaker: async_sessionmaker) -> int:
+    """거래처(partner) 전량 덤프 → upsert(kind='partner', dept='') + stale 삭제(kind 스코프).
+
+    실제 피커 덤프(dump_partners)는 Track A(trip_domestic)가 프로브 후 구현한다. 앱 기동을
+    깨지 않도록 함수 내부에서 지연 import 하고, 미구현 시 한국어 오류로 실패한다(백그라운드
+    태스크가 sync_state[partner].error 로 남긴다).
+    """
+    try:
+        from app.agents.trip_domestic.steps import dump_partners
+    except ImportError as exc:  # Track A 미완료 — 명확한 한국어 오류로 실패.
+        raise RuntimeError("거래처 덤프 미구현 — Track A 대기") from exc
+
+    rows = await dump_partners(page)
+    now = datetime.now(timezone.utc)
+    codes = {r["code"] for r in rows}
+    async with sessionmaker() as s:
+        prev = (
+            await s.execute(
+                select(func.count())
+                .select_from(ErpCodeCatalog)
+                .where(ErpCodeCatalog.kind == "partner")
+            )
+        ).scalar() or 0
+        # 덤프가 비었는데 기존 카탈로그가 있으면 = 중단/실패 의심. 부분(0) 결과로 기존 3천여 건을
+        # 지우지 않도록 **예외로 실패**시킨다(_run_catalog_sync 가 sync_state.error 로 남긴다).
+        # 첫 적재(prev=0)에서 진짜 0건이면 정상 종료(0 반환).
+        if not rows:
+            if prev > 0:
+                raise RuntimeError(
+                    f"거래처 덤프 결과가 비어 있습니다(기존 {prev}건) — 중단/실패 의심, 카탈로그 보존"
+                )
+            return 0
+        for r in rows:
+            await s.merge(
+                ErpCodeCatalog(
+                    kind="partner",
+                    dept="",  # 전사 공용 — 거래처 마스터는 부서 스코프가 없다.
+                    code=r["code"],  # 거래처코드(선택 단위).
+                    name=r["name"],  # 거래처명.
+                    extra={"bizNo": r.get("bizNo") or ""},  # 사업자번호(있으면).
+                    synced_at=now,
+                )
+            )
+        # 부분 덤프 보호(_sync_projects 미러) — 집계가 기존보다 적으면 stale 삭제를 건너뛴다.
+        # 페이징 중단으로 일부만 수집됐을 때 정상 거래처를 대량 삭제하는 사고를 막는다(리뷰 HIGH).
+        if len(codes) >= prev:
+            await s.execute(
+                delete(ErpCodeCatalog).where(
+                    ErpCodeCatalog.kind == "partner",
+                    ErpCodeCatalog.code.notin_(codes),
+                )
+            )
+        else:
+            logger.warning(
+                "거래처 집계(%d) < 기존(%d) — stale 삭제 생략(부분 덤프 보호)", len(codes), prev
+            )
+        await s.commit()
+    return len(rows)
+
+
 async def sync_catalog(
     kind: str,
     userid: str,
@@ -202,7 +262,7 @@ async def sync_catalog(
     browser_factory,
     sessionmaker: async_sessionmaker,
 ) -> dict:
-    """kind('budget_unit'|'project') 코드 카탈로그를 헤드리스로 동기화. 반환 {count, syncedAt}."""
+    """kind('budget_unit'|'project'|'partner') 코드 카탈로그를 헤드리스로 동기화. 반환 {count, syncedAt}."""
     browser = await browser_factory()
     try:
         page = await browser.new_page(viewport={"width": 1440, "height": 900})
@@ -212,6 +272,8 @@ async def sync_catalog(
             count = await _sync_budget_units(page, sessionmaker)
         elif kind == "project":
             count = await _sync_projects(page, sessionmaker)
+        elif kind == "partner":
+            count = await _sync_partners(page, sessionmaker)
         else:
             raise ValueError(f"알 수 없는 kind: {kind}")
         return {"count": count, "syncedAt": datetime.now(timezone.utc).isoformat()}
