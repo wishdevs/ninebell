@@ -72,6 +72,41 @@ CORPORATE_CARD_FLOW: dict = {
 }
 
 
+# ── 출장(국내/자차) 결의 플로우 그래프 (trip-domestic 그래프의 사람용 요약) ──────
+TRIP_DOMESTIC_FLOW: dict = {
+    "nodes": [
+        {"id": "access", "kind": "start", "status": "done", "title": "결의서 입력 접속", "sub": "전사공통(회계)", **_col(0)},
+        {"id": "kind", "kind": "step", "status": "done", "title": "결의구분 = 출장(국내·자차)", "sub": "추가(F3)", **_col(1)},
+        {"id": "date", "kind": "step", "status": "done", "title": "회계일자 세팅", "sub": "마지막 자차 사용일", **_col(2)},
+        {"id": "row", "kind": "step", "status": "active", "title": "상세행 추가(F3)", "sub": "행별 반복", **_col(3)},
+        {"id": "evd", "kind": "step", "status": "pending", "title": "증빙유형 선택", "sub": "10 규정에의한 비용정산", **_col(4)},
+        {"id": "partner", "kind": "step", "status": "pending", "title": "거래처 입력", "sub": "통행료=공공기관 / 유류비=본인", **_col(5)},
+        {"id": "budget", "kind": "step", "status": "pending", "title": "예산단위", "sub": "여비교통비-국내출장(부서×판/제)", **_col(6)},
+        {"id": "project", "kind": "step", "status": "pending", "title": "프로젝트", "sub": "행별 프로젝트 선택", **_col(7)},
+        {"id": "amount", "kind": "step", "status": "pending", "title": "금액·적요", "sub": "공급가(거래금액)+공급가액+합계 · 적요", **_col(8)},
+        {"id": "bfc", "kind": "step", "status": "pending", "title": "상대계정거래처", "sub": "작성자 본인(BFC_PARTNER_CD)", **_col(9)},
+        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 행?", "sub": "남은 행이 있으면 F3 반복", **_col(10)},
+        {"id": "save", "kind": "step", "status": "pending", "title": "저장(F7)", "sub": "저장 후 지속 확인", **_col(11)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "전자결재 상신", "sub": "사용자가 직접", **_col(12)},
+    ],
+    "edges": [
+        {"id": "e-access-kind", "source": "access", "target": "kind"},
+        {"id": "e-kind-date", "source": "kind", "target": "date"},
+        {"id": "e-date-row", "source": "date", "target": "row"},
+        {"id": "e-row-evd", "source": "row", "target": "evd"},
+        {"id": "e-evd-partner", "source": "evd", "target": "partner"},
+        {"id": "e-partner-budget", "source": "partner", "target": "budget"},
+        {"id": "e-budget-project", "source": "budget", "target": "project"},
+        {"id": "e-project-amount", "source": "project", "target": "amount"},
+        {"id": "e-amount-bfc", "source": "amount", "target": "bfc"},
+        {"id": "e-bfc-more", "source": "bfc", "target": "more"},
+        {"id": "e-more-row", "source": "more", "target": "row", "label": "다음 행 ↩ F3", "kind": "loop"},
+        {"id": "e-more-save", "source": "more", "target": "save", "label": "마지막 행", "kind": "branch"},
+        {"id": "e-save-submit", "source": "save", "target": "submit", "label": "저장 후", "kind": "branch"},
+    ],
+}
+
+
 # ── 에이전트 그룹 (2뎁스 분류 — 실행 불가, 목록 섹션·브레드크럼 전용) ────────
 # '결의서입력' 문서군: 카드(실동작) + 출장(국내/자차·해외/정산서)·경조금·학자금(더미 —
 # 아래 _RESOLUTION_DUMMY 참조, 구현되면 workflow_id·steps 를 채워 실동작으로 승격).
@@ -194,9 +229,48 @@ def _resolution_dummy(agent_id: str, name: str) -> dict:
     }
 
 
+# ── 출장(국내/자차) — 실동작 승격(trip-domestic 워크플로우) ────────────────────
+# steps 의 key 는 그래프 노드가 emit_step 하는 키와 1:1(진행 하이라이트). 증빙 선택은
+# fill_rows 내부에서 행별로 처리하므로(P9 carry-over 없음) 별도 스텝을 두지 않는다.
+_TRIP_DOMESTIC_FIXTURE: dict = {
+    "id": "trip-domestic",
+    "workflow_id": "trip-domestic",
+    "group_id": "resolution",
+    "name": "출장(국내/자차)",
+    "description": "실행 전 입력 폼으로 받은 통행료·유류비 지원 행을 결의서에 무개입으로 채워 저장(F7)한다. 유류비 금액은 주행거리·차량 기준연비·기준단가로 백엔드가 계산하고, 예산단위는 부서×비용구분의 여비교통비-국내출장으로 자동 매칭한다.",
+    "handoff_note": "저장된 결의서는 아직 상신 전입니다. 옴니솔 결의서 화면에서 저장된 건을 확인하고, 직접 결제(승인) 상신을 진행해 주세요.",
+    "drive": "browser",
+    "interaction": "autonomous",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    "timeout_seconds": 240,
+    "elapsed_seconds": 0,
+    "current_action": "대기 중 — 입력을 완료하고 실행하면 시작합니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": TRIP_DOMESTIC_FLOW,
+    "steps": [
+        {"key": "validate_params", "label": "입력 검증", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "실행 전 폼 입력(회계일자·행)을 검증하고 유류비 금액을 계산"},
+        {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
+        {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
+        {"key": "menu_nav", "label": "결의서입력 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "전사공통(회계) 결의서 입력 화면 진입"},
+        {"key": "set_gubun", "label": "결의구분: 출장(국내·자차)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "결의구분 드롭다운을 출장(국내·자차)으로 설정"},
+        {"key": "add_row", "label": "상세행 추가(F3)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "F3로 첫 결의 상세행 생성"},
+        {"key": "set_acct_date", "label": "회계일 설정", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "마지막 자차 사용일로 결의서 회계일 설정"},
+        {"key": "fill_rows", "label": "건별 입력", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "행별 증빙(10)·거래처·예산단위·프로젝트·금액(거래금액)·적요·상대계정(작성자 본인)을 반복 입력(HITL 없음)"},
+        {"key": "save_doc", "label": "저장(F7)", "skill": "save", "status": "pending", "phase": "저장", "detail": "반영된 행을 마지막에 한 번만 저장"},
+    ],
+    "logs": [],
+}
+
+
 AGENT_FIXTURES.extend(
     [
-        _resolution_dummy("trip-domestic", "출장(국내/자차)"),
+        _TRIP_DOMESTIC_FIXTURE,
         _resolution_dummy("trip-overseas", "출장(해외/정산서)"),
         _resolution_dummy("family-event", "경조금"),
         _resolution_dummy("scholarship", "학자금"),

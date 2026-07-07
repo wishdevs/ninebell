@@ -49,21 +49,9 @@ def period_month_end(period_start: str) -> tuple[str, str]:
     return f"{y:04d}{m:02d}{last:02d}", f"{y:04d}-{m:02d}-{last:02d}"
 
 
-async def set_acct_date(page: Any, ymd_compact: str, expect_display: str) -> dict:
-    """마스터(결의서) 0행 회계일(ACTG_DT) 설정 + 표시값 검증. 반환 {ok, display}|{ok:False, reason}.
-
-    프로브 실측(2026-07-04): F3 직후 마스터 행 1개 존재, ds.setValue(0,'ACTG_DT','YYYYMMDD')
-    로 설정되고 표시값이 dashed 로 확인된다.
-    """
-    r = await page.evaluate(js.SET_ACCT_DATE_JS, ymd_compact)
-    if not r.get("ok"):
-        return {"ok": False, "reason": r.get("reason") or "회계일 설정 실패"}
-    if (r.get("display") or "") != expect_display:
-        return {
-            "ok": False,
-            "reason": f"회계일 표시값 불일치(기대 {expect_display}·실제 {r.get('display')!r})",
-        }
-    return {"ok": True, "display": r.get("display")}
+# set_acct_date 는 app.agents.common.doc_steps 로 승격(2026-07-06, 출장 공용) — 재수출 shim.
+# card 노드(query.py)의 steps.set_acct_date 호출과 테스트 monkeypatch 를 그대로 보존한다.
+from app.agents.common.doc_steps import set_acct_date  # noqa: E402, F401 — 하위호환 재수출
 
 
 # ── 카드 선택(본인 카드 우선, 없으면 전체) ─────────────────────────────────────────

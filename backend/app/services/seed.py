@@ -168,6 +168,16 @@ async def seed_agents(db: AsyncSession) -> None:
             # 여기서 픽스처 값을 따라가게 한다.
             if row.handoff_note != fx.get("handoff_note"):
                 row.handoff_note = fx.get("handoff_note")
+            # 실행 표시 필드(flow_graph·interaction·drive) 동기화 — 픽스처가 단일 소스. 더미를 실동작
+            # 으로 승격할 때 이 필드들이 낡은 더미값으로 잔존하는 것을 막는다(trip-domestic 승격 실측
+            # 2026-07-06: workflow_id·steps 는 승격됐으나 interaction='conversational'·flow_graph 가
+            # 더미로 남아 워크플로우 탭이 잘못 표시됐다).
+            if row.flow_graph != fx["flow_graph"]:
+                row.flow_graph = fx["flow_graph"]
+            if row.interaction != fx["interaction"]:
+                row.interaction = fx["interaction"]
+            if row.drive != fx["drive"]:
+                row.drive = fx["drive"]
             # ⚠ settings(0018)는 시드가 동기화하지 않는다 — 관리자가 저장한 값을 시드가
             #   덮으면 안 된다. 정의(스키마·기본값)는 app/services/agent_settings.py 가 소스.
             # 스텝 멱등 보강: skill(카탈로그 키 전환분)·intervention·phase 를 픽스처와 동기화.

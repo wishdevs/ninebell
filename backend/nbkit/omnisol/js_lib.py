@@ -204,6 +204,57 @@ EVDN_EDITOR_MAGNIFIER_RECT_JS = """() => {
   return { x: r.right + 8, y: r.top + r.height / 2 };
 }"""
 
+# 디테일 그리드(인덱스 1) 마지막 행의 **임의 필드** 셀 에디터 열기 — OPEN_EVDN_EDITOR_JS 를
+# fieldName 파라미터화한 일반형(거래처 PARTNER_CD·예산 BG_CD·프로젝트 PJT_CD·상대계정
+# BFC_PARTNER_CD 셀에 공용). 항상 '마지막 행'(F3 신규 행은 맨 아래) 을 연다. arg=fieldName.
+# 반환 {ok, idx, rows} | {ok:false, reason}. (증빙 셀은 기존 OPEN_EVDN_EDITOR_JS 유지.)
+OPEN_DETAIL_CELL_EDITOR_JS = """(fieldName) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
+    const n = g.getDataSource().getRowCount();
+    const idx = Math.max(0, n - 1);
+    g.setCurrent({ itemIndex: idx, fieldName });
+    g.showEditor();
+    return { ok: true, idx: idx, rows: n };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
+# showEditor 로 뜬 detail 그리드 에디터 input 의 돋보기 좌표(input 오른쪽 +8px). EVDN 전용
+# (/gridDetail_line/) 보다 넓은 매칭(프로브 trip_probe2 검증: /gridDetail_line|gridDetail|_editor/)
+# + 폴백(그리드[1] 영역 위 보이는 input). 코드 셀(거래처/예산/프로젝트/상대계정) 공용.
+DETAIL_EDITOR_MAGNIFIER_JS = """() => {
+  const inp = [...document.querySelectorAll('input')].find(i =>
+    /gridDetail_line|gridDetail|_editor/.test(i.id || '') && i.offsetParent !== null);
+  if (inp) {
+    const r = inp.getBoundingClientRect();
+    return { x: r.right + 8, y: r.top + r.height / 2, id: inp.id || '(no-id)', via: 'gridDetail' };
+  }
+  const g = document.querySelectorAll('.dews-ui-grid')[1];
+  const gr = g ? g.getBoundingClientRect() : null;
+  const cand = [...document.querySelectorAll('input')].find(i => {
+    if (i.offsetParent === null || !gr) return false;
+    const r = i.getBoundingClientRect();
+    return r.top >= gr.top - 5 && r.top <= gr.bottom + 40 && r.width > 20;
+  });
+  if (!cand) return null;
+  const r = cand.getBoundingClientRect();
+  return { x: r.right + 8, y: r.top + r.height / 2, id: cand.id || '(no-id)', via: 'fallback' };
+}"""
+
+# 마스터(결의서) 그리드 0행의 회계일(ACTG_DT) 설정 + 표시값 검증 — card 에서 승격(2026-07-06).
+# ⚠ 'YYYY-MM-DD'(대시) 형식은 오류 없이 셀을 **비운다**(프로브 실측) — compact 'YYYYMMDD' 만.
+# 출장(trip)·card 공용(공통 doc_steps.set_acct_date 가 사용). 인자 ymd='YYYYMMDD'.
+SET_ACCT_DATE_JS = """(ymd) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    if (ds.getRowCount() < 1) return { ok: false, reason: '결의서(마스터) 행 없음' };
+    ds.setValue(0, 'ACTG_DT', ymd);
+    const disp = (g.getDisplayValuesOfRow ? g.getDisplayValuesOfRow(0) : {}) || {};
+    return { ok: true, display: String(disp.ACTG_DT || '') };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
 # 증빙유형 팝업(.k-window.dialog)이 떴는지.
 EVDN_POPUP_OPEN_JS = (
     "() => [...document.querySelectorAll('.k-window.dialog')].some(d => d.offsetParent !== null)"
@@ -384,14 +435,19 @@ PICKER_SEARCH_JS = """(q) => {
   const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
     .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
   if (!p) return { ok:false, reason:'no-pop' };
-  // 팝업별 검색창 id 상이: 예산단위/계정=#keyword, 프로젝트=#s_search_key. 알려진 id 우선,
-  // 없으면 search_key/keyword 접미·접두 → 마지막으로 첫 보이는 text input.
+  // 팝업별 검색창 id 상이: 예산단위/계정=#keyword, 프로젝트=#s_search_key, 거래처=#customTextBox.
+  // 알려진 id 우선(card 동작 보존), 없으면 search_key/keyword/customText 접미·접두 → 첫 보이는 text input.
   const kw = p.querySelector('#keyword') || p.querySelector('#s_search_key')
-    || p.querySelector('[id$=search_key]') || p.querySelector('[id*=keyword]')
+    || p.querySelector('#customTextBox') || p.querySelector('[id$=search_key]')
+    || p.querySelector('[id*=keyword]') || p.querySelector('[id*=customText]')
     || [...p.querySelectorAll('input')].filter(i=>i.offsetParent!==null && (i.type==='text'||!i.type))[0];
   if (!kw) return { ok:false, reason:'no-keyword' };
   const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); d.set.call(kw, q);
   ['input','change'].forEach(t => kw.dispatchEvent(new Event(t, { bubbles:true })));
+  // ⚠ focus 필수 — 이후 page.keyboard.press('Enter')가 이 검색창에 도달해야 서버 재조회가 뜬다.
+  // 셀 에디터(showEditor)로 연 팝업(거래처 customTextBox 등)은 포커스가 그리드 캔버스에 있어
+  // focus 없이 Enter 를 누르면 검색이 트리거되지 않는다(프로브 trip_probe3 실측 2026-07-06).
+  kw.focus();
   return { ok:true, field: kw.id || '(no-id)' };
 }"""
 

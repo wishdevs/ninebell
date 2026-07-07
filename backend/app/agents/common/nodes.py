@@ -17,8 +17,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from app.agents.common import doc_steps
 from app.config import get_settings
-from nbkit.browser.actions import js_click, mouse_click
+from nbkit.browser.actions import js_click
 from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD
 from nbkit.patterns import emit_log, emit_shot, emit_step
@@ -157,36 +158,14 @@ def make_open_evdn_node():
         page = state["page"]
         await emit_step(emit, "open_evdn", "running")
         t0 = time.monotonic()
-        opened = False
-        for attempt in range(1, 4):  # 캔버스 돋보기 클릭은 빗나갈 수 있어 재시도
-            if attempt > 1:
-                await emit_log(emit, f"증빙 돋보기 재시도 ({attempt}/3)…", "warn")
-            shown = await page.evaluate(js_lib.OPEN_EVDN_EDITOR_JS)
-            if not shown:
-                continue
-            # 고정 700ms 대기 대신 돋보기 rect 가 준비되는 즉시 클릭 — 폴링(상한 1s, 동작 동일).
-            rect = None
-            waited = 0
-            while waited < 1_000:
-                await page.wait_for_timeout(100)
-                waited += 100
-                rect = await page.evaluate(js_lib.EVDN_EDITOR_MAGNIFIER_RECT_JS)
-                if rect:
-                    break
-            if not rect:
-                continue
-            await mouse_click(page, rect["x"], rect["y"])  # 돋보기(캔버스) 클릭
-            for _ in range(20):  # 300ms 간격(상한 6s 유지)
-                await page.wait_for_timeout(300)
-                opened = await page.evaluate(js_lib.EVDN_POPUP_OPEN_JS)
-                if opened:
-                    break
-            if opened:
-                break
-        if not opened:
+        # 브라우저 상호작용(showEditor+돋보기 3회 재시도)은 doc_steps 순수 스텝으로 위임한다
+        # (출장 fill_rows 가 행별로 같은 스텝을 재사용) — 노드는 진행 이벤트만 방출한다.
+        r = await doc_steps.open_evdn_editor(page)
+        if not r.get("ok"):
             await emit_step(emit, "open_evdn", "failed")
-            return {"error": "증빙유형 팝업이 열리지 않았습니다(돋보기 클릭 3회 실패). 잠시 후 다시 실행해 주세요."}
+            return {"error": r.get("reason") or "증빙유형 팝업이 열리지 않았습니다."}
         # 대상 행 로깅 — 2패스 사고(기존 행 증빙 오픈) 재발 진단용. shown 은 {ok, idx, rows}.
+        shown = r.get("shown")
         target = (
             f"(대상 {shown['idx'] + 1}행/총 {shown['rows']}행)"
             if isinstance(shown, dict) and "idx" in shown
@@ -215,35 +194,14 @@ def make_select_evdn_node(code: str = "01"):
         page = state["page"]
         await emit_step(emit, "select_evdn", "running")
         t0 = time.monotonic()
-        # 팝업 '창'은 떠도 내부 그리드 행이 늦게 로드되는 레이스(실측 2026-07-04: 폴링 세분화
-        # 후 code-not-found) — 선택 자체를 폴링해 행 로드를 기다린다(상한 ~6s).
-        r: dict = {}
-        for _ in range(20):
-            r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
-            if r.get("ok"):
-                break
-            await page.wait_for_timeout(300)
+        # 선택·적용·셀 반영 판정은 doc_steps 순수 스텝으로 위임(출장 fill_rows 재사용).
+        r = await doc_steps.select_evdn_code(page, code)
         if not r.get("ok"):
             await emit_step(emit, "select_evdn", "failed")
-            return {"error": f"증빙유형 코드 {code} 자동선택 실패: {r.get('reason')}"}
-        await page.wait_for_timeout(500)
-        sel_name = r.get("name") or ""
-        box = await page.evaluate(js_lib.EVDN_APPLY_BOX_JS)
-        if box:
-            await mouse_click(page, box["x"], box["y"])
-        applied = False
-        for _ in range(27):  # 300ms 간격(상한 ~8s 유지)
-            await page.wait_for_timeout(300)
-            cell = await page.evaluate(js_lib.DETAIL_EVDN_CELL_JS)
-            if sel_name and sel_name in cell:
-                applied = True
-                break
-        if not applied:
-            await emit_step(emit, "select_evdn", "failed")
-            return {"error": "증빙유형 자동 적용(적용 버튼)에 실패했습니다."}
+            return {"error": r.get("reason") or f"증빙유형 코드 {code} 적용 실패"}
         await emit_log(
             emit,
-            f"증빙유형 '{sel_name}'(코드 {r.get('code')}) 자동선택·적용 완료 — "
+            f"증빙유형 '{r.get('name')}'(코드 {r.get('code')}) 자동선택·적용 완료 — "
             "카드 상세 입력 단계로 진행. 저장(F7)은 하지 않음.",
             "ok",
         )

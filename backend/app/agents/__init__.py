@@ -13,6 +13,7 @@ from app.live.registry import register_workflow
 
 from .card_collect.graph import build_card_collect_graph
 from .expense_card import build_expense_card_chat_graph
+from .trip_domestic.graph import build_trip_domestic_graph
 
 # 1회 컴파일 후 재사용(demo_echo 등록 패턴과 동일).
 _expense_card_chat_graph = build_expense_card_chat_graph()
@@ -22,4 +23,12 @@ _card_collect_graph = build_card_collect_graph()
 # delay_scale 0.15: 라이브 검증된 대기 배율(피커 실시간 상한 견고화 후 168s→~135s, 2026-07-04).
 register_workflow("card-collect", lambda: _card_collect_graph, delay_scale=0.15)
 
-__all__ = ["build_card_collect_graph", "build_expense_card_chat_graph"]
+_trip_domestic_graph = build_trip_domestic_graph()
+# delay_scale 미지정(None=1.0) — 라이브 실측(Phase 6) 전까지 기본 대기.
+register_workflow("trip-domestic", lambda: _trip_domestic_graph)
+
+__all__ = [
+    "build_card_collect_graph",
+    "build_expense_card_chat_graph",
+    "build_trip_domestic_graph",
+]
