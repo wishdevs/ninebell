@@ -54,9 +54,11 @@ def create_app() -> FastAPI:
         app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
 
         # --- 더존 헤드리스 브라우저 + 동시 로그인 상한 ---
+        # 컨테이너/Fargate 는 CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox" 로 크래시 방지(env).
+        _chromium_args = [a for a in settings.chromium_args.split() if a]
         pw = await async_playwright().start()
         app.state.playwright = pw
-        app.state.erp_browser = await pw.chromium.launch(headless=True)
+        app.state.erp_browser = await pw.chromium.launch(headless=True, args=_chromium_args)
         # 로그인/실행 세마포어 분리 — 장기 실행이 짧은 로그인을 막지 않도록 격리(P3-5).
         app.state.login_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_logins)
         app.state.run_semaphore = asyncio.Semaphore(settings.max_concurrent_erp_runs)
@@ -64,7 +66,7 @@ def create_app() -> FastAPI:
         # --- 라이브 실행(run): run 당 fresh 헤드리스 브라우저 팩토리 + 세션 리퍼 ---
         # 라우터(runs.py)가 이 팩토리로 run 당 새 브라우저를 열고 finally 에서 닫는다.
         async def _launch_browser():
-            return await pw.chromium.launch(headless=True)
+            return await pw.chromium.launch(headless=True, args=_chromium_args)
 
         app.state.browser_factory = _launch_browser
         session_reaper = asyncio.create_task(reap_sessions())

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     max_concurrent_erp_logins: int = 3
     max_concurrent_erp_runs: int = 2
 
+    # 헤드리스 Chromium 실행 인자(공백 구분). env CHROMIUM_ARGS. 로컬 dev 는 빈값(기본 동작).
+    # ⚠ 컨테이너/Fargate 는 /dev/shm 조절 불가 → "--disable-dev-shm-usage --no-sandbox" 필수.
+    chromium_args: str = ""
+
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
     # gemini-2.0-flash 는 구글에서 retired(404) → 2.5-flash 로 교체(env GEMINI_MODEL 로 오버라이드).
