@@ -33,12 +33,12 @@ def test_card_collect_spec_has_delay_scale():
     assert get_spec("demo-echo").delay_scale is None
 
 
-def test_trip_domestic_spec_registered_with_defaults():
-    # 라이브 실측(Phase 6) 전이라 delay_scale 미지정(None=1.0), 브라우저 필요.
+def test_trip_domestic_spec_registered():
+    # delay_scale 0.4(보수적 대기 축소, env CARD_DELAY_SCALE 우선). 브라우저 필요.
     spec = get_spec("trip-domestic")
     assert spec is not None
     assert spec.needs_browser is True
-    assert spec.delay_scale is None
+    assert spec.delay_scale == 0.4
     assert spec.site == "omnisol"
 
 

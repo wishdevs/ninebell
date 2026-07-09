@@ -16,9 +16,18 @@ from sqlalchemy import select
 from app.core.deps import DbSession, require_permission, require_role_min
 from app.core.permissions import AGENTS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
 from app.models import Agent, AgentOrgAccess, User
+from app.services.agent_fixtures import AGENT_FIXTURES
 from app.services.agent_settings import validate_settings
-from app.services.agents import serialize_agent
+from app.services.agents import compute_run_stats, serialize_agent
 from app.services.step_timings import expected_step_ms
+
+# 표시 순서 = 픽스처 정의 순서(의도된 순서). created_at 은 배치 시드 시 동일값이라 타이브레이크가
+# 비결정적(예: 결의서입력 그룹의 출장/경조금/학자금이 임의 순서). 픽스처에 없는 에이전트는 뒤로.
+_FIXTURE_ORDER: dict[str, int] = {f["id"]: i for i, f in enumerate(AGENT_FIXTURES)}
+
+# 숨김 에이전트(hidden=True) — 목록/상세에서 완전히 제외한다(카드·국내출장만 노출, 사용자 요청).
+# DB 행·워크플로우 등록은 유지하되 UI 도달을 막는다(직접 URL 도 404). 픽스처 플래그가 단일 소스.
+_HIDDEN_AGENT_IDS: frozenset[str] = frozenset(f["id"] for f in AGENT_FIXTURES if f.get("hidden"))
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -53,11 +62,16 @@ async def list_agents(
     db: DbSession,
     actor: Annotated[User, Depends(require_permission(AGENTS_READ))],
 ) -> list[dict]:
-    rows = (await db.execute(select(Agent).order_by(Agent.created_at.asc()))).scalars().all()
+    rows = list((await db.execute(select(Agent).order_by(Agent.created_at.asc()))).scalars().all())
+    # 숨김 에이전트 제외(hidden=True — 미검증 해외출장·더미 경조금/학자금).
+    rows = [a for a in rows if a.id not in _HIDDEN_AGENT_IDS]
+    # 픽스처 정의 순서로 정렬(카드 → 출장 국내). 픽스처 밖은 뒤로 + 시각순.
+    rows.sort(key=lambda a: (_FIXTURE_ORDER.get(a.id, len(_FIXTURE_ORDER)), a.created_at))
     if not _is_org_admin(actor):
         allowed_ids = await _accessible_agent_ids(db, actor)
         rows = [a for a in rows if _visible(a, actor, allowed_ids)]
-    return [serialize_agent(a) for a in rows]
+    stats = await compute_run_stats(db, [a.id for a in rows])
+    return [serialize_agent(a, stats=stats.get(a.id)) for a in rows]
 
 
 @router.get("/{agent_id}")
@@ -67,7 +81,8 @@ async def get_agent(
     actor: Annotated[User, Depends(require_permission(AGENTS_READ))],
 ) -> dict:
     agent = await db.get(Agent, agent_id)
-    if agent is None:
+    if agent is None or agent_id in _HIDDEN_AGENT_IDS:
+        # 숨김 에이전트는 존재 자체를 숨긴다(직접 URL 접근도 404 = 비활성).
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
     if not _is_org_admin(actor):
         allowed_ids = await _accessible_agent_ids(db, actor)
@@ -78,7 +93,8 @@ async def get_agent(
             )
     # 상세에서만 단계별 예상 소요(최근 성공 런 실측 평균) 계산 — 목록은 부하상 미계산.
     step_ms = await expected_step_ms(db, agent.workflow_id) if agent.workflow_id else None
-    return serialize_agent(agent, include_flow=True, step_expected_ms=step_ms)
+    stats = await compute_run_stats(db, [agent.id])
+    return serialize_agent(agent, stats=stats.get(agent.id), include_flow=True, step_expected_ms=step_ms)
 
 
 class SettingsPatchIn(BaseModel):
@@ -103,4 +119,5 @@ async def patch_agent_settings(
     # 기존 저장값 위에 병합(불변 갱신 — JSON 컬럼 in-place 변경은 dirty 감지가 안 된다).
     agent.settings = {**(agent.settings or {}), **validated}
     await db.commit()
-    return serialize_agent(agent)
+    stats = await compute_run_stats(db, [agent.id])
+    return serialize_agent(agent, stats=stats.get(agent.id))

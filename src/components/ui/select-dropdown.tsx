@@ -2,7 +2,7 @@
 
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { RiArrowDownSLine } from '@remixicon/react';
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -28,7 +28,7 @@ export const SelectTrigger = forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'border-border bg-surface text-foreground inline-flex h-7 cursor-pointer items-center justify-between gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[length:var(--text-body-sm)] tabular-nums',
+      'border-border bg-surface text-foreground inline-flex h-7 cursor-pointer items-center justify-between gap-1.5 overflow-hidden rounded-[var(--radius-md)] border px-2.5 text-[length:var(--text-body-sm)] whitespace-nowrap tabular-nums',
       'hover:bg-surface-raised hover:border-border-strong transition-colors',
       'data-[state=open]:bg-surface-raised data-[state=open]:border-border-strong',
       'focus-visible:ring-accent/40 focus-visible:ring-2 focus-visible:outline-none',
@@ -72,8 +72,11 @@ SelectContent.displayName = 'SelectContent';
 
 export const SelectItem = forwardRef<
   ElementRef<typeof SelectPrimitive.Item>,
-  ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+  ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+    /** 목록에만 보이는 보조 표기(트리거 SelectValue 엔 ItemText 만 반영). 예: 연비·단가. */
+    hint?: ReactNode;
+  }
+>(({ className, children, hint, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
@@ -86,6 +89,11 @@ export const SelectItem = forwardRef<
     {...props}
   >
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    {hint != null ? (
+      <span className="text-foreground-tertiary ml-2 text-[length:var(--text-caption)] tabular-nums">
+        {hint}
+      </span>
+    ) : null}
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = 'SelectItem';

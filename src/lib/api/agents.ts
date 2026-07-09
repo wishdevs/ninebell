@@ -14,7 +14,8 @@ import { api } from './client';
 /** `PATCH /agents/{id}/settings` — 세부설정 저장. 갱신된 Agent 를 반환한다. */
 export function patchAgentSettings(
   id: string,
-  settings: Record<string, number | string | boolean>,
+  // 스칼라 외에 구조화 값(예 출장 fuel_classes 목록)도 보낼 수 있어 값 타입은 unknown.
+  settings: Record<string, unknown>,
 ): Promise<Agent> {
   return api.patch<Agent>(`/agents/${encodeURIComponent(id)}/settings`, { settings });
 }

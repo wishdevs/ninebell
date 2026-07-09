@@ -1,41 +1,22 @@
 'use client';
 
 import { useEffect } from 'react';
-import Link from 'next/link';
-import { RiDatabase2Line, RiErrorWarningLine } from '@remixicon/react';
+import { RiErrorWarningLine } from '@remixicon/react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
-import { MetaChip } from '@/components/ui/meta-chip';
 import type { Agent } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
+import { GroupCard } from './group-nav';
 
 interface GroupSection {
   /** null = 단독 에이전트 섹션. */
   group: NonNullable<Agent['group']> | null;
   agents: Agent[];
 }
-
-interface GroupTool {
-  label: string;
-  href: string;
-}
-
-/**
- * 그룹별 기준정보(공유 관리 데이터) 진입점 — 사이드바 최상위 '관리'에서 내려, 그룹 문맥에서 연다.
- * '결의서 작성'의 예산단위·프로젝트는 소속 에이전트(카드·출장·경조금·학자금)가 공유하는 프리필
- * 소스라 특정 에이전트가 아니라 그룹에 속한다. 새 그룹은 여기 한 줄로 자기 기준정보를 선언한다.
- */
-const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
-  resolution: [
-    { label: '예산단위 관리', href: '/manage/budget-units' },
-    { label: '프로젝트 관리', href: '/manage/projects' },
-    { label: '거래처 관리', href: '/manage/partners' },
-  ],
-};
 
 /**
  * 그룹별 섹션으로 묶는다(등장 순서 유지). 그룹 소속 섹션이 먼저, 단독(group null)은
@@ -85,7 +66,7 @@ export function AgentsClient() {
       <PageHeader
         caption="자동화"
         title="에이전트"
-        description="실행할 업무를 고르기만 하면 됩니다. 에이전트가 더존 화면을 대신 조작하고, 진행 과정을 실시간으로 보여주며 증빙·프로젝트 같은 중요한 선택은 직접 승인하면 됩니다."
+        description="반복되는 업무를 대신 처리하는 자동화입니다. 할 일을 고르면 알아서 진행하고, 중요한 선택만 직접 확인하면 됩니다."
       />
 
       {status === 'loading' ? (
@@ -112,86 +93,31 @@ export function AgentsClient() {
       ) : (
         (() => {
           const sections = groupSections(data ?? []);
-          if (sections.length === 0) {
-            // 그룹이 전혀 없으면 기존처럼 플랫 그리드(헤더 없음).
-            return (
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                {data?.map((agent) => (
-                  <AgentCard
-                    key={agent.id}
-                    agent={agent}
-                    favorite={{
-                      active: fav.has(agent.id),
-                      onToggle: () => void fav.toggle(agent.id, agent.name),
-                    }}
-                  />
-                ))}
-              </div>
-            );
-          }
+          // 그룹 = 폴더형 카드(클릭 시 상세로 한 단계 이동), 단독 에이전트 = 실행 카드. 한 그리드에 섞는다.
+          // 그룹이 새 에이전트로 불어나도 최상위는 카드 1장으로 유지된다(평평하게 깔리지 않음).
+          const groupCards = sections.filter((s) => s.group);
+          const standalone =
+            sections.find((s) => !s.group)?.agents ??
+            (sections.length === 0 ? [...(data ?? [])] : []);
           return (
-            <div className="flex flex-col gap-8">
-              {sections.map((section) => (
-                <section
-                  key={section.group?.id ?? '__standalone'}
-                  aria-label={section.group?.name ?? '단독 에이전트'}
-                  className="flex flex-col gap-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-foreground text-[length:var(--text-body-lg)] font-semibold tracking-tight">
-                          {section.group?.name ?? '단독 에이전트'}
-                        </h2>
-                        <MetaChip className="tabular-nums">{section.agents.length}</MetaChip>
-                      </div>
-                      {section.group?.description ? (
-                        <p className="text-muted-foreground truncate text-xs leading-relaxed">
-                          {section.group.description}
-                        </p>
-                      ) : null}
-                    </div>
-                    {section.group && GROUP_TOOLS[section.group.id] ? (
-                      <GroupTools tools={GROUP_TOOLS[section.group.id]} />
-                    ) : null}
-                  </div>
-                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                    {section.agents.map((agent) => (
-                      <AgentCard
-                        key={agent.id}
-                        agent={agent}
-                        favorite={{
-                          active: fav.has(agent.id),
-                          onToggle: () => void fav.toggle(agent.id, agent.name),
-                        }}
-                      />
-                    ))}
-                  </div>
-                </section>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {groupCards.map((section) => (
+                <GroupCard key={section.group!.id} group={section.group!} agents={section.agents} />
+              ))}
+              {standalone.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  favorite={{
+                    active: fav.has(agent.id),
+                    onToggle: () => void fav.toggle(agent.id, agent.name),
+                  }}
+                />
               ))}
             </div>
           );
         })()
       )}
-    </div>
-  );
-}
-
-/**
- * 그룹 기준정보 진입점 — 그룹 섹션 헤더 우측의 관리 버튼. 관리 화면(/manage/*)으로 이동하되
- * 사이드바가 아니라 '일하는 자리(그룹)'에서 열도록 한다. secondary 버튼으로 뚜렷이 노출한다.
- */
-function GroupTools({ tools }: { tools: readonly GroupTool[] }) {
-  return (
-    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-      {tools.map((tool) => (
-        <Button key={tool.href} asChild variant="secondary" size="sm">
-          <Link href={tool.href}>
-            <RiDatabase2Line size={14} aria-hidden />
-            {tool.label}
-          </Link>
-        </Button>
-      ))}
     </div>
   );
 }

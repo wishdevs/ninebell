@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.db import get_sessionmaker
 from app.models import ErpCodeCatalog, User, UserCodeFavorite
+from app.services import cost_project as _cost_project
 
 
 async def _load_budget_catalog() -> list[dict]:
@@ -133,38 +134,10 @@ def _resolve_seed_budget(acct_name: str | None, candidates: list[dict]) -> dict 
 
 # 비용구분 → 예산계정 접두사. 팀의 비용구분이 이 접두사 계정을 우선하게 한다.
 _COST_PREFIX = {"판관비": "(판)", "제조원가": "(제)"}
-# 비용구분 → 기본 프로젝트 번호(PJT_NO). ERP 에 비용구분과 동명의 프로젝트가 존재
-# (500|500 '제조원가' / 800|800 '판매관리비', 카탈로그 실측 2026-07-04). 팀 비용구분에 따라
-# 프로젝트 기본값을 이 프로젝트로 프리셀렉트한다(사용자 확정).
-_COST_PROJECT_NO = {"제조원가": "500", "판관비": "800"}
+# 비용구분 → 기본 프로젝트 해석은 공용 서비스로 승격(card·trip 단일 소스). 하위호환 이름 유지.
+_COST_PROJECT_NO = _cost_project.COST_PROJECT_NO
 
 
 async def _load_cost_project(cost_type: str | None) -> dict | None:
-    """비용구분 기본 프로젝트({code,name,wbsNo,wbsNm}) — 카탈로그(kind='project')에서 조회.
-
-    제조원가→PJT_NO 500, 판관비→800. 카탈로그에 없으면 None(기존 기본지정 즐겨찾기 폴백).
-    """
-    pjt_no = _COST_PROJECT_NO.get(cost_type or "")
-    if not pjt_no:
-        return None
-    async with get_sessionmaker()() as s:
-        rows = (
-            await s.execute(
-                select(ErpCodeCatalog).where(
-                    ErpCodeCatalog.kind == "project",
-                    ErpCodeCatalog.code.like(f"{pjt_no}|%"),
-                )
-            )
-        ).scalars().all()
-    if not rows:
-        return None
-    # WBS 행이 여럿이면 wbsNo 오름차순 첫 행(500|500 처럼 프로젝트 번호와 동일한 WBS 우선).
-    rows = sorted(rows, key=lambda r: ((r.extra or {}).get("wbsNo") or ""))
-    exact = next((r for r in rows if ((r.extra or {}).get("wbsNo") or "") == pjt_no), rows[0])
-    extra = exact.extra or {}
-    return {
-        "code": exact.code,
-        "name": exact.name,
-        "wbsNo": extra.get("wbsNo", ""),
-        "wbsNm": extra.get("wbsNm", ""),
-    }
+    """비용구분 기본 프로젝트 — app.services.cost_project.resolve_cost_project 위임(단일 소스)."""
+    return await _cost_project.resolve_cost_project(cost_type)

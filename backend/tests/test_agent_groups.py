@@ -78,7 +78,7 @@ async def test_agent_serializes_group(client, make_user, auth_as):
     assert resp.json()["group"] == {
         "id": "resolution",
         "name": "결의서입력",
-        "description": "더존 옴니솔 결의서(GLDDOC00300) 문서군 — 카드·출장·경조금·학자금",
+        "description": "지출 결의서를 종류별로 대신 작성해 저장합니다.",
     }
 
 

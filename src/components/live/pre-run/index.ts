@@ -11,6 +11,7 @@
 
 import type { ComponentType } from 'react';
 import type { Agent } from '@/lib/data/agents';
+import { OverseasPreRunForm } from './overseas-pre-run-form';
 import { TripPreRunForm } from './trip-pre-run-form';
 
 export interface PreRunFormProps {
@@ -24,4 +25,5 @@ export interface PreRunFormProps {
 
 export const PRE_RUN_FORMS: Record<string, ComponentType<PreRunFormProps>> = {
   'trip-domestic': TripPreRunForm,
+  'trip-overseas': OverseasPreRunForm,
 };

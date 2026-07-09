@@ -23,10 +23,11 @@ async def test_agents_read_allowed_for_user_role(client, make_user, auth_as):
     auth_as(uid)
     resp = await client.get("/agents")
     assert resp.status_code == 200
-    # 픽스처 개수와 동기 — 카드(실동작) + 결의서입력 더미 4개(출장 2·경조금·학자금).
+    # 노출(hidden 아님) 픽스처 개수와 동기 — 현재 카드·국내출장 2개(해외출장·경조금·학자금은 숨김).
     from app.services.agent_fixtures import AGENT_FIXTURES
 
-    assert len(resp.json()) == len(AGENT_FIXTURES)
+    visible = [f for f in AGENT_FIXTURES if not f.get("hidden")]
+    assert len(resp.json()) == len(visible)
 
 
 async def test_agent_detail_includes_flowgraph(client, make_user, auth_as):

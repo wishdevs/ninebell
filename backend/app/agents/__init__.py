@@ -14,6 +14,7 @@ from app.live.registry import register_workflow
 from .card_collect.graph import build_card_collect_graph
 from .expense_card import build_expense_card_chat_graph
 from .trip_domestic.graph import build_trip_domestic_graph
+from .trip_overseas.graph import build_trip_overseas_graph
 
 # 1회 컴파일 후 재사용(demo_echo 등록 패턴과 동일).
 _expense_card_chat_graph = build_expense_card_chat_graph()
@@ -24,11 +25,19 @@ _card_collect_graph = build_card_collect_graph()
 register_workflow("card-collect", lambda: _card_collect_graph, delay_scale=0.15)
 
 _trip_domestic_graph = build_trip_domestic_graph()
-# delay_scale 미지정(None=1.0) — 라이브 실측(Phase 6) 전까지 기본 대기.
-register_workflow("trip-domestic", lambda: _trip_domestic_graph)
+# delay_scale 0.4: 대기(고정 settle·폴 간격)만 배율 축소 — 실 ERP 렌더/검색 시간은 불변이라
+# 안전 여유를 둔 보수값(카드는 0.15 라이브검증, 트립은 캔버스 돋보기 피커가 트립 고유라 단계적
+# 하향). 상한(피커 안정 폴 cap)은 유지돼 서버 재조회 보장은 그대로. 런타임 튜닝은 env
+# CARD_DELAY_SCALE 이 우선(0.15 까지 낮춰보고 10사이클 실저장 무결 확인 후 코드 기본값 하향).
+register_workflow("trip-domestic", lambda: _trip_domestic_graph, delay_scale=0.4)
+
+_trip_overseas_graph = build_trip_overseas_graph()
+# 국내/자차와 동일 플로우·프리미티브 재사용 → 같은 delay_scale(0.4). env CARD_DELAY_SCALE 우선.
+register_workflow("trip-overseas", lambda: _trip_overseas_graph, delay_scale=0.4)
 
 __all__ = [
     "build_card_collect_graph",
     "build_expense_card_chat_graph",
     "build_trip_domestic_graph",
+    "build_trip_overseas_graph",
 ]

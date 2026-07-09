@@ -1,9 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { RiErrorWarningLine, RiLockLine, RiSettings3Line } from '@remixicon/react';
+import Link from 'next/link';
+import {
+  RiArrowLeftSLine,
+  RiErrorWarningLine,
+  RiLockLine,
+  RiSettings3Line,
+} from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { MetaChip } from '@/components/ui/meta-chip';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { usePermissions } from '@/hooks/use-permissions';
@@ -11,41 +18,14 @@ import { ROLES, roleAtLeast } from '@/lib/auth/permissions';
 import { ApiError, api, errorMessage, toApiError } from '@/lib/api/client';
 import type { Agent } from '@/lib/data/agents';
 import { AgentSettingsCard } from './agent-settings-card';
-import { ManageGroupCard } from './manage-group-card';
 
 type Phase = 'loading' | 'ready' | 'error';
 
-interface GroupBucket {
-  group: NonNullable<Agent['group']>;
-  agents: Agent[];
-}
-
 /**
- * 설정 가능한 에이전트를 그룹별로 묶는다(등장 순서 유지). 그룹 없는(단독) 설정 에이전트는
- * 별도로 모은다. 그룹은 폴더 카드로 드릴인, 단독은 최상위에서 바로 설정 폼으로 편다.
+ * 에이전트 관리 그룹 드릴인 — /manage/agents/groups/[groupId]. `GET /agents`에서 이 그룹의
+ * **설정 가능한**(settingsSchema 보유) 에이전트만 걸러 설정 폼으로 나열한다. 관리자 전용.
  */
-function bucketByGroup(agents: readonly Agent[]): { groups: GroupBucket[]; standalone: Agent[] } {
-  const byId = new Map<string, GroupBucket>();
-  const standalone: Agent[] = [];
-  for (const agent of agents) {
-    if (!agent.group) {
-      standalone.push(agent);
-      continue;
-    }
-    const bucket = byId.get(agent.group.id);
-    if (bucket) bucket.agents.push(agent);
-    else byId.set(agent.group.id, { group: agent.group, agents: [agent] });
-  }
-  return { groups: [...byId.values()], standalone };
-}
-
-/**
- * 에이전트 관리(관리자 전용) — `GET /agents`에서 settingsSchema 가 있는 에이전트만 대상으로,
- * **그룹 폴더 카드**로 묶어 한 단계 드릴인(/manage/agents/groups/[id])해 설정한다. 에이전트가
- * 늘어도(20개+) 최상위가 평평하게 깔리지 않는다(카탈로그 목록과 동일 IA).
- * 게이트는 UX 보조일 뿐이며 백엔드가 PATCH 에서 admin 을 최종 강제한다(미만 403).
- */
-export function AgentSettingsClient() {
+export function ManageAgentsGroupClient({ groupId }: { groupId: string }) {
   const { role } = usePermissions();
   const isAdmin = roleAtLeast(role, ROLES.ADMIN);
 
@@ -69,17 +49,32 @@ export function AgentSettingsClient() {
     if (isAdmin) void load();
   }, [isAdmin, load]);
 
-  // 스키마가 있는(설정 가능한) 에이전트만 노출 대상이다.
-  const configurable = agents.filter((agent) => (agent.settingsSchema?.length ?? 0) > 0);
-  const { groups, standalone } = bucketByGroup(configurable);
+  const inGroup = agents.filter(
+    (a) => a.group?.id === groupId && (a.settingsSchema?.length ?? 0) > 0,
+  );
+  const group = inGroup[0]?.group ?? null;
 
   return (
     <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-8">
-      <PageHeader
-        caption="운영"
-        title="에이전트 관리"
-        description="에이전트별 세부설정을 관리합니다. 저장한 값은 다음 실행부터 적용됩니다."
-      />
+      <div className="flex flex-col gap-3">
+        <Link
+          href="/manage/agents"
+          className="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-[length:var(--text-body-sm)] font-medium transition-colors"
+        >
+          <RiArrowLeftSLine size={15} aria-hidden />
+          에이전트 관리
+        </Link>
+        <PageHeader
+          caption="운영"
+          title={
+            <span className="inline-flex items-center gap-2">
+              {group?.name ?? '에이전트 관리'}
+              {group ? <MetaChip className="tabular-nums">{inGroup.length}</MetaChip> : null}
+            </span>
+          }
+          description="에이전트별 세부설정을 관리합니다. 저장한 값은 다음 실행부터 적용됩니다."
+        />
+      </div>
 
       {!isAdmin ? (
         <EmptyState
@@ -103,26 +98,20 @@ export function AgentSettingsClient() {
             </Button>
           }
         />
-      ) : configurable.length === 0 ? (
+      ) : inGroup.length === 0 ? (
         <EmptyState
           icon={<RiSettings3Line size={18} aria-hidden />}
           title="설정 가능한 에이전트가 없습니다"
-          description="세부설정 스키마를 가진 에이전트가 아직 없습니다."
+          description="이 그룹에 세부설정을 가진 에이전트가 없습니다."
+          action={
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/manage/agents">에이전트 관리로</Link>
+            </Button>
+          }
         />
       ) : (
         <div className="flex flex-col gap-6">
-          {groups.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {groups.map((bucket) => (
-                <ManageGroupCard
-                  key={bucket.group.id}
-                  group={bucket.group}
-                  agents={bucket.agents}
-                />
-              ))}
-            </div>
-          ) : null}
-          {standalone.map((agent) => (
+          {inGroup.map((agent) => (
             <AgentSettingsCard
               key={agent.id}
               agent={agent}

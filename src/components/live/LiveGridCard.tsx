@@ -551,6 +551,7 @@ function BulkBar({
       />
       <select
         value=""
+        aria-label="프로젝트 전체 적용"
         disabled={disabled || projectFavs.length === 0}
         onChange={(ev) => {
           const p = projectFavs.find((x) => x.code === ev.target.value);
@@ -707,16 +708,21 @@ function BudgetCombobox({
         aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
         className={cn(
-          'border-border bg-surface flex h-8 w-full items-center rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
           'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
           'aria-invalid:border-danger disabled:opacity-50',
         )}
       >
         <span
-          className={cn('truncate', triggerLabel ? 'text-foreground' : 'text-muted-foreground')}
+          className={cn(
+            'min-w-0 truncate',
+            triggerLabel ? 'text-foreground' : 'text-muted-foreground',
+          )}
         >
           {triggerLabel ?? placeholder}
         </span>
+        {/* 검색형 선택(돋보기) — 목록 select(꺾쇠)와 구분되는 어포던스. */}
+        <RiSearchLine size={13} aria-hidden className="text-foreground-tertiary shrink-0" />
       </button>
 
       {open ? (
@@ -892,14 +898,19 @@ function ProjectCombobox({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
+        title="검색하여 선택"
         className={cn(
-          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
           'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2 disabled:opacity-50',
         )}
       >
-        <span className={cn('truncate', code ? 'text-foreground' : 'text-muted-foreground')}>
+        <span
+          className={cn('min-w-0 truncate', code ? 'text-foreground' : 'text-muted-foreground')}
+        >
           {code ? name || code : '프로젝트 선택'}
         </span>
+        {/* 검색형 선택(돋보기) — 목록 select(꺾쇠)와 구분되는 어포던스. */}
+        <RiSearchLine size={13} aria-hidden className="text-foreground-tertiary shrink-0" />
       </button>
 
       {open ? (
@@ -984,13 +995,22 @@ function ProjectCombobox({
 }
 
 function ProjectOptionRow({ option, onClick }: { option: ProjectOption; onClick: () => void }) {
+  // 표시 코드 = PJT_NO. option.code 는 PJT_NO|WBS_NO 합성이라 앞부분만 쓴다.
+  const codeLabel = option.code.split('|')[0] || option.code;
   return (
     <button
       type="button"
       onClick={onClick}
       className="hover:bg-muted/60 flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
     >
-      <span className="text-foreground truncate">{option.name}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        {codeLabel ? (
+          <span className="text-foreground-tertiary bg-muted/60 shrink-0 rounded-[3px] px-1 py-px font-mono text-[10px] tabular-nums">
+            {codeLabel}
+          </span>
+        ) : null}
+        <span className="text-foreground truncate">{option.name}</span>
+      </span>
       {option.wbsNm ? (
         <span className="text-foreground-tertiary shrink-0 truncate">{option.wbsNm}</span>
       ) : option.wbsNo ? (

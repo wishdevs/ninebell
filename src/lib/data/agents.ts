@@ -211,9 +211,10 @@ export interface Agent {
   intervention?: Intervention | null;
   /**
    * 세부설정 유효값(기본값 병합 완료) — 백엔드 GET /agents(·/{id})가
-   * settingsSchema 가 있는 에이전트에만 내려준다.
+   * settingsSchema 가 있는 에이전트에만 내려준다. 스칼라(number/string/boolean) 외에
+   * 구조화 값(예 출장 fuel_classes 목록)도 담길 수 있어 값 타입은 unknown.
    */
-  settings?: Record<string, number | string | boolean>;
+  settings?: Record<string, unknown>;
   /** 세부설정 스키마 — 없으면(빈 배열 포함) '에이전트 관리'에 노출되지 않는다. */
   settingsSchema?: readonly AgentSettingDef[];
 }

@@ -121,6 +121,10 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 개입(HITL) 대기 중이면 우측 패널을 넓혀 개입 카드에 화면을 양보한다(브라우저 열은 축소).
   // 종류(chat/choice/grid) 무관하게 개입 자체에 적용 — 스테이지는 컨테이너 쿼리로 자가 적응한다.
   const interventionActive = isLive && run.hitl != null;
+  // 실행 전 입력 폼(출장 등)도 개입과 동일하게 취급 — 미실행 상태에서 폼(표/그리드 입력)에 화면을
+  // 양보하고 라이브 브라우저 열은 축소한다(사용자 요청: 최초 입력 시 입력창을 크게).
+  const preRunActive = usePreRun && !isLive;
+  const panelWide = interventionActive || preRunActive;
 
   // 개입 대기 알림 — 탭 제목 접두 + (백그라운드 탭이면) 브라우저 알림. 해소·종료 시 원복.
   useHitlNotification(interventionActive ? (run.hitl?.id ?? null) : null);
@@ -152,13 +156,11 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     <div className="flex w-full flex-col gap-4 lg:min-h-0 lg:flex-1">
       {/* 헤더 */}
       <div className="flex flex-col gap-3">
-        {/* 브레드크럼 — 그룹 소속이면 "에이전트 › 그룹명"(그룹명은 비링크 표기). */}
+        {/* 브레드크럼 — "에이전트 › 그룹명". 그룹 소속이면 상위(뒤로)는 그룹으로, 각 단계는 링크.
+            그룹명이 링크라 에이전트 → 그룹(1단계 위)로 빠져나갈 수 있다(루트로 건너뛰지 않음). */}
         <div className="text-muted-foreground inline-flex w-fit items-center gap-1 text-[length:var(--text-body-sm)] font-medium">
-          <Link
-            href="/agents"
-            className="hover:text-foreground inline-flex items-center gap-1 transition-colors"
-          >
-            <RiArrowLeftSLine size={15} aria-hidden />
+          <RiArrowLeftSLine size={15} aria-hidden className="text-foreground-tertiary" />
+          <Link href="/agents" className="hover:text-foreground transition-colors">
             에이전트
           </Link>
           {agent.group ? (
@@ -166,7 +168,12 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
               <span aria-hidden className="text-foreground-tertiary">
                 ›
               </span>
-              <span>{agent.group.name}</span>
+              <Link
+                href={`/agents/groups/${agent.group.id}`}
+                className="hover:text-foreground transition-colors"
+              >
+                {agent.group.name}
+              </Link>
             </>
           ) : null}
         </div>
@@ -219,7 +226,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
       <div
         className={cn(
           'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
-          interventionActive
+          panelWide
             ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
             : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
         )}
