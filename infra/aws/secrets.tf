@@ -38,6 +38,7 @@ resource "aws_secretsmanager_secret" "gemini" {
 }
 
 resource "aws_secretsmanager_secret_version" "gemini" {
-  secret_id     = aws_secretsmanager_secret.gemini.id
-  secret_string = var.gemini_api_key
+  secret_id = aws_secretsmanager_secret.gemini.id
+  # Secrets Manager 는 빈 문자열 거부 → 미지정 시 placeholder. 실제 키는 tfvars 나 콘솔로 나중에 갱신.
+  secret_string = var.gemini_api_key != "" ? var.gemini_api_key : "REPLACE_ME"
 }

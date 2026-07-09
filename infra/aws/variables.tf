@@ -106,7 +106,8 @@ variable "postgres_version" {
   type = string
   # 사용 가능 버전 확인:
   # aws rds describe-db-engine-versions --engine postgres --query 'DBEngineVersions[].EngineVersion'
-  default = "17.4"
+  # ap-northeast-2 가용: 17.5~17.10 (17.4 없음, 2026-07 확인).
+  default = "17.6"
 }
 
 variable "db_name" {
