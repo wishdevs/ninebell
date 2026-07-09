@@ -26,7 +26,15 @@ SET_BFC = r"""(code) => { try {
 READ_BFC = r"""() => { try {
   const ds=window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid.getDataSource();
   const n=ds.getRowCount(); const rows=n>0?ds.getJsonRows(0,n-1):[];
-  return rows.map(r=>({BFC:String(r.BFC_PARTNER_CD==null?'':r.BFC_PARTNER_CD), PARTNER:String(r.PARTNER_NM==null?'':r.PARTNER_NM)}));
+  return rows.map(r=>({
+    BFC_CD:String(r.BFC_PARTNER_CD==null?'':r.BFC_PARTNER_CD),
+    BFC_NM:String(r.BFC_PARTNER_NM==null?'':r.BFC_PARTNER_NM),
+    PARTNER:String(r.PARTNER_NM==null?'':r.PARTNER_NM),
+    // 상대계정 관련 다른 필드도 함께(합계계정/부가세계정 상대).
+    FEOTH_CD:String(r.FEOTH_ACCT_CD==null?'':r.FEOTH_ACCT_CD),
+    FEOTH_NM:String(r.FEOTH_ACCT_NM==null?'':r.FEOTH_ACCT_NM),
+    bfcKeys: Object.keys(r).filter(k=>/BFC|FEOTH|상대/.test(k)),
+  }));
 } catch(e){ return {e:String(e).slice(0,80)}; } }"""
 
 async def qmaster(page):

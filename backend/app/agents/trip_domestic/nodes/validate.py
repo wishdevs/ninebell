@@ -5,7 +5,7 @@
 한국어 error 로 단락(이후 노드가 전부 건너뛰고 러너가 error 프레임으로 종료).
 
 ⚠ effective_settings(연비·단가)는 runs.py 가 params 로 평탄화해 깔아둔다 — parse_trip_params
-에 params 자체를 settings Mapping 으로 넘긴다(fuel_eff_* / fuel_unit_price 키를 읽음).
+에 params 자체를 settings Mapping 으로 넘긴다(fuel_classes 목록 / fuel_unit_price 키를 읽음).
 """
 
 from __future__ import annotations

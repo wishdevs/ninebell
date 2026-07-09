@@ -21,7 +21,7 @@ import re
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.codepicker import (
     _norm,
     _picker_search,
@@ -434,6 +434,139 @@ async def set_transaction_amount(page: Any, amount: int) -> dict:
     return {"ok": True, "after": primary_after}
 
 
+async def type_amount(page: Any, amount: int) -> dict:
+    """공급가액(거래금액 SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(2026-07-09 규명).
+
+    ⚠ setValue(set_transaction_amount) 는 금액 입력 트리거(예산현황 팝업)를 발화 안 해 파생상태가
+    미완 → 저장 시 "데이터베이스 처리 중 오류". 실제로 입력하면 예산현황 팝업이 뜨고 확인해야
+    예산집행·분개가 완성돼 저장이 된다. 숫자 에디터를 열어 select_text→타이핑→Tab(커밋·핸들러 발화)
+    → 예산현황 확인 → SPPRC_AMT/TOTAL_AMT 자동계산. 반영 검증. 반환 {ok, after}|{ok:False, reason}.
+    """
+    op = await page.evaluate(js_lib.OPEN_DETAIL_CELL_EDITOR_JS, "SPPRC_AMT2")
+    if not op.get("ok"):
+        return {"ok": False, "reason": f"금액 에디터 열기 실패: {op.get('reason')}"}
+    await page.wait_for_timeout(500)
+    rect = await page.evaluate(js.AMOUNT_EDITOR_INPUT_JS)
+    if not rect or not rect.get("id"):
+        return {"ok": False, "reason": "금액 숫자 에디터(gridDetail_number)를 찾지 못함"}
+    loc = page.locator(f'input[id="{rect["id"]}"]')
+    await loc.click()
+    await page.wait_for_timeout(150)
+    await loc.select_text()  # 기존 '0' 선택(Meta+A 는 에디터 닫힘 유발이라 금지).
+    await page.wait_for_timeout(100)
+    await loc.press_sequentially(str(amount), delay=90)
+    await page.wait_for_timeout(200)
+    await loc.press("Tab")  # 커밋 → blur/change 로 예산현황 트리거 발화(Enter 보다 확실).
+    # 예산현황 팝업 확인(뜨는 모달을 확인/예 로 닫는다).
+    modals_seen: list[str] = []
+    for _ in range(8):
+        await page.wait_for_timeout(600)
+        modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
+        if not modals:
+            break
+        modals_seen.append(str((modals[0] or {}).get("title") or ""))
+        clicked = False
+        for label in ("확인", "예"):
+            btn = await page.evaluate(js_lib.MODAL_BTN_BOX_JS, label)
+            if btn:
+                await mouse_click(page, btn["x"], btn["y"])
+                clicked = True
+                break
+        if not clicked:
+            break
+    after = await page.evaluate(js.READ_AMT_JS)
+    got = str(after.get("SPPRC_AMT2") or "").replace(",", "").strip()
+    if got != str(amount):
+        return {"ok": False, "reason": f"금액 반영 불일치(기대 {amount:,}·실제 {after.get('SPPRC_AMT2')})", "modals": modals_seen}
+    return {"ok": True, "after": after, "modals": modals_seen}
+
+
+async def register_counter_partner(page: Any, self_name: str) -> dict:
+    """상대계정거래처 = 작성자 본인 — **부가선택 위젯 🔍 → 검색 → 팝업 행 더블클릭**(2026-07-09 확정).
+
+    실제 상대계정거래처 UI 는 detail 셀이 아니라 하단 부가선택 테이블(내역코드/내역명)이다. BFC_PARTNER_CD
+    setValue(set_counter_partner)는 숨김필드만 세팅해 화면 미표시라 폐기. 위젯 🔍 로 거래처 팝업을 열어
+    본인명 검색 → 행 더블클릭하면 등록된다. **부작용: detail 빈 행 1개 추가(ERP 동작)** → 호출측이
+    `delete_blank_row` 로 제거. 등록 성공 신호 = 빈 행 추가(행수 +1). 반환 {ok}|{ok:False, reason}.
+    """
+    before = await page.evaluate(js.DETAIL_ROWS_JS)
+    before_n = int(before.get("n") or 0)
+    row = None
+    err = "부가선택 위젯 열기 실패"
+    for _ in range(3):
+        if not await page.evaluate(js.COUNTER_SCROLL_JS):
+            await page.wait_for_timeout(600)
+            continue
+        await page.wait_for_timeout(600)
+        box = await page.evaluate(js.COUNTER_PICKER_BOX_JS)
+        if not box:
+            await page.wait_for_timeout(600)
+            continue
+        await mouse_click(page, box["x"], box["y"])
+        n = -1
+        for _ in range(25):
+            await page.wait_for_timeout(300)
+            n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+            if isinstance(n, int) and n > 50:
+                break
+        await _picker_search(page, self_name)
+        await page.wait_for_timeout(600)
+        rd = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [PARTNER_FIELDS, 0])
+        row, err = pick_partner_row(rd.get("options") or [], self_name, None)
+        if not err:
+            break
+        await page.evaluate(js_lib.PICKER_CLOSE_JS)
+        await page.wait_for_timeout(500)
+    if not row:
+        return {"ok": False, "reason": f"상대계정 본인('{self_name}') 검색 실패: {err}"}
+    rr = await page.evaluate(js.PICKER_ROW_RECT_JS, row["i"])
+    if not rr:
+        return {"ok": False, "reason": "상대계정 팝업 행 좌표 없음"}
+    await page.mouse.dblclick(rr["x"], rr["y"])
+    # 적용 반영 = detail 빈 행 +1 — 나타날 때까지 폴링(대기 배율에 무관하게 견고).
+    for _ in range(20):
+        await page.wait_for_timeout(400)
+        cur = await page.evaluate(js.DETAIL_ROWS_JS)
+        if int(cur.get("n") or 0) > before_n:
+            return {"ok": True}
+    return {"ok": False, "reason": "상대계정 등록 실패(적용 후 빈 행 미추가 — 미반영 의심)"}
+
+
+async def delete_blank_row(page: Any) -> dict:
+    """상대계정 등록 시 추가된 빈(마지막) detail 행 삭제 — 빈 행 선택 → 툴바 삭제 버튼 + 확인 모달.
+
+    데이터 행(거래처 있는 행)은 유지된다(실측). 빈 행 없으면 no-op. 반환 {ok}|{ok:False, reason}.
+    """
+    rows = await page.evaluate(js.DETAIL_ROWS_JS)
+    before_n = int(rows.get("n") or 0)
+    blanks = [r["i"] for r in (rows.get("rows") or []) if not r.get("PARTNER")]
+    if not blanks:
+        return {"ok": True, "note": "빈 행 없음"}
+    bi = max(blanks)  # 마지막(추가된) 빈 행.
+    pt = await page.evaluate(js.DETAIL_ROW_CLICK_JS, bi)
+    await mouse_click(page, pt["x"], pt["y"])
+    await page.wait_for_timeout(1200)  # 빈 행 선택 확정(배율 대비 넉넉히).
+    box = await page.evaluate(js.BTN_BOX_JS, selectors.BTN_DELETE)
+    if not box:
+        return {"ok": False, "reason": "삭제 버튼을 찾지 못함"}
+    await mouse_click(page, box["x"], box["y"])
+    # 확인 모달 처리 + 행수 감소를 폴링(대기 배율에 무관하게 견고). 20회.
+    for _ in range(20):
+        await page.wait_for_timeout(500)
+        modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
+        if modals:
+            for label in ("예", "확인", "삭제"):
+                btn = await page.evaluate(js_lib.MODAL_BTN_BOX_JS, label)
+                if btn:
+                    await mouse_click(page, btn["x"], btn["y"])
+                    break
+            continue
+        cur = await page.evaluate(js.DETAIL_ROWS_JS)
+        if int(cur.get("n") or 99) < before_n:
+            return {"ok": True}
+    return {"ok": False, "reason": f"빈 행 삭제 실패(행수 {before_n} 유지)"}
+
+
 async def set_master_total(page: Any, total: int) -> dict:
     """마스터 상세합계금액(DETAIL_SUM_AMT) = 전 행 합계 명시 세팅 + 반영 검증. 반환 {ok, after}.
 
@@ -447,6 +580,27 @@ async def set_master_total(page: Any, total: int) -> dict:
     if after_raw != str(total):
         return {"ok": False, "reason": f"마스터 합계 반영 불일치(기대 {total:,}·실제 {r.get('after')})"}
     return {"ok": True, "after": r.get("after")}
+
+
+async def set_invoice_date(page: Any, ymd_compact: str) -> dict:
+    """(세금)계산서일(START_DT) 셀 = 행별 증빙일(통행료/유류비 결제일) setValue 직접 세팅 + 반영 검증.
+
+    START_DT 는 detail 그리드(index 1) 날짜 셀(헤더 "(세금)계산서일", 프로브 trip_amount_cols 실측).
+    compact 'YYYYMMDD' 로 세팅하면 셀은 Date 객체로 보관한다 → 검증은 `READ_DETAIL_DATE_JS`(Date 를
+    브라우저 로컬 Y/M/D compact 로 정규화)로 읽어 비교한다. String(Date) 숫자추출은 'Jul' 등이 섞여
+    오판하므로 금지(2026-07-07 실측: 'Tue Jul 07 2026 ...' → 잘못된 비교). 반환 {ok, after}|{ok:False}.
+    """
+    if len(str(ymd_compact or "")) != 8:
+        return {"ok": False, "reason": f"계산서일 형식 오류: {ymd_compact!r}"}
+    w = await page.evaluate(js.SET_DETAIL_CELL_JS, {"field": "START_DT", "value": ymd_compact})
+    if not w.get("ok"):
+        return {"ok": False, "reason": w.get("reason") or "계산서일 세팅 실패"}
+    r = await page.evaluate(js.READ_DETAIL_DATE_JS, "START_DT")
+    got = str(r.get("compact") or "") if r.get("ok") else ""
+    if got != ymd_compact:
+        detail = r.get("raw") if r.get("ok") else r.get("reason")
+        return {"ok": False, "reason": f"계산서일 반영 불일치(기대 {ymd_compact}·실제 {detail})"}
+    return {"ok": True, "after": r.get("raw")}
 
 
 async def set_row_note(page: Any, text: str) -> dict:

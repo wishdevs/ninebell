@@ -258,6 +258,53 @@ async def test_set_master_total_mismatch_fails():
     assert r["ok"] is False and "마스터 합계 반영 불일치" in r["reason"]
 
 
+# ── set_invoice_date ((세금)계산서일 = START_DT 세팅·검증) ──────────────────────
+class _DatePage:
+    """START_DT setValue + READ_DETAIL_DATE_JS(compact) 검증용 가짜 page.
+
+    실 ERP 날짜 셀 getValue 는 Date 객체 → READ_DETAIL_DATE_JS 가 브라우저 로컬 Y/M/D compact 로
+    정규화한다. read_compact = 그 정규화 결과(모사). SET 은 field 기록.
+    """
+
+    def __init__(self, read_compact: str) -> None:
+        self._read = read_compact
+        self.fields: list = []
+
+    async def wait_for_timeout(self, ms):  # noqa: ANN001
+        return None
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if arg == "START_DT":  # READ_DETAIL_DATE_JS
+            return {"ok": True, "compact": self._read, "raw": "Tue Jul 07 2026 00:00:00 GMT+0900"}
+        if isinstance(arg, dict) and arg.get("field") == "START_DT":  # SET_DETAIL_CELL_JS
+            self.fields.append(arg["field"])
+            return {"ok": True, "after": arg["value"], "display": ""}
+        return {"ok": True}
+
+
+async def test_set_invoice_date_match():
+    page = _DatePage("20260703")
+    r = await steps.set_invoice_date(page, "20260703")
+    assert r["ok"] is True
+    assert page.fields == ["START_DT"]
+
+
+async def test_set_invoice_date_date_object_normalized_match():
+    # 실 ERP 는 Date 객체(String→'Tue Jul 07 2026 ...')를 반환 → 전용 리드가 compact 로 정규화해 통과.
+    r = await steps.set_invoice_date(_DatePage("20260703"), "20260703")
+    assert r["ok"] is True
+
+
+async def test_set_invoice_date_mismatch_fails():
+    r = await steps.set_invoice_date(_DatePage("20260704"), "20260703")
+    assert r["ok"] is False and "계산서일 반영 불일치" in r["reason"]
+
+
+async def test_set_invoice_date_bad_format_fails():
+    r = await steps.set_invoice_date(_DatePage("20260703"), "2026-07-03")
+    assert r["ok"] is False and "형식 오류" in r["reason"]
+
+
 # ── set_counter_partner (상대계정 = BFC_PARTNER_CD 직접 setValue) ──────────────
 async def test_set_counter_partner_match():
     r = await steps.set_counter_partner(_AmountPage("2026032511"), "2026032511")

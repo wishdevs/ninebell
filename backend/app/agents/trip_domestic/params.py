@@ -18,16 +18,12 @@ from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# 차량종류 → 기준연비 설정 키. agent_settings.py AGENT_SETTINGS_SCHEMA["trip-domestic"] 와 정합.
-CAR_CLASS_EFF_KEY: dict[str, str] = {
-    "under1000": "fuel_eff_under_1000",
-    "under1600": "fuel_eff_under_1600",
-    "under2000": "fuel_eff_under_2000",
-    "over2000": "fuel_eff_over_2000",
-}
+# 차량종류는 동적 목록(agent_settings.fuel_classes)이라 고정 Literal 이 아니다 — id 는 자유 문자열.
+# 유효 여부는 실효 설정의 fuel_classes 에 그 id 가 있는지로 판정한다(런타임 검증).
+FUEL_CLASSES_KEY = "fuel_classes"
 FUEL_UNIT_PRICE_KEY = "fuel_unit_price"
 
-CarClass = Literal["under1000", "under1600", "under2000", "over2000"]
+CarClass = str  # 차량종류 id(관리자 목록의 안정 식별자)
 
 DEFAULT_TOLL_NOTE = "통행료(현금)"
 DEFAULT_FUEL_NOTE = "국내출장 자차 유류비 지원"
@@ -44,9 +40,10 @@ class ProjectIn(BaseModel):
 
 
 class TollRowIn(BaseModel):
-    """통행료 행 — 거래처(공공기관) + 공급가액(입력 금액)."""
+    """통행료 행 — 거래처(공공기관) + 공급가액(입력 금액) + 계산서일(통행료 결제일)."""
 
     type: Literal["toll"] = "toll"
+    invoiceDate: date  # (세금)계산서일 = 증빙일(통행료 결제일). 행별 입력.
     partnerCode: str
     partnerName: str
     amount: int = Field(gt=0)
@@ -55,9 +52,10 @@ class TollRowIn(BaseModel):
 
 
 class FuelRowIn(BaseModel):
-    """유류비 지원 행 — km + 차량종류. amount 는 받지 않고 백엔드가 계산한다."""
+    """유류비 지원 행 — km + 차량종류 + 계산서일. amount 는 받지 않고 백엔드가 계산한다."""
 
     type: Literal["fuel"] = "fuel"
+    invoiceDate: date  # (세금)계산서일 = 증빙일(유류비 결제일). 행별 입력.
     km: int = Field(gt=0)
     carClass: CarClass
     project: ProjectIn
@@ -68,24 +66,32 @@ RowIn = Annotated[Union[TollRowIn, FuelRowIn], Field(discriminator="type")]
 
 
 class TripParams(BaseModel):
-    """`params["trip"]` 전체 — 회계일자(문서당 1개) + 행 목록(1..20)."""
+    """`params["trip"]` 전체 — 행 목록(1..20). 회계일자는 계산서일 최댓값으로 파생(입력 없음)."""
 
-    acctDate: date
     rows: list[RowIn] = Field(min_length=1, max_length=20)
 
 
 # ── 유류비 계산(백엔드 권위) ──────────────────────────────────────────────────
+def _eff_for_class(car_class: str, settings: Mapping[str, Any]) -> Any:
+    """차량종류 id → 기준연비(kmPerL). 동적 목록(settings['fuel_classes'])에서 조회.
+
+    목록에 없는 id 는 ValueError(한국어). 목록이 없으면(구설정) 빈 목록으로 취급해 무매칭.
+    """
+    classes = settings.get(FUEL_CLASSES_KEY) or []
+    for c in classes:
+        if isinstance(c, Mapping) and str(c.get("id")) == str(car_class):
+            return c.get("kmPerL")
+    raise ValueError(f"알 수 없는 차량종류입니다: {car_class}")
+
+
 def fuel_support_amount(km: int, car_class: str, settings: Mapping[str, Any]) -> int:
     """km ÷ 차량별 기준연비 × 기준단가 → 원 단위 ROUND_HALF_UP.
 
-    설정(연비/단가)은 effective_settings 로 병합된 실효값을 넘긴다. 연비/단가가 ≤0 이면
+    설정(차량종류 목록/단가)은 effective_settings 로 병합된 실효값을 넘긴다. 연비/단가가 ≤0 이면
     ValueError(한국어). 내장 round() 금지 — Decimal.quantize(ROUND_HALF_UP) 로 고정.
     """
-    eff_key = CAR_CLASS_EFF_KEY.get(car_class)
-    if eff_key is None:
-        raise ValueError(f"알 수 없는 차량종류입니다: {car_class}")
     try:
-        eff = Decimal(str(settings.get(eff_key)))
+        eff = Decimal(str(_eff_for_class(car_class, settings)))
         unit_price = Decimal(str(settings.get(FUEL_UNIT_PRICE_KEY)))
     except (InvalidOperation, TypeError):
         raise ValueError("유류비 설정값(연비·단가)이 올바르지 않습니다.")
@@ -107,9 +113,11 @@ def _normalize_row(row: Union[TollRowIn, FuelRowIn], settings: Mapping[str, Any]
              amount 는 fuel_support_amount 로 계산해 채운다.
     """
     project = {"code": row.project.code, "name": row.project.name, **(row.project.model_extra or {})}
+    invoice_compact = row.invoiceDate.strftime("%Y%m%d")  # START_DT(계산서일) 세팅용 compact.
     if isinstance(row, TollRowIn):
         return {
             "type": "toll",
+            "invoiceDate": invoice_compact,
             "partnerCode": row.partnerCode,
             "partnerName": row.partnerName,
             "amount": row.amount,
@@ -120,6 +128,7 @@ def _normalize_row(row: Union[TollRowIn, FuelRowIn], settings: Mapping[str, Any]
         }
     return {
         "type": "fuel",
+        "invoiceDate": invoice_compact,
         "partnerCode": "",
         "partnerName": "",
         "amount": fuel_support_amount(row.km, row.carClass, settings),
@@ -133,15 +142,13 @@ def _normalize_row(row: Union[TollRowIn, FuelRowIn], settings: Mapping[str, Any]
 def parse_trip_params(params: dict, settings: Mapping[str, Any]) -> tuple[list[dict], str]:
     """`params["trip"]` → (plan_rows, acct_date_compact "YYYYMMDD").
 
-    한국어 ValueError 로 실패. 대표 오류: 회계일자 누락, rows 빈 배열, 통행료 거래처 누락,
+    회계일자는 입력받지 않고 **계산서일(증빙일) 중 가장 마지막일**로 파생한다(사용자 결정).
+    한국어 ValueError 로 실패. 대표 오류: rows 빈 배열, 계산서일 누락, 통행료 거래처 누락,
     잘못된 차량종류, km/금액 비양수. settings 는 effective_settings 실효값(연비·단가).
     """
     trip = params.get("trip")
     if not isinstance(trip, dict):
         raise ValueError("출장 입력(trip)이 없습니다.")
-
-    if not trip.get("acctDate"):
-        raise ValueError("회계일자가 없습니다.")
 
     raw_rows = trip.get("rows")
     if not isinstance(raw_rows, list) or len(raw_rows) == 0:
@@ -159,7 +166,8 @@ def parse_trip_params(params: dict, settings: Mapping[str, Any]) -> tuple[list[d
             if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
                 raise ValueError("통행료 금액은 0보다 큰 정수여야 합니다.")
         elif rtype == "fuel":
-            if r.get("carClass") not in CAR_CLASS_EFF_KEY:
+            valid_ids = {str(c.get("id")) for c in (settings.get(FUEL_CLASSES_KEY) or []) if isinstance(c, Mapping)}
+            if str(r.get("carClass") or "") not in valid_ids:
                 raise ValueError(f"알 수 없는 차량종류입니다: {r.get('carClass')}")
             km = r.get("km")
             if not isinstance(km, int) or isinstance(km, bool) or km <= 0:
@@ -168,6 +176,8 @@ def parse_trip_params(params: dict, settings: Mapping[str, Any]) -> tuple[list[d
             raise ValueError(f"알 수 없는 행 유형입니다: {rtype}")
         if not str((r.get("project") or {}).get("code") or "").strip():
             raise ValueError(f"{i + 1}번째 행에 프로젝트가 없습니다.")
+        if not str(r.get("invoiceDate") or "").strip():
+            raise ValueError(f"{i + 1}번째 행에 계산서일(증빙일)이 없습니다.")
 
     try:
         parsed = TripParams.model_validate(trip)
@@ -175,5 +185,6 @@ def parse_trip_params(params: dict, settings: Mapping[str, Any]) -> tuple[list[d
         raise ValueError(f"출장 입력 형식이 올바르지 않습니다: {exc}") from exc
 
     plan_rows = [_normalize_row(row, settings) for row in parsed.rows]
-    acct_date_compact = parsed.acctDate.strftime("%Y%m%d")
+    # 회계일자 = 계산서일(증빙일) 최댓값(가장 마지막일). 사용자 입력 없이 파생(D3 개정).
+    acct_date_compact = max(row.invoiceDate for row in parsed.rows).strftime("%Y%m%d")
     return plan_rows, acct_date_compact

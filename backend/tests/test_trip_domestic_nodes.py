@@ -21,12 +21,15 @@ from tests.support.state_contract import assert_keys_declared
 
 pytestmark = pytest.mark.asyncio
 
+# 차량종류는 동적 목록(fuel_classes) — 실효 설정 형태와 일치시킨다.
 DEFAULT_SETTINGS = {
-    "fuel_eff_under_1000": 14,
-    "fuel_eff_under_1600": 9,
-    "fuel_eff_under_2000": 7,
-    "fuel_eff_over_2000": 6,
     "fuel_unit_price": 2000,
+    "fuel_classes": [
+        {"id": "under1000", "label": "1,000cc 미만", "kmPerL": 14},
+        {"id": "under1600", "label": "1,600cc 미만", "kmPerL": 9},
+        {"id": "under2000", "label": "2,000cc 미만", "kmPerL": 7},
+        {"id": "over2000", "label": "2,000cc 이상", "kmPerL": 6},
+    ],
 }
 
 
@@ -37,6 +40,7 @@ def _q() -> asyncio.Queue:
 def _toll(**over) -> dict:
     return {
         "type": "toll",
+        "invoiceDate": "2026-07-03",
         "partnerCode": "P001",
         "partnerName": "한국도로공사",
         "amount": 15400,
@@ -48,6 +52,7 @@ def _toll(**over) -> dict:
 def _fuel(**over) -> dict:
     return {
         "type": "fuel",
+        "invoiceDate": "2026-07-03",
         "km": 320,
         "carClass": "under1600",
         "project": {"code": "PJT|WBS", "name": "출장 프로젝트"},
@@ -60,7 +65,7 @@ def _trip_params(rows, **over) -> dict:
         **DEFAULT_SETTINGS,
         "department": "회계팀",
         "cost_type": "판관비",
-        "trip": {"acctDate": "2026-07-03", "rows": rows},
+        "trip": {"rows": rows},
         **over,
     }
 
@@ -154,15 +159,11 @@ def _patch_all_ok(monkeypatch, calls: list):
     monkeypatch.setattr(fill.steps, "fill_partner_by_search", _rec("fill_partner_by_search", {"name": "이트라이브2"}))
     monkeypatch.setattr(fill.steps, "fill_budget_fixed", _rec("fill_budget"))
     monkeypatch.setattr(fill.steps, "fill_project", _rec("fill_project"))
-    monkeypatch.setattr(fill.steps, "set_transaction_amount", _rec("set_transaction_amount"))
+    monkeypatch.setattr(fill.steps, "set_invoice_date", _rec("set_invoice_date"))
+    monkeypatch.setattr(fill.steps, "type_amount", _rec("type_amount"))
     monkeypatch.setattr(fill.steps, "set_row_note", _rec("set_row_note"))
-
-    async def _lookup(*a, **k):  # 상대계정 코드 조회(str 반환).
-        calls.append("lookup_partner_code")
-        return "2026032511"
-
-    monkeypatch.setattr(fill.steps, "lookup_partner_code", _lookup)
-    monkeypatch.setattr(fill.steps, "set_counter_partner", _rec("set_counter_partner"))
+    monkeypatch.setattr(fill.steps, "register_counter_partner", _rec("register_counter_partner"))
+    monkeypatch.setattr(fill.steps, "delete_blank_row", _rec("delete_blank_row"))
 
 
 async def test_fill_rows_two_rows_success(monkeypatch):
@@ -188,11 +189,13 @@ async def test_fill_rows_two_rows_success(monkeypatch):
     assert calls.count("add_next_row") == 1
     # 통행료는 fill_partner, 유류비는 fill_partner_by_search(본인).
     assert "fill_partner" in calls and "fill_partner_by_search" in calls
-    # 상대계정거래처 = 코드 1회 조회 + 행별 set_counter_partner(BFC_PARTNER_CD setValue).
-    assert calls.count("lookup_partner_code") == 1
-    assert calls.count("set_counter_partner") == 2
-    # 금액은 set_transaction_amount(거래금액 SPPRC_AMT2 + 공급가액 + 합계) 로 행별 세팅.
-    assert calls.count("set_transaction_amount") == 2
+    # 상대계정거래처 = 행별 register_counter_partner(부가선택 위젯) + 딸려온 빈 행 delete_blank_row.
+    assert calls.count("register_counter_partner") == 2
+    assert calls.count("delete_blank_row") == 2
+    # 금액은 type_amount(셀 에디터 타이핑 + 예산현황 확인) 로 행별 세팅.
+    assert calls.count("type_amount") == 2
+    # (세금)계산서일(START_DT)도 행별 세팅.
+    assert calls.count("set_invoice_date") == 2
 
 
 async def test_fill_rows_partner_failure_reports_row_and_field(monkeypatch):
@@ -221,14 +224,14 @@ async def test_fill_rows_partner_failure_reports_row_and_field(monkeypatch):
 
 
 async def test_fill_rows_amount_failure_fails_fast(monkeypatch):
-    # 거래금액 세팅 실패(set_transaction_amount)는 fail-fast 여야 한다(반쪽 결의서 저장 방지).
+    # 거래금액 세팅 실패(type_amount)는 fail-fast 여야 한다(반쪽 결의서 저장 방지).
     calls: list = []
     _patch_all_ok(monkeypatch, calls)
 
     async def _fail_amount(*a, **k):
         return {"ok": False, "reason": "합계금액 반영 불일치(기대 15,400·실제 0)"}
 
-    monkeypatch.setattr(fill.steps, "set_transaction_amount", _fail_amount)
+    monkeypatch.setattr(fill.steps, "type_amount", _fail_amount)
     node = make_fill_rows_node()
     out = await node({
         "events": _q(),

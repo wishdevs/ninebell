@@ -24,7 +24,7 @@ def _ms(t0: float) -> int:
 
 
 def make_set_acct_date_node():
-    """마스터 회계일(ACTG_DT) = 마지막 자차 사용일(validate_params 가 넣은 compact)."""
+    """마스터 회계일(ACTG_DT) = 마지막 계산서일(validate_params 가 계산서일 최댓값으로 파생한 compact)."""
 
     async def set_acct_date(state: dict) -> dict:
         if state.get("error"):
@@ -42,7 +42,7 @@ def make_set_acct_date_node():
         if not r.get("ok"):
             await emit_step(events, "set_acct_date", "failed")
             return {"error": f"회계일 설정 실패({dashed}): {r.get('reason')}"}
-        await emit_log(events, f"회계일 = {dashed} (마지막 자차 사용일).", "info")
+        await emit_log(events, f"회계일 = {dashed} (마지막 계산서일).", "info")
         await emit_step(events, "set_acct_date", "done", _ms(t0))
         return {}
 
@@ -78,16 +78,6 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": i + 1, "field": field, "reason": reason}]}
 
-        # 상대계정거래처(작성자 본인) partner code 1회 조회 — 행별 BFC_PARTNER_CD setValue 재사용.
-        # 저장 시 상대계정거래처로 persist(실측 2026-07-07: 실저장+재조회 검증). 하단 폼 위젯은
-        # '적용'이 활성 detail 에디터에 반영돼 빈 행을 추가하는 함정이라 미사용 → dataSource 직접 세팅.
-        counter_code = await steps.lookup_partner_code(page, self_name)
-        if not counter_code:
-            await emit_step(events, "fill_rows", "failed")
-            msg = f"상대계정거래처: 작성자 '{self_name}'의 거래처 코드를 찾을 수 없습니다."
-            await emit_log(events, msg, "error")
-            return {"error": msg, "fill_failures": [{"row": 0, "field": "상대계정거래처", "reason": msg}]}
-
         total = len(plan_rows)
         filled = 0
         for i, row in enumerate(plan_rows):
@@ -108,6 +98,10 @@ def make_fill_rows_node():
             se = await doc_steps.select_evdn_code(page, EVDN_CODE)
             if not se.get("ok"):
                 return await fail(i, "증빙유형(10)", se.get("reason"))
+            # 2.5) (세금)계산서일(START_DT) = 행별 증빙일(통행료/유류비 결제일).
+            dt = await steps.set_invoice_date(page, str(row.get("invoiceDate") or ""))
+            if not dt.get("ok"):
+                return await fail(i, "계산서일", dt.get("reason"))
             # 3) 거래처: 통행료=카탈로그 / 유류비=본인 이름 검색.
             if rtype == "toll":
                 pr = await steps.fill_partner(page, row.get("partnerCode") or "", row.get("partnerName") or "")
@@ -123,21 +117,25 @@ def make_fill_rows_node():
             pj = await steps.fill_project(page, row.get("project") or {})
             if not pj.get("ok"):
                 return await fail(i, "프로젝트", pj.get("reason"))
-            # 6) 공급가(거래금액=SPPRC_AMT2) + 공급가액 + 합계 세팅(사용자 정정 2026-07-07:
-            #    금액은 거래금액 필드에 채운다). set_transaction_amount 가 세 값을 동일하게 세팅·
-            #    각 반영을 검증한다(자동계산 없음, 국내 자차 부가세 0). 실패 시 fail-fast.
-            sa = await steps.set_transaction_amount(page, amount)
+            # 6) 공급가액(거래금액=SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(2026-07-09).
+            #    setValue 는 예산현황 확인 트리거를 건너뛰어 파생상태 미완 → 저장 DB오류였음.
+            #    타이핑 → Tab 커밋 → 예산현황 팝업 확인 → SPPRC_AMT/TOTAL_AMT 자동계산.
+            sa = await steps.type_amount(page, amount)
             if not sa.get("ok"):
                 return await fail(i, "거래금액", sa.get("reason"))
             # 7) 적요.
             nt = await steps.set_row_note(page, row.get("note") or "")
             if not nt.get("ok"):
                 return await fail(i, "적요", nt.get("reason"))
-            # 8) 상대계정거래처(작성자 본인) = detail 행 BFC_PARTNER_CD 직접 setValue(실측 2026-07-07:
-            #    저장 전표에 persist·행 추가 없음·PARTNER 미덮음). 하단 폼 위젯은 함정이라 미사용.
-            cp = await steps.set_counter_partner(page, counter_code)
+            # 8) 상대계정거래처(작성자 본인) = **부가선택 위젯 🔍 → 검색 → 행 더블클릭**(2026-07-09 확정).
+            #    등록 시 detail 빈 행 1개가 딸려 추가됨(ERP 동작) → 9) 에서 삭제.
+            cp = await steps.register_counter_partner(page, self_name)
             if not cp.get("ok"):
                 return await fail(i, "상대계정거래처", cp.get("reason"))
+            # 9) 상대계정 등록으로 추가된 빈 행 삭제(데이터 행 유지).
+            db = await steps.delete_blank_row(page)
+            if not db.get("ok"):
+                return await fail(i, "빈행삭제", db.get("reason"))
 
             filled += 1
             await emit_log(events, f"{i + 1}/{total}행 반영 완료.", "ok")

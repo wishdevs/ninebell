@@ -37,6 +37,29 @@ READ_DETAIL_CELL_JS = """(fields) => {
   } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
 }"""
 
+# detail 그리드(index 1) 마지막 행의 **날짜 셀**을 compact 'YYYYMMDD'(브라우저 로컬 Y/M/D)로 재독.
+# ⚠ 날짜 셀 getValue 는 Date 객체를 반환한다 → String() 하면 'Tue Jul 07 2026 ...'(월이 영문·오프셋
+#   포함)이라 숫자만 뽑는 검증이 오판한다(계산서일 반영 불일치 오류의 원인, 2026-07-07 실측). Date 는
+#   getFullYear/Month/Date 로 직접 compact 화하고, 문자열/숫자면 숫자만 추려 앞 8자리를 쓴다.
+#   인자 field(str). 반환 {ok, compact, raw} | {ok:false, reason}.
+READ_DETAIL_DATE_JS = """(field) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
+    const n = g.getDataSource().getRowCount();
+    if (n < 1) return { ok: false, reason: 'detail 행 없음' };
+    const row = Math.max(0, n - 1);
+    const v = g.getValue(row, field);
+    let compact = '';
+    if (v instanceof Date && !isNaN(v.getTime())) {
+      const p = (x) => ('0' + x).slice(-2);
+      compact = '' + v.getFullYear() + p(v.getMonth() + 1) + p(v.getDate());
+    } else {
+      compact = String(v == null ? '' : v).replace(/\\D/g, '').slice(0, 8);
+    }
+    return { ok: true, compact: compact, raw: String(v == null ? '' : v) };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
 # ── 상대계정거래처 = detail 행 BFC_PARTNER_CD 직접 세팅(실측 2026-07-07) ──────────
 # 하단 폼 위젯(코드피커)은 '적용'이 활성 detail 에디터에 반영돼 빈 행을 추가하는 함정 → 사용 금지.
 # 대신 **detail dataSource 필드 BFC_PARTNER_CD 를 grid.setValue 로 직접 세팅**한다. 행 추가 없이
@@ -99,6 +122,67 @@ RESET_SCROLL_TO_DETAIL_JS = """() => {
   const g = document.querySelectorAll('.dews-ui-grid')[1];
   if (g) g.scrollIntoView({ block: 'center' });
   return !!g;
+}"""
+
+
+# ── 금액(공급가액=거래금액) 실 타이핑 — 예산현황 확인 트리거 발화(2026-07-09 규명) ────────
+# ⚠ setValue 는 금액 입력 트리거(예산현황 팝업)를 발화 안 해 파생상태 미완 → 저장 DB오류.
+#   OPEN_DETAIL_CELL_EDITOR_JS('SPPRC_AMT2') 로 숫자 에디터를 열면 이 input 이 뜬다(gridDetail_number,
+#   접힌 _line(w=1)은 배제). locator 로 잡아 select_text→타이핑→Tab 하면 예산현황 확인 후 3필드 자동계산.
+AMOUNT_EDITOR_INPUT_JS = """() => {
+  const inp = [...document.querySelectorAll('input')].find(i =>
+    /gridDetail_number/.test(i.id || '') && i.offsetParent !== null && i.getBoundingClientRect().width > 10);
+  if (!inp) return null; const r = inp.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), id: inp.id || '' };
+}"""
+
+# 마지막 detail 행 금액 3필드 재독(타이핑 반영 검증).
+READ_AMT_JS = """() => { try {
+  const ds = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid.getDataSource();
+  const r = ds.getJsonRows(ds.getRowCount()-1, ds.getRowCount()-1)[0] || {};
+  return { SPPRC_AMT2:String(r.SPPRC_AMT2==null?'':r.SPPRC_AMT2), SPPRC_AMT:String(r.SPPRC_AMT==null?'':r.SPPRC_AMT), TOTAL_AMT:String(r.TOTAL_AMT==null?'':r.TOTAL_AMT) };
+} catch(e){ return { e:String(e).slice(0,80) }; } }"""
+
+# ── 상대계정거래처 = 부가선택 위젯 피커(2026-07-09 규명·확정) ──────────────────────────
+# 부가선택 상대계정거래처 🔍(COUNTER_PICKER_BOX_JS) → 거래처 팝업 검색 → **행 더블클릭**(적용버튼 아님)
+# → 등록됨(부작용: detail 빈 행 1개 추가 = ERP 동작 → delete_blank_row 로 제거).
+# 피커 팝업 그리드 rowIndex 행 화면좌표(더블클릭용). getCellBounds 가 화면좌표계와 안 맞아 그리드 rect 추정.
+PICKER_ROW_RECT_JS = """(rowIndex) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return null; const gridEl = p.querySelector('.dews-ui-grid'); if (!gridEl) return null;
+  const gr = gridEl.getBoundingClientRect();
+  return { x: Math.round(gr.x + 150), y: Math.round(gr.y + 30 + rowIndex*32 + 16) };
+}"""
+
+# 상대계정거래처 부가선택 행의 내역코드/내역명 값(등록 검증). {found, vals} .
+COUNTER_VALS_JS = """() => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const lbl = [...document.querySelectorAll('label,span,div,td,th')].find(e => e.offsetParent!==null && c(e.innerText)==='상대계정거래처');
+  if (!lbl) return { found:false };
+  const lr = lbl.getBoundingClientRect();
+  return { found:true, vals:[...document.querySelectorAll('input')].filter(i=>i.offsetParent!==null && Math.abs(i.getBoundingClientRect().top-lr.top)<26 && i.getBoundingClientRect().left>lr.left).map(i=>c(i.value)) };
+}"""
+
+# detail 그리드 전 행 PARTNER(빈행 탐색). {n, rows:[{i,PARTNER}]}.
+DETAIL_ROWS_JS = """() => { try {
+  const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
+  const n = g.getDataSource().getRowCount(); const out = [];
+  for (let i=0;i<n;i++){ const r=g.getDataSource().getJsonRows(i,i)[0]||{}; out.push({ i, PARTNER:String(r.PARTNER_NM||'') }); }
+  return { n, rows:out };
+} catch(e){ return { e:String(e).slice(0,80) }; } }"""
+
+# detail 그리드 idx 행 적요셀(텍스트, 피커 없음) 클릭 좌표 — 빈 행 선택용.
+DETAIL_ROW_CLICK_JS = """(idx) => {
+  const g = document.querySelectorAll('.dews-ui-grid')[1]; const r = g.getBoundingClientRect();
+  return { x: Math.round(r.x + 220), y: Math.round(r.y + 34 + idx*32 + 16) };
+}"""
+
+# 툴바 버튼(selector) 중심좌표 — 삭제 버튼 실클릭용. {x,y} | null.
+BTN_BOX_JS = """(sel) => {
+  const b = document.querySelector(sel); if (!b || b.offsetParent===null) return null;
+  const r = b.getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) };
 }"""
 
 
