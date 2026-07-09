@@ -1,0 +1,19 @@
+# 도커 빌드 컨텍스트(리포 루트) 제외 — 이미지 안에서 재설치/재빌드됨.
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.next
+.git
+.github
+.idea
+.recycles
+**/.terraform
+*.tfstate
+*.tfstate.*
+infra/aws/.terraform
+backend/e2e/artifacts
+*.pem
+.DS_Store
+**/.DS_Store
+.claude

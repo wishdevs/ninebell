@@ -1,6 +1,7 @@
 # 빌드 컨텍스트 = 리포 루트.  docker build -f infra/aws/docker/api.Dockerfile .
 # Playwright 공식 파이썬 베이스(브라우저·시스템 의존성 포함). 태그 = requirements 의 playwright 버전과 일치.
-FROM mcr.microsoft.com/playwright/python:v1.49.1-jammy
+# ⚠ noble(Ubuntu 24.04) = Python 3.12 — 앱이 datetime.UTC(3.11+) 등 3.11+ 기능을 씀(jammy 3.10 은 크래시).
+FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

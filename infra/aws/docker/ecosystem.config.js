@@ -1,10 +1,10 @@
-// pm2 로 Next.js 2 프로세스(클러스터). 둘이 3000 포트를 공유(pm2 cluster 소켓 공유).
+// pm2 로 Next.js 2 프로세스(클러스터). 커스텀 server.js 를 fork(포트 3000 공유).
+// next CLI 를 cluster 로 돌리면 프로젝트 디렉토리 오인식 → server.js 사용.
 module.exports = {
   apps: [
     {
       name: 'next',
-      script: 'node_modules/next/dist/bin/next',
-      args: 'start -p 3000',
+      script: 'server.js',
       instances: 2,
       exec_mode: 'cluster',
       env: { NODE_ENV: 'production' },

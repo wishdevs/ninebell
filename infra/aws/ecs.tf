@@ -53,6 +53,7 @@ resource "aws_ecs_task_definition" "api" {
       { name = "MAX_CONCURRENT_ERP_RUNS", value = tostring(var.max_concurrent_erp_runs) },
       { name = "MAX_CONCURRENT_ERP_LOGINS", value = tostring(var.max_concurrent_erp_logins) },
       { name = "CHROMIUM_ARGS", value = var.chromium_args }, # Fargate /dev/shm 회피 플래그
+      { name = "DEV_CREATE_ALL", value = var.dev_create_all },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
     ]

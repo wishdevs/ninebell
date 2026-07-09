@@ -74,10 +74,11 @@ variable "front_desired_count" {
   default = 1
 }
 
-# X86_64 권장(Chromium 호환 안전). 비용 절감하려면 ARM64 + arm 베이스 이미지로.
+# ARM64(Graviton) — 빌드 호스트(Apple Silicon)와 동일 아키텍처라 네이티브 빌드 + Fargate 저렴.
+# playwright/node 베이스 모두 arm64 지원 확인(2026-07). X86_64 로 바꾸면 amd64 이미지 필요.
 variable "cpu_architecture" {
   type    = string
-  default = "X86_64"
+  default = "ARM64"
 }
 
 # ── 동시 실행 상한(세마포어). 10 동접 테스트 → 브라우저 6개 동시로 시작 ──────
@@ -146,6 +147,13 @@ variable "container_port_api" {
 variable "container_port_front" {
   type    = number
   default = 3000
+}
+
+# 1 이면 api 기동 시 SQLAlchemy metadata.create_all 로 테이블 생성(테스트 부트스트랩용).
+# 운영은 0(alembic upgrade head 로 마이그레이션). 빈 RDS 초기화에 편의상 사용.
+variable "dev_create_all" {
+  type    = string
+  default = "0"
 }
 
 # 헤드리스 Chromium 실행 인자 → 앱이 CHROMIUM_ARGS env 로 읽어 launch(args=...).
