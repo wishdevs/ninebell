@@ -19,7 +19,7 @@
 import { api } from './client';
 
 /** 코드 종류 — 예산단위 / 프로젝트 / 거래처 / 에이전트(즐겨찾기 전용 — 카탈로그·동기화 없음). */
-export type CatalogKind = 'budget_unit' | 'project' | 'partner' | 'agent';
+export type CatalogKind = 'budget_unit' | 'project' | 'partner' | 'agent' | 'org_unit';
 
 /** 부가 데이터 — 백엔드 JSON 객체.
  * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),
@@ -136,6 +136,34 @@ export async function fetchCatalog(query: CatalogQuery): Promise<CatalogPage> {
     `/me/catalog?${qs.toString()}`,
   );
   return { items: res.items ?? [], total: res.total ?? 0, syncedAt: res.syncedAt ?? null };
+}
+
+/** 출장 기본 프로젝트(팀 비용구분 매칭) — code=PJT_NO|WBS_NO 합성. */
+export interface TripDefaultProject {
+  code: string;
+  name: string;
+  wbsNo: string;
+  wbsNm: string;
+}
+
+/** `GET /me/trip-defaults` 응답 — 소속 팀 비용구분(판/제) + 그에 맞는 기본 프로젝트. */
+export interface TripDefaults {
+  costType: string | null;
+  department: string | null;
+  defaultProject: TripDefaultProject | null;
+}
+
+/**
+ * `GET /me/trip-defaults` — 출장 실행 전 폼 기본값. 소속 팀 비용구분(제조원가→500/판관비→800)에
+ * 맞는 기본 프로젝트를 서버가 카드 자동화와 동일 규칙으로 해석해 내려준다. 미배정·미존재면 null.
+ */
+export async function fetchTripDefaults(): Promise<TripDefaults> {
+  const res = await api.get<Partial<TripDefaults>>('/me/trip-defaults');
+  return {
+    costType: res.costType ?? null,
+    department: res.department ?? null,
+    defaultProject: res.defaultProject ?? null,
+  };
 }
 
 /**

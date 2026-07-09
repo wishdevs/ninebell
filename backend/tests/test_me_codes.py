@@ -805,3 +805,73 @@ async def test_card_learning_retrieve_matches_normalized_merchant(sm, make_user)
     )
     hits = await card_learning.retrieve_for_merchants(str(uid), ["네이버파이낸셜(주)"])
     assert card_learning.norm_merchant("네이버파이낸셜(주)") in hits
+
+
+# ── /me/trip-defaults (팀 비용구분 → 기본 프로젝트: 제조원가 500 / 판관비 800) ──────
+async def test_trip_defaults_sga_team_returns_800_project(
+    client, make_user, auth_as, set_user_org, sm
+):
+    uid = await make_user("trip-sga", "user")
+    await set_user_org(uid, "hq_mgmt__t0")  # 인사기획팀 = 판관비(_SGA)
+    await _seed_catalog(
+        sm,
+        [
+            {"kind": "project", "code": "800|800", "name": "판매관리비",
+             "extra": {"pjtNo": "800", "wbsNo": "800", "wbsNm": "판매관리비"}},
+            {"kind": "project", "code": "500|500", "name": "제조원가",
+             "extra": {"pjtNo": "500", "wbsNo": "500", "wbsNm": "제조원가"}},
+        ],
+    )
+    auth_as(uid)
+    r = await client.get("/me/trip-defaults")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["costType"] == "판관비"
+    assert body["defaultProject"]["code"] == "800|800"
+    assert body["defaultProject"]["wbsNo"] == "800"
+
+
+async def test_trip_defaults_mfg_team_returns_500_project(
+    client, make_user, auth_as, set_user_org, sm
+):
+    uid = await make_user("trip-mfg", "user")
+    await set_user_org(uid, "hq_mgmt__t3")  # 구매팀 = 제조원가(_MFG)
+    await _seed_catalog(
+        sm,
+        [{"kind": "project", "code": "500|500", "name": "제조원가",
+          "extra": {"pjtNo": "500", "wbsNo": "500"}}],
+    )
+    auth_as(uid)
+    r = await client.get("/me/trip-defaults")
+    assert r.status_code == 200
+    assert r.json()["costType"] == "제조원가"
+    assert r.json()["defaultProject"]["code"] == "500|500"
+
+
+async def test_trip_defaults_no_org_returns_null_project(client, make_user, auth_as):
+    uid = await make_user("trip-noorg", "user")
+    auth_as(uid)
+    r = await client.get("/me/trip-defaults")
+    assert r.status_code == 200
+    assert r.json()["costType"] is None
+    assert r.json()["defaultProject"] is None
+
+
+async def test_trip_defaults_wbs_equal_to_pjtno_row_wins(
+    client, make_user, auth_as, set_user_org, sm
+):
+    # 같은 프로젝트에 WBS 여러 행이면 wbsNo == pjtNo(=800) 행 우선.
+    uid = await make_user("trip-wbs", "user")
+    await set_user_org(uid, "hq_mgmt__t0")  # 판관비
+    await _seed_catalog(
+        sm,
+        [
+            {"kind": "project", "code": "800|810", "name": "판매관리비",
+             "extra": {"pjtNo": "800", "wbsNo": "810"}},
+            {"kind": "project", "code": "800|800", "name": "판매관리비",
+             "extra": {"pjtNo": "800", "wbsNo": "800"}},
+        ],
+    )
+    auth_as(uid)
+    r = await client.get("/me/trip-defaults")
+    assert r.json()["defaultProject"]["code"] == "800|800"

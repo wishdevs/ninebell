@@ -13,7 +13,9 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErpOrgSync } from './erp-org-sync';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
@@ -228,6 +230,13 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
+          본부·팀을 직접 관리하거나, 옴니솔 조직도를 불러와 대조하세요.
+        </p>
+        <ErpOrgSync />
+      </div>
+
       <div className="border-border bg-surface flex items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
         <Label htmlFor="new-parent-label" className="sr-only">
           새 본부 이름
@@ -590,6 +599,8 @@ function AgentAccessTab({
 }: AgentAccessTabProps) {
   // 낙관적 로컬 미러(agentId → 선택된 org id 배열).
   const [local, setLocal] = useState<Record<string, string[]>>({});
+  // 편집 팝업 대상(에이전트 id) — 목록은 요약 행만, 상세 조직 선택은 다이얼로그에서.
+  const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => {
     setLocal(Object.fromEntries(accessData.map((a) => [a.agentId, a.orgUnitIds])));
   }, [accessData]);
@@ -656,6 +667,34 @@ function AgentAccessTab({
     schedulePersist(agentId);
   };
 
+  // 본부 '전체' 토글 — 그 본부 팀 전부 선택/해제(on=true 선택).
+  const toggleParent = (agentId: string, childIds: string[], on: boolean) => {
+    setLocal((prev) => {
+      const current = new Set(prev[agentId] ?? []);
+      for (const id of childIds) {
+        if (on) current.add(id);
+        else current.delete(id);
+      }
+      const next = options.filter((o) => current.has(o.id)).map((o) => o.id);
+      return { ...prev, [agentId]: next };
+    });
+    schedulePersist(agentId);
+  };
+
+  const teamOptions = options.filter((o) => o.id !== ORG_NONE);
+
+  // 요약 문구/톤 — 목록 행에 접근 상태를 한 줄로. 전체=모든 조직, 0=접근 없음, 그 외 팀 수(+미지정).
+  const summarize = (sel: Set<string>): { text: string; tone: 'all' | 'some' | 'none' } => {
+    const teamCount = teamOptions.filter((o) => sel.has(o.id)).length;
+    const hasNone = sel.has(ORG_NONE);
+    if (teamCount === teamOptions.length && hasNone) return { text: '모든 조직 허용', tone: 'all' };
+    if (teamCount === 0 && !hasNone) return { text: '접근 조직 없음', tone: 'none' };
+    const parts: string[] = [];
+    if (teamCount > 0) parts.push(`${teamCount}개 팀`);
+    if (hasNone) parts.push('미지정 포함');
+    return { text: parts.join(' · '), tone: 'some' };
+  };
+
   if (accessData.length === 0) {
     return (
       <EmptyState
@@ -666,82 +705,192 @@ function AgentAccessTab({
     );
   }
 
+  const editing = accessData.find((a) => a.agentId === editingId) ?? null;
+  const editingSel = editing ? new Set(local[editing.agentId] ?? []) : new Set<string>();
+
   return (
-    <div className="flex flex-col gap-4">
-      {accessData.map((agent) => {
-        const selected = new Set(local[agent.agentId] ?? []);
-        const count = selected.size;
-        const total = options.length;
-        const allOn = total > 0 && count === total;
-        return (
-          <section
-            key={agent.agentId}
-            className="border-border bg-surface flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)]"
-          >
-            <header className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-foreground text-base font-semibold tracking-tight">
-                {agent.agentName}
-              </h2>
-              <div className="flex items-center gap-3">
-                <span
+    <>
+      <p className="text-muted-foreground mb-3 text-[length:var(--text-body-sm)] leading-relaxed">
+        에이전트별로 실행을 허용할 조직(팀)을 지정합니다. 각 행의 <b>편집</b>에서 팝업으로
+        선택하세요. 지정하지 않으면 모든 조직이 실행할 수 있습니다.
+      </p>
+
+      {/* 요약 행 목록 — 에이전트당 한 줄(이름 + 접근 요약 + 편집). */}
+      <div className="border-border bg-surface divide-border-subtle flex flex-col divide-y rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
+        {accessData.map((agent) => {
+          const s = summarize(new Set(local[agent.agentId] ?? []));
+          return (
+            <div key={agent.agentId} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-foreground truncate font-medium">{agent.agentName}</p>
+                <p
                   className={cn(
-                    'rounded-full px-2 py-0.5 text-[length:var(--text-body-sm)] font-semibold tabular-nums',
-                    count === 0
-                      ? 'bg-danger/10 text-danger'
-                      : allOn
-                        ? 'bg-success/10 text-success'
-                        : 'bg-muted text-foreground-secondary',
+                    'mt-0.5 text-xs',
+                    s.tone === 'all'
+                      ? 'text-success'
+                      : s.tone === 'none'
+                        ? 'text-danger'
+                        : 'text-foreground-secondary',
                   )}
                 >
-                  {count}/{total}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelection(agent.agentId, allOn ? [] : options.map((o) => o.id))}
-                  className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
-                >
-                  {allOn ? '모두 해제' : '모두 선택'}
-                </button>
-              </div>
-            </header>
-
-            <div className="flex flex-col gap-4">
-              {tree.map(({ parent, children }) =>
-                children.length === 0 ? null : (
-                  <div key={parent.id} className="flex flex-col gap-2">
-                    <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
-                      {parent.label}
-                    </p>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                      {children.map((child) => (
-                        <OrgAccessCheckbox
-                          key={child.id}
-                          label={child.label}
-                          checked={selected.has(child.id)}
-                          onClick={() => toggle(agent.agentId, child.id)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ),
-              )}
-
-              <div className="flex flex-col gap-2">
-                <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.04em] uppercase">
-                  기타
+                  {s.text}
                 </p>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                  <OrgAccessCheckbox
-                    label="미지정"
-                    checked={selected.has(ORG_NONE)}
-                    onClick={() => toggle(agent.agentId, ORG_NONE)}
-                  />
-                </div>
               </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setEditingId(agent.agentId)}
+              >
+                <RiPencilLine size={14} aria-hidden />
+                편집
+              </Button>
             </div>
-          </section>
+          );
+        })}
+      </div>
+
+      {/* 편집 팝업 — 조직 트리(본부 접기 + 전체 토글) + 미지정. 변경은 자동 저장(디바운스). */}
+      {editing ? (
+        <Dialog
+          open
+          onClose={() => setEditingId(null)}
+          title={`${editing.agentName} — 접근 조직`}
+          description="이 에이전트를 실행할 수 있는 조직(팀)을 선택하세요. 변경은 자동 저장됩니다."
+          size="lg"
+          footer={
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelection(
+                    editing.agentId,
+                    editingSel.size === options.length ? [] : options.map((o) => o.id),
+                  )
+                }
+                className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
+              >
+                {editingSel.size === options.length ? '모두 해제' : '모두 선택'}
+              </button>
+              <Button onClick={() => setEditingId(null)}>닫기</Button>
+            </div>
+          }
+        >
+          <DialogBody>
+            <AgentAccessEditor
+              tree={tree}
+              selected={editingSel}
+              noneChecked={editingSel.has(ORG_NONE)}
+              onToggle={(id) => toggle(editing.agentId, id)}
+              onToggleParent={(childIds, on) => toggleParent(editing.agentId, childIds, on)}
+            />
+          </DialogBody>
+        </Dialog>
+      ) : null}
+    </>
+  );
+}
+
+// ── 편집 팝업 내용 — 본부 접기 + 전체 토글 + 팀 체크박스 + 미지정 ──────────────
+function AgentAccessEditor({
+  tree,
+  selected,
+  noneChecked,
+  onToggle,
+  onToggleParent,
+}: {
+  tree: { parent: OrgUnit; children: OrgUnit[] }[];
+  selected: Set<string>;
+  noneChecked: boolean;
+  onToggle: (orgId: string) => void;
+  onToggleParent: (childIds: string[], on: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {tree.map(({ parent, children }) => {
+        if (children.length === 0) return null;
+        const childIds = children.map((c) => c.id);
+        const selCount = childIds.filter((id) => selected.has(id)).length;
+        const allOn = selCount === childIds.length;
+        const isExp = expanded.has(parent.id);
+        return (
+          <div
+            key={parent.id}
+            className="border-border/60 overflow-hidden rounded-[var(--radius-md)] border"
+          >
+            <div className="bg-muted/30 flex items-center gap-1.5 px-2 py-1.5">
+              <button
+                type="button"
+                aria-label={isExp ? '접기' : '펼치기'}
+                onClick={() => toggleExpand(parent.id)}
+                className="text-foreground-tertiary hover:text-foreground flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors"
+              >
+                <RiArrowDownSLine
+                  size={16}
+                  aria-hidden
+                  className={cn('transition-transform', isExp ? '' : '-rotate-90')}
+                />
+              </button>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={allOn ? true : selCount > 0 ? 'mixed' : false}
+                onClick={() => onToggleParent(childIds, !allOn)}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
+                    allOn
+                      ? 'border-accent bg-accent text-white'
+                      : selCount > 0
+                        ? 'border-accent bg-accent/20 text-accent'
+                        : 'border-border-strong bg-surface',
+                  )}
+                >
+                  {allOn ? <RiCheckLine size={13} /> : selCount > 0 ? '–' : null}
+                </span>
+                <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+                  {parent.label}
+                </span>
+              </button>
+              <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
+                {selCount}/{childIds.length}
+              </span>
+            </div>
+            {isExp ? (
+              <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3">
+                {children.map((child) => (
+                  <OrgAccessCheckbox
+                    key={child.id}
+                    label={child.label}
+                    checked={selected.has(child.id)}
+                    onClick={() => onToggle(child.id)}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
         );
       })}
+
+      <div className="mt-1">
+        <OrgAccessCheckbox
+          label="미지정 (조직 미배정 사용자 허용)"
+          checked={noneChecked}
+          onClick={() => onToggle(ORG_NONE)}
+        />
+      </div>
     </div>
   );
 }

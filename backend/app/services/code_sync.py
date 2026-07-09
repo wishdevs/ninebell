@@ -255,6 +255,61 @@ async def _sync_partners(page, sessionmaker: async_sessionmaker) -> int:
     return len(rows)
 
 
+async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: async_sessionmaker) -> int:
+    """조직도 스크레이프 → 본부▸팀 평탄화 → upsert(kind='org_unit', dept='') + stale 삭제.
+
+    안정 ERP 코드가 없어 code 는 이름 기반: 본부='본부명', 팀='본부명|팀명'. extra 에 종류(hq/team)·
+    상위 본부·인원수·정렬순서를 담는다(프론트 뷰어/향후 OrgUnit 정합용). 빈 결과는 보존 실패 처리.
+    """
+    from app.services.org_sync import fetch_org_tree
+
+    tree = await fetch_org_tree(userid, password, browser_factory)
+    flat = tree["flat"]
+    now = datetime.now(timezone.utc)
+
+    # (본부, 팀) → catalog code. 본부 자체도 1행(type=hq)으로 남겨 계층을 복원 가능하게 한다.
+    catalog: dict[str, dict] = {}
+    order = 0
+    for r in flat:
+        hq_code = r["hq"]
+        if hq_code not in catalog:
+            catalog[hq_code] = {
+                "code": hq_code, "name": r["hq"],
+                "extra": {"type": "hq", "hq": None, "memberCount": r.get("hqCount"), "sortOrder": order},
+            }
+            order += 1
+        team_code = f"{r['hq']}|{r['team']}"
+        if team_code not in catalog:
+            catalog[team_code] = {
+                "code": team_code, "name": r["team"],
+                "extra": {"type": "team", "hq": r["hq"], "memberCount": r.get("teamCount"), "sortOrder": order},
+            }
+            order += 1
+
+    codes = set(catalog)
+    async with sessionmaker() as s:
+        prev = (
+            await s.execute(
+                select(func.count()).select_from(ErpCodeCatalog).where(ErpCodeCatalog.kind == "org_unit")
+            )
+        ).scalar() or 0
+        if not catalog:  # 빈 결과 — 기존 보존(스크레이프 실패 의심).
+            if prev > 0:
+                raise RuntimeError(f"조직도 결과가 비어 있습니다(기존 {prev}건) — 중단/실패 의심, 보존")
+            return 0
+        for row in catalog.values():
+            await s.merge(
+                ErpCodeCatalog(kind="org_unit", dept="", code=row["code"], name=row["name"], extra=row["extra"], synced_at=now)
+            )
+        await s.execute(
+            delete(ErpCodeCatalog).where(
+                ErpCodeCatalog.kind == "org_unit", ErpCodeCatalog.code.notin_(codes)
+            )
+        )
+        await s.commit()
+    return len(catalog)
+
+
 async def sync_catalog(
     kind: str,
     userid: str,
@@ -262,7 +317,12 @@ async def sync_catalog(
     browser_factory,
     sessionmaker: async_sessionmaker,
 ) -> dict:
-    """kind('budget_unit'|'project'|'partner') 코드 카탈로그를 헤드리스로 동기화. 반환 {count, syncedAt}."""
+    """kind('budget_unit'|'project'|'partner'|'org_unit') 카탈로그 헤드리스 동기화. 반환 {count, syncedAt}."""
+    # 조직도(org_unit)는 랜딩 우상단에 있어 카드 진입 체인이 불필요 — 로그인만 하고 스크레이프.
+    if kind == "org_unit":
+        count = await _sync_org(userid, password, browser_factory, sessionmaker)
+        return {"count": count, "syncedAt": datetime.now(timezone.utc).isoformat()}
+
     browser = await browser_factory()
     try:
         page = await browser.new_page(viewport={"width": 1440, "height": 900})

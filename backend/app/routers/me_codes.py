@@ -26,15 +26,17 @@ from app.models import (
     CardLearnedSelection,
     CardSeedSelection,
     ErpCodeCatalog,
+    OrgUnit,
     UserCodeFavorite,
 )
 from app.services.code_sync import dept_matches_budget_name, sync_catalog
+from app.services.cost_project import resolve_cost_project
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["me-codes"])
 
 # 카탈로그/동기화 kind — ERP 코드만(에이전트는 카탈로그·동기화 대상이 아님).
-_VALID_KINDS = ("budget_unit", "project", "partner")
+_VALID_KINDS = ("budget_unit", "project", "partner", "org_unit")
 # 즐겨찾기 kind — 스키마 레벨에서 강제(무효 kind 행 축적 방지, 리뷰 MEDIUM #4).
 # 'agent' = 홈 '자주쓰는 에이전트'(code=에이전트 id, name=에이전트명) — 즐겨찾기 전용.
 CodeKind = Literal["budget_unit", "project", "partner", "agent"]
@@ -331,6 +333,23 @@ async def list_card_seed(
 
 
 # ── 코드 카탈로그 조회 ──────────────────────────────────────────────────────────
+@router.get("/trip-defaults")
+async def get_trip_defaults(user: CurrentUser, db: DbSession) -> dict:
+    """출장 실행 전 폼 기본값 — 소속 팀 비용구분(판/제)에 맞춘 기본 프로젝트 + 부서.
+
+    조직 설정(팀 cost_type)과 프로젝트 기본값을 일치시킨다: 제조원가→PJT_NO 500 / 판관비→800.
+    카드 자동화(collect 노드)와 동일 규칙(app.services.cost_project). 팀 미지정·구분 없음·
+    카탈로그 미존재면 defaultProject=null(프론트가 기본지정 즐겨찾기로 폴백).
+    """
+    cost_type: str | None = None
+    if user.org_unit_id:
+        team = await db.get(OrgUnit, user.org_unit_id)
+        if team is not None:
+            cost_type = team.cost_type
+    project = await resolve_cost_project(cost_type)
+    return {"costType": cost_type, "department": user.department, "defaultProject": project}
+
+
 @router.get("/catalog")
 async def get_catalog(
     user: CurrentUser,

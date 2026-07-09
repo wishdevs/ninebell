@@ -42,7 +42,8 @@ const SYNC_POLL_MS = 3000;
 const SEARCH_DEBOUNCE_MS = 300;
 
 /** 이 화면이 다루는 kind — ERP 카탈로그가 있는 코드만('agent' 는 즐겨찾기 전용이라 제외). */
-type CatalogOnlyKind = Exclude<CatalogKind, 'agent'>;
+// org_unit 은 조직도 싱크 전용(즐겨찾기·이 카탈로그 관리 UI 대상 아님) → 여기선 제외.
+type CatalogOnlyKind = Exclude<CatalogKind, 'agent' | 'org_unit'>;
 
 interface CodeCatalogManagerProps {
   kind: CatalogOnlyKind;
