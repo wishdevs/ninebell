@@ -76,13 +76,13 @@ async def test_hidden_agents_excluded_from_list(client, make_user, auth_as):
     auth_as(uid)
     rows = (await client.get("/agents")).json()
     ids = {a["id"] for a in rows}
-    # 카드·국내출장만 노출, 해외출장·경조금·학자금은 숨김.
-    assert "card-chat" in ids and "trip-domestic" in ids
-    assert "trip-overseas" not in ids
+    # 카드·국내출장·해외출장 노출(2026-07-09 해외 검증 완료). 경조금·학자금은 아직 숨김.
+    assert "card-chat" in ids and "trip-domestic" in ids and "trip-overseas" in ids
     assert "family-event" not in ids and "scholarship" not in ids
 
 
 async def test_hidden_agent_detail_returns_404(client, make_user, auth_as):
     uid = await make_user("hide-detail", "super_admin")
     auth_as(uid)
-    assert (await client.get("/agents/trip-overseas")).status_code == 404
+    # family-event(경조금)·scholarship(학자금)은 아직 hidden. trip-overseas 는 노출됨(2026-07-09).
+    assert (await client.get("/agents/family-event")).status_code == 404

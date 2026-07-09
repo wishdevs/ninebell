@@ -142,7 +142,7 @@ def test_fixture_promoted_from_dummy():
     assert fx["workflow_id"] == "trip-overseas"  # 더미(None)에서 승격
     assert fx["interaction"] == "autonomous"
     assert fx["group_id"] == "resolution"
-    assert fx["hidden"] is True  # 라이브 프로브 전까지 숨김(카드·국내출장만 노출)
+    assert fx["hidden"] is False  # 라이브 검증 완료 → 노출(2026-07-09)
     assert fx["flow_graph"] is not None
     step_keys = [s["key"] for s in fx["steps"]]
     assert step_keys == [
