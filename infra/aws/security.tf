@@ -11,14 +11,14 @@ resource "aws_security_group" "alb" {
     cidr_blocks = var.web_ingress_cidrs
   }
   ingress {
-    description = "https (front + api, host 기반)"
+    description = "https (front + api, host-based routing)"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = var.web_ingress_cidrs
   }
   ingress {
-    description = "api (http, enable_https=false 일 때만 사용)"
+    description = "api http (only when enable_https=false)"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"

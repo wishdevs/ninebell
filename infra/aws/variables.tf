@@ -13,6 +13,13 @@ variable "region" {
   default = "ap-northeast-2" # 서울
 }
 
+# AWS 자격증명 프로파일(~/.aws/credentials). ax-prod = IAM 사용자 ax-admin(root 대신 권장).
+# 기본 자격증명 체인/env 를 쓰려면 "" 로.
+variable "aws_profile" {
+  type    = string
+  default = "ax-prod"
+}
+
 variable "vpc_cidr" {
   type    = string
   default = "10.40.0.0/16"

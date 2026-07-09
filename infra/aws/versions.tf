@@ -21,7 +21,8 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region  = var.region
+  profile = var.aws_profile # ~/.aws/credentials 의 프로파일(정적 키). 기본 default 체인은 "" 로.
 
   default_tags {
     tags = {
