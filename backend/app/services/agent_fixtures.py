@@ -358,7 +358,7 @@ _TRIP_OVERSEAS_FIXTURE: dict = {
         {"key": "set_gubun", "label": "결의구분: 출장(해외·정산서)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "결의구분 드롭다운을 출장(해외·정산서)으로 설정"},
         {"key": "add_row", "label": "상세행 추가(F3)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "F3로 첫 결의 상세행 생성"},
         {"key": "set_acct_date", "label": "회계일 설정", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "마지막 계산서일(출장일)로 결의서 회계일 설정"},
-        {"key": "fill_rows", "label": "건별 입력", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "행별 증빙(10)·계산서일·거래처(본인)·예산단위(해외출장)·프로젝트·공급가액·적요·상대계정(본인)을 반복 입력(HITL 없음)"},
+        {"key": "fill_rows", "label": "건별 입력", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "행별 증빙(10)·계산서일·거래처(본인)·예산단위(해외출장)·프로젝트·공급가액(타이핑+예산현황 확인)·적요·상대계정(부가선택 위젯)+빈행정리를 반복 입력(HITL 없음)"},
         {"key": "save_doc", "label": "저장(F7)", "skill": "save", "status": "pending", "phase": "저장", "detail": "반영된 행을 마지막에 한 번만 저장"},
     ],
     "logs": [],

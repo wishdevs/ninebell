@@ -132,6 +132,8 @@ def make_fill_rows_node():
             cp = await steps.register_counter_partner(page, self_name)
             if not cp.get("ok"):
                 return await fail(i, "상대계정거래처", cp.get("reason"))
+            if cp.get("skipped"):
+                await emit_log(events, f"{i + 1}행 상대계정거래처 항목 없음(문서유형) — 스킵.", "info")
             # 9) 상대계정 등록으로 추가된 빈 행 삭제(데이터 행 유지).
             db = await steps.delete_blank_row(page)
             if not db.get("ok"):

@@ -30,7 +30,17 @@ from nbkit.omnisol.codepicker import (
 
 from . import js
 
+# 국내/자차에서 확정된 공통 스텝을 재사용(중복 방지) — 금액 예산현황 타이핑·상대계정 부가선택
+# 위젯 등록·딸려온 빈 행 삭제. detail 그리드 조작이 국내와 동일 구조라 그대로 통용된다(2026-07-09).
+from app.agents.trip_domestic.steps import (  # noqa: E402
+    delete_blank_row,
+    register_counter_partner,
+    type_amount,
+)
+
 logger = logging.getLogger(__name__)
+
+__all_shared__ = ("type_amount", "register_counter_partner", "delete_blank_row")
 
 # ── 피커 컬럼 / 검색어 상수(프로브 실측) ──────────────────────────────────────────
 PARTNER_FIELDS = ["PARTNER_CD", "PARTNER_NM", "PARTNER_FG_NM", "BIZR_NO"]

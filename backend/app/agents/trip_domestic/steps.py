@@ -489,6 +489,18 @@ async def register_counter_partner(page: Any, self_name: str) -> dict:
     본인명 검색 → 행 더블클릭하면 등록된다. **부작용: detail 빈 행 1개 추가(ERP 동작)** → 호출측이
     `delete_blank_row` 로 제거. 등록 성공 신호 = 빈 행 추가(행수 +1). 반환 {ok}|{ok:False, reason}.
     """
+    # 상대계정거래처 항목 존재 확인 — 문서유형에 따라 없을 수 있다(해외 정산서 gubun 54 는 관리항목에
+    # 상대계정거래처가 없음, 2026-07-09 실측). 5회 스크롤 시도해도 라벨이 없으면 이 유형은 상대계정을
+    # 쓰지 않는 것으로 보고 우아하게 스킵(오등록·오류 대신). 국내 자차는 첫 시도에 바로 발견됨.
+    label_present = False
+    for _ in range(5):
+        if await page.evaluate(js.COUNTER_SCROLL_JS):
+            label_present = True
+            break
+        await page.wait_for_timeout(500)
+    if not label_present:
+        return {"ok": True, "skipped": True, "reason": "상대계정거래처 항목 없음(문서유형) — 스킵"}
+
     before = await page.evaluate(js.DETAIL_ROWS_JS)
     before_n = int(before.get("n") or 0)
     row = None

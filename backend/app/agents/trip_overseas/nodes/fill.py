@@ -78,16 +78,6 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": i + 1, "field": field, "reason": reason}]}
 
-        # 상대계정거래처(작성자 본인) partner code 1회 조회 — 행별 BFC_PARTNER_CD setValue 재사용.
-        # 저장 시 상대계정거래처로 persist(실측 2026-07-07: 실저장+재조회 검증). 하단 폼 위젯은
-        # '적용'이 활성 detail 에디터에 반영돼 빈 행을 추가하는 함정이라 미사용 → dataSource 직접 세팅.
-        counter_code = await steps.lookup_partner_code(page, self_name)
-        if not counter_code:
-            await emit_step(events, "fill_rows", "failed")
-            msg = f"상대계정거래처: 작성자 '{self_name}'의 거래처 코드를 찾을 수 없습니다."
-            await emit_log(events, msg, "error")
-            return {"error": msg, "fill_failures": [{"row": 0, "field": "상대계정거래처", "reason": msg}]}
-
         total = len(plan_rows)
         filled = 0
         for i, row in enumerate(plan_rows):
@@ -122,20 +112,26 @@ def make_fill_rows_node():
             pj = await steps.fill_project(page, row.get("project") or {})
             if not pj.get("ok"):
                 return await fail(i, "프로젝트", pj.get("reason"))
-            # 6) 공급가액(총액) — set_transaction_amount 가 SPPRC_AMT2+공급가액+합계를 동일 세팅·검증
-            #    (자동계산 없음, 해외 정산서 부가세 0 가정). 실패 시 fail-fast.
-            sa = await steps.set_transaction_amount(page, amount)
+            # 6) 공급가액(거래금액=SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(국내와 동일).
+            #    setValue 는 예산현황 확인 트리거를 건너뛰어 저장 DB오류 → 타이핑+Tab→예산현황 확인.
+            sa = await steps.type_amount(page, amount)
             if not sa.get("ok"):
                 return await fail(i, "공급가액", sa.get("reason"))
             # 7) 적요.
             nt = await steps.set_row_note(page, row.get("note") or "")
             if not nt.get("ok"):
                 return await fail(i, "적요", nt.get("reason"))
-            # 8) 상대계정거래처(작성자 본인) = detail 행 BFC_PARTNER_CD 직접 setValue(실측 2026-07-07:
-            #    저장 전표에 persist·행 추가 없음·PARTNER 미덮음). 하단 폼 위젯은 함정이라 미사용.
-            cp = await steps.set_counter_partner(page, counter_code)
+            # 8) 상대계정거래처(작성자 본인) = **부가선택 위젯 🔍 → 검색 → 행 더블클릭**(국내와 동일).
+            #    등록 시 딸려오는 빈 행은 9) 에서 삭제.
+            cp = await steps.register_counter_partner(page, self_name)
             if not cp.get("ok"):
                 return await fail(i, "상대계정거래처", cp.get("reason"))
+            if cp.get("skipped"):
+                await emit_log(events, f"{i + 1}행 상대계정거래처 항목 없음(해외 정산서) — 스킵.", "info")
+            # 9) 상대계정 등록으로 추가된 빈 행 삭제(데이터 행 유지).
+            db = await steps.delete_blank_row(page)
+            if not db.get("ok"):
+                return await fail(i, "빈행삭제", db.get("reason"))
 
             filled += 1
             await emit_log(events, f"{i + 1}/{total}행 반영 완료.", "ok")
