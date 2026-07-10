@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # 세션 쿠키 SameSite. 로컬(동일 출처 http)=lax. 운영에서 front·api 가 다른 도메인이면
     # cross-origin 이라 "none"(+cookie_secure=true) 필요. env COOKIE_SAMESITE.
     cookie_samesite: str = "lax"
+    # 세션 쿠키 Domain. 비우면 host-only(로컬: front·api 가 같은 localhost 라 공유됨).
+    # 운영에서 front(ninebell.hynro.com)·api(ninebell-api.hynro.com) 가 서로 다른 서브도메인이면
+    # ".hynro.com" 처럼 부모 도메인으로 발급해야 front 프록시(구 middleware)가 쿠키를 본다. env COOKIE_DOMAIN.
+    cookie_domain: str = ""
 
     # --- 더존 옴니솔 ERP ---
     erp_base: str = "https://erp.ninebell.co.kr"

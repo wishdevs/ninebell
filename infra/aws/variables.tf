@@ -187,6 +187,13 @@ variable "api_domain_name" {
   default = "ninebell-api.hynro.com" # api
 }
 
+# 세션 쿠키 Domain. front·api 가 서로 다른 서브도메인이라 부모 도메인으로 발급해야
+# front 프록시(구 middleware)가 쿠키를 본다. https 모드에서만 적용(로컬은 host-only).
+variable "cookie_domain" {
+  type    = string
+  default = ".hynro.com"
+}
+
 variable "ssl_policy" {
   type    = string
   default = "ELBSecurityPolicy-TLS13-1-2-2021-06"

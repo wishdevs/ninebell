@@ -59,6 +59,8 @@ resource "aws_ecs_task_definition" "api" {
       # cross-origin(front↔api 다른 도메인) 세션 쿠키: https 면 SameSite=None + Secure 필요.
       { name = "COOKIE_SECURE", value = var.enable_https ? "true" : "false" },
       { name = "COOKIE_SAMESITE", value = var.enable_https ? "none" : "lax" },
+      # front·api 가 다른 서브도메인 → 부모 도메인 쿠키라야 front 프록시가 세션을 본다.
+      { name = "COOKIE_DOMAIN", value = var.enable_https ? var.cookie_domain : "" },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
     ]

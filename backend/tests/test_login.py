@@ -179,3 +179,38 @@ async def test_remember_me_extends_session_ttl(client, sm, monkeypatch):
     sc2 = r2.headers["set-cookie"]
     assert f"Max-Age={settings.remember_ttl_seconds}" in sc2
     assert settings.remember_ttl_seconds > settings.session_ttl_seconds
+
+
+# ---- 세션 쿠키 Domain(front·api 서브도메인 공유) ----------------------------
+
+
+async def test_cookie_domain_applied_when_configured(client, monkeypatch):
+    """COOKIE_DOMAIN 설정 시 Set-Cookie 에 Domain 속성이 실린다.
+
+    운영에서 front(ninebell.hynro.com) 프록시가 api(ninebell-api.hynro.com) 발급 세션 쿠키를
+    보려면 부모 도메인(.hynro.com)으로 발급해야 한다.
+    """
+
+    async def _must_not_call(browser, userid, password, base):
+        raise AssertionError("로컬 계정 로그인은 옴니솔을 호출하면 안 된다.")
+
+    _wire_state(monkeypatch, _must_not_call)
+    monkeypatch.setattr(get_settings(), "cookie_domain", ".hynro.com")
+
+    resp = await client.post("/auth/login", json={"userid": "admin", "password": "1111"})
+    assert resp.status_code == 200
+    assert "Domain=.hynro.com" in resp.headers["set-cookie"]
+
+
+async def test_cookie_domain_absent_by_default(client, monkeypatch):
+    """기본(COOKIE_DOMAIN 미설정) → host-only. 로컬은 front·api 가 같은 localhost 라 공유된다."""
+
+    async def _must_not_call(browser, userid, password, base):
+        raise AssertionError("로컬 계정 로그인은 옴니솔을 호출하면 안 된다.")
+
+    _wire_state(monkeypatch, _must_not_call)
+    monkeypatch.setattr(get_settings(), "cookie_domain", "")
+
+    resp = await client.post("/auth/login", json={"userid": "admin", "password": "1111"})
+    assert resp.status_code == 200
+    assert "Domain=" not in resp.headers["set-cookie"]

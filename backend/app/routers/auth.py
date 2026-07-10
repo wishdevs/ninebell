@@ -70,6 +70,7 @@ def _issue_session(
         samesite=settings.cookie_samesite,
         secure=settings.cookie_secure,
         path="/",
+        domain=settings.cookie_domain or None,
     )
 
 
@@ -283,9 +284,13 @@ async def logout(request: Request, response: Response) -> dict:
         except InvalidTokenError:
             pass
     settings = get_settings()
-    # 삭제 쿠키도 발급 때와 동일 속성이어야 브라우저가 확실히 지운다(특히 SameSite=None; Secure).
+    # 삭제 쿠키도 발급 때와 동일 속성(domain 포함)이어야 브라우저가 확실히 지운다(특히 SameSite=None; Secure).
     response.delete_cookie(
-        SESSION_COOKIE, path="/", samesite=settings.cookie_samesite, secure=settings.cookie_secure
+        SESSION_COOKIE,
+        path="/",
+        samesite=settings.cookie_samesite,
+        secure=settings.cookie_secure,
+        domain=settings.cookie_domain or None,
     )
     return {"ok": True}
 
