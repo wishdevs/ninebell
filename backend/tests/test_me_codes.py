@@ -12,7 +12,7 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import app.routers.me_codes as me_codes
 import app.services.code_sync as code_sync
@@ -346,6 +346,8 @@ async def test_card_seed_list_and_search(client, make_user, auth_as, sm):
     uid = await make_user("seed-user", "user")
     auth_as(uid)
     async with sm() as s:
+        # 시드 격리 — seed_all 이 넣는 전사 기초자료를 비우고 이 테스트 전용 2건만 검증한다.
+        await s.execute(delete(CardSeedSelection))
         s.add(CardSeedSelection(
             norm_merchant="맘스터치상대원점", merchant="맘스터치 상대원점",
             acct_code="81100", acct_name="복리후생비-석식", note="직원 야근식대",
