@@ -7,11 +7,19 @@ card_collect 에서 승격(2026-07-05) — 모든 옴니솔 에이전트 공용.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any
 
 from nbkit.omnisol import js_lib
+
+logger = logging.getLogger("nbkit.omnisol.codepicker")
+
+# 코드피커 버튼 출현 폴링 — 컨테이너 느린 렌더(--disable-dev-shm-usage)나 '증빙 확인 중' 모달로
+# 버튼(#{field}-wrapper)이 지연 출현하는 환경 대비(2026-07-10 규명, 실측 ~0.5s). 넉넉히 6s.
+_OPEN_BTN_POLLS = 24
+_OPEN_BTN_INTERVAL_MS = 250
 
 # underscore 이름들도 shim(card_collect.steps)이 재수출하므로 안정 인터페이스로 유지한다.
 __all__ = [
@@ -169,9 +177,22 @@ async def fill_codepicker(
 
 # ── 코드 카탈로그 덤프용 저수준 헬퍼(열기/재검색) ─────────────────────────────────
 async def _open_picker(page: Any, field_id: str) -> bool:
-    """코드피커 버튼 좌표 클릭 → 팝업 오픈·그리드 준비 폴링(고정 1.8s 대체). 성공 True."""
-    box = await page.evaluate(js_lib.picker_btn_js(field_id))
+    """코드피커 버튼 좌표 클릭 → 팝업 오픈·그리드 준비 폴링(고정 1.8s 대체). 성공 True.
+
+    버튼(#{field}-wrapper .dews-codepicker-button)이 렌더될 때까지 폴링한다 — 컨테이너의 느린
+    렌더(--disable-dev-shm-usage)나 '증빙 확인 중' 모달로 버튼이 지연 출현하면 예전엔 box=None
+    즉시 실패로 0행이 됐다(프로젝트 카탈로그 동기화 prod 0건 원인, 2026-07-10 규명).
+    """
+    box = None
+    for i in range(_OPEN_BTN_POLLS):
+        box = await page.evaluate(js_lib.picker_btn_js(field_id))
+        if box:
+            if i:
+                logger.info("코드피커 '%s' 버튼 %d회 폴링 후 출현(~%dms)", field_id, i, i * _OPEN_BTN_INTERVAL_MS)
+            break
+        await page.wait_for_timeout(_OPEN_BTN_INTERVAL_MS)
     if not box:
+        logger.warning("코드피커 '%s' 버튼 미출현(폴링 %d회 소진) — 팝업 미오픈", field_id, _OPEN_BTN_POLLS)
         return False
     await page.mouse.click(box["x"], box["y"])
     await _wait_picker_rows_stable(page, cap_ms=3_000)
