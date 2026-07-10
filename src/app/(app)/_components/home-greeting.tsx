@@ -5,6 +5,7 @@ import { usePermissions } from '@/hooks/use-permissions';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { HomeFavoriteAgents } from './home-favorite-agents';
+import { PushAlarmTest } from './push-alarm-test';
 
 /**
  * 홈 — 인사 헤더 + '자주쓰는 에이전트' 최대 3개 (사용자 확정 2026-07-05: 홈은 이것만).
@@ -27,6 +28,8 @@ export function HomeGreeting() {
       />
 
       {has(PERMISSIONS.AGENTS_READ) ? <HomeFavoriteAgents /> : null}
+
+      <PushAlarmTest />
     </div>
   );
 }
