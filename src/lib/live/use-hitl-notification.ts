@@ -26,13 +26,13 @@ function isTabFocused(): boolean {
   return document.visibilityState === 'visible' && document.hasFocus();
 }
 
-/** 백그라운드 탭에 OS 알림(안 사라지게) — 권한 granted 일 때만. */
+/** 백그라운드 탭에 OS 알림 — 권한 granted 일 때만. */
 function notify(title: string, body: string): void {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
-    // requireInteraction: 배너가 자동으로 사라지지 않고 사용자가 닫을 때까지 유지된다
-    // (macOS 는 알림 스타일이 '배너'가 아니라 '알림(Alerts)'일 때 유지됨 — OS 설정 의존).
-    new Notification(title, { body, requireInteraction: true });
+    // requireInteraction 은 쓰지 않는다 — macOS 알림 스타일이 '배너'면 지속 요청과 충돌해
+    // 알림이 아예 안 뜨는 사례가 있다. 지속성은 탭 제목·파비콘 플래싱이 대신한다.
+    new Notification(title, { body });
   } catch {
     /* 알림 생성 실패는 치명적이지 않다 — 조용히 무시 */
   }
