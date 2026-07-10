@@ -267,8 +267,8 @@ async def test_grid_submit_applies_each_non_skip_row_and_records_failures(monkey
         frame["id"],
         {
             "rows": [
-                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식"},
-                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "소모품"},
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "회식"},
+                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "소모품"},
                 {"no": 3, "skip": True},
             ]
         },
@@ -316,10 +316,12 @@ async def test_grid_submit_learns_only_edited_fields(monkeypatch):
         {
             "rows": [
                 # 1행: 예산단위만 편집 → 예산단위만 학습(적요·프로젝트는 None 으로 스냅샷 보존).
-                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식",
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"},
+                 "project": {"code": "800|W1", "name": "판관비"}, "note": "회식",
                  "budgetEdited": True, "noteEdited": False, "projectEdited": False},
                 # 2행: 아무 편집 없음(프리필 그대로 수락) → 학습 대상 아님.
-                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "소모품",
+                {"no": 2, "budgetUnit": {"code": "1000", "name": "영업본부", "bgacctNm": "(판)복리후생비"},
+                 "project": {"code": "800|W1", "name": "판관비"}, "note": "소모품",
                  "budgetEdited": False, "noteEdited": False, "projectEdited": False},
             ]
         },
@@ -406,9 +408,9 @@ async def test_grid_submit_partitions_taxable_vs_nontax(monkeypatch):
         frame["id"],
         {
             "rows": [
-                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "회식"},
-                {"no": 2, "budgetUnit": {"code": "2000", "name": "경영본부"}, "note": "소모품"},
-                {"no": 3, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "주차"},
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "회식"},
+                {"no": 2, "budgetUnit": {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "소모품"},
+                {"no": 3, "budgetUnit": {"code": "1000", "name": "영업본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "주차"},
             ]
         },
     )
@@ -941,14 +943,20 @@ async def test_grid_submit_batches_same_key_rows_into_one_apply(monkeypatch):
     task = asyncio.create_task(make_collect_rows_node()(state))
     frame = await _next_hitl(events)
 
-    bu = {"code": "2000", "name": "경영본부"}
+    bu = {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"}
+    pj = {"code": "800|W1", "name": "판관비"}
     resolve_hitl(
         frame["id"],
         {
             "rows": [
-                {"no": 1, "budgetUnit": bu, "note": "회식"},
-                {"no": 2, "budgetUnit": bu, "note": "회식"},  # 1행과 같은 키 → 같은 그룹
-                {"no": 3, "budgetUnit": {"code": "1000", "name": "영업본부"}, "note": "회식"},
+                {"no": 1, "budgetUnit": bu, "project": pj, "note": "회식"},
+                {"no": 2, "budgetUnit": bu, "project": pj, "note": "회식"},  # 1행과 같은 키 → 같은 그룹
+                {
+                    "no": 3,
+                    "budgetUnit": {"code": "1000", "name": "영업본부", "bgacctNm": "(판)복리후생비"},
+                    "project": pj,
+                    "note": "회식",
+                },
             ]
         },
     )
@@ -996,3 +1004,45 @@ async def test_apply_group_fields_batches_and_skips_account_picker(monkeypatch):
     assert ok and "(3건 일괄)" in detail
     assert picked == ["bg", "pjt"]  # 계정(acct) 피커 미호출
     assert applied_rows == [[0, 2, 5]]  # 일괄적용 1회
+
+
+# ── 제출 검증: 예산계정·프로젝트·적요 필수(사용자 규명 2026-07-10) ──────────────
+
+
+def _submit_row(**over) -> dict:
+    r = {
+        "no": 1,
+        "budgetUnit": {"code": "B|P|A", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
+        "project": {"code": "800|W1", "name": "판관비"},
+        "note": "야근식대",
+    }
+    r.update(over)
+    return r
+
+
+def test_validate_grid_submit_accepts_complete_row():
+    ok, reason = cc_nodes._validate_grid_submit([_submit_row()], 1)
+    assert ok, reason
+
+
+def test_validate_grid_submit_requires_project():
+    ok, reason = cc_nodes._validate_grid_submit([_submit_row(project={"code": "", "name": ""})], 1)
+    assert not ok and "프로젝트" in reason
+
+
+def test_validate_grid_submit_requires_budget_account():
+    ok, reason = cc_nodes._validate_grid_submit(
+        [_submit_row(budgetUnit={"code": "B|P|A", "name": "팀", "bgacctNm": ""})], 1
+    )
+    assert not ok and "예산계정" in reason
+
+
+def test_validate_grid_submit_requires_note():
+    ok, reason = cc_nodes._validate_grid_submit([_submit_row(note="")], 1)
+    assert not ok and "적요" in reason
+
+
+def test_validate_grid_submit_skip_row_bypasses_required():
+    # 스킵 행은 필수 검증을 타지 않는다(제외 처리).
+    ok, reason = cc_nodes._validate_grid_submit([{"no": 1, "skip": True}], 1)
+    assert ok, reason

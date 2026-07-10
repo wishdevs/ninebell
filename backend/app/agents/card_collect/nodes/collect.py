@@ -20,7 +20,7 @@ logger = logging.getLogger("app.agents.card_collect.nodes.collect")
 
 
 def _validate_grid_submit(rows_in: list[dict], n: int) -> tuple[bool, str]:
-    """제출 rows 서버검증. 비스킵 행은 예산단위(code·name)·적요 필수, 행번호는 1..n.
+    """제출 rows 서버검증. 비스킵 행은 예산단위(code·name)·예산계정·프로젝트·적요 필수, 행번호는 1..n.
 
     행 집합은 정확히 {1..n}(중복·누락 불허) — 부분 제출을 허용하면 빠진 행이 조용히 pending
     으로 남고, 중복 no 는 같은 ERP 행을 이중 반영한다(리뷰 MEDIUM #3). (ok, reason) 반환.
@@ -38,6 +38,13 @@ def _validate_grid_submit(rows_in: list[dict], n: int) -> tuple[bool, str]:
         bu = row.get("budgetUnit") or {}
         if not (bu.get("code") and bu.get("name")):
             return False, f"{no}행 예산단위를 선택해 주세요."
+        # 예산계정(bgacctNm)·프로젝트·적요는 ERP 저장 시 필수 — 비면 조용히 넘어가 F7 이
+        # "상세그리드 필수값 미입력"으로 거부된다(사용자 규명 2026-07-10). 제출 단계에서 막는다.
+        if not (bu.get("bgacctNm") or "").strip():
+            return False, f"{no}행 예산계정이 비어 있습니다 — 예산단위를 다시 선택해 주세요."
+        pj = row.get("project") or {}
+        if not (pj.get("code") and pj.get("name")):
+            return False, f"{no}행 프로젝트를 선택해 주세요."
         if not (row.get("note") or "").strip():
             return False, f"{no}행 적요를 입력해 주세요."
     if len(seen) != n:
