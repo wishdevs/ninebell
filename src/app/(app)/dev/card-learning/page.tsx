@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CardLearningTable } from './_components/card-learning-table';
@@ -11,10 +10,9 @@ export const metadata: Metadata = { title: '개입 학습(디버그)' };
  * 개입 학습 디버그 — AI 추천 근거가 되는 두 tier 를 탭으로 나눠 열람한다.
  * - 공통: 전사 기초자료(seed, 가맹점→계정·적요) — 공용, 개인 학습 없을 때 폴백.
  * - 개인: 사용자가 그리드 개입에서 확정한 선택(예산단위/프로젝트/적요·빈도).
- * 제작용이며 **개발 환경에서만** 접근 가능(프로덕션 빌드에서는 404).
+ * 운영 노출(관리자+ nav 게이트). 라우트 자체는 세션만 요구한다.
  */
 export default function CardLearningDevPage() {
-  if (process.env.NODE_ENV === 'production') notFound();
   return (
     <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-6">
       <PageHeader
