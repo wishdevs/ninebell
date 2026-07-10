@@ -50,8 +50,9 @@ export function useHitlNotification(hitlId: string | null): void {
     // 사용자 피드백 2026-07-05: "개입 시점인데 알람이 안 온다").
     toast.info('입력이 필요합니다', { description: '개입 탭에서 입력을 완료해 주세요.' });
 
-    // 브라우저 알림 — 탭이 백그라운드일 때(권한 granted). 포커스 중엔 토스트가 대신한다.
-    if (!isTabFocused() && 'Notification' in window && Notification.permission === 'granted') {
+    // 브라우저 알림 — 개입이 오면 포커스 여부와 무관하게 항상(권한 granted). 사용자 요청
+    // 2026-07-10: "개입이 있을 경우 브라우저 알람을 줘야 한다"(다른 탭/앱을 보고 있어도 확실히 인지).
+    if ('Notification' in window && Notification.permission === 'granted') {
       try {
         new Notification('입력이 필요합니다', {
           body: '결의서 그리드 입력을 기다리는 중입니다.',
