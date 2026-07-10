@@ -1,0 +1,70 @@
+name: deploy
+
+# main 푸시(또는 수동 실행) → 이미지 빌드/푸시(ECR) → ECS 서비스 재배포.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# 새 푸시가 오면 진행 중 배포는 취소(중복 배포 방지).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 943789029542.dkr.ecr.ap-northeast-2.amazonaws.com
+  API_REPO: ninebell-dashboard-test-api
+  FRONT_REPO: ninebell-dashboard-test-front
+  CLUSTER: ninebell-dashboard-test
+  # front 클라이언트 번들에 구워지는 api 주소(빌드 타임). 배포 도메인과 일치시킬 것.
+  NEXT_PUBLIC_API_BASE: https://ninebell-api.hynro.com
+
+jobs:
+  deploy:
+    # ECS 태스크가 ARM64(Graviton) → 러너도 arm64 네이티브(빌드 빠름).
+    # ⚠ 요금제에서 arm64 러너를 못 쓰면: ubuntu-latest + docker buildx(QEMU) 로 --platform linux/arm64
+    #    (playwright 이미지라 에뮬레이션은 매우 느림) 또는 ECS 를 X86_64 로 전환.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push API
+        run: |
+          IMG="$ECR_REGISTRY/$API_REPO"
+          docker build --platform linux/arm64 -f infra/aws/docker/api.Dockerfile \
+            -t "$IMG:latest" -t "$IMG:${{ github.sha }}" .
+          docker push "$IMG:latest"
+          docker push "$IMG:${{ github.sha }}"
+
+      - name: Build & push FRONT
+        run: |
+          IMG="$ECR_REGISTRY/$FRONT_REPO"
+          docker build --platform linux/arm64 -f infra/aws/docker/front.Dockerfile \
+            --build-arg NEXT_PUBLIC_API_BASE="$NEXT_PUBLIC_API_BASE" \
+            -t "$IMG:latest" -t "$IMG:${{ github.sha }}" .
+          docker push "$IMG:latest"
+          docker push "$IMG:${{ github.sha }}"
+
+      - name: Deploy to ECS (force new deployment)
+        run: |
+          aws ecs update-service --cluster "$CLUSTER" --service api   --force-new-deployment --region "$AWS_REGION" >/dev/null
+          aws ecs update-service --cluster "$CLUSTER" --service front --force-new-deployment --region "$AWS_REGION" >/dev/null
+
+      - name: Wait for services stable
+        run: |
+          aws ecs wait services-stable --cluster "$CLUSTER" --services api front --region "$AWS_REGION"
+          echo "✅ 배포 완료: https://ninebell.hynro.com"

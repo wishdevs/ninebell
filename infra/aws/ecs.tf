@@ -54,6 +54,8 @@ resource "aws_ecs_task_definition" "api" {
       { name = "MAX_CONCURRENT_ERP_LOGINS", value = tostring(var.max_concurrent_erp_logins) },
       { name = "CHROMIUM_ARGS", value = var.chromium_args }, # Fargate /dev/shm 회피 플래그
       { name = "DEV_CREATE_ALL", value = var.dev_create_all },
+      # front 오리진 CORS 허용(교차 출처: front 도메인 ↔ api 도메인). https 모드면 도메인, 아니면 ALB.
+      { name = "CORS_ORIGINS", value = var.enable_https ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
     ]
