@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # '로그인 상태 유지' 체크 시의 연장 세션 수명(기본 30일). 미체크는 session_ttl_hours.
     remember_ttl_hours: int = 24 * 30
     cookie_secure: bool = False
+    # 세션 쿠키 SameSite. 로컬(동일 출처 http)=lax. 운영에서 front·api 가 다른 도메인이면
+    # cross-origin 이라 "none"(+cookie_secure=true) 필요. env COOKIE_SAMESITE.
+    cookie_samesite: str = "lax"
 
     # --- 더존 옴니솔 ERP ---
     erp_base: str = "https://erp.ninebell.co.kr"

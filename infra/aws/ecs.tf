@@ -56,6 +56,9 @@ resource "aws_ecs_task_definition" "api" {
       { name = "DEV_CREATE_ALL", value = var.dev_create_all },
       # front 오리진 CORS 허용(교차 출처: front 도메인 ↔ api 도메인). https 모드면 도메인, 아니면 ALB.
       { name = "CORS_ORIGINS", value = var.enable_https ? "https://${var.domain_name}" : "http://${aws_lb.main.dns_name}" },
+      # cross-origin(front↔api 다른 도메인) 세션 쿠키: https 면 SameSite=None + Secure 필요.
+      { name = "COOKIE_SECURE", value = var.enable_https ? "true" : "false" },
+      { name = "COOKIE_SAMESITE", value = var.enable_https ? "none" : "lax" },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
     ]

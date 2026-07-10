@@ -67,7 +67,7 @@ def _issue_session(
         token,
         max_age=ttl,
         httponly=True,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         secure=settings.cookie_secure,
         path="/",
     )
@@ -282,7 +282,11 @@ async def logout(request: Request, response: Response) -> dict:
                 request.app.state.cred_cache.delete(jti)
         except InvalidTokenError:
             pass
-    response.delete_cookie(SESSION_COOKIE, path="/")
+    settings = get_settings()
+    # 삭제 쿠키도 발급 때와 동일 속성이어야 브라우저가 확실히 지운다(특히 SameSite=None; Secure).
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", samesite=settings.cookie_samesite, secure=settings.cookie_secure
+    )
     return {"ok": True}
 
 
