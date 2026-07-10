@@ -75,9 +75,10 @@ export function PushAlarmTest() {
       window.clearInterval(interval);
       setCountdown(0);
       try {
+        // tag 를 쓰지 않는다 — 같은 tag 알림은 조용히 '교체'되어(renotify 기본 false)
+        // 반복 클릭 시 두 번째부터 새 배너가 안 뜬다. 매 클릭 독립 배너로.
         new Notification('푸시 알람 테스트', {
           body: '3초 뒤 알림이 정상적으로 표시되었습니다. ✅',
-          tag: 'push-alarm-test',
         });
       } catch {
         toast.error('알림 표시에 실패했습니다.');
