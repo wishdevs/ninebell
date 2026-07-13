@@ -17,3 +17,6 @@ backend/e2e/artifacts
 .DS_Store
 **/.DS_Store
 .claude
+# 프론트(루트 컨텍스트) 이미지엔 백엔드·배포파일 불필요 — 백엔드는 자체 backend/Dockerfile(context=backend).
+backend/
+deploy/

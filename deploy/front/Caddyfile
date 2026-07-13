@@ -1,0 +1,20 @@
+# 유일한 public 진입점. /api → 백엔드(api 서버 50), 나머지 → 프론트(로컬 next 컨테이너).
+# same-origin 이라 쿠키/CORS 가 단순해진다.
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# /api/* → 백엔드. handle_path 가 '/api' 접두사를 벗겨 전달(백엔드는 /auth/me 로 받음).
+	handle_path /api/* {
+		reverse_proxy {$API_UPSTREAM}
+	}
+
+	# 나머지 → 프론트(같은 compose 네트워크의 next 컨테이너, :3000).
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
+# HTTPS 옵션(택1):
+#  1) 공개 도메인 자동 인증서: SITE_ADDRESS 를 도메인으로(예 ninebell.example.com) → Caddy ACME 자동 발급.
+#  2) 내부 전용 HTTPS: 위 사이트 블록에 `tls internal` 한 줄 추가(Caddy 내부 CA). → app.env COOKIE_SECURE=true.
+#  3) HTTP(:80)만: 지금 상태 그대로. → app.env COOKIE_SECURE=false.

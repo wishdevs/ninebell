@@ -1,0 +1,84 @@
+# 배포 파이프라인 — build(러너에서 1회) → registry push → deploy(서버는 pull만).
+# 서버에선 빌드하지 않는다. 상세 셋업: deploy/README.md
+stages: [build, deploy]
+
+variables:
+  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
+  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
+  TAG: "$CI_COMMIT_SHORT_SHA"
+
+# ══════════ BUILD (CI 러너 dind → GitLab Container Registry) ══════════
+.build:
+  image: docker:27
+  services: [docker:27-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"' # main 에서만 빌드(초안 — 필요시 조정)
+
+build:backend:
+  extends: .build
+  stage: build
+  script:
+    - docker build -f backend/Dockerfile -t "$BACKEND_IMAGE:$TAG" -t "$BACKEND_IMAGE:latest" backend
+    - docker push "$BACKEND_IMAGE:$TAG"
+    - docker push "$BACKEND_IMAGE:latest"
+
+build:frontend:
+  extends: .build
+  stage: build
+  script:
+    # ⚠ NEXT_PUBLIC_API_BASE 는 빌드타임에 번들에 구움 → 프록시 same-origin '/api'.
+    - docker build --build-arg NEXT_PUBLIC_API_BASE=/api -t "$FRONTEND_IMAGE:$TAG" -t "$FRONTEND_IMAGE:latest" .
+    - docker push "$FRONTEND_IMAGE:$TAG"
+    - docker push "$FRONTEND_IMAGE:latest"
+
+# ══════════ DEPLOY (서버 SSH → 프리빌드 이미지 pull + up) ══════════
+# 서버가 private 레지스트리에서 pull 하려면 read_registry Deploy Token 필요
+# (GitLab → Settings → Repository → Deploy tokens, scope=read_registry).
+# → CI/CD 변수: REGISTRY_DEPLOY_USER / REGISTRY_DEPLOY_TOKEN.
+# SSH: DEPLOY_SSH_KEY(개인키, masked·protected) / DEPLOY_USER / API_HOST / DB_HOST / FRONT_HOST.
+.deploy:
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache openssh-client rsync
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    - ssh-keyscan -H "$API_HOST" "$FRONT_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual # 초안: 수동 승인 버튼. 자동배포하려면 when 줄 제거.
+
+# api: entrypoint 가 `alembic upgrade head` 후 uvicorn → 배포 시 마이그레이션 자동.
+deploy:api:
+  extends: .deploy
+  stage: deploy
+  script:
+    - rsync -az deploy/api/docker-compose.yml "$DEPLOY_USER@$API_HOST:/opt/ninebell/api/docker-compose.yml"
+    - |
+      ssh "$DEPLOY_USER@$API_HOST" "
+        set -e
+        cd /opt/ninebell/api
+        docker login -u '$REGISTRY_DEPLOY_USER' -p '$REGISTRY_DEPLOY_TOKEN' '$CI_REGISTRY'
+        BACKEND_IMAGE='$BACKEND_IMAGE:$TAG' docker compose pull
+        BACKEND_IMAGE='$BACKEND_IMAGE:$TAG' docker compose up -d
+        docker image prune -f
+      "
+
+deploy:frontend:
+  extends: .deploy
+  stage: deploy
+  script:
+    - rsync -az deploy/front/docker-compose.yml deploy/front/Caddyfile "$DEPLOY_USER@$FRONT_HOST:/opt/ninebell/front/"
+    - |
+      ssh "$DEPLOY_USER@$FRONT_HOST" "
+        set -e
+        cd /opt/ninebell/front
+        docker login -u '$REGISTRY_DEPLOY_USER' -p '$REGISTRY_DEPLOY_TOKEN' '$CI_REGISTRY'
+        FRONTEND_IMAGE='$FRONTEND_IMAGE:$TAG' docker compose pull
+        FRONTEND_IMAGE='$FRONTEND_IMAGE:$TAG' docker compose up -d
+        docker image prune -f
+      "
+# db(172.20.50.51)는 스테이트풀이라 CI 배포 대상 아님 — 최초 1회 수동 셋업(deploy/README.md).

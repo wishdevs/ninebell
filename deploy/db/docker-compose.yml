@@ -1,0 +1,24 @@
+# DB 서버(172.20.50.51) — Postgres. 스테이트풀이라 앱 배포와 분리 관리(자주 재배포 X).
+# 최초 1회만 `docker compose up -d`. 데이터는 named volume(pgdata)으로 영속.
+# (도커 대신 네이티브 postgresql 로 돌려도 됨 — 그 경우 이 파일 불필요.)
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dashboard
+      POSTGRES_DB: dashboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 를 .env 에 설정하세요}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # ⚠ api 서버(50)만 닿게 내부 인터페이스에 바인딩. 절대 0.0.0.0/공개 금지 + 방화벽으로 50만 허용.
+      - "172.20.50.51:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

@@ -48,3 +48,7 @@ backend/.pytest_cache/
 # Claude Code 에이전트 워크트리(전체 리포 사본) — Tailwind v4 가 gitignore 밖 파일을
 # 전부 스캔하므로 여기 없으면 워크트리 내 문서 문자열이 빌드를 깨뜨릴 수 있다(2026-07-05 실측).
 .claude/worktrees/
+deploy/api/app.env
+deploy/api/.env
+deploy/db/.env
+deploy/front/.env

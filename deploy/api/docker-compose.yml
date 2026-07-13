@@ -1,0 +1,24 @@
+# API 서버(172.20.50.50) — FastAPI 백엔드(헤드리스 Chromium 포함).
+# 두 개의 env 파일을 쓴다:
+#   .env      → 이미지 태그(BACKEND_IMAGE). CI 가 배포 때 갱신(compose 변수 치환용).
+#   app.env   → 런타임 시크릿(DATABASE_URL·AUTH_SECRET·LOCAL_ADMIN_PASSWORD·GEMINI_API_KEY…). 서버에 1회 배치.
+# 컨테이너 시작 시 entrypoint 가 `alembic upgrade head` 후 uvicorn(단일 워커) 실행.
+services:
+  api:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE 미설정 — CI 가 .env 에 registry/backend:TAG 를 씀}
+    restart: unless-stopped
+    env_file: app.env
+    environment:
+      # ⚠ 컨테이너 Chromium 필수 인자(/dev/shm 제약·샌드박스 없음).
+      CHROMIUM_ARGS: "--disable-dev-shm-usage --no-sandbox"
+    shm_size: "1gb"
+    ports:
+      # 프록시(front 52)에서만 접근. 내부 인터페이스 바인딩 + 방화벽으로 52만 허용. 공개 금지.
+      - "172.20.50.50:8010:8010"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/openapi.json').getcode()==200 else 1)\""
+      interval: 15s
+      timeout: 5s
+      retries: 5

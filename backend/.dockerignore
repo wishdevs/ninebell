@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.env
+e2e/artifacts/
+tests/
+# app/data/*.json.gz 는 시드라 이미지에 포함되어야 한다(제외 금지).
