@@ -38,6 +38,26 @@ function supplyAmount(baseAmount: number, under1Year: boolean): number {
   return under1Year ? Math.round(baseAmount * 0.5) : baseAmount;
 }
 
+/**
+ * 금액을 한글 원화 표기로(억·만 단위). 예: 500000 → "50만원", 1234567 → "123만 4,567원".
+ * 숫자 표기(정확값) 보조용 — 읽기 편하게 만/억 단위로 끊어 보여준다. 0 이하·비수는 빈 문자열.
+ */
+function toKoreanWon(amount: number): string {
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const EOK = 100_000_000;
+  const MAN = 10_000;
+  let rest = Math.floor(amount);
+  const eok = Math.floor(rest / EOK);
+  rest %= EOK;
+  const man = Math.floor(rest / MAN);
+  rest %= MAN;
+  const parts: string[] = [];
+  if (eok) parts.push(`${eok.toLocaleString('ko-KR')}억`);
+  if (man) parts.push(`${man.toLocaleString('ko-KR')}만`);
+  if (rest) parts.push(rest.toLocaleString('ko-KR'));
+  return `${parts.join(' ')}원`;
+}
+
 /** 프로젝트 선택값(code+name) — 콤보박스가 두 값을 함께 세팅/해제한다. */
 interface ProjectPick {
   code: string;
@@ -280,9 +300,14 @@ export function GyeongjoPreRunForm({ disabled, initialParams, onStart }: PreRunF
             </span>
           ) : null}
         </div>
-        <span className="text-foreground text-xl font-semibold tabular-nums">
-          {supplyPreview != null ? `${supplyPreview.toLocaleString('ko-KR')}원` : '—'}
-        </span>
+        <div className="flex flex-col items-end">
+          <span className="text-foreground text-xl font-semibold tabular-nums">
+            {supplyPreview != null ? `${supplyPreview.toLocaleString('ko-KR')}원` : '—'}
+          </span>
+          {supplyPreview != null ? (
+            <span className="text-foreground-tertiary text-xs">{toKoreanWon(supplyPreview)}</span>
+          ) : null}
+        </div>
       </div>
 
       <div className="flex items-center justify-end">
