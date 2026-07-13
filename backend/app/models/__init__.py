@@ -11,7 +11,9 @@ from app.models.agent_run import AgentRun
 from app.models.agent_step import AgentStep
 from app.models.agent_template import AgentTemplate
 from app.models.base import Base
+from app.models.card_learned_note import CardLearnedNote
 from app.models.card_learned_selection import CardLearnedSelection
+from app.models.card_seed_note import CardSeedNote
 from app.models.card_seed_selection import CardSeedSelection
 from app.models.erp_code_catalog import ErpCodeCatalog
 from app.models.org_unit import AgentOrgAccess, OrgUnit
@@ -41,4 +43,6 @@ __all__ = [
     "ErpCodeCatalog",
     "CardLearnedSelection",
     "CardSeedSelection",
+    "CardLearnedNote",
+    "CardSeedNote",
 ]

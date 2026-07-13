@@ -28,6 +28,7 @@ from app.models import (
     AgentIntervention,
     AgentLog,
     AgentStep,
+    CardSeedNote,
     CardSeedSelection,
     OrgUnit,
     Permission,
@@ -365,6 +366,8 @@ async def seed_org_units(db: AsyncSession) -> None:
 
 # 전사 카드 기초자료 시드 파일(레포 커밋) — app/data/card_seed_selections.json.gz.
 _CARD_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "card_seed_selections.json.gz"
+# (가맹점 × 계정) → 적요 시드 파일(레포 커밋) — app/data/card_seed_notes.json.gz.
+_CARD_SEED_NOTES_PATH = Path(__file__).resolve().parent.parent / "data" / "card_seed_notes.json.gz"
 
 
 async def seed_card_seeds(db: AsyncSession) -> None:
@@ -397,6 +400,38 @@ async def seed_card_seeds(db: AsyncSession) -> None:
     logger.info("card_seed 시드: %d행 적재(%s).", len(rows), _CARD_SEED_PATH.name)
 
 
+async def seed_card_seed_notes(db: AsyncSession) -> None:
+    """전사 (가맹점 × 계정) → 적요(card_seed_notes) 멱등 시드 — 비어있을 때만 gz 파일에서 적재.
+
+    seed_card_seeds 미러. 누적/갱신분(사용·재임포트) 보존을 위해 테이블이 비어있을 때만 넣는다.
+    파일이 없으면 경고만 남기고 건너뛴다(스타트업 실패 방지).
+    """
+    if (await db.execute(select(CardSeedNote.id).limit(1))).first() is not None:
+        return  # 이미 데이터 존재(시드됨 또는 누적) — 건너뜀.
+    if not _CARD_SEED_NOTES_PATH.exists():
+        logger.warning(
+            "card_seed_notes 파일 없음(%s) — 계정별 적요 시드 건너뜀.", _CARD_SEED_NOTES_PATH
+        )
+        return
+    with gzip.open(_CARD_SEED_NOTES_PATH, "rb") as fh:
+        rows = json.loads(fh.read().decode("utf-8"))
+    for r in rows:
+        db.add(
+            CardSeedNote(
+                norm_merchant=r["norm_merchant"],
+                merchant=r["merchant"],
+                acct_code=r["acct_code"],
+                acct_name=r.get("acct_name"),
+                note=r.get("note"),
+                count=r.get("count", 1),
+                dominance=r.get("dominance", 1.0),
+                last_year=r.get("last_year"),
+            )
+        )
+    await db.flush()
+    logger.info("card_seed_notes 시드: %d행 적재(%s).", len(rows), _CARD_SEED_NOTES_PATH.name)
+
+
 async def seed_all(db: AsyncSession) -> None:
     """전체 시드를 1개 트랜잭션 흐름으로 실행. 호출자가 commit 한다."""
     permissions = await seed_permissions(db)
@@ -406,3 +441,4 @@ async def seed_all(db: AsyncSession) -> None:
     await seed_agents(db)
     await seed_org_units(db)
     await seed_card_seeds(db)
+    await seed_card_seed_notes(db)

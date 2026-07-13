@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.db import get_sessionmaker
-from app.models import CardLearnedSelection, CardSeedSelection
+from app.models import CardLearnedNote, CardLearnedSelection, CardSeedSelection
 
 logger = logging.getLogger("app.services.card_learning")
 
@@ -100,6 +100,75 @@ async def record_selections(owner: str | None, entries: list[dict]) -> int:
             await s.commit()
     except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
         logger.exception("card learning record_selections failed")
+        return 0
+    return n
+
+
+async def record_account_notes(owner: str | None, entries: list[dict]) -> int:
+    """확정행의 (계정 × 적요)를 (user, norm_merchant, acct_code) 로 upsert.
+
+    entries={merchant, acct_code, acct_name, note}. 사람이 예산단위(=계정)를 바꾸고 적요를 확정한
+    행만 넘어온다(호출부가 noteEdited 게이트). 같은 (가맹점 × 계정) 재확정은 count++ + 최신 적요
+    갱신. record_selections(가맹점 단위 예산 학습)와 **병행** — 이 함수는 계정별 적요만 담당한다.
+
+    계정코드 없으면 skip(방어). owner 없거나 예외면 조용히 0(학습은 부가기능 — 런을 죽이지 않는다).
+    """
+    uid = _uuid(owner)
+    if uid is None or not entries:
+        return 0
+    # ⚠ 같은 런에 같은 (가맹점 × 계정)이 2건 이상이면 유니크 위반으로 커밋 전체가 롤백된다
+    # (record_selections 의 네이버 회귀와 동종). 배치 내 중복을 최신 선택 우선 1건으로 접는다.
+    collapsed: dict[tuple[str, str], dict] = {}
+    for e in entries:
+        merchant = (e.get("merchant") or "").strip()
+        key = norm_merchant(merchant)
+        acct_code = (e.get("acct_code") or "").strip()
+        if not key or not acct_code:
+            continue
+        collapsed[(key, acct_code)] = {**e, "merchant": merchant}
+    if not collapsed:
+        return 0
+    now = datetime.now(UTC)
+    n = 0
+    try:
+        async with get_sessionmaker()() as s:
+            for (key, acct_code), e in collapsed.items():
+                row = (
+                    await s.execute(
+                        select(CardLearnedNote).where(
+                            CardLearnedNote.user_id == uid,
+                            CardLearnedNote.norm_merchant == key,
+                            CardLearnedNote.acct_code == acct_code,
+                        )
+                    )
+                ).scalar_one_or_none()
+                note = (e.get("note") or "").strip() or None
+                acct_name = (e.get("acct_name") or "").strip() or None
+                if row is None:
+                    s.add(
+                        CardLearnedNote(
+                            user_id=uid,
+                            norm_merchant=key,
+                            merchant=e["merchant"],
+                            acct_code=acct_code,
+                            acct_name=acct_name,
+                            note=note,
+                            count=1,
+                            last_used_at=now,
+                        )
+                    )
+                else:
+                    row.merchant = e["merchant"] or row.merchant
+                    if acct_name:
+                        row.acct_name = acct_name
+                    if note:
+                        row.note = note
+                    row.count = (row.count or 0) + 1
+                    row.last_used_at = now
+                n += 1
+            await s.commit()
+    except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
+        logger.exception("card learning record_account_notes failed")
         return 0
     return n
 

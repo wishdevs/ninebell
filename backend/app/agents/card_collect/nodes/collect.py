@@ -407,6 +407,27 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     )
             _owner = state.get("owner")
             learned_n = await card_learning.record_selections(_owner, learn_entries)
+            # (가맹점 × 계정) → 적요 학습: 사람이 적요를 바꾼 행을, **그 행에 확정된 계정
+            # (budgetUnit.bgacctCd/bgacctNm)** 단위로 누적한다(record_selections 와 병행). 다음 런에서
+            # 같은 가맹점의 같은 계정이 나오면 그 계정 전용 적요를 결정적으로 추천하기 위한 데이터.
+            # 계정코드 없으면 record_account_notes 가 skip(방어).
+            note_entries = []
+            for e in [*taxable_work, *pending_nontax]:
+                if not (e["noteEdited"] and e["note"]):
+                    continue
+                bu = e.get("budgetUnit") or {}
+                acct_code = (bu.get("bgacctCd") or "").strip()
+                if not acct_code:
+                    continue
+                note_entries.append(
+                    {
+                        "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                        "acct_code": acct_code,
+                        "acct_name": (bu.get("bgacctNm") or "").strip() or None,
+                        "note": e["note"],
+                    }
+                )
+            account_notes_n = await card_learning.record_account_notes(_owner, note_entries)
             # 항상 로깅(진단): owner 유무·편집 플래그 도착 여부·후보·저장. 0건이면 원인을 바로 좁힌다.
             # 편집표시 0인데 사용자가 바꿨다면 → 프론트 번들 stale(budgetEdited 미전송) 신호.
             _all = [*taxable_work, *pending_nontax]
@@ -416,8 +437,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
             await emit_log(
                 events,
                 f"개입 학습: owner={'있음' if _owner else '없음'} · 편집표시(예산 {_eb}·적요 {_en}·프로젝트 {_ep})"
-                f" · 후보 {len(learn_entries)}건 · 저장 {learned_n}건.",
-                "info" if learned_n else "warn",
+                f" · 후보 {len(learn_entries)}건 · 저장 {learned_n}건 · 계정적요 {account_notes_n}건.",
+                "info" if learned_n or account_notes_n else "warn",
             )
 
             filled, failures, applied_idx = await batch._apply_batch(
