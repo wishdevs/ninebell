@@ -13,6 +13,7 @@ from app.live.registry import register_workflow
 
 from .card_collect.graph import build_card_collect_graph
 from .expense_card import build_expense_card_chat_graph
+from .gyeongjo_grant.graph import build_gyeongjo_grant_graph
 from .trip_domestic.graph import build_trip_domestic_graph
 from .trip_overseas.graph import build_trip_overseas_graph
 
@@ -35,9 +36,14 @@ _trip_overseas_graph = build_trip_overseas_graph()
 # 국내/자차와 동일 플로우·프리미티브 재사용 → 같은 delay_scale(0.4). env CARD_DELAY_SCALE 우선.
 register_workflow("trip-overseas", lambda: _trip_overseas_graph, delay_scale=0.4)
 
+_gyeongjo_grant_graph = build_gyeongjo_grant_graph()
+# 국내/해외출장과 동일 detail 스키마·프리미티브 재사용(단건) → 같은 delay_scale(0.4). env 우선.
+register_workflow("gyeongjo-grant", lambda: _gyeongjo_grant_graph, delay_scale=0.4)
+
 __all__ = [
     "build_card_collect_graph",
     "build_expense_card_chat_graph",
+    "build_gyeongjo_grant_graph",
     "build_trip_domestic_graph",
     "build_trip_overseas_graph",
 ]

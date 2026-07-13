@@ -25,7 +25,7 @@ from app.services.step_timings import expected_step_ms
 # 비결정적(예: 결의서입력 그룹의 출장/경조금/학자금이 임의 순서). 픽스처에 없는 에이전트는 뒤로.
 _FIXTURE_ORDER: dict[str, int] = {f["id"]: i for i, f in enumerate(AGENT_FIXTURES)}
 
-# 숨김 에이전트(hidden=True) — 목록/상세에서 완전히 제외한다(카드·국내출장만 노출, 사용자 요청).
+# 숨김 에이전트(hidden=True) — 목록/상세에서 완전히 제외한다(현재 더미 학자금만 숨김, 나머지 노출).
 # DB 행·워크플로우 등록은 유지하되 UI 도달을 막는다(직접 URL 도 404). 픽스처 플래그가 단일 소스.
 _HIDDEN_AGENT_IDS: frozenset[str] = frozenset(f["id"] for f in AGENT_FIXTURES if f.get("hidden"))
 
@@ -63,7 +63,7 @@ async def list_agents(
     actor: Annotated[User, Depends(require_permission(AGENTS_READ))],
 ) -> list[dict]:
     rows = list((await db.execute(select(Agent).order_by(Agent.created_at.asc()))).scalars().all())
-    # 숨김 에이전트 제외(hidden=True — 미검증 해외출장·더미 경조금/학자금).
+    # 숨김 에이전트 제외(hidden=True — 현재 더미 학자금만).
     rows = [a for a in rows if a.id not in _HIDDEN_AGENT_IDS]
     # 픽스처 정의 순서로 정렬(카드 → 출장 국내). 픽스처 밖은 뒤로 + 시각순.
     rows.sort(key=lambda a: (_FIXTURE_ORDER.get(a.id, len(_FIXTURE_ORDER)), a.created_at))
