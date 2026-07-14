@@ -14,10 +14,16 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_sessionmaker
-from app.models import CardLearnedNote, CardLearnedSelection, CardSeedSelection
+from app.models import (
+    CardLearnedNote,
+    CardLearnedSelection,
+    CardSeedNote,
+    CardSeedSelection,
+)
 
 logger = logging.getLogger("app.services.card_learning")
 
@@ -242,3 +248,92 @@ async def retrieve_seed_for_merchants(merchants: list[str]) -> dict[str, dict]:
         }
         for r in rows
     }
+
+
+async def suggest_note(
+    session: AsyncSession,
+    *,
+    user_id: str | uuid.UUID | None,
+    merchant: str,
+    acct_code: str | None,
+) -> dict:
+    """(가맹점 × 계정) → 적요 리졸버 — learned>seed>category>heuristic 사다리(첫 히트 반환).
+
+    반환 {"note": str|None, "source": "learned"|"seed"|"category"|"heuristic"|None}.
+    계정(acct_code) 있으면 개인학습(CardLearnedNote, 가장 구체적) → 전사 seed(CardSeedNote,
+    가맹점×계정) → 그 계정의 최빈 적요(CardSeedNote 를 acct_code 로 GROUP BY — cold-start:
+    처음 보는 가맹점도 계정 카테고리 적요) 순으로 결정적 매칭하고, 못 찾으면 가맹점명 키워드
+    휴리스틱으로 폴백. 계정 없으면 1·2·3 을 스킵하고 휴리스틱만.
+
+    사람이 예산단위(=계정)를 바꿀 때 그 계정에 맞는 적요를 재추천하는 리졸버 — 엔드포인트
+    GET /me/note-suggest 와 collect 초기 프리필이 공유해 배치 최초 추천·실시간 재추천이 일관된다.
+    세션은 호출부(라우터 DbSession / 노드 자체 세션)가 주입한다.
+    """
+    norm = norm_merchant(merchant)
+    acct = (acct_code or "").strip()
+
+    if acct:
+        uid = _uuid(user_id)
+        # 1) learned — (user, norm, acct) 개인 학습(가장 구체적, 결정적).
+        if uid is not None and norm:
+            learned_note = (
+                (
+                    await session.execute(
+                        select(CardLearnedNote.note)
+                        .where(
+                            CardLearnedNote.user_id == uid,
+                            CardLearnedNote.norm_merchant == norm,
+                            CardLearnedNote.acct_code == acct,
+                        )
+                        .limit(1)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if learned_note and learned_note.strip():
+                return {"note": learned_note.strip(), "source": "learned"}
+        # 2) seed — (norm, acct) 전사 가맹점×계정 관례.
+        if norm:
+            seed_note = (
+                (
+                    await session.execute(
+                        select(CardSeedNote.note)
+                        .where(
+                            CardSeedNote.norm_merchant == norm,
+                            CardSeedNote.acct_code == acct,
+                        )
+                        .limit(1)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if seed_note and seed_note.strip():
+                return {"note": seed_note.strip(), "source": "seed"}
+        # 3) category — 그 계정의 최빈 적요(count 합 최대). 쿼리타임 집계, 별도 테이블 없음.
+        total = func.sum(CardSeedNote.count)
+        cat_note = (
+            (
+                await session.execute(
+                    select(CardSeedNote.note)
+                    .where(CardSeedNote.acct_code == acct, CardSeedNote.note.isnot(None))
+                    .group_by(CardSeedNote.note)
+                    .order_by(total.desc(), CardSeedNote.note.asc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if cat_note and cat_note.strip():
+            return {"note": cat_note.strip(), "source": "category"}
+
+    # 4) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
+    from app.agents.card_collect.nodes._shared import recommend_note
+
+    h = recommend_note(merchant, amount=None)
+    if h and h.strip():
+        return {"note": h.strip(), "source": "heuristic"}
+    # 5) 아무것도 없음.
+    return {"note": None, "source": None}

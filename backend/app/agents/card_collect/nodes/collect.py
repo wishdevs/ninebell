@@ -8,6 +8,7 @@ import time
 import uuid
 
 from app.config import get_settings
+from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step
 from app.live.hitl import close_hitl_channel, open_hitl_channel
 from app.services import card_learning
@@ -199,6 +200,34 @@ def make_collect_rows_node(timeout_s: int | None = None):
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
         )
+        # 계정 인지 적요 재추천: 프리셀렉트된 예산계정(bgacctCd)으로 suggest_note 사다리를 태워
+        # 초기 적요도 계정 인지되게 만든다(엔드포인트 /me/note-suggest 와 같은 리졸버 — 배치
+        # 최초 추천·실시간 재추천 일관). 계정 없는 행은 위 가맹점-키 경로를 그대로 유지(회귀 방어).
+        # noteSource 배지는 리졸버 source(learned/seed/category/heuristic)를 그대로 반영한다.
+        acct_by_key: dict[int, tuple[str, str]] = {}
+        for idx, r in enumerate(rows_list):
+            bu = (preselect.get(idx + 1) or {}).get("budgetUnit") or {}
+            acct_code = (bu.get("bgacctCd") or "").strip()
+            if acct_code:
+                acct_by_key[r.get("i", idx)] = (r.get("TRAN_NM") or "", acct_code)
+        if acct_by_key:  # 계정이 하나라도 있을 때만 세션을 연다(계정 없는 런은 DB 접근 없음).
+            try:
+                async with get_sessionmaker()() as s:
+                    for idx, r in enumerate(rows_list):
+                        key = r.get("i", idx)
+                        if key not in acct_by_key:
+                            continue
+                        merchant, acct_code = acct_by_key[key]
+                        res = await card_learning.suggest_note(
+                            s, user_id=state.get("owner"), merchant=merchant, acct_code=acct_code
+                        )
+                        note = (res.get("note") or "").strip()
+                        if note:
+                            recs[key] = note
+                            notes[key] = note
+                            note_sources[key] = res.get("source")
+            except Exception:  # noqa: BLE001 — 적요 재추천 실패가 런을 죽여선 안 된다(부가기능).
+                logger.exception("card-collect account-aware note suggest failed")
         # AI 추천 준비 끝 → 그리드(사람 개입) 구간 시작. 분리 측정해야 ETA 가 정직해진다
         # (prefill=자동·예측 대상, collect_rows=사람 시간·예측 제외).
         await emit_step(events, "prefill", "done", _shared._ms(t0))

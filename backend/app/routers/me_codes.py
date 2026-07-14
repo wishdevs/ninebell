@@ -29,6 +29,7 @@ from app.models import (
     OrgUnit,
     UserCodeFavorite,
 )
+from app.services import card_learning
 from app.services.code_sync import dept_matches_budget_name, sync_catalog
 from app.services.cost_project import resolve_cost_project
 
@@ -330,6 +331,22 @@ async def list_card_seed(
             for r in rows
         ],
     }
+
+
+# ── 계정 인지 적요 추천(카드 개입: 예산단위 변경 시 그 계정 맞춤 적요) ────────────────
+@router.get("/note-suggest")
+async def note_suggest(
+    user: CurrentUser, db: DbSession, merchant: str, acct: str | None = None
+) -> dict:
+    """가맹점(+계정)으로 적요를 추천 — learned>seed>category>heuristic 사다리.
+
+    카드 개입 그리드에서 사람이 예산단위(=계정)를 바꾸면 그 계정에 맞는 적요를 즉시 재추천한다.
+    merchant 필수, acct 선택(없으면 계정 무관 키워드 휴리스틱만). 반환 {note, source} — source 는
+    matched tier(learned=개인학습·seed=전사관례·category=계정최빈·heuristic=키워드·null=없음).
+    """
+    return await card_learning.suggest_note(
+        db, user_id=user.id, merchant=merchant, acct_code=acct
+    )
 
 
 # ── 코드 카탈로그 조회 ──────────────────────────────────────────────────────────

@@ -152,7 +152,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
     frame = await _next_hitl(events)
 
     assert frame["rows"][0]["budgetUnit"] == {
-        "code": "2101", "name": "인사기획팀", "bizplanNm": "", "bgacctNm": "",
+        "code": "2101", "name": "인사기획팀", "bizplanNm": "", "bgacctCd": "", "bgacctNm": "",
     }
     assert frame["rows"][0]["budgetSource"] == "ai"
     # 추천 없고 기본지정도 없는 2행 → 프리셀렉트 없음.
