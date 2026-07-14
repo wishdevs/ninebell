@@ -1,46 +1,11 @@
 # 배포 파이프라인 — build(러너에서 1회) → registry push → deploy(서버는 pull만).
 # 서버에선 빌드하지 않는다. 상세 셋업: deploy/README.md
-stages: [diagnose, build, deploy]
+stages: [build, deploy]
 
 variables:
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   TAG: "$CI_COMMIT_SHORT_SHA"
-
-# ══════════ [임시] DIND 진단 — dockerd 가 실제로 뜨는지/왜 안 뜨는지 확정 ══════════
-# 4번의 빌드 실패에서 "Cannot connect to the Docker daemon"(TLS 2376·평문 2375 둘 다) 확인 →
-# dind 데몬 자체가 안 올라오는 것으로 보임(초기 registry HTTP/HTTPS 에러는 docker login CLI 단계라
-# 데몬 문제를 가렸음). 이 잡이 DNS/인증서/포트리슨/데몬연결을 한 번에 드러낸다. 원인 확정 후 삭제.
-diagnose:dind:
-  stage: diagnose
-  image: docker:27
-  services:
-    - name: docker:27-dind
-      command: ["--insecure-registry=192.168.50.61:5050"]
-  variables:
-    DOCKER_HOST: "tcp://docker:2376"
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: "1"
-    DOCKER_CERT_PATH: "/certs/client"
-  script:
-    - 'echo "== ENV: DOCKER_HOST=$DOCKER_HOST CERTDIR=$DOCKER_TLS_CERTDIR CERT_PATH=$DOCKER_CERT_PATH"'
-    - echo "== /etc/hosts =="; cat /etc/hosts
-    - echo "== DNS(docker resolve) =="; nslookup docker 2>&1 || echo "resolve 실패"
-    - echo "== 인증서 공유(/certs) =="; ls -la /certs 2>&1 || echo "/certs 없음"; ls -la /certs/client 2>&1 || echo "/certs/client 없음"
-    - echo "== 포트 리슨(2376/2375) — 데몬이 TCP 를 여는지 =="; for p in 2376 2375; do nc -z -w2 docker $p && echo "port $p OPEN" || echo "port $p CLOSED"; done
-    - echo "== docker version(client/server) =="; docker version || true
-    - |
-      echo "== 데몬 대기 40s + info(에러 미숨김) =="
-      ok=""
-      for i in $(seq 1 20); do
-        if docker info >/tmp/i 2>/tmp/e; then echo "[OK i=$i] 데몬 연결됨"; ok=1; break; fi
-        echo "[$i] $(head -1 /tmp/e 2>/dev/null)"; sleep 2
-      done
-      echo "== 최종 info 에러 전문 =="; cat /tmp/e 2>/dev/null || true
-      echo "== insecure-registry 반영 =="; docker info 2>/dev/null | grep -iA3 "Insecure Registries" || echo "미확인(연결실패/미반영)"
-      if [ -n "$ok" ]; then echo "결론: 데몬 OK — 문제는 레지스트리/인증 단계"; else echo "결론: 데몬 연결 실패 — 러너 privileged/dind 셋업 의심"; fi
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
 
 # ══════════ BUILD (CI 러너 dind → GitLab Container Registry) ══════════
 .build:
@@ -57,17 +22,18 @@ diagnose:dind:
     DOCKER_TLS_VERIFY: "1"
     DOCKER_CERT_PATH: "/certs/client"
   before_script:
-    # 진단: dind 에 insecure-registry 가 실제 적용됐는지(192.168.50.61:5050 나오면 적용됨).
-    - docker info 2>/dev/null | grep -iA3 "Insecure Registries" || echo "[[no-insecure-in-daemon]]"
-    # HTTP 레지스트리라 docker login(HTTPS 강제) 이 실패 → 로그인 생략, config.json 에 인증 직접(push 는 insecure HTTP).
+    # dind 데몬 준비 대기 — 진짜 실패원인이 이 레이스였다. 포트 오픈 ≠ 서빙 준비이고, GitLab '서비스
+    # 대기'는 포트만 본다. 진단으로 확인: 데몬 정상·인증서공유 OK·insecure-registry 등록됨 — 준비 전에
+    # docker build 가 실행돼 "Cannot connect" 이 났던 것. info 성공까지(최대 60s) 기다린 뒤 빌드한다.
+    - for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; echo "dind 데몬 대기 $i/30..."; sleep 2; done
+    - docker info | grep -iA2 "Insecure Registries" || echo "[[no-insecure]]"
+    # HTTP 레지스트리라 docker login(HTTPS 강제) 대신 config.json 에 인증 직접(push 는 insecure HTTP).
     - mkdir -p "$HOME/.docker"
     - |
       AUTH=$(printf '%s' "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
       printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > "$HOME/.docker/config.json"
   rules:
-    # [임시] 진단 중 — 빌드는 수동으로 내려 노이즈/비용 방지. 진단 후 auto 로 되돌린다.
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
 
 build:backend:
   extends: .build
