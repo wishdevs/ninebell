@@ -56,13 +56,18 @@ build:frontend:
 # 서버가 private 레지스트리에서 pull 하려면 read_registry Deploy Token 필요
 # (GitLab → Settings → Repository → Deploy tokens, scope=read_registry).
 # → CI/CD 변수: REGISTRY_DEPLOY_USER / REGISTRY_DEPLOY_TOKEN.
-# SSH: DEPLOY_SSH_KEY(개인키, masked·protected) / DEPLOY_USER / API_HOST / DB_HOST / FRONT_HOST.
+# SSH: DEPLOY_SSH_KEY(개인키 — ⚠ File 타입 변수 권장·Masked 끄기) / DEPLOY_USER / API_HOST / DB_HOST / FRONT_HOST.
 .deploy:
   image: alpine:3.20
   before_script:
     - apk add --no-cache openssh-client rsync
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    # DEPLOY_SSH_KEY 가 File 타입이면 $DEPLOY_SSH_KEY 는 파일 경로 → 그대로 복사(개행 손상 없음, 권장).
+    # 일반 변수면 값 자체를 파일로 기록(마스킹/CRLF 로 깨지기 쉬움 → 'error in libcrypto'). File 타입을 쓸 것.
+    - |
+      if [ -f "$DEPLOY_SSH_KEY" ]; then cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519;
+      else printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
+      chmod 600 ~/.ssh/id_ed25519
     - ssh-keyscan -H "$API_HOST" "$FRONT_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
