@@ -19,7 +19,13 @@ variables:
     DOCKER_HOST: "tcp://docker:2375"
     DOCKER_TLS_CERTDIR: ""
   before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    # 진단: dind 에 insecure-registry 가 실제 적용됐는지(192.168.50.61:5050 나오면 적용됨).
+    - docker info 2>/dev/null | grep -iA3 "Insecure Registries" || echo "[[no-insecure-in-daemon]]"
+    # HTTP 레지스트리라 docker login(HTTPS 강제) 이 실패 → 로그인 생략, config.json 에 인증 직접(push 는 insecure HTTP).
+    - mkdir -p "$HOME/.docker"
+    - |
+      AUTH=$(printf '%s' "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > "$HOME/.docker/config.json"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"' # main 에서만 빌드(초안 — 필요시 조정)
 
