@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
 # 백엔드(FastAPI + Playwright 헤드리스 Chromium). 빌드는 CI에서 1회, 서버는 pull 만.
 # 빌드 컨텍스트 = backend/  (CI: docker build -f backend/Dockerfile backend)
-FROM python:3.13-slim
+# ⚠ bookworm(Debian 12) 고정 — python:3.13-slim 의 기본이 trixie(Debian 13)로 올라갔는데
+#    playwright 1.49 는 trixie 를 모른다 → 'ubuntu20.04 fallback' 으로 우분투 전용 폰트 패키지
+#    (ttf-ubuntu-font-family·ttf-unifont)를 apt 설치하려다 실패한다. bookworm 은 playwright 가
+#    인식해 올바른 Debian 의존성을 깐다. (playwright 업그레이드로 trixie 지원되면 재검토.)
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
