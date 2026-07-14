@@ -70,8 +70,7 @@ build:frontend:
       chmod 600 ~/.ssh/id_ed25519
     - ssh-keyscan -H "$API_HOST" "$FRONT_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual # 초안: 수동 승인 버튼. 자동배포하려면 when 줄 제거.
+    - if: '$CI_COMMIT_BRANCH == "main"' # main push → build 통과 후 자동 배포(수동 게이트 제거).
 
 # api: entrypoint 가 `alembic upgrade head` 후 uvicorn → 배포 시 마이그레이션 자동.
 deploy:api:
