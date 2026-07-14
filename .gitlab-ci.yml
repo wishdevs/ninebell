@@ -15,7 +15,9 @@ variables:
     - name: docker:27-dind
       command: ["--insecure-registry=192.168.50.61:5050"]
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+    # dind 을 평문(2375)으로 — TLS 인증서 셋업과의 충돌 없이 --insecure-registry 가 확실히 적용되게.
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
   before_script:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   rules:
