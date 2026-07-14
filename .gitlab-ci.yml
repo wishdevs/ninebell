@@ -65,9 +65,12 @@ build:frontend:
     # DEPLOY_SSH_KEY 가 File 타입이면 $DEPLOY_SSH_KEY 는 파일 경로 → 그대로 복사(개행 손상 없음, 권장).
     # 일반 변수면 값 자체를 파일로 기록(마스킹/CRLF 로 깨지기 쉬움 → 'error in libcrypto'). File 타입을 쓸 것.
     - |
-      if [ -f "$DEPLOY_SSH_KEY" ]; then cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519;
-      else printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
+      if [ -f "$DEPLOY_SSH_KEY" ]; then echo "[key] DEPLOY_SSH_KEY=File 타입(경로) → cp"; cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519;
+      else echo "[key] DEPLOY_SSH_KEY=일반 Variable(값) → printf (⚠ File 타입으로 바꿔야 함)"; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
       chmod 600 ~/.ssh/id_ed25519
+    # 진단(키 미유출 — 첫줄/줄수/지문만): 지문이 SHA256:TEegNaMKtpQ... 면 정상. 파싱실패면 값 손상.
+    - 'echo "[key] 첫줄: $(head -1 ~/.ssh/id_ed25519)"; echo "[key] 줄수: $(wc -l < ~/.ssh/id_ed25519)"'
+    - ssh-keygen -l -f ~/.ssh/id_ed25519 || echo "[key] !! 키 파싱 실패 — 변수 값이 손상됨(File 타입 아님/개행 깨짐)"
     - ssh-keyscan -H "$API_HOST" "$FRONT_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"' # main push → build 통과 후 자동 배포(수동 게이트 제거).
