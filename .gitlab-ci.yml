@@ -11,13 +11,16 @@ variables:
 .build:
   image: docker:27
   services:
-    # 내부 레지스트리(192.168.50.61:5050)가 HTTP(no TLS) → dind 에 insecure-registry 로 등록.
+    # 내부 레지스트리(192.168.50.61:5050)가 HTTP(no TLS) → dind 데몬에 insecure-registry 등록.
+    # 클라이언트↔dind 는 GitLab 기본 TLS(/certs, 2376) 유지. 평문(2375)으로 바꾸면 dind
+    # 엔트리포인트가 tcp 호스트를 안 열어 "Cannot connect to the Docker daemon" 이 난다(이전 실패 원인).
     - name: docker:27-dind
       command: ["--insecure-registry=192.168.50.61:5050"]
   variables:
-    # dind 을 평문(2375)으로 — TLS 인증서 셋업과의 충돌 없이 --insecure-registry 가 확실히 적용되게.
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
   before_script:
     # 진단: dind 에 insecure-registry 가 실제 적용됐는지(192.168.50.61:5050 나오면 적용됨).
     - docker info 2>/dev/null | grep -iA3 "Insecure Registries" || echo "[[no-insecure-in-daemon]]"
