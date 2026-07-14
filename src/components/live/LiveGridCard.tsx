@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { Spinner } from '@/components/ui/spinner';
+import { fetchNoteSuggest } from '@/lib/api/me-codes';
 import { useFavorites } from '@/lib/live/use-favorites';
 import type {
   BudgetUnitOption,
@@ -73,6 +74,18 @@ const TX_COLUMNS: { key: TxColumnKey; header: string; align?: 'right' }[] = [
   { key: 'vatType', header: '부가세구분' },
 ];
 
+/** 예산단위 변경 → 계정 맞춤 적요 재추천 디바운스(ms). 빠른 연속 변경 시 마지막만 조회. */
+const NOTE_SUGGEST_DEBOUNCE_MS = 250;
+
+/** 예산단위 조합 코드(BG|BIZPLAN|BGACCT)에서 예산계정(BGACCT) 코드를 뽑는다.
+ * 옵션에 bgacctCd 가 실려 오면(내 부서·전체 그룹) 우선, 없으면(즐겨찾기 등) 복합코드 3번째 세그먼트.
+ * note-suggest 의 acct 매칭 키 — 어느 그룹에서 골랐든 동일하게 계정을 얻기 위한 단일 소스. */
+function acctCodeOf(code: string, option?: BudgetUnitOption): string {
+  const fromField = option?.bgacctCd?.trim();
+  if (fromField) return fromField;
+  return code.split('|')[2]?.trim() ?? '';
+}
+
 /**
  * 그리드 개입(kind=grid) — 카드 거래내역을 표로 보여주고 행마다 예산단위·프로젝트·적요를
  * 채우게 한다. 넓은 사이드 패널을 가정한 실 테이블(가로 스크롤 폴백·sticky 헤더)이며,
@@ -94,7 +107,12 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 예산계정 맞춤 적요 조회 중인 행(미세 로딩 표시). 행 no → 조회 중 여부.
+  const [suggesting, setSuggesting] = useState<Record<number, boolean>>({});
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  // 계정 맞춤 적요 재추천 — 행별 디바운스 타이머 + 요청 토큰(레이스 방지: 최신 요청만 반영).
+  const suggestTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const suggestTokens = useRef<Map<number, number>>(new Map());
 
   const bFav = useFavorites('budget_unit');
   const pFav = useFavorites('project');
@@ -159,6 +177,80 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     },
     [rows],
   );
+
+  /**
+   * 예산단위(=예산계정) 변경 시 그 계정 맞춤 적요를 디바운스로 조회해 채운다.
+   * - 디바운스(NOTE_SUGGEST_DEBOUNCE_MS): 빠른 연속 변경 시 마지막 요청만 나간다.
+   * - 레이스 방지: 행별 토큰을 증가시키고, 응답 시점에 최신 토큰과 다르면 스테일 응답으로 버린다.
+   * - 보호 규칙: 사용자가 직접 친 적요(noteSource=null && 내용 있음)는 절대 덮지 않는다
+   *   (비어 있거나 자동채움 noteSource 가 있을 때만 채운다).
+   * - 실패는 조용히 무시 — 기존 적요 유지(에러가 UI 를 깨지 않게).
+   */
+  const scheduleNoteSuggest = useCallback(
+    (no: number, code: string, merchant: string | undefined) => {
+      const timers = suggestTimers.current;
+      const prev = timers.get(no);
+      if (prev) clearTimeout(prev);
+      // 이 행에서 발생한 최신 변경 표식 — 나중에 도착한 스테일 응답을 걸러낸다.
+      // 매 변경마다 증가시키므로, 선택 해제·계정 없음이어도 진행 중 요청은 무효화된다.
+      const token = (suggestTokens.current.get(no) ?? 0) + 1;
+      suggestTokens.current.set(no, token);
+
+      const m = (merchant ?? '').trim();
+      const acct = acctCodeOf(code, budgetByCode.get(code));
+      if (!m || !acct) {
+        // 가맹점명 없음 또는 계정 없음(선택 해제 포함) → 취소만 하고 조회하지 않는다.
+        timers.delete(no);
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        timers.delete(no);
+        setSuggesting((s) => ({ ...s, [no]: true }));
+        fetchNoteSuggest({ merchant: m, acct })
+          .then((res) => {
+            if (suggestTokens.current.get(no) !== token) return; // 스테일 응답 무시.
+            const note = (res.note ?? '').trim();
+            if (!note) return;
+            setEdits((cur) => {
+              const row = cur[no];
+              if (!row) return cur;
+              // 수동 편집(사용자가 직접 친 적요)은 덮지 않는다.
+              const isManual = row.noteSource == null && row.note.trim().length > 0;
+              if (isManual) return cur;
+              // 예산단위는 onChange 가 이미 세팅 — 여기선 적요·배지만 갱신한다.
+              return { ...cur, [no]: { ...row, note, noteSource: 'lookup' } };
+            });
+          })
+          .catch(() => {
+            // 조용히 무시 — 기존 적요 유지.
+          })
+          .finally(() => {
+            // 최신 요청만 로딩 표시를 내린다(뒤늦은 스테일 응답이 현재 조회를 지우지 않게).
+            if (suggestTokens.current.get(no) === token) {
+              setSuggesting((s) => {
+                const next = { ...s };
+                delete next[no];
+                return next;
+              });
+            }
+          });
+      }, NOTE_SUGGEST_DEBOUNCE_MS);
+      timers.set(no, timer);
+    },
+    [budgetByCode],
+  );
+
+  // 개입(hitl.id) 전환·언마운트 시 대기 중 추천 타이머 정리 — 새 그리드에 스테일 적용 방지.
+  useEffect(() => {
+    const timers = suggestTimers.current;
+    const tokens = suggestTokens.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+      tokens.clear();
+    };
+  }, [hitl.id]);
 
   const isRowValid = (no: number): boolean => {
     const e = edits[no];
@@ -239,7 +331,11 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         budgetAllExclFav={bAllExclFav}
         projectFavs={pFavList}
         disabled={disabled}
-        onBulkBudget={(code) => applyAll({ budgetUnitCode: code })}
+        onBulkBudget={(code) => {
+          applyAll({ budgetUnitCode: code });
+          // 일괄 지정도 동일하게 각 행 계정 맞춤 적요를 재추천(비제외 행만, 행별 보호규칙 유지).
+          for (const r of rows) if (!edits[r.no]?.skip) scheduleNoteSuggest(r.no, code, r.merchant);
+        }}
         onBulkProject={(code, name, wbsNo) =>
           applyAll({ projectCode: code, projectName: name, projectWbsNo: wbsNo })
         }
@@ -318,9 +414,12 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         selectedOption={budgetByCode.get(e.budgetUnitCode)}
                         disabled={e.skip || disabled}
                         invalid={rowInvalid && e.budgetUnitCode === ''}
-                        onChange={(code) =>
-                          setRow(r.no, { budgetUnitCode: code, budgetSource: null })
-                        }
+                        onChange={(code) => {
+                          setRow(r.no, { budgetUnitCode: code, budgetSource: null });
+                          // 예산단위(=계정) 변경 → 그 계정 맞춤 적요 실시간 재추천(디바운스·보호규칙).
+                          // 선택 해제(code='')여도 호출 — 대기 중 추천을 취소하고 진행 중 요청을 무효화한다.
+                          scheduleNoteSuggest(r.no, code, r.merchant);
+                        }}
                       />
                       <FavoriteToggle
                         active={bFav.has(e.budgetUnitCode)}
@@ -385,10 +484,19 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                     </div>
                   </Td>
 
-                  {/* 적요 — 프리필 출처 배지(학습/전사) 표시, 사용자가 바꾸면 배지 제거. */}
+                  {/* 적요 — 프리필 출처 배지(학습/전사) 표시, 사용자가 바꾸면 배지 제거.
+                      예산계정 변경 시엔 그 계정 맞춤 적요를 조회하는 동안 미세 스피너를 노출. */}
                   <Td>
                     <div className="flex items-center gap-1.5">
-                      {e.noteSource ? <SourceBadge source={e.noteSource} /> : null}
+                      {suggesting[r.no] ? (
+                        <Spinner
+                          size={12}
+                          label="적요 추천 조회 중"
+                          className="text-foreground-tertiary shrink-0"
+                        />
+                      ) : e.noteSource ? (
+                        <SourceBadge source={e.noteSource} />
+                      ) : null}
                       <input
                         value={e.note}
                         onChange={(ev) => setRow(r.no, { note: ev.target.value, noteSource: null })}
@@ -1034,6 +1142,11 @@ const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: st
     title: '전사 기초자료(과거 법인카드 실적)의 이 가맹점 관례로 미리 채움',
     cls: 'bg-info/15 text-info',
   },
+  lookup: {
+    label: '추천',
+    title: '예산계정 변경에 맞춰 실시간 재추천된 적요 — 확인 후 필요시 수정',
+    cls: 'bg-warning/15 text-warning',
+  },
   default: {
     label: '기본',
     title: '기본지정으로 미리 선택됨',
@@ -1061,6 +1174,7 @@ const LEGEND_ITEMS: { source: PrefillSource; desc: string }[] = [
   { source: 'ai', desc: 'AI 추천' },
   { source: 'learned', desc: '과거 내 확정(개입 학습)' },
   { source: 'seed', desc: '전사 기초자료 관례' },
+  { source: 'lookup', desc: '예산계정 맞춤 재추천' },
   { source: 'default', desc: '기본지정' },
 ];
 

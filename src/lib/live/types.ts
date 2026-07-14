@@ -73,8 +73,9 @@ export interface LiveGridRow {
   error?: string;
 }
 
-/** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백. */
-export type PrefillSource = 'ai' | 'default' | 'learned' | 'seed';
+/** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백,
+ * learned=개입 학습, seed=전사 기초자료, lookup=예산계정 변경에 맞춰 실시간 재추천된 적요. */
+export type PrefillSource = 'ai' | 'default' | 'learned' | 'seed' | 'lookup';
 
 /** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
 /** 예산단위 보기 — 선택 단위는 (예산단위명 × 사업계획명 × 예산계정명) 조합 행.
@@ -83,6 +84,9 @@ export interface BudgetUnitOption {
   code: string;
   name: string;
   bizplanNm?: string;
+  /** 예산계정 코드 — 계정 인지 적요 추천(note-suggest)의 매칭 키. 내 부서/전체 그룹에만 실려
+   * 오고 즐겨찾기엔 없을 수 있어(bgacctNm 만), 없으면 복합 code(BG|BIZPLAN|BGACCT)에서 뽑는다. */
+  bgacctCd?: string;
   bgacctNm?: string;
   /** 과거 데이터 하위호환(미사용). */
   deptNm?: string;
