@@ -7,31 +7,22 @@ variables:
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   TAG: "$CI_COMMIT_SHORT_SHA"
 
-# ══════════ BUILD (CI 러너 dind → GitLab Container Registry) ══════════
+# ══════════ BUILD (Kaniko — 데몬리스 이미지 빌드, dind 불필요) ══════════
+# dind 가 이 러너에서 불안정하다(진단 잡은 6초만에 데몬 성공했으나, 바로 다음 빌드 런은 dind 가
+# 아예 안 떠 60s+ 'no route to host' 로 실패). 러너 호스트 자원/상태 문제라 CI 로는 못 고친다 →
+# 데몬 없는 Kaniko 로 빌드해 dind·privileged·TLS·기동레이스 전체를 제거한다. 내부 레지스트리
+# (192.168.50.61:5050)는 HTTP(no TLS) → --insecure 로 그 레지스트리만 평문 허용(베이스 이미지
+# pull 은 Docker Hub HTTPS 유지). debug 이미지는 셸이 있어 before_script(인증 셋업)를 돌릴 수 있다.
 .build:
-  image: docker:27
-  services:
-    # 내부 레지스트리(192.168.50.61:5050)가 HTTP(no TLS) → dind 데몬에 insecure-registry 등록.
-    # 클라이언트↔dind 는 GitLab 기본 TLS(/certs, 2376) 유지. 평문(2375)으로 바꾸면 dind
-    # 엔트리포인트가 tcp 호스트를 안 열어 "Cannot connect to the Docker daemon" 이 난다(이전 실패 원인).
-    - name: docker:27-dind
-      command: ["--insecure-registry=192.168.50.61:5050"]
-  variables:
-    DOCKER_HOST: "tcp://docker:2376"
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: "1"
-    DOCKER_CERT_PATH: "/certs/client"
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
   before_script:
-    # dind 데몬 준비 대기 — 진짜 실패원인이 이 레이스였다. 포트 오픈 ≠ 서빙 준비이고, GitLab '서비스
-    # 대기'는 포트만 본다. 진단으로 확인: 데몬 정상·인증서공유 OK·insecure-registry 등록됨 — 준비 전에
-    # docker build 가 실행돼 "Cannot connect" 이 났던 것. info 성공까지(최대 60s) 기다린 뒤 빌드한다.
-    - for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; echo "dind 데몬 대기 $i/30..."; sleep 2; done
-    - docker info | grep -iA2 "Insecure Registries" || echo "[[no-insecure]]"
-    # HTTP 레지스트리라 docker login(HTTPS 강제) 대신 config.json 에 인증 직접(push 는 insecure HTTP).
-    - mkdir -p "$HOME/.docker"
+    # HTTP 레지스트리라 docker login(HTTPS 강제) 대신 Kaniko config.json 에 base64 인증 직접.
+    - mkdir -p /kaniko/.docker
     - |
       AUTH=$(printf '%s' "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
-      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > "$HOME/.docker/config.json"
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
@@ -39,18 +30,27 @@ build:backend:
   extends: .build
   stage: build
   script:
-    - docker build -f backend/Dockerfile -t "$BACKEND_IMAGE:$TAG" -t "$BACKEND_IMAGE:latest" backend
-    - docker push "$BACKEND_IMAGE:$TAG"
-    - docker push "$BACKEND_IMAGE:latest"
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR/backend"
+      --dockerfile "$CI_PROJECT_DIR/backend/Dockerfile"
+      --destination "$BACKEND_IMAGE:$TAG"
+      --destination "$BACKEND_IMAGE:latest"
+      --insecure --skip-tls-verify
 
 build:frontend:
   extends: .build
   stage: build
   script:
     # ⚠ NEXT_PUBLIC_API_BASE 는 빌드타임에 번들에 구움 → 프록시 same-origin '/api'.
-    - docker build --build-arg NEXT_PUBLIC_API_BASE=/api -t "$FRONTEND_IMAGE:$TAG" -t "$FRONTEND_IMAGE:latest" .
-    - docker push "$FRONTEND_IMAGE:$TAG"
-    - docker push "$FRONTEND_IMAGE:latest"
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$FRONTEND_IMAGE:$TAG"
+      --destination "$FRONTEND_IMAGE:latest"
+      --build-arg NEXT_PUBLIC_API_BASE=/api
+      --insecure --skip-tls-verify
 
 # ══════════ DEPLOY (서버 SSH → 프리빌드 이미지 pull + up) ══════════
 # 서버가 private 레지스트리에서 pull 하려면 read_registry Deploy Token 필요
