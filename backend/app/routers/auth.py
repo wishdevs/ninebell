@@ -260,8 +260,9 @@ async def signup(body: SignupBody, request: Request, response: Response, db: DbS
     now = datetime.now(UTC)
     user = User(
         omnisol_userid=userid,
-        display_name=body.display_name or None,
-        # 부서는 ERP 인증 프로필값(pending)을 권위값으로 사용 — 조직구분 자동배정 키라 클라 입력 무시.
+        # 이름·부서는 ERP 인증 프로필값(pending)을 권위값으로 사용 — 클라 입력 무시.
+        # (부서는 조직구분 자동배정 키라 특히 조작 불가여야 함)
+        display_name=pending.get("display_name") or None,
         department=pending.get("department") or None,
         email=body.email or None,  # 빈문자열/누락은 None 으로 정규화(email 선택 입력)
         status="active",

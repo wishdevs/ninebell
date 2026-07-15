@@ -40,7 +40,7 @@ function readPending(): PendingSignup | null {
  *
  * 로그인이 첫 접속으로 판정하면 signupToken+prefill을 sessionStorage에 넣고
  * 이 화면으로 보낸다. pending 정보가 없으면(직접 URL 접근 등) `/login`으로
- * 되돌린다. 이름은 prefill(수정 가능)·부서는 ERP 소속값 읽기전용(조직구분 자동배정 키),
+ * 되돌린다. 이름·부서는 ERP 프로필값 읽기전용(부서는 조직구분 자동배정 키),
  * 이메일은 선택 입력(추후 필수화)이며
  * 약관 동의 후 `POST /auth/signup`으로 계정을 생성하고 세션을 발급받아 홈으로 이동한다.
  */
@@ -119,7 +119,11 @@ export function SignupForm() {
 
   return (
     <form onSubmit={handleSubmit} className="grid gap-5" noValidate>
-      <FormField id="displayName" label="이름" required>
+      <FormField
+        id="displayName"
+        label="이름"
+        hint="옴니솔 프로필에서 불러왔어요. 직접 수정할 수 없어요."
+      >
         <Input
           id="displayName"
           name="displayName"
@@ -127,11 +131,10 @@ export function SignupForm() {
           autoComplete="name"
           placeholder="이름"
           value={displayName}
-          onChange={(event) => {
-            setDisplayName(event.target.value);
-            if (error) setError(null);
-          }}
-          required
+          readOnly
+          aria-readonly
+          tabIndex={-1}
+          className="cursor-not-allowed opacity-70"
         />
       </FormField>
 
