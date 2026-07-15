@@ -3,6 +3,11 @@
 {$SITE_ADDRESS} {
 	encode gzip
 
+	# 내부 전용 HTTPS — 서버가 사설 IP(172.20.50.x)라 Let's Encrypt(공개 CA) 인증이 불가.
+	# Caddy 내부 CA 로 자체 서명 인증서를 발급한다(app.env COOKIE_SECURE=true 와 짝). 클라이언트는
+	# 브라우저 경고를 보며, 없애려면 Caddy 루트 CA 를 조직 기기에 배포하거나 DNS-01 로 공인 인증서 발급.
+	tls internal
+
 	# /api/* → 백엔드. handle_path 가 '/api' 접두사를 벗겨 전달(백엔드는 /auth/me 로 받음).
 	handle_path /api/* {
 		reverse_proxy {$API_UPSTREAM}
