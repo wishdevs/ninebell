@@ -47,8 +47,8 @@ class Settings(BaseSettings):
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
-    # gemini-2.0-flash 는 구글에서 retired(404) → 2.5-flash 로 교체(env GEMINI_MODEL 로 오버라이드).
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.0-flash retired(404) → 2.5-flash → 3.5-flash 로 상향(env GEMINI_MODEL 로 오버라이드).
+    gemini_model: str = "gemini-3.5-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
     # --- 라이브 세션(run) / 스크린캐스트 ---

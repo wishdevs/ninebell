@@ -336,16 +336,27 @@ async def list_card_seed(
 # ── 계정 인지 적요 추천(카드 개입: 예산단위 변경 시 그 계정 맞춤 적요) ────────────────
 @router.get("/note-suggest")
 async def note_suggest(
-    user: CurrentUser, db: DbSession, merchant: str, acct: str | None = None
+    user: CurrentUser,
+    db: DbSession,
+    merchant: str,
+    acct: str | None = None,
+    acctName: str | None = None,  # noqa: N803 — 프론트 camelCase 쿼리 파라미터와 맞춤.
 ) -> dict:
-    """가맹점(+계정)으로 적요를 추천 — learned>seed>category>heuristic 사다리.
+    """가맹점(+계정)으로 적요를 추천 — learned>seed>AI>category>heuristic 사다리.
 
     카드 개입 그리드에서 사람이 예산단위(=계정)를 바꾸면 그 계정에 맞는 적요를 즉시 재추천한다.
-    merchant 필수, acct 선택(없으면 계정 무관 키워드 휴리스틱만). 반환 {note, source} — source 는
-    matched tier(learned=개인학습·seed=전사관례·category=계정최빈·heuristic=키워드·null=없음).
+    사람이 트리거하는 경로라 allow_ai=True — learned/seed 에 (가맹점×계정) 실이력이 없는 미학습
+    조합(예: 네이버파이낸셜 + 회의비)은 계정 이름(acctName)으로 AI 가 계정 맞춤 적요를 생성한다.
+    merchant 필수, acct/acctName 선택(계정 없으면 키워드 휴리스틱만, acctName 없으면 AI 스킵).
+    반환 {note, source} — source(learned·seed·ai·category·heuristic·null).
     """
     return await card_learning.suggest_note(
-        db, user_id=user.id, merchant=merchant, acct_code=acct
+        db,
+        user_id=user.id,
+        merchant=merchant,
+        acct_code=acct,
+        acct_name=acctName,
+        allow_ai=True,
     )
 
 

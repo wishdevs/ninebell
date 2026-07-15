@@ -14,11 +14,14 @@ import re
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import get_sessionmaker
 from app.models import (
+    CardAiNote,
     CardLearnedNote,
     CardLearnedSelection,
     CardSeedNote,
@@ -250,24 +253,119 @@ async def retrieve_seed_for_merchants(merchants: list[str]) -> dict[str, dict]:
     }
 
 
+# ── AI tier: learned/seed 미스 조합의 계정 맞춤 적요 생성(전사 공유 캐시) ──────────────
+_AI_NOTE_SYSTEM = (
+    "너는 법인카드 지출 적요(비용 설명 문구)를 작성하는 회계 보조다. 주어진 예산계정(용도)과 "
+    "가맹점명에 맞는 간결한 한국어 적요 한 줄을 만든다.\n"
+    "규칙:\n"
+    "1) 지금 고른 예산계정의 용도를 반드시 반영한다(가맹점의 과거 통계가 아니라 이 계정이 기준).\n"
+    "2) 회사 관례 표기 '{용도}(법인카드)' 형태를 따른다.\n"
+    "3) 25자 이내. 따옴표·설명·부연·줄바꿈 없이 적요 문구만 출력한다.\n"
+    "4) 가맹점 성격이 계정과 자연스럽게 맞으면 녹이되, 억지로 넣지 않는다."
+)
+
+
+async def _ai_note_cached(session: AsyncSession, norm: str, acct: str) -> str | None:
+    """(norm_merchant, acct_code) AI 캐시 조회(전사 공유). 없으면 None."""
+    row = (
+        (
+            await session.execute(
+                select(CardAiNote.note)
+                .where(CardAiNote.norm_merchant == norm, CardAiNote.acct_code == acct)
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    return row.strip() if row and row.strip() else None
+
+
+async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | None:
+    """(가맹점, 계정이름) → Gemini 계정 맞춤 적요. 반환 (note, model).
+
+    키 없음/네트워크·모델 오류/빈 응답이면 None → 호출자가 category·heuristic 로 폴백한다.
+    """
+    settings = get_settings()
+    key = (settings.gemini_api_key or "").strip()
+    if not key:  # 키 없으면 조용히 스킵(결정적 폴백).
+        return None
+    # 지연 import 로 app.agents 순환참조 회피(heuristic tier 와 동일 규율).
+    from app.agents.common.gemini import gemini_generate_text
+
+    model = settings.gemini_model
+    user = f"예산계정: {acct_name.strip()}\n가맹점: {merchant.strip()}\n적요:"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            raw = await gemini_generate_text(
+                http,
+                key,
+                model,
+                settings.gemini_base_url,
+                system=_AI_NOTE_SYSTEM,
+                user=user,
+                temperature=0.2,
+                max_output_tokens=128,
+                thinking_budget=0,  # 적요 생성엔 사고 불필요 — 사고 토큰이 출력을 잠식하지 않게 끈다.
+            )
+    except Exception:  # noqa: BLE001 — LLM 실패가 추천을 죽여선 안 된다(폴백 존재).
+        logger.warning("ai note generate failed (merchant=%r acct_name=%r)", merchant, acct_name)
+        return None
+    if not raw:
+        return None
+    note = raw.splitlines()[0].strip().strip("\"'`").removeprefix("적요:").strip()
+    if not note:
+        return None
+    return note[:255], model
+
+
+async def _ai_note_store(
+    *, norm: str, merchant: str, acct: str, acct_name: str, note: str, model: str
+) -> None:
+    """생성 적요를 캐시에 저장 — 호출자 트랜잭션과 분리된 별도 세션으로. 실패는 조용히 무시.
+
+    동시 요청이 같은 조합을 생성하면 유니크 경쟁이 날 수 있는데, 그건 캐시 실패로 보고 무시한다
+    (다음 조회 때 둘 중 하나가 이미 있으므로 정상). 캐시 쓰기 실패가 응답을 막지 않게 한다.
+    """
+    try:
+        async with get_sessionmaker()() as s:
+            s.add(
+                CardAiNote(
+                    norm_merchant=norm,
+                    merchant=merchant,
+                    acct_code=acct,
+                    acct_name=acct_name,
+                    note=note,
+                    model=model,
+                )
+            )
+            await s.commit()
+    except Exception:  # noqa: BLE001 — 유니크 경쟁/DB 오류 → 캐시 실패는 무시.
+        logger.debug("ai note cache store skipped (merchant=%r acct=%r)", merchant, acct)
+
+
 async def suggest_note(
     session: AsyncSession,
     *,
     user_id: str | uuid.UUID | None,
     merchant: str,
     acct_code: str | None,
+    acct_name: str | None = None,
+    allow_ai: bool = False,
 ) -> dict:
-    """(가맹점 × 계정) → 적요 리졸버 — learned>seed>category>heuristic 사다리(첫 히트 반환).
+    """(가맹점 × 계정) → 적요 리졸버 — learned>seed>[AI]>category>heuristic 사다리(첫 히트 반환).
 
-    반환 {"note": str|None, "source": "learned"|"seed"|"category"|"heuristic"|None}.
+    반환 {"note": str|None, "source": "learned"|"seed"|"ai"|"category"|"heuristic"|None}.
     계정(acct_code) 있으면 개인학습(CardLearnedNote, 가장 구체적) → 전사 seed(CardSeedNote,
-    가맹점×계정) → 그 계정의 최빈 적요(CardSeedNote 를 acct_code 로 GROUP BY — cold-start:
-    처음 보는 가맹점도 계정 카테고리 적요) 순으로 결정적 매칭하고, 못 찾으면 가맹점명 키워드
-    휴리스틱으로 폴백. 계정 없으면 1·2·3 을 스킵하고 휴리스틱만.
+    가맹점×계정) → (allow_ai + acct_name 있으면) AI 계정 맞춤 적요(CardAiNote 캐시 우선, 없으면
+    Gemini 생성 후 캐시) → 그 계정의 최빈 적요(CardSeedNote 를 acct_code 로 GROUP BY) 순으로
+    매칭하고, 못 찾으면 가맹점명 키워드 휴리스틱으로 폴백. 계정 없으면 계정 tier 를 스킵하고 휴리스틱만.
 
-    사람이 예산단위(=계정)를 바꿀 때 그 계정에 맞는 적요를 재추천하는 리졸버 — 엔드포인트
-    GET /me/note-suggest 와 collect 초기 프리필이 공유해 배치 최초 추천·실시간 재추천이 일관된다.
-    세션은 호출부(라우터 DbSession / 노드 자체 세션)가 주입한다.
+    AI tier 는 learned/seed 에 (가맹점×계정) 실이력이 **없는** 조합에서만 돈다 — 통계로 못 메우는
+    "네이버파이낸셜 + 회의비" 같은 미학습 계정 조합에 계정 이름(acct_name)으로 적요를 생성한다.
+    allow_ai 는 사람이 트리거하는 엔드포인트(GET /me/note-suggest)만 opt-in 하고, 배치(collect
+    초기 프리필)는 기본 False 라 결정적 tier 만 태워 빠르고 저비용이다. AI 실패/키없음이면 조용히
+    category·heuristic 로 폴백한다. 세션은 호출부(라우터 DbSession / 노드 자체 세션)가 주입한다.
     """
     norm = norm_merchant(merchant)
     acct = (acct_code or "").strip()
@@ -311,7 +409,26 @@ async def suggest_note(
             )
             if seed_note and seed_note.strip():
                 return {"note": seed_note.strip(), "source": "seed"}
-        # 3) category — 그 계정의 최빈 적요(count 합 최대). 쿼리타임 집계, 별도 테이블 없음.
+        # 3) AI — learned/seed 에 (가맹점×계정) 실이력이 없는 조합. 계정 이름으로 계정 맞춤 적요를
+        #    생성한다(캐시 우선, 전사 공유). allow_ai(엔드포인트만 opt-in) + 계정 이름 있을 때만.
+        acct_nm = (acct_name or "").strip()
+        if allow_ai and norm and acct_nm:
+            cached = await _ai_note_cached(session, norm, acct)
+            if cached:
+                return {"note": cached, "source": "ai"}
+            gen = await _ai_note_generate(merchant, acct_nm)
+            if gen is not None:
+                gen_note, gen_model = gen
+                await _ai_note_store(
+                    norm=norm,
+                    merchant=merchant,
+                    acct=acct,
+                    acct_name=acct_nm,
+                    note=gen_note,
+                    model=gen_model,
+                )
+                return {"note": gen_note, "source": "ai"}
+        # 4) category — 그 계정의 최빈 적요(count 합 최대). 쿼리타임 집계, 별도 테이블 없음.
         total = func.sum(CardSeedNote.count)
         cat_note = (
             (
@@ -329,11 +446,11 @@ async def suggest_note(
         if cat_note and cat_note.strip():
             return {"note": cat_note.strip(), "source": "category"}
 
-    # 4) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
+    # 5) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
     from app.agents.card_collect.nodes._shared import recommend_note
 
     h = recommend_note(merchant, amount=None)
     if h and h.strip():
         return {"note": h.strip(), "source": "heuristic"}
-    # 5) 아무것도 없음.
+    # 6) 아무것도 없음.
     return {"note": None, "source": None}

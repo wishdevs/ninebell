@@ -1,14 +1,17 @@
-"""계정 인지 적요 리졸버(suggest_note) + 엔드포인트(GET /me/note-suggest) 검증(Phase 2).
+"""계정 인지 적요 리졸버(suggest_note) + 엔드포인트(GET /me/note-suggest) 검증.
 
-리졸버 사다리: learned(개인) > seed(전사 가맹점×계정) > category(계정 최빈, cold-start) >
-heuristic(가맹점 키워드) > None. 계정 없으면 1·2·3 스킵하고 heuristic 만. 엔드포인트는 인증 +
-merchant 필수·acct 선택 계약을 고정한다. isolated acct 코드를 써 seed_all 실데이터와 충돌하지 않는다.
+리졸버 사다리: learned(개인) > seed(전사 가맹점×계정) > AI(미학습 조합 계정 맞춤 생성, allow_ai+
+acct_name 있을 때) > category(계정 최빈, cold-start) > heuristic(가맹점 키워드) > None. 계정 없으면
+계정 tier 스킵하고 heuristic 만. AI tier 는 실 LLM 대신 _ai_note_generate 를 monkeypatch 로 대체해
+결정적으로 검증한다. isolated acct 코드를 써 seed_all 실데이터와 충돌하지 않는다.
 """
 
 from __future__ import annotations
 
+from sqlalchemy import select
+
 import app.agents.card_collect.nodes._shared as cc_shared
-from app.models import CardLearnedNote, CardSeedNote
+from app.models import CardAiNote, CardLearnedNote, CardSeedNote
 from app.services import card_learning
 
 
@@ -139,3 +142,132 @@ async def test_note_suggest_requires_auth(client):
     """인증 없으면 401(세션 쿠키 없음)."""
     r = await client.get("/me/note-suggest", params={"merchant": "김밥천국"})
     assert r.status_code == 401
+
+
+# ─────────────────────────── AI tier (미학습 조합) ───────────────────────────
+async def test_suggest_note_ai_generates_when_learned_seed_miss(sm, monkeypatch):
+    """learned/seed 미스 + allow_ai + acct_name → AI 계정 맞춤 생성(source 'ai') + 캐시 적재."""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_gen(merchant: str, acct_name: str):
+        calls.append((merchant, acct_name))
+        return "회의비(법인카드)", "test-model"
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", fake_gen)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="에이아이상점", acct_code="AI_MEET",
+            acct_name="회의비", allow_ai=True,
+        )
+    assert res == {"note": "회의비(법인카드)", "source": "ai"}
+    assert calls == [("에이아이상점", "회의비")]  # 생성 1회.
+    norm = card_learning.norm_merchant("에이아이상점")
+    async with sm() as s:
+        rows = (
+            await s.execute(select(CardAiNote).where(CardAiNote.norm_merchant == norm))
+        ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].note == "회의비(법인카드)"
+    assert rows[0].acct_code == "AI_MEET"
+    assert rows[0].acct_name == "회의비"
+
+
+async def test_suggest_note_ai_cache_hit_skips_regenerate(sm, monkeypatch):
+    """같은 (가맹점×계정) 재호출은 캐시에서 반환 — LLM 생성 재호출 없음."""
+    calls: list[int] = []
+
+    async def fake_gen(merchant: str, acct_name: str):
+        calls.append(1)
+        return "회의비(법인카드)", "test-model"
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", fake_gen)
+    async with sm() as s:
+        await card_learning.suggest_note(
+            s, user_id=None, merchant="캐시상점", acct_code="AI_C",
+            acct_name="회의비", allow_ai=True,
+        )
+    async with sm() as s:
+        res2 = await card_learning.suggest_note(
+            s, user_id=None, merchant="캐시상점", acct_code="AI_C",
+            acct_name="회의비", allow_ai=True,
+        )
+    assert res2 == {"note": "회의비(법인카드)", "source": "ai"}
+    assert len(calls) == 1  # 두 번째는 캐시 히트 — 생성은 1회뿐.
+
+
+async def test_suggest_note_ai_gated_by_allow_ai(sm, monkeypatch):
+    """allow_ai=False(배치 기본)면 acct_name 이 있어도 AI 미호출 → 결정적 폴백."""
+    async def boom(*a, **k):
+        raise AssertionError("allow_ai=False 인데 AI 가 호출됨")
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", boom)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="김밥천국", acct_code="NOSEED_ZZZ",
+            acct_name="회의비", allow_ai=False,
+        )
+    assert res == {"note": "식대(법인카드)", "source": "heuristic"}
+
+
+async def test_suggest_note_ai_needs_acct_name(sm, monkeypatch):
+    """allow_ai=True 라도 acct_name 없으면 AI 스킵(생성 근거 없음) → 결정적 폴백."""
+    async def boom(*a, **k):
+        raise AssertionError("acct_name 없는데 AI 가 호출됨")
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", boom)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="김밥천국", acct_code="NOSEED_ZZZ",
+            acct_name=None, allow_ai=True,
+        )
+    assert res == {"note": "식대(법인카드)", "source": "heuristic"}
+
+
+async def test_suggest_note_ai_failure_falls_through(sm, monkeypatch):
+    """AI 생성 실패(None: 키없음/오류)면 category·heuristic 로 폴백 — 응답 안 죽음."""
+    async def none_gen(*a, **k):
+        return None
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", none_gen)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="김밥천국", acct_code="NOSEED_ZZZ",
+            acct_name="회의비", allow_ai=True,
+        )
+    assert res == {"note": "식대(법인카드)", "source": "heuristic"}
+
+
+async def test_suggest_note_seed_beats_ai(sm, monkeypatch):
+    """(가맹점×계정) seed 실이력이 있으면 AI 미호출하고 seed 반환."""
+    async def boom(*a, **k):
+        raise AssertionError("seed 있는데 AI 가 호출됨")
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", boom)
+    norm = card_learning.norm_merchant("씨드우선상점")
+    async with sm() as s:
+        s.add(CardSeedNote(
+            norm_merchant=norm, merchant="씨드우선상점", acct_code="SB1", note="전사관례", count=7
+        ))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="씨드우선상점", acct_code="SB1",
+            acct_name="회의비", allow_ai=True,
+        )
+    assert res == {"note": "전사관례", "source": "seed"}
+
+
+async def test_note_suggest_endpoint_ai_with_acct_name(client, make_user, auth_as, monkeypatch):
+    """GET /me/note-suggest?...&acctName → 미학습 조합은 AI 생성(source 'ai')."""
+    async def fake_gen(merchant: str, acct_name: str):
+        return f"{acct_name}(법인카드)", "test-model"
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", fake_gen)
+    uid = await make_user("ep-ai", "user")
+    auth_as(uid)
+    r = await client.get(
+        "/me/note-suggest",
+        params={"merchant": "에이아이엔드", "acct": "EPAI1", "acctName": "회의비"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"note": "회의비(법인카드)", "source": "ai"}

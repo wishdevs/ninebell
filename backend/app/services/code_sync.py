@@ -32,6 +32,7 @@ from app.agents.common.nodes import (
     make_user_type_node,
 )
 from app.models import ErpCodeCatalog
+from app.services.card_seed_remap import remap_seed_notes_to_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,15 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
             )
         )
         await s.commit()
+    # 카탈로그(9자리 예산계정)가 갱신됐으니 전사 시드(card_seed_notes)를 현 ERP 코드로 재정렬한다.
+    # 옛 자료의 5자리 계정과목 코드는 현 ERP 와 겹치지 않으므로, 이름으로 현 코드에 재키잉해야
+    # 개입 화면의 계정별 적요 조회(seed tier)가 실제로 매칭된다. 멱등 — 실패해도 동기화는 유지.
+    try:
+        async with sessionmaker() as s:
+            stats = await remap_seed_notes_to_catalog(s)
+        logger.info("budget_unit 동기화 후 card_seed_notes 재키잉: %s", stats)
+    except Exception:  # noqa: BLE001 — 재키잉 실패가 카탈로그 동기화 성공을 되돌려선 안 된다.
+        logger.exception("budget_unit 동기화 후 시드 재키잉 실패(동기화 자체는 성공)")
     return len(rows)
 
 
