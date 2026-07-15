@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { RiCheckLine, RiErrorWarningLine, RiPencilLine } from '@remixicon/react';
+import {
+  RiBuilding2Line,
+  RiCheckLine,
+  RiErrorWarningLine,
+  RiFolder3Line,
+  RiPencilLine,
+} from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
@@ -22,13 +28,6 @@ import {
   type OrgUnitCostType,
   type OrgUnitNode,
 } from '@/lib/data/org-units';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
 
 /** 비용구분 선택지 — 팀(leaf)의 비용구분 설정에 사용. */
@@ -187,8 +186,8 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 }
 
 /**
- * 조직 트리 노드(재귀). 임의 깊이를 중첩 `ul`(좌측 가이드선)로 들여쓴다.
- * 팀(leaf)만 비용구분 셀렉트를 노출하고, 본부·그룹(중간 노드)은 하위 팀 수만 표시한다.
+ * 조직 트리 노드(재귀). 임의 깊이를 중첩 `ul`(좌측 가이드선)로 들여쓴다. 본부(building)·그룹(folder)·
+ * 팀(점)을 아이콘·굵기로 구분하고, 팀(leaf)만 비용구분 세그먼트 토글, 상위 노드는 하위 팀 수 배지.
  */
 function OrgTreeNode({
   node,
@@ -201,48 +200,98 @@ function OrgTreeNode({
 }) {
   const isTeam = isLeafTeam(node); // leaf + parentId!==null → 비용구분 대상.
   const hasChildren = node.children.length > 0;
+  const isHq = node.unit.parentId === null;
 
   return (
     <li>
-      <div className="flex items-center gap-3 py-2 pr-1">
+      <div className="group hover:bg-muted/40 flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 transition-colors">
+        <span
+          aria-hidden
+          className={cn(
+            'flex size-5 shrink-0 items-center justify-center',
+            isHq ? 'text-accent' : 'text-foreground-tertiary',
+          )}
+        >
+          {isHq ? (
+            <RiBuilding2Line size={16} />
+          ) : hasChildren ? (
+            <RiFolder3Line size={15} />
+          ) : (
+            <span className="bg-border-strong size-1.5 rounded-full" />
+          )}
+        </span>
         <span
           className={cn(
             'min-w-0 flex-1 truncate text-sm',
-            isTeam ? 'text-foreground-secondary' : 'text-foreground font-semibold',
+            isHq
+              ? 'text-foreground font-semibold'
+              : hasChildren
+                ? 'text-foreground-secondary font-medium'
+                : 'text-foreground-secondary',
           )}
         >
           {node.unit.label}
         </span>
         {isTeam ? (
-          <Select
-            value={costOf(node.unit) ?? undefined}
-            onValueChange={(value) => onCostType(node.unit.id, value as OrgUnitCostType)}
-          >
-            <SelectTrigger aria-label={`${node.unit.label} 비용구분`} className="w-28 shrink-0">
-              <SelectValue placeholder="비용구분" />
-            </SelectTrigger>
-            <SelectContent>
-              {COST_TYPE_OPTIONS.map((ct) => (
-                <SelectItem key={ct} value={ct}>
-                  {ct}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CostTypeToggle
+            label={node.unit.label}
+            value={costOf(node.unit)}
+            onChange={(ct) => onCostType(node.unit.id, ct)}
+          />
         ) : hasChildren ? (
-          <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
+          <span className="text-foreground-tertiary bg-muted shrink-0 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums">
             {descendantLeafTeamIds(node).length}팀
           </span>
         ) : null}
       </div>
       {hasChildren ? (
-        <ul className="border-border-subtle ml-3 flex flex-col border-l pl-3">
+        <ul className="border-border-subtle ml-[19px] flex flex-col border-l pl-2">
           {node.children.map((child) => (
             <OrgTreeNode key={child.unit.id} node={child} costOf={costOf} onCostType={onCostType} />
           ))}
         </ul>
       ) : null}
     </li>
+  );
+}
+
+/** 팀 비용구분 세그먼트 토글 — 판관비/제조원가를 한눈에, 클릭 즉시 전환. */
+function CostTypeToggle({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: OrgUnitCostType | null;
+  onChange: (ct: OrgUnitCostType) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={`${label} 비용구분`}
+      className="border-border bg-surface inline-flex shrink-0 items-center rounded-full border p-0.5"
+    >
+      {COST_TYPE_OPTIONS.map((ct) => {
+        const active = value === ct;
+        return (
+          <button
+            key={ct}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(ct)}
+            className={cn(
+              'rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors',
+              'focus-visible:ring-accent/50 focus-visible:ring-2 focus-visible:outline-none',
+              active
+                ? 'bg-accent text-white'
+                : 'text-foreground-tertiary hover:text-foreground-secondary',
+            )}
+          >
+            {ct}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
