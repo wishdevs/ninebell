@@ -1,34 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  RiAddLine,
-  RiArrowDownSLine,
-  RiArrowUpSLine,
-  RiCheckLine,
-  RiDeleteBinLine,
-  RiErrorWarningLine,
-  RiPencilLine,
-} from '@remixicon/react';
+import { RiCheckLine, RiErrorWarningLine, RiPencilLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErpOrgSync } from './erp-org-sync';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
-import { StatusPill } from '@/components/ui/status-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { ApiError, api, errorMessage } from '@/lib/api/client';
 import {
-  buildOrgUnitTree,
+  buildOrgUnitForest,
+  descendantLeafTeamIds,
+  isLeafTeam,
+  leafTeamUnits,
   type AgentAccess,
   type OrgUnit,
   type OrgUnitCostType,
+  type OrgUnitNode,
 } from '@/lib/data/org-units';
 import {
   Select,
@@ -39,22 +31,13 @@ import {
 } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
 
-/** 비용구분 선택지 — 팀 생성/수정 시 사용. */
+/** 비용구분 선택지 — 팀(leaf)의 비용구분 설정에 사용. */
 const COST_TYPE_OPTIONS: readonly OrgUnitCostType[] = ['판관비', '제조원가'];
-
-/** 비용구분 배지 톤 — 판관비/제조원가를 구분하되 과하지 않게. */
-const COST_TYPE_TONE: Record<OrgUnitCostType, string> = {
-  판관비: 'bg-info/10 text-info',
-  제조원가: 'bg-accent/10 text-accent',
-};
-
-function CostTypeBadge({ costType }: { costType: OrgUnitCostType }) {
-  return <StatusPill label={costType} variant="custom" toneClassName={COST_TYPE_TONE[costType]} />;
-}
 
 /**
  * 조직구분 관리 — 두 탭.
- * - 조직구분: 본부▸팀 CRUD(추가·이름변경·순서변경·삭제·팀 비용구분). 백엔드 `/org-units`.
+ * - 조직구분: ERP 조직도를 미러링한 조직 트리(읽기 전용 구조). 구조는 여기서 생성/수정/삭제하지
+ *   않고 'ERP 조직도 불러오기'로만 동기화하며, 각 팀(leaf)의 비용구분만 설정한다. 백엔드 `/org-units`.
  * - 에이전트 접근: 실 에이전트별 사용 가능 팀을 체크박스로 관리. 백엔드 `/agent-access`.
  * 최초 설정은 모두 선택(백엔드 access_configured=false → 전체 반환).
  */
@@ -72,7 +55,7 @@ export function OrgAccessClient() {
       <PageHeader
         caption="운영"
         title="조직구분 관리"
-        description="본부·팀 조직구분을 관리하고, 팀별로 각 에이전트의 사용 권한을 설정합니다. 최초 설정은 모두 선택입니다."
+        description="ERP 조직도를 반영한 조직 구조를 확인하고, 팀별 비용구분과 각 에이전트의 사용 권한을 설정합니다. 최초 설정은 모두 선택입니다."
       />
 
       <Tabs defaultValue="org" className="flex flex-col gap-6">
@@ -131,7 +114,7 @@ function LoadState({ error, onReload }: { error: ApiError | null; onReload: () =
   );
 }
 
-// ── 조직구분 CRUD 탭 ─────────────────────────────────────────────────────────
+// ── 조직구분 탭(읽기 전용 트리 + 팀 비용구분) ───────────────────────────────────
 interface OrgUnitsTabProps {
   status: 'loading' | 'success' | 'error';
   error: ApiError | null;
@@ -140,434 +123,126 @@ interface OrgUnitsTabProps {
   onOrgsChanged: () => void;
 }
 
-/** 인라인 편집 대상 — 본부(costType=null)와 팀(costType=선택값)을 함께 다룬다. */
-interface EditingState {
-  id: string;
-  label: string;
-  /** null 이면 본부(비용구분 없음), 문자열이면 팀. */
-  costType: OrgUnitCostType | null;
-}
-
 function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUnitsTabProps) {
-  const [newParentLabel, setNewParentLabel] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState<EditingState | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<OrgUnit | null>(null);
-  // 팀 추가 인라인 폼 — 한 번에 한 본부에서만 연다.
-  const [addChildFor, setAddChildFor] = useState<string | null>(null);
-  const [newChildLabel, setNewChildLabel] = useState('');
-  const [newChildCostType, setNewChildCostType] = useState<OrgUnitCostType>('판관비');
+  // 비용구분 낙관적 오버레이(id→선택값). 새 목록이 도착하면 비운다(서버값이 진실).
+  const [pending, setPending] = useState<Record<string, OrgUnitCostType>>({});
+  useEffect(() => {
+    setPending({});
+  }, [orgUnits]);
 
   if (status === 'loading' || status === 'error') {
     return <LoadState error={error} onReload={onReload} />;
   }
 
-  const tree = buildOrgUnitTree(orgUnits);
+  const forest = buildOrgUnitForest(orgUnits);
 
-  const runMutation = async (fn: () => Promise<unknown>) => {
-    setBusy(true);
+  const updateCostType = async (id: string, costType: OrgUnitCostType) => {
+    setPending((prev) => ({ ...prev, [id]: costType }));
     try {
-      await fn();
+      await api.patch(`/org-units/${id}`, { costType });
+      onReload(); // 서버 상태로 재동기화 → 오버레이는 목록 갱신 시 비워진다.
     } catch (err) {
       toast.error(errorMessage(err));
-    } finally {
-      // 성공/실패 모두 서버 상태로 재동기화(실패 시 stale 행 잔존 방지, 리뷰 #13).
-      onOrgsChanged();
-      setBusy(false);
+      setPending((prev) => {
+        const next = { ...prev };
+        delete next[id]; // 실패한 항목만 롤백.
+        return next;
+      });
     }
   };
 
-  const addParent = async () => {
-    const label = newParentLabel.trim();
-    if (!label) return;
-    await runMutation(async () => {
-      await api.post('/org-units', { label });
-      setNewParentLabel('');
-    });
-  };
-
-  const openAddChild = (parentId: string) => {
-    setAddChildFor(parentId);
-    setNewChildLabel('');
-    setNewChildCostType('판관비');
-  };
-
-  const addChild = async (parentId: string) => {
-    const label = newChildLabel.trim();
-    if (!label) return;
-    await runMutation(async () => {
-      await api.post('/org-units', { label, parentId, costType: newChildCostType });
-      setAddChildFor(null);
-    });
-  };
-
-  const saveRename = async () => {
-    if (!editing) return;
-    const label = editing.label.trim();
-    if (!label) return;
-    const { id, costType } = editing;
-    await runMutation(async () => {
-      await api.patch(`/org-units/${id}`, costType === null ? { label } : { label, costType });
-      setEditing(null);
-    });
-  };
-
-  const moveParent = async (index: number, dir: -1 | 1) => {
-    const next = index + dir;
-    if (next < 0 || next >= tree.length) return;
-    const orderedIds = tree.map((g) => g.parent.id);
-    [orderedIds[index], orderedIds[next]] = [orderedIds[next], orderedIds[index]];
-    await runMutation(() => api.post('/org-units/reorder', { parentId: null, orderedIds }));
-  };
-
-  const moveChild = async (parentId: string, children: OrgUnit[], index: number, dir: -1 | 1) => {
-    const next = index + dir;
-    if (next < 0 || next >= children.length) return;
-    const orderedIds = children.map((c) => c.id);
-    [orderedIds[index], orderedIds[next]] = [orderedIds[next], orderedIds[index]];
-    await runMutation(() => api.post('/org-units/reorder', { parentId, orderedIds }));
-  };
+  const costOf = (unit: OrgUnit): OrgUnitCostType | null => pending[unit.id] ?? unit.costType;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
-          본부·팀을 직접 관리하거나, 옴니솔 조직도를 불러와 대조하세요.
+          조직 구조는 ERP 조직도에서 동기화됩니다. 여기서는 각 팀의 비용구분만 설정할 수 있습니다.
         </p>
         <ErpOrgSync onApplied={onOrgsChanged} />
       </div>
 
-      <div className="border-border bg-surface flex items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
-        <Label htmlFor="new-parent-label" className="sr-only">
-          새 본부 이름
-        </Label>
-        <Input
-          id="new-parent-label"
-          value={newParentLabel}
-          onChange={(e) => setNewParentLabel(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void addParent();
-          }}
-          placeholder="새 본부 이름"
-          maxLength={120}
-          className="min-w-0 flex-1"
-        />
-        <Button
-          size="sm"
-          onClick={() => void addParent()}
-          disabled={busy || !newParentLabel.trim()}
-        >
-          <RiAddLine size={15} aria-hidden className="mr-1" />
-          본부 추가
-        </Button>
-      </div>
-
-      {tree.length === 0 ? (
+      {forest.length === 0 ? (
         <EmptyState
           icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="본부가 없습니다"
-          description="위에서 본부를 추가하세요."
+          title="조직이 없습니다"
+          description="상단의 ‘ERP 조직도 불러오기’로 조직 구조를 가져오세요."
         />
       ) : (
-        <div className="flex flex-col gap-4">
-          {tree.map(({ parent, children }, pIndex) => (
-            <section
-              key={parent.id}
-              className="border-border bg-surface overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]"
-            >
-              <header className="bg-muted/30 border-border-subtle flex items-center gap-3 border-b px-4 py-3">
-                <span className="text-foreground-tertiary w-6 text-center text-[length:var(--text-body-sm)] tabular-nums">
-                  {pIndex + 1}
-                </span>
-                {editing?.id === parent.id ? (
-                  <>
-                    <Label htmlFor={`rename-parent-${parent.id}`} className="sr-only">
-                      본부 이름
-                    </Label>
-                    <Input
-                      id={`rename-parent-${parent.id}`}
-                      autoFocus
-                      value={editing.label}
-                      onChange={(e) => setEditing({ ...editing, label: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void saveRename();
-                        if (e.key === 'Escape') setEditing(null);
-                      }}
-                      maxLength={120}
-                      className="min-w-0 flex-1"
-                    />
-                  </>
-                ) : (
-                  <span className="text-foreground min-w-0 flex-1 truncate text-sm font-semibold">
-                    {parent.label}
-                  </span>
-                )}
-                <div className="flex items-center gap-1">
-                  {editing?.id === parent.id ? (
-                    <>
-                      <Button size="sm" onClick={() => void saveRename()} disabled={busy}>
-                        저장
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-                        취소
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => openAddChild(parent.id)}
-                        disabled={busy}
-                      >
-                        <RiAddLine size={14} aria-hidden className="mr-1" />팀 추가
-                      </Button>
-                      <IconBtn
-                        label="위로"
-                        onClick={() => void moveParent(pIndex, -1)}
-                        disabled={busy || pIndex === 0}
-                      >
-                        <RiArrowUpSLine size={16} aria-hidden />
-                      </IconBtn>
-                      <IconBtn
-                        label="아래로"
-                        onClick={() => void moveParent(pIndex, 1)}
-                        disabled={busy || pIndex === tree.length - 1}
-                      >
-                        <RiArrowDownSLine size={16} aria-hidden />
-                      </IconBtn>
-                      <IconBtn
-                        label="이름 변경"
-                        onClick={() =>
-                          setEditing({ id: parent.id, label: parent.label, costType: null })
-                        }
-                        disabled={busy}
-                      >
-                        <RiPencilLine size={15} aria-hidden />
-                      </IconBtn>
-                      <IconBtn
-                        label="삭제"
-                        onClick={() => setPendingDelete(parent)}
-                        disabled={busy}
-                        danger
-                      >
-                        <RiDeleteBinLine size={15} aria-hidden />
-                      </IconBtn>
-                    </>
-                  )}
-                </div>
-              </header>
-
-              {children.length === 0 ? (
-                <p className="text-foreground-tertiary px-4 py-3 text-[length:var(--text-body-sm)]">
-                  이 본부에 속한 팀이 없습니다.
-                </p>
-              ) : (
-                <ul className="divide-border-subtle flex flex-col divide-y">
-                  {children.map((child, cIndex) => (
-                    <li key={child.id} className="flex items-center gap-3 py-2.5 pr-4 pl-10">
-                      <span className="text-foreground-tertiary w-6 text-center text-[length:var(--text-body-sm)] tabular-nums">
-                        {cIndex + 1}
-                      </span>
-                      {editing?.id === child.id ? (
-                        <>
-                          <Label htmlFor={`rename-child-${child.id}`} className="sr-only">
-                            팀 이름
-                          </Label>
-                          <Input
-                            id={`rename-child-${child.id}`}
-                            autoFocus
-                            value={editing.label}
-                            onChange={(e) => setEditing({ ...editing, label: e.target.value })}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') void saveRename();
-                              if (e.key === 'Escape') setEditing(null);
-                            }}
-                            maxLength={120}
-                            className="min-w-0 flex-1"
-                          />
-                          <Select
-                            value={editing.costType ?? '판관비'}
-                            onValueChange={(value) =>
-                              setEditing({ ...editing, costType: value as OrgUnitCostType })
-                            }
-                          >
-                            <SelectTrigger aria-label="비용구분" className="w-24">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {COST_TYPE_OPTIONS.map((ct) => (
-                                <SelectItem key={ct} value={ct}>
-                                  {ct}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-foreground min-w-0 flex-1 truncate text-sm">
-                            {child.label}
-                          </span>
-                          {child.costType ? <CostTypeBadge costType={child.costType} /> : null}
-                        </>
-                      )}
-                      <div className="flex items-center gap-1">
-                        {editing?.id === child.id ? (
-                          <>
-                            <Button size="sm" onClick={() => void saveRename()} disabled={busy}>
-                              저장
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-                              취소
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <IconBtn
-                              label="위로"
-                              onClick={() => void moveChild(parent.id, children, cIndex, -1)}
-                              disabled={busy || cIndex === 0}
-                            >
-                              <RiArrowUpSLine size={16} aria-hidden />
-                            </IconBtn>
-                            <IconBtn
-                              label="아래로"
-                              onClick={() => void moveChild(parent.id, children, cIndex, 1)}
-                              disabled={busy || cIndex === children.length - 1}
-                            >
-                              <RiArrowDownSLine size={16} aria-hidden />
-                            </IconBtn>
-                            <IconBtn
-                              label="이름/비용구분 변경"
-                              onClick={() =>
-                                setEditing({
-                                  id: child.id,
-                                  label: child.label,
-                                  costType: child.costType ?? '판관비',
-                                })
-                              }
-                              disabled={busy}
-                            >
-                              <RiPencilLine size={15} aria-hidden />
-                            </IconBtn>
-                            <IconBtn
-                              label="삭제"
-                              onClick={() => setPendingDelete(child)}
-                              disabled={busy}
-                              danger
-                            >
-                              <RiDeleteBinLine size={15} aria-hidden />
-                            </IconBtn>
-                          </>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {addChildFor === parent.id ? (
-                <div className="border-border-subtle bg-muted/10 flex items-center gap-2 border-t px-4 py-3 pl-10">
-                  <Label htmlFor={`new-child-label-${parent.id}`} className="sr-only">
-                    새 팀 이름
-                  </Label>
-                  <Input
-                    id={`new-child-label-${parent.id}`}
-                    autoFocus
-                    value={newChildLabel}
-                    onChange={(e) => setNewChildLabel(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void addChild(parent.id);
-                      if (e.key === 'Escape') setAddChildFor(null);
-                    }}
-                    placeholder="새 팀 이름"
-                    maxLength={120}
-                    className="min-w-0 flex-1"
-                  />
-                  <Select
-                    value={newChildCostType}
-                    onValueChange={(value) => setNewChildCostType(value as OrgUnitCostType)}
-                  >
-                    <SelectTrigger aria-label="비용구분" className="w-24">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {COST_TYPE_OPTIONS.map((ct) => (
-                        <SelectItem key={ct} value={ct}>
-                          {ct}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="sm"
-                    onClick={() => void addChild(parent.id)}
-                    disabled={busy || !newChildLabel.trim()}
-                  >
-                    추가
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setAddChildFor(null)}>
-                    취소
-                  </Button>
-                </div>
-              ) : null}
-            </section>
-          ))}
+        <div className="border-border bg-surface rounded-[var(--radius-lg)] border p-2 shadow-[var(--shadow-card)]">
+          <ul className="flex flex-col">
+            {forest.map((node) => (
+              <OrgTreeNode
+                key={node.unit.id}
+                node={node}
+                costOf={costOf}
+                onCostType={updateCostType}
+              />
+            ))}
+          </ul>
         </div>
       )}
-
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        onClose={() => setPendingDelete(null)}
-        title={pendingDelete?.parentId === null ? '본부 삭제' : '팀 삭제'}
-        message={
-          pendingDelete
-            ? pendingDelete.parentId === null
-              ? `'${pendingDelete.label}'을(를) 삭제하면 그 아래 팀도 함께 삭제되고, 각 에이전트의 접근 설정도 함께 제거됩니다.`
-              : `'${pendingDelete.label}'을(를) 삭제하면 각 에이전트의 이 팀 접근 설정도 함께 제거됩니다.`
-            : ''
-        }
-        confirmLabel="삭제"
-        variant="danger"
-        onConfirm={async () => {
-          if (!pendingDelete) return;
-          const id = pendingDelete.id;
-          setPendingDelete(null);
-          await runMutation(() => api.delete(`/org-units/${id}`));
-        }}
-      />
     </div>
   );
 }
 
-function IconBtn({
-  label,
-  onClick,
-  disabled,
-  danger,
-  children,
+/**
+ * 조직 트리 노드(재귀). 임의 깊이를 중첩 `ul`(좌측 가이드선)로 들여쓴다.
+ * 팀(leaf)만 비용구분 셀렉트를 노출하고, 본부·그룹(중간 노드)은 하위 팀 수만 표시한다.
+ */
+function OrgTreeNode({
+  node,
+  costOf,
+  onCostType,
 }: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  children: React.ReactNode;
+  node: OrgUnitNode;
+  costOf: (unit: OrgUnit) => OrgUnitCostType | null;
+  onCostType: (id: string, costType: OrgUnitCostType) => void;
 }) {
+  const isTeam = isLeafTeam(node); // leaf + parentId!==null → 비용구분 대상.
+  const hasChildren = node.children.length > 0;
+
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        'text-foreground-tertiary hover:bg-muted flex size-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        danger ? 'hover:text-danger' : 'hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
+    <li>
+      <div className="flex items-center gap-3 py-2 pr-1">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-sm',
+            isTeam ? 'text-foreground-secondary' : 'text-foreground font-semibold',
+          )}
+        >
+          {node.unit.label}
+        </span>
+        {isTeam ? (
+          <Select
+            value={costOf(node.unit) ?? undefined}
+            onValueChange={(value) => onCostType(node.unit.id, value as OrgUnitCostType)}
+          >
+            <SelectTrigger aria-label={`${node.unit.label} 비용구분`} className="w-28 shrink-0">
+              <SelectValue placeholder="비용구분" />
+            </SelectTrigger>
+            <SelectContent>
+              {COST_TYPE_OPTIONS.map((ct) => (
+                <SelectItem key={ct} value={ct}>
+                  {ct}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : hasChildren ? (
+          <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
+            {descendantLeafTeamIds(node).length}팀
+          </span>
+        ) : null}
+      </div>
+      {hasChildren ? (
+        <ul className="border-border-subtle ml-3 flex flex-col border-l pl-3">
+          {node.children.map((child) => (
+            <OrgTreeNode key={child.unit.id} node={child} costOf={costOf} onCostType={onCostType} />
+          ))}
+        </ul>
+      ) : null}
+    </li>
   );
 }
 
@@ -623,12 +298,13 @@ function AgentAccessTab({
     return <LoadState error={accessError ?? orgError} onReload={onReload} />;
   }
 
-  // 팀(leaf)만 접근 대상 — 본부는 배정 단위가 아니다(백엔드가 본부 id를 거부).
-  const tree = buildOrgUnitTree(orgUnits);
+  // 팀(leaf)만 접근 대상 — 본부·그룹(중간 노드)은 배정 단위가 아니다(백엔드가 거부).
+  const forest = buildOrgUnitForest(orgUnits);
+  const leaves = leafTeamUnits(forest);
 
   // 체크 옵션 = 실 팀 전체 + '미지정'(조직 미배정 사용자 허용, 항상 마지막).
   const options: { id: string; label: string }[] = [
-    ...tree.flatMap((g) => g.children.map((c) => ({ id: c.id, label: c.label }))),
+    ...leaves.map((leaf) => ({ id: leaf.id, label: leaf.label })),
     { id: ORG_NONE, label: '미지정' },
   ];
 
@@ -667,11 +343,11 @@ function AgentAccessTab({
     schedulePersist(agentId);
   };
 
-  // 본부 '전체' 토글 — 그 본부 팀 전부 선택/해제(on=true 선택).
-  const toggleParent = (agentId: string, childIds: string[], on: boolean) => {
+  // 상위 노드 '전체' 토글 — 그 노드 하위 팀 전부 선택/해제(on=true 선택).
+  const toggleParent = (agentId: string, leafIds: string[], on: boolean) => {
     setLocal((prev) => {
       const current = new Set(prev[agentId] ?? []);
-      for (const id of childIds) {
+      for (const id of leafIds) {
         if (on) current.add(id);
         else current.delete(id);
       }
@@ -707,6 +383,8 @@ function AgentAccessTab({
 
   const editing = accessData.find((a) => a.agentId === editingId) ?? null;
   const editingSel = editing ? new Set(local[editing.agentId] ?? []) : new Set<string>();
+  // 모두 선택 여부는 옵션 멤버십으로 판정(로컬에 중간 그룹 id 등 옵션 외 값이 섞여도 견고).
+  const allSelected = options.every((o) => editingSel.has(o.id));
 
   return (
     <>
@@ -750,7 +428,7 @@ function AgentAccessTab({
         })}
       </div>
 
-      {/* 편집 팝업 — 조직 트리(본부 접기 + 전체 토글) + 미지정. 변경은 자동 저장(디바운스). */}
+      {/* 편집 팝업 — 조직 트리(상위 노드 전체 토글) + 미지정. 변경은 자동 저장(디바운스). */}
       {editing ? (
         <Dialog
           open
@@ -763,14 +441,11 @@ function AgentAccessTab({
               <button
                 type="button"
                 onClick={() =>
-                  setSelection(
-                    editing.agentId,
-                    editingSel.size === options.length ? [] : options.map((o) => o.id),
-                  )
+                  setSelection(editing.agentId, allSelected ? [] : options.map((o) => o.id))
                 }
                 className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
               >
-                {editingSel.size === options.length ? '모두 해제' : '모두 선택'}
+                {allSelected ? '모두 해제' : '모두 선택'}
               </button>
               <Button onClick={() => setEditingId(null)}>닫기</Button>
             </div>
@@ -778,11 +453,11 @@ function AgentAccessTab({
         >
           <DialogBody>
             <AgentAccessEditor
-              tree={tree}
+              forest={forest}
               selected={editingSel}
               noneChecked={editingSel.has(ORG_NONE)}
               onToggle={(id) => toggle(editing.agentId, id)}
-              onToggleParent={(childIds, on) => toggleParent(editing.agentId, childIds, on)}
+              onToggleParent={(leafIds, on) => toggleParent(editing.agentId, leafIds, on)}
             />
           </DialogBody>
         </Dialog>
@@ -791,98 +466,31 @@ function AgentAccessTab({
   );
 }
 
-// ── 편집 팝업 내용 — 본부 접기 + 전체 토글 + 팀 체크박스 + 미지정 ──────────────
+// ── 편집 팝업 내용 — 조직 트리(상위 노드 전체 토글) + 팀 체크박스 + 미지정 ──────────
 function AgentAccessEditor({
-  tree,
+  forest,
   selected,
   noneChecked,
   onToggle,
   onToggleParent,
 }: {
-  tree: { parent: OrgUnit; children: OrgUnit[] }[];
+  forest: OrgUnitNode[];
   selected: Set<string>;
   noneChecked: boolean;
   onToggle: (orgId: string) => void;
-  onToggleParent: (childIds: string[], on: boolean) => void;
+  onToggleParent: (leafIds: string[], on: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggleExpand = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
   return (
     <div className="flex flex-col gap-1.5">
-      {tree.map(({ parent, children }) => {
-        if (children.length === 0) return null;
-        const childIds = children.map((c) => c.id);
-        const selCount = childIds.filter((id) => selected.has(id)).length;
-        const allOn = selCount === childIds.length;
-        const isExp = expanded.has(parent.id);
-        return (
-          <div
-            key={parent.id}
-            className="border-border/60 overflow-hidden rounded-[var(--radius-md)] border"
-          >
-            <div className="bg-muted/30 flex items-center gap-1.5 px-2 py-1.5">
-              <button
-                type="button"
-                aria-label={isExp ? '접기' : '펼치기'}
-                onClick={() => toggleExpand(parent.id)}
-                className="text-foreground-tertiary hover:text-foreground flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors"
-              >
-                <RiArrowDownSLine
-                  size={16}
-                  aria-hidden
-                  className={cn('transition-transform', isExp ? '' : '-rotate-90')}
-                />
-              </button>
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={allOn ? true : selCount > 0 ? 'mixed' : false}
-                onClick={() => onToggleParent(childIds, !allOn)}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
-                    allOn
-                      ? 'border-accent bg-accent text-white'
-                      : selCount > 0
-                        ? 'border-accent bg-accent/20 text-accent'
-                        : 'border-border-strong bg-surface',
-                  )}
-                >
-                  {allOn ? <RiCheckLine size={13} /> : selCount > 0 ? '–' : null}
-                </span>
-                <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
-                  {parent.label}
-                </span>
-              </button>
-              <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
-                {selCount}/{childIds.length}
-              </span>
-            </div>
-            {isExp ? (
-              <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3">
-                {children.map((child) => (
-                  <OrgAccessCheckbox
-                    key={child.id}
-                    label={child.label}
-                    checked={selected.has(child.id)}
-                    onClick={() => onToggle(child.id)}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+      {forest.map((node) => (
+        <AgentAccessNode
+          key={node.unit.id}
+          node={node}
+          selected={selected}
+          onToggle={onToggle}
+          onToggleParent={onToggleParent}
+        />
+      ))}
 
       <div className="mt-1">
         <OrgAccessCheckbox
@@ -890,6 +498,82 @@ function AgentAccessEditor({
           checked={noneChecked}
           onClick={() => onToggle(ORG_NONE)}
         />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 접근 편집 트리 노드(재귀). 팀(leaf)은 체크박스, 상위 노드는 하위 팀 전체 토글(tri-state)
+ * 헤더 + 중첩 자식. 배정 대상 팀이 없는 가지는 렌더하지 않는다.
+ */
+function AgentAccessNode({
+  node,
+  selected,
+  onToggle,
+  onToggleParent,
+}: {
+  node: OrgUnitNode;
+  selected: Set<string>;
+  onToggle: (orgId: string) => void;
+  onToggleParent: (leafIds: string[], on: boolean) => void;
+}) {
+  if (isLeafTeam(node)) {
+    return (
+      <OrgAccessCheckbox
+        label={node.unit.label}
+        checked={selected.has(node.unit.id)}
+        onClick={() => onToggle(node.unit.id)}
+      />
+    );
+  }
+
+  const leafIds = descendantLeafTeamIds(node);
+  if (leafIds.length === 0) return null; // 배정 대상 팀이 없는 본부/그룹은 숨김.
+  const selCount = leafIds.filter((id) => selected.has(id)).length;
+  const allOn = selCount === leafIds.length;
+
+  return (
+    <div className="border-border/60 overflow-hidden rounded-[var(--radius-md)] border">
+      <div className="bg-muted/30 flex items-center gap-1.5 px-2 py-1.5">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={allOn ? true : selCount > 0 ? 'mixed' : false}
+          onClick={() => onToggleParent(leafIds, !allOn)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <span
+            aria-hidden
+            className={cn(
+              'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
+              allOn
+                ? 'border-accent bg-accent text-white'
+                : selCount > 0
+                  ? 'border-accent bg-accent/20 text-accent'
+                  : 'border-border-strong bg-surface',
+            )}
+          >
+            {allOn ? <RiCheckLine size={13} /> : selCount > 0 ? '–' : null}
+          </span>
+          <span className="text-foreground truncate text-[length:var(--text-body-sm)] font-medium">
+            {node.unit.label}
+          </span>
+        </button>
+        <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
+          {selCount}/{leafIds.length}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1.5 p-2 pl-3">
+        {node.children.map((child) => (
+          <AgentAccessNode
+            key={child.unit.id}
+            node={child}
+            selected={selected}
+            onToggle={onToggle}
+            onToggleParent={onToggleParent}
+          />
+        ))}
       </div>
     </div>
   );

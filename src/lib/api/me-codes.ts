@@ -68,13 +68,13 @@ export interface CatalogPage {
 }
 
 /** 조직도(org_unit) 동기화 시 org_units 반영 요약 — 백엔드 org_apply.apply_org_tree 반환.
- * 키는 백엔드 서비스 dict 그대로(snake_case): 추가/갱신/미포함은 라벨 목록, unchanged·total_erp 는 수. */
+ * ERP 트리를 전체 깊이로 미러링한다: added·deleted 는 라벨 목록, updated·unchanged·total 은 수. */
 export interface OrgApplySummary {
   added: string[];
-  updated: string[];
+  updated: number;
   unchanged: number;
-  local_only: string[];
-  total_erp: number;
+  deleted: string[];
+  total: number;
 }
 
 /** 조직도 반영 후 department 기준 재배치된 사용자 1건 — 백엔드 org_apply.reconcile_users 반환. */

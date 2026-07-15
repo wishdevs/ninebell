@@ -278,6 +278,7 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
 
     tree = await fetch_org_tree(userid, password, browser_factory)
     flat = tree["flat"]
+    nodes = tree["nodes"]  # 전체 깊이 트리 — org_units 미러링용(catalog 미리보기는 flat 유지).
     now = datetime.now(timezone.utc)
 
     # (본부, 팀) → catalog code. 본부 자체도 1행(type=hq)으로 남겨 계층을 복원 가능하게 한다.
@@ -325,19 +326,19 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
     # 카탈로그 커밋과 분리된 세션/트랜잭션이라, 반영이 실패해도 미리보기는 이미 남는다.
     applied: dict = {}
     reassigned: list[dict] = []
-    if flat:
+    if nodes:
         from app.services.org_apply import apply_org_tree, reconcile_users
 
         async with sessionmaker() as s:
-            applied = await apply_org_tree(s, flat)
+            applied = await apply_org_tree(s, nodes)
             reassigned = await reconcile_users(s)
             await s.commit()
         logger.info(
-            "조직도 org_units 반영 — 추가 %d·갱신 %d·미변경 %d·ERP미포함 %d·사용자 재배치 %d명",
+            "조직도 org_units 반영(전체 깊이) — 추가 %d·갱신 %d·미변경 %d·삭제 %d·사용자 재배치 %d명",
             len(applied.get("added", [])),
-            len(applied.get("updated", [])),
+            applied.get("updated", 0),
             applied.get("unchanged", 0),
-            len(applied.get("local_only", [])),
+            len(applied.get("deleted", [])),
             len(reassigned),
         )
     return {"count": len(catalog), "applied": applied, "reassigned": reassigned}

@@ -58,14 +58,13 @@ async function loadErpOrg(): Promise<HqGroup[]> {
   }));
 }
 
-/** 반영 요약(status.applied·reassigned) → "추가 N · 갱신 M · ERP 미포함 K · 사용자 재배치 J명". */
+/** 반영 요약(status.applied·reassigned) → "추가 N · 삭제 K · 사용자 재배치 J명". */
 function summarize(status: SyncStatus): string {
   const a = status.applied;
   const added = a?.added?.length ?? 0;
-  const updated = a?.updated?.length ?? 0;
-  const localOnly = a?.local_only?.length ?? 0;
+  const deleted = a?.deleted?.length ?? 0;
   const reassigned = status.reassigned?.length ?? 0;
-  return `조직구분 반영: 추가 ${added} · 갱신 ${updated} · ERP 미포함 ${localOnly} · 사용자 재배치 ${reassigned}명`;
+  return `조직구분 반영: 추가 ${added} · 삭제 ${deleted} · 사용자 재배치 ${reassigned}명`;
 }
 
 interface ErpOrgSyncProps {
