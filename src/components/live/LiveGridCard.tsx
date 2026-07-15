@@ -39,6 +39,87 @@ interface RowEdit {
   budgetSource: PrefillSource | null;
   projectSource: PrefillSource | null;
   noteSource: PrefillSource | null;
+  /** 부가세구분 — '과세' 또는 '불공'. 자동 분류 기본값, 사용자가 토글로 덮어쓸 수 있다. */
+  vat: string;
+}
+
+/** 표시 정렬 — 승인 → 거래시간(날짜+시각) 오름차순. no(제출키)는 행마다 유지되어 제출엔 영향 없다. */
+function sortGridRows(rows: readonly LiveGridRow[]): LiveGridRow[] {
+  return [...rows].sort(
+    (a, b) =>
+      (a.approved ?? '').localeCompare(b.approved ?? '') ||
+      (a.date ?? '').localeCompare(b.date ?? '') ||
+      (a.time ?? '').localeCompare(b.time ?? ''),
+  );
+}
+
+/** 예산계정명이 불공(매입세액 불공제) 계정인지 — 백엔드 app/agents/card_collect/vat.py 미러.
+ * (판)/(제)/공통·공백·하이픈을 흡수해 '복리후생비-업무'↔'(판)복리후생비-업무' 등을 묶는다. */
+function normAcctName(s?: string): string {
+  return (s ?? '')
+    .replace(/\(판\)|\(제\)|\(공통\)/g, '')
+    .replace(/[\s()[\]{}·・,./\-_]+/g, '')
+    .toLowerCase();
+}
+// 정확일치(특정 세부계정) — 복리후생비-'업무'만 불공('석식' 아님).
+const NONDEDUCTIBLE_ACCTS = new Set(
+  ['복리후생비-업무', '여비교통비-해외출장', '차량유지비-유류'].map(normAcctName),
+);
+// 접대비 계열(접대비·국내/해외·해외접대비 등, 어순 무관) → 부분일치로 전부 불공.
+const NONDEDUCTIBLE_CONTAINS = [normAcctName('접대비')];
+function isNondeductibleAcct(bgacctNm?: string): boolean {
+  const n = normAcctName(bgacctNm);
+  if (n.length === 0) return false;
+  if (NONDEDUCTIBLE_CONTAINS.some((sub) => n.includes(sub))) return true;
+  return NONDEDUCTIBLE_ACCTS.has(n);
+}
+
+/** 계정 불공 사유를 뺀 부가세구분 기준값 — 계정을 비-불공으로 바꿀 때 복원용.
+ * 가맹점 AI 판정(불공)·원본 비과세면 불공 유지, 그 외(원본 과세)면 과세로 되돌린다. */
+function baseVat(rawVatType?: string, aiVat?: string): string {
+  if ((aiVat ?? '').trim() === '불공') return '불공';
+  return (rawVatType ?? '').trim() === '과세' ? '과세' : '불공';
+}
+
+/** 부가세구분 편집형 배지 — 과세(파랑)/불공(주황) 색 구분, 클릭 시 토글.
+ * 카드내역 원본(rawVatType)이 '과세'인데 불공으로 처리되면(재분류) 그 맥락을 캡션으로 명시한다
+ * — "왜 과세인데 불공이지?"를 사용자가 이해·검증하게. 툴팁엔 원본값과 사유. */
+function VatBadge({
+  value,
+  rawVatType,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  rawVatType?: string;
+  disabled?: boolean;
+  onChange: (v: string) => void;
+}) {
+  const nd = value === '불공';
+  const rawTaxable = (rawVatType ?? '').trim() === '과세';
+  // 카드내역=과세 인데 불공 처리 = 재분류(불공제 계정·통행료/우체국/유류 등). 맥락을 드러낸다.
+  const reclassified = nd && rawTaxable;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange(nd ? '과세' : '불공')}
+      title={
+        reclassified
+          ? `카드내역 부가세구분은 '과세'이지만 매입세액 불공제 대상이라 '불공'으로 처리합니다. 클릭해 과세/불공 전환`
+          : `부가세구분 — 카드내역 원본 '${rawVatType || '—'}'. 클릭해 과세/불공 전환`
+      }
+      className={cn(
+        'shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+        nd
+          ? 'bg-warning/15 text-warning hover:bg-warning/25'
+          : 'bg-info/15 text-info hover:bg-info/25',
+      )}
+    >
+      {/* 재분류(원본 과세 → 불공)는 전이를 한 배지에 표기 — 스캔 시 '→' 있는 행만 재분류로 인지. */}
+      {reclassified ? '과세 → 불공' : nd ? '불공' : '과세'}
+    </button>
+  );
 }
 
 function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
@@ -56,6 +137,7 @@ function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
         budgetSource: r.budgetUnit ? (r.budgetSource ?? null) : null,
         projectSource: r.project ? (r.projectSource ?? null) : null,
         noteSource: r.note ? (r.noteSource ?? null) : null,
+        vat: r.vat === '불공' ? '불공' : '과세',
       },
     ]),
   );
@@ -96,6 +178,8 @@ function acctCodeOf(code: string, option?: BudgetUnitOption): string {
  */
 export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const rows = hitl.rows ?? [];
+  // 표시용 정렬본(승인·거래시간). 제출/편집은 no 키 기반이라 원본 rows 순서와 무관.
+  const displayRows = sortGridRows(rows);
   const bFavList = hitl.budgetUnits?.favorites ?? [];
   const bMineList = hitl.budgetUnits?.mine ?? [];
   const bAllList = hitl.budgetUnits?.all ?? [];
@@ -197,7 +281,10 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
       suggestTokens.current.set(no, token);
 
       const m = (merchant ?? '').trim();
-      const acct = acctCodeOf(code, budgetByCode.get(code));
+      const opt = budgetByCode.get(code);
+      const acct = acctCodeOf(code, opt);
+      // 계정 이름(bgacctNm) — 미학습 조합에서 AI 가 계정 맞춤 적요를 생성하는 근거로 함께 넘긴다.
+      const acctName = (opt?.bgacctNm ?? '').trim();
       if (!m || !acct) {
         // 가맹점명 없음 또는 계정 없음(선택 해제 포함) → 취소만 하고 조회하지 않는다.
         timers.delete(no);
@@ -207,7 +294,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
       const timer = setTimeout(() => {
         timers.delete(no);
         setSuggesting((s) => ({ ...s, [no]: true }));
-        fetchNoteSuggest({ merchant: m, acct })
+        fetchNoteSuggest({ merchant: m, acct, acctName })
           .then((res) => {
             if (suggestTokens.current.get(no) !== token) return; // 스테일 응답 무시.
             const note = (res.note ?? '').trim();
@@ -219,7 +306,9 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
               const isManual = row.noteSource == null && row.note.trim().length > 0;
               if (isManual) return cur;
               // 예산단위는 onChange 가 이미 세팅 — 여기선 적요·배지만 갱신한다.
-              return { ...cur, [no]: { ...row, note, noteSource: 'lookup' } };
+              // 미학습 조합의 AI 생성은 'ai' 배지, 결정적 재추천은 'lookup' 배지로 구분.
+              const src: PrefillSource = res.source === 'ai' ? 'ai' : 'lookup';
+              return { ...cur, [no]: { ...row, note, noteSource: src } };
             });
           })
           .catch(() => {
@@ -296,6 +385,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           : null,
         note: e.note.trim(),
         skip: false,
+        vat: e.vat === '불공' ? '불공' : '과세',
         budgetEdited: e.budgetUnitCode !== (r.budgetUnit?.code ?? ''),
         projectEdited: (e.projectCode || '') !== (r.project?.code ?? ''),
         noteEdited: e.note.trim() !== (r.note ?? '').trim(),
@@ -332,7 +422,21 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         projectFavs={pFavList}
         disabled={disabled}
         onBulkBudget={(code) => {
-          applyAll({ budgetUnitCode: code });
+          // 일괄 지정도 부가세구분 재도출 — 불공 계정이면 전부 불공, 아니면 각 행 원본 기준으로 복원
+          // (행마다 원본 VAT_TP·가맹점 AI 가 달라 행별 계산). budgetUnitCode 는 공통.
+          const nd = isNondeductibleAcct(budgetByCode.get(code)?.bgacctNm);
+          setEdits((prev) => {
+            const next = { ...prev };
+            for (const r of rows) {
+              if (next[r.no]?.skip) continue;
+              next[r.no] = {
+                ...next[r.no],
+                budgetUnitCode: code,
+                vat: nd ? '불공' : baseVat(r.vatType, r.vatDeduction),
+              };
+            }
+            return next;
+          });
           // 일괄 지정도 동일하게 각 행 계정 맞춤 적요를 재추천(비제외 행만, 행별 보호규칙 유지).
           for (const r of rows) if (!edits[r.no]?.skip) scheduleNoteSuggest(r.no, code, r.merchant);
         }}
@@ -358,14 +462,14 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                   {c.header}
                 </Th>
               ))}
-              <Th className="min-w-[220px]">예산단위</Th>
+              <Th className="min-w-[220px]">예산계정</Th>
               <Th className="min-w-[220px]">프로젝트</Th>
               <Th className="min-w-[180px]">적요</Th>
               <Th className="w-14 text-center">제외</Th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {displayRows.map((r) => {
               const e = edits[r.no] ?? {
                 budgetUnitCode: '',
                 projectCode: '',
@@ -376,6 +480,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                 budgetSource: null,
                 projectSource: null,
                 noteSource: null,
+                vat: '과세',
               };
               const rowInvalid = !e.skip && !isRowValid(r.no);
               return (
@@ -383,7 +488,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                   key={r.no}
                   data-row-no={r.no}
                   className={cn(
-                    'border-border/50 border-t align-top',
+                    // 셀 수직 중앙 정렬 — 읽기 컬럼(텍스트)과 입력 컬럼(콤보/배지) 높이 차이로 어긋나 보이던 것 교정.
+                    'border-border/50 border-t align-middle',
                     e.skip && 'opacity-40',
                     rowInvalid && 'bg-danger/[0.04]',
                     r.error && 'bg-danger/[0.07] ring-danger/30 ring-1 ring-inset',
@@ -398,7 +504,17 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         c.align === 'right' ? 'text-right' : 'text-left',
                       )}
                     >
-                      {r[c.key] ?? ''}
+                      {c.key === 'vatType' ? (
+                        // 부가세구분 = 과세/불공(편집형 배지). 원시 VAT_TP 대신 분류값을 보여주고 토글한다.
+                        <VatBadge
+                          value={e.vat}
+                          rawVatType={r.vatType}
+                          disabled={e.skip || disabled}
+                          onChange={(v) => setRow(r.no, { vat: v })}
+                        />
+                      ) : (
+                        (r[c.key] ?? '')
+                      )}
                     </Td>
                   ))}
 
@@ -415,7 +531,12 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                         disabled={e.skip || disabled}
                         invalid={rowInvalid && e.budgetUnitCode === ''}
                         onChange={(code) => {
-                          setRow(r.no, { budgetUnitCode: code, budgetSource: null });
+                          // 계정 변경 시 부가세구분 재도출 — 불공 계정이면 불공, 아니면 원본(가맹점 AI·
+                          // VAT_TP) 기준으로 복원한다. 예: 해외출장(불공)→사무용품비로 바꾸면 다시 과세로.
+                          const vat = isNondeductibleAcct(budgetByCode.get(code)?.bgacctNm)
+                            ? '불공'
+                            : baseVat(r.vatType, r.vatDeduction);
+                          setRow(r.no, { budgetUnitCode: code, budgetSource: null, vat });
                           // 예산단위(=계정) 변경 → 그 계정 맞춤 적요 실시간 재추천(디바운스·보호규칙).
                           // 선택 해제(code='')여도 호출 — 대기 중 추천을 취소하고 진행 중 요청을 무효화한다.
                           scheduleNoteSuggest(r.no, code, r.merchant);

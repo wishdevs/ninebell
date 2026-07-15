@@ -55,9 +55,19 @@ async def test_recommend_selections_validates_range_codes_and_clamp(monkeypatch)
     out = await recommend.recommend_selections(
         rows, budget, project, http=object(), settings=_fake_settings()
     )
-    assert out[1] == {"budgetUnitCode": "B1", "projectCode": "P1", "confidence": 1.0}
+    assert out[1] == {
+        "budgetUnitCode": "B1",
+        "projectCode": "P1",
+        "confidence": 1.0,
+        "vatDeduction": None,
+    }
     assert 99 not in out
-    assert out[2] == {"budgetUnitCode": "", "projectCode": "", "confidence": 0.0}
+    assert out[2] == {
+        "budgetUnitCode": "",
+        "projectCode": "",
+        "confidence": 0.0,
+        "vatDeduction": None,
+    }
 
 
 async def test_recommend_selections_skips_without_key():

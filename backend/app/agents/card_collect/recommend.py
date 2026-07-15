@@ -33,6 +33,9 @@ _SYSTEM = (
     "budgetUnitCode·projectCode 는 반드시 제공된 후보의 code 값을 그대로 사용하고, 새로 만들지 마세요. "
     "행에 priorChoice(과거 사용자가 같은 가맹점에 확정했던 선택)가 있으면, 그 code 를 최우선으로 "
     "채택하고 confidence 를 높게 매기세요(사용자의 반복 판단이 가장 신뢰도 높은 근거입니다). "
+    "부가세구분(vatDeduction)도 판정하세요: 통행료·우체국·주유소(유류) 등 매입세액 불공제 대상 "
+    "가맹점이면 '불공', 그 외 '과세'. 특히 주유·유류 가맹점은 예산단위를 '차량유지비-유류' 계정으로 "
+    "고르고 vatDeduction 을 '불공'으로 하세요. "
     "모든 행에 대해 submit_recommendations 를 정확히 한 번 호출하세요."
 )
 
@@ -60,6 +63,14 @@ _TOOLS: list[dict] = [
                             "confidence": {
                                 "type": "number",
                                 "description": "0~1 확신도",
+                            },
+                            "vatDeduction": {
+                                "type": "string",
+                                "enum": ["과세", "불공"],
+                                "description": (
+                                    "부가세구분 — 매입세액 불공제 대상 가맹점(통행료·우체국·"
+                                    "주유소(유류) 등)이면 '불공', 그 외 '과세'"
+                                ),
                             },
                         },
                         "required": ["no", "confidence"],
@@ -179,9 +190,12 @@ async def recommend_selections(
             continue
         budget_code = _code(rec.get("budgetUnitCode"))
         project_code = _code(rec.get("projectCode"))
+        vat_ded = str(rec.get("vatDeduction") or "").strip()
         out[no] = {
             "budgetUnitCode": budget_code if budget_code in budget_codes else "",
             "projectCode": project_code if project_code in project_codes else "",
             "confidence": _clamp01(rec.get("confidence")),
+            # 부가세구분(가맹점 기반) — '불공'만 유의미(계정/VAT_TP 와 함께 classify_vat 로 최종 결정).
+            "vatDeduction": vat_ded if vat_ded in ("과세", "불공") else None,
         }
     return out

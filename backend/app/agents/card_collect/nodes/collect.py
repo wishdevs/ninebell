@@ -14,7 +14,7 @@ from app.live.hitl import close_hitl_channel, open_hitl_channel
 from app.services import card_learning
 from app.services.code_sync import dept_matches_budget_name
 
-from .. import steps
+from .. import steps, vat as vat_rules
 from . import _shared, batch, catalog, prefill
 
 logger = logging.getLogger("app.agents.card_collect.nodes.collect")
@@ -246,6 +246,13 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 "time": r.get("TRAN_TM") or "",
                 "approved": r.get("APRVL_YN") or "",
                 "vatType": r.get("VAT_TP") or "",
+                # 부가세구분(과세/불공) 자동 분류 — 예산계정 불공목록·AI 가맹점 판정·VAT_TP 순.
+                # 사용자가 그리드에서 덮어쓸 수 있고, 저장 파티션은 그 최종값을 쓴다.
+                "vat": vat_rules.classify_vat(
+                    r.get("VAT_TP"),
+                    (preselect[idx + 1].get("budgetUnit") or {}).get("bgacctNm"),
+                    preselect[idx + 1].get("vatDeduction"),
+                ),
                 "note": recs[r.get("i", idx)],
                 "noteSource": note_sources[r.get("i", idx)],
                 **preselect[idx + 1],
@@ -390,7 +397,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     "projectEdited": bool(row.get("projectEdited")),
                     "noteEdited": bool(row.get("noteEdited")),
                 }
-                if (src.get("VAT_TP") or "").strip() == "과세":
+                # 부가세구분 파티션 — 사용자 최종 제출값(vat) 우선, 없으면(구클라) 계정+VAT_TP 자동분류.
+                row_vat = (row.get("vat") or "").strip() or vat_rules.classify_vat(
+                    src.get("VAT_TP"), (row.get("budgetUnit") or {}).get("bgacctNm")
+                )
+                if row_vat == vat_rules.TAXABLE:
                     taxable_work.append(entry)
                 else:
                     pending_nontax.append(

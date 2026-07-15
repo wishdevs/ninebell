@@ -246,23 +246,27 @@ export async function fetchCardSeed(
 
 // ── 계정 인지 적요 추천(note-suggest) ─────────────────────────────────────────
 /** `GET /me/note-suggest` 응답 — note 없으면 null, source 는 matched tier
- * (learned=개인학습 · seed=전사관례 · category=계정최빈 · heuristic=키워드 · null=없음). */
+ * (learned=개인학습 · seed=전사관례 · ai=계정 맞춤 생성 · category=계정최빈 · heuristic=키워드 · null=없음). */
 export interface NoteSuggestResult {
   note: string | null;
   source: string | null;
 }
 
 /**
- * `GET /me/note-suggest?merchant=&acct=` — 가맹점(+예산계정)에 맞는 적요 추천.
+ * `GET /me/note-suggest?merchant=&acct=&acctName=` — 가맹점(+예산계정)에 맞는 적요 추천.
  * 카드 개입 그리드에서 사람이 예산단위(=계정)를 바꾸면 그 계정 맞춤 적요를 즉시 재추천한다.
- * acct 생략 시 계정 무관 키워드 휴리스틱만. 실패는 호출부가 관대히 다룬다(기존 적요 유지).
+ * learned/seed 에 실이력이 없는 미학습 조합은 계정 이름(acctName)으로 AI 가 생성한다 —
+ * acctName 을 넘겨야 AI tier 가 돈다(없으면 통계·휴리스틱만). acct 생략 시 계정 무관 키워드만.
+ * 실패는 호출부가 관대히 다룬다(기존 적요 유지).
  */
 export async function fetchNoteSuggest(params: {
   merchant: string;
   acct?: string;
+  acctName?: string;
 }): Promise<NoteSuggestResult> {
   const qs = new URLSearchParams({ merchant: params.merchant });
   if (params.acct && params.acct.trim()) qs.set('acct', params.acct.trim());
+  if (params.acctName && params.acctName.trim()) qs.set('acctName', params.acctName.trim());
   const res = await api.get<Partial<NoteSuggestResult>>(`/me/note-suggest?${qs.toString()}`);
   return { note: res.note ?? null, source: res.source ?? null };
 }

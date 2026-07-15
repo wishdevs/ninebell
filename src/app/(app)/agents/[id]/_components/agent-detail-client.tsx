@@ -125,6 +125,22 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 양보하고 라이브 브라우저 열은 축소한다(사용자 요청: 최초 입력 시 입력창을 크게).
   const preRunActive = usePreRun && !isLive;
   const panelWide = interventionActive || preRunActive;
+  // 개입 레이아웃 레벨(3) — 개입 콘텐츠(kind)별로 라이브화면 노출·크기 + 개입 패널 크기를 정한다.
+  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때)
+  //  split: 작은 라이브(좌측) + 넓은 개입   — choice·chat, 실행 전 입력 폼
+  //  live : 라이브 크게 + 작은 패널          — 개입 없는 모니터링(읽기 전용 관찰)
+  const layoutLevel: 'full' | 'split' | 'live' =
+    interventionActive && run.hitl?.kind === 'grid' ? 'full' : panelWide ? 'split' : 'live';
+
+  // AI 추천 계산 구간(skillKey='ai-recommend' 스텝이 running) — 화면 변화가 없어 멈춰 보이는
+  // 긴 AI 콜을 라이브 화면에 눈에 띄게 오버레이한다(우측 패널만으론 잘 안 보인다는 피드백).
+  // run.steps.step(라이브 상태 키)을 agent.steps.id(계획)와 매칭해 skillKey 를 확인한다.
+  const aiWorkingLabel = useMemo(() => {
+    if (!isLive) return null;
+    const running = new Set(run.steps.filter((s) => s.status === 'running').map((s) => s.step));
+    const step = agent.steps.find((p) => p.skillKey === 'ai-recommend' && running.has(p.id));
+    return step?.label ?? null;
+  }, [isLive, run.steps, agent.steps]);
 
   // 개입 대기 알림 — 탭 제목 접두 + (백그라운드 탭이면) 브라우저 알림. 해소·종료 시 원복.
   useHitlNotification(interventionActive ? (run.hitl?.id ?? null) : null);
@@ -226,33 +242,37 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
       <div
         className={cn(
           'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
-          panelWide
-            ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
-            : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
+          layoutLevel === 'full'
+            ? 'lg:grid-cols-1' // 라이브 숨김 — 개입 패널이 전체폭
+            : layoutLevel === 'split'
+              ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
+              : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
         )}
       >
-        {/* 브라우저는 항상 라이브 스테이지 — 미실행 시 run 은 idle 상태라 중립 대기 화면을
-            보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). idle/종료엔 스테이지
-            중앙에 대형 실행 CTA 를 겹친다(우상단 버튼이 안 보인다는 피드백 반영, 동작 동일). */}
-        <LiveBrowserStage
-          targetUrl={agent.targetUrl}
-          status={run.status}
-          screenshot={run.screenshot}
-          connected={run.connected}
-          canRun={canRun}
-          etaHint={etaHint}
-          // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
-          // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
-          onStart={
-            usePreRun
-              ? undefined
-              : () => {
-                  const workflowId =
-                    (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
-                  if (workflowId) startRun(workflowId, session.params);
-                }
-          }
-        />
+        {/* 라이브 스테이지 — full 레벨(그리드 개입)에선 숨겨 개입 패널에 전체폭을 준다. 그 외엔
+            미실행 시 idle 중립 대기 화면(가짜 LIVE 노출 안 함), idle/종료엔 중앙 대형 실행 CTA 겹침. */}
+        {layoutLevel !== 'full' ? (
+          <LiveBrowserStage
+            targetUrl={agent.targetUrl}
+            status={run.status}
+            screenshot={run.screenshot}
+            connected={run.connected}
+            canRun={canRun}
+            etaHint={etaHint}
+            aiWorking={aiWorkingLabel}
+            // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
+            // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
+            onStart={
+              usePreRun
+                ? undefined
+                : () => {
+                    const workflowId =
+                      (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
+                    if (workflowId) startRun(workflowId, session.params);
+                  }
+            }
+          />
+        ) : null}
         {isLive ? (
           <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
         ) : PreRunForm ? (

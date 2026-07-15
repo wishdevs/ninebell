@@ -57,6 +57,11 @@ export interface LiveGridRow {
   time?: string;
   approved?: string;
   vatType?: string;
+  /** 부가세구분 기본값(자동 분류) — '과세' 또는 '불공'. 사용자가 그리드에서 덮어쓸 수 있다. */
+  vat?: string;
+  /** 가맹점 기반 부가세 판정(AI) — '불공'이면 계정 무관 불공(통행료·우체국·유류). 계정 변경 시
+   *  부가세구분을 원본 기준으로 복원할 때 쓴다(계정 불공만이 사유였는지 구분). */
+  vatDeduction?: string;
   /** 적요 기본값(입력 프리필). */
   note?: string;
   /** 예산단위 프리셀렉트(AI 추천 또는 기본지정). 없으면 null/미포함. */
@@ -146,6 +151,8 @@ export interface GridRowSubmit {
   project: { code: string; name: string; wbsNo?: string } | null;
   note: string;
   skip: boolean;
+  /** 부가세구분(최종) — '과세' 또는 '불공'. 저장 2패스 파티션(증빙 01=과세 / 02=불공)을 구동한다. */
+  vat?: string;
   /** 개입 학습용 — 사용자가 프리필값에서 **실제로 바꾼** 필드 표시. 바꾼 것만 학습한다
    * (프리필 그대로 수락은 학습 안 함 — 자기추천 되먹임 방지). */
   budgetEdited?: boolean;

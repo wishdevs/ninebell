@@ -1046,3 +1046,57 @@ def test_validate_grid_submit_skip_row_bypasses_required():
     # 스킵 행은 필수 검증을 타지 않는다(제외 처리).
     ok, reason = cc_nodes._validate_grid_submit([{"no": 1, "skip": True}], 1)
     assert ok, reason
+
+
+# ── 부서 비용구분(판/제) 강제 정정 (prefill._enforce_*) ──────────────────────
+def _bud(code, nm, cd):
+    return {"code": code, "name": "u", "bgacctCd": cd, "bgacctNm": nm}
+
+
+def test_enforce_budget_prefix_converts_je_to_pan():
+    """판관 사용자에게 제조 계정이 잡히면 같은 계정명의 판관 형제로 교정."""
+    cands = [
+        _bud("A|1|511003600", "(제)복리후생비-석식", "511003600"),
+        _bud("B|2|811003600", "(판)복리후생비-석식", "811003600"),
+    ]
+    r = prefill._enforce_budget_prefix(cands[0], "(판)", cands)
+    assert r["bgacctCd"] == "811003600" and r["bgacctNm"] == "(판)복리후생비-석식"
+
+
+def test_enforce_budget_prefix_keeps_when_already_matches():
+    cands = [_bud("B|2|811003600", "(판)복리후생비-석식", "811003600")]
+    r = prefill._enforce_budget_prefix(cands[0], "(판)", cands)
+    assert r["bgacctCd"] == "811003600"
+
+
+def test_enforce_budget_prefix_keeps_when_no_sibling():
+    """판관 형제 후보가 없으면 무리하게 바꾸지 않고 원본 유지."""
+    only_je = [_bud("A|1|511003600", "(제)복리후생비-석식", "511003600")]
+    r = prefill._enforce_budget_prefix(only_je[0], "(판)", only_je)
+    assert r["bgacctCd"] == "511003600"
+
+
+def test_enforce_budget_prefix_noop_without_cost_prefix():
+    je = _bud("A|1|511003600", "(제)복리후생비-석식", "511003600")
+    assert prefill._enforce_budget_prefix(je, None, [je]) is je
+
+
+def test_enforce_project_cost_converts_wrong_bucket():
+    """판관 사용자에게 제조원가(500)가 잡히면 부서 프로젝트(판매관리비 800)로 교정."""
+    cp = {"code": "800|800", "name": "판매관리비", "wbsNo": "800", "wbsNm": "판매관리비"}
+    je = {"code": "500|500", "name": "제조원가", "wbsNo": "500", "wbsNm": "제조원가"}
+    r = prefill._enforce_project_cost(je, "(판)", cp)
+    assert r["code"] == "800|800" and r["name"] == "판매관리비"
+
+
+def test_enforce_project_cost_keeps_specific_project():
+    """판/제 버킷(500/800)이 아닌 특정 프로젝트는 부서 무관이라 건드리지 않는다."""
+    cp = {"code": "800|800", "name": "판매관리비", "wbsNo": "800", "wbsNm": "판매관리비"}
+    spec = {"code": "PJT123|W1", "name": "특정", "wbsNo": "W1", "wbsNm": "x"}
+    r = prefill._enforce_project_cost(spec, "(판)", cp)
+    assert r["code"] == "PJT123|W1"
+
+
+def test_enforce_project_cost_noop_without_cost_project():
+    je = {"code": "500|500", "name": "제조원가", "wbsNo": "500", "wbsNm": "제조원가"}
+    assert prefill._enforce_project_cost(je, "(판)", None) is je

@@ -1,6 +1,12 @@
 'use client';
 
-import { RiLockLine, RiPlayCircleLine, RiPlayLine, RiRestartLine } from '@remixicon/react';
+import {
+  RiLockLine,
+  RiPlayCircleLine,
+  RiPlayLine,
+  RiRestartLine,
+  RiSparkling2Fill,
+} from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
@@ -30,6 +36,8 @@ interface LiveBrowserStageProps {
   onStart?: () => void;
   /** 실행 전 CTA 아래 소요 예고("약 2분 소요 · 첫 입력 요청까지 ~30초"). null=미표시. */
   etaHint?: StageEtaHint | null;
+  /** AI 추천 계산 구간이면 그 단계 라벨 — 화면 위에 'AI가 계산하는 중…' 오버레이. null=미표시. */
+  aiWorking?: string | null;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -52,6 +60,7 @@ export function LiveBrowserStage({
   canRun = false,
   onStart,
   etaHint = null,
+  aiWorking = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
   return (
@@ -77,6 +86,17 @@ export function LiveBrowserStage({
             이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
         <div className="bg-muted/30 relative aspect-[16/10] w-full">
           <LiveScreen src={screenshot} live={live} />
+          {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
+              화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
+          {aiWorking ? (
+            <div className="bg-surface/70 absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 px-6 text-center backdrop-blur-[2px]">
+              <RiSparkling2Fill size={30} aria-hidden className="animate-ai-sparkle text-accent" />
+              <p className="ai-working-text text-sm font-semibold">
+                {aiWorking} — AI가 계산하는 중…
+              </p>
+              <p className="text-foreground-tertiary text-xs">건수에 따라 수십 초 걸릴 수 있어요</p>
+            </div>
+          ) : null}
           {/* 실행 CTA — 우상단 버튼이 안 보인다는 피드백에 따라, 세션이 없거나(idle)
               종료됐을 때 화면 중앙에 대형 실행 진입점을 겹쳐 보여준다(실행 중엔 숨김). */}
           {onStart && !live ? (

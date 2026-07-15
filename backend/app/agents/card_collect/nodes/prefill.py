@@ -12,6 +12,54 @@ from app.services import card_learning
 from ..recommend import RECOMMEND_CONFIDENCE_THRESHOLD, recommend_selections
 from . import _shared, catalog
 
+# 비용구분 접두사 → 프로젝트 판/제 버킷(PJT_NO). 제조원가=500 / 판관비=800.
+_PREFIX_PROJECT_NO = {"(제)": "500", "(판)": "800"}
+
+
+def _enforce_budget_prefix(budget: dict, cost_prefix: str | None, candidates: list[dict]) -> dict:
+    """부서 비용구분(판/제)과 다른 계정이면 같은 계정명의 부서 판/제 형제로 교정.
+
+    예: 판관 사용자에게 '(제)복리후생비-석식'(제조)이 잡히면 후보에서 '(판)복리후생비-석식'을 찾아
+    바꾼다(가맹점 이력이 제조여도 부서가 판관이면 판관 계정으로). 접두사 없음·이미 일치·형제 후보
+    없음이면 원본 유지 — 무리하게 바꾸지 않는다.
+    """
+    if not cost_prefix:
+        return budget
+    nm = budget.get("bgacctNm") or ""
+    if nm.startswith(cost_prefix):
+        return budget  # 이미 부서 판/제와 일치.
+    key = catalog._acct_norm(nm)
+    if not key:
+        return budget
+    sib = next(
+        (
+            c
+            for c in candidates
+            if (c.get("bgacctNm") or "").startswith(cost_prefix)
+            and catalog._acct_norm(c.get("bgacctNm")) == key
+        ),
+        None,
+    )
+    return catalog._pick_budget(sib) if sib else budget
+
+
+def _enforce_project_cost(
+    project: dict, cost_prefix: str | None, cost_project: dict | None
+) -> dict:
+    """부서와 다른 판/제 버킷 프로젝트(제조원가 500 / 판관비 800)면 부서 프로젝트로 교정.
+
+    버킷(500/800)이 아닌 특정 프로젝트는 부서 무관이라 건드리지 않는다. 부서 프로젝트 미상이면 원본.
+    """
+    if not cost_prefix or not cost_project:
+        return project
+    want = _PREFIX_PROJECT_NO.get(cost_prefix)
+    if not want:
+        return project
+    pjt_no = str(project.get("code") or "").split("|")[0]
+    if pjt_no in ("500", "800") and pjt_no != want:
+        return catalog._pick_project(cost_project)
+    return project
+
 
 async def _prefill_selections(
     events: Any,
@@ -165,10 +213,20 @@ async def _prefill_selections(
             else:
                 project, project_source = None, None
 
+        # 부서 비용구분(판/제) 강제 — AI/seed/기본 자동 픽이 부서와 다른 판/제를 고르면 교정한다.
+        # (학습=사용자 확정은 존중해 건드리지 않는다.) 가맹점 이력이 제조여도 로그인 부서가 판관이면
+        # 판관 계정·프로젝트로 맞춘다. 예산: 같은 계정명의 부서 판/제 형제로, 프로젝트: 부서 프로젝트로.
+        if budget and budget_source != "learned":
+            budget = _enforce_budget_prefix(budget, cost_prefix, budget_candidates)
+        if project and project_source != "learned":
+            project = _enforce_project_cost(project, cost_prefix, cost_project)
+
         out[no] = {
             "budgetUnit": budget,
             "project": project,
             "budgetSource": budget_source,
             "projectSource": project_source,
+            # 가맹점 기반 부가세구분(AI) — collect 가 계정/VAT_TP 와 함께 classify_vat 로 최종 결정.
+            "vatDeduction": rec.get("vatDeduction"),
         }
     return out
