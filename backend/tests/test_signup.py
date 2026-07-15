@@ -15,7 +15,7 @@ import app.erp.login as erp_login
 from app.config import get_settings
 from app.erp.credcache import CredCache
 from app.main import app as fastapi_app
-from app.models import User
+from app.models import OrgUnit, User
 from app.services.signup_cache import SignupCache
 
 
@@ -87,6 +87,36 @@ async def test_signup_name_and_department_from_erp_ignore_body(client, sm, monke
         u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
         assert u.display_name == "홍길동"  # 클라 '위조이름'이 아니라 ERP 프로필값
         assert u.department == "개발팀"  # 클라 '위조팀'이 아니라 ERP 프로필값
+
+
+async def test_signup_assigns_org_unit_from_department(client, sm, monkeypatch):
+    """가입 시 부서(=조직구분)를 org_units 에 매칭해 org_unit_id 자동 배정 — '미지정' 방지."""
+    _wire_state(monkeypatch)
+    # 조직구분: 본부X ▸ 개발팀. 가입 부서 '개발팀'이 이 팀에 매칭돼야 한다.
+    async with sm() as s:
+        s.add_all(
+            [
+                OrgUnit(id="hq_x", label="본부X", parent_id=None, sort_order=0),
+                OrgUnit(id="hq_x__t0", label="개발팀", parent_id="hq_x", cost_type="판관비", sort_order=0),
+            ]
+        )
+        await s.commit()
+    token = fastapi_app.state.signup_cache.put("newbie", "pw", "홍길동", "개발팀")
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "홍길동",
+            "department": "개발팀",
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
+        assert u.org_unit_id == "hq_x__t0"  # 부서 → 팀 매칭
 
 
 async def test_signup_succeeds_without_email(client, sm, monkeypatch):

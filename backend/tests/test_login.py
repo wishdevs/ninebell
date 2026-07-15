@@ -16,7 +16,7 @@ import app.erp.login as erp_login
 from app.config import get_settings
 from app.erp.credcache import CredCache
 from app.main import app as fastapi_app
-from app.models import AccessLog, User
+from app.models import AccessLog, OrgUnit, User
 from app.services.signup_cache import SignupCache
 
 
@@ -154,6 +154,26 @@ async def test_existing_omnisol_user_promoted_by_super_admin_allowlist(
             assert u.role.code == "super_admin"  # allowlist 재평가로 승격
     finally:
         get_settings.cache_clear()
+
+
+async def test_login_assigns_org_unit_from_department(client, sm, make_user, monkeypatch):
+    """로그인 시 부서(=조직구분)를 org_units 에 매칭해 org_unit_id 자동 배정(기존 '미지정' 해소)."""
+    await make_user("carol", "user")  # org_unit_id 없음(미지정)
+    async with sm() as s:
+        s.add_all(
+            [
+                OrgUnit(id="hq_m", label="경영본부", parent_id=None, sort_order=0),
+                OrgUnit(id="hq_m__t0", label="경영지원", parent_id="hq_m", cost_type="판관비", sort_order=0),
+            ]
+        )
+        await s.commit()
+    _wire_state(monkeypatch, _fake_authenticate)  # 프로필 부서=경영지원
+
+    resp = await client.post("/auth/login", json={"userid": "carol", "password": "pw"})
+    assert resp.status_code == 200
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "carol"))).scalar_one()
+        assert u.org_unit_id == "hq_m__t0"  # 부서 '경영지원' → 팀 매칭
 
 
 async def test_failed_omnisol_login_records_failed_and_401(client, sm, monkeypatch):

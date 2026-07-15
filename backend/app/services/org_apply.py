@@ -136,6 +136,28 @@ async def apply_org_tree(session: AsyncSession, flat: list[dict]) -> dict:
     }
 
 
+async def match_org_unit_for_department(session: AsyncSession, department: object) -> OrgUnit | None:
+    """부서명(ERP)을 org_units 라벨에 정규화 매칭 — 팀(parent 있음) 우선, 없으면 본부. 없으면 None.
+
+    가입·로그인 시 사용자 소속(org_unit_id)을 부서(=조직구분)로 자동 배정하는 단건 조회.
+    부서와 조직구분은 같은 개념이라, 부서 문자열이 조직구분 라벨과 정규화 일치하면 그 조직으로 잇는다.
+    """
+    n = _norm(department)
+    if not n:
+        return None
+    org_units = (await session.execute(select(OrgUnit))).scalars().all()
+    team: OrgUnit | None = None
+    fallback: OrgUnit | None = None
+    for o in org_units:
+        if _norm(o.label) != n:
+            continue
+        if o.parent_id is not None and team is None:
+            team = o
+        if fallback is None:
+            fallback = o
+    return team or fallback
+
+
 async def reconcile_users(session: AsyncSession) -> list[dict]:
     """department 있는 사용자를 org_unit 라벨에 정규화 매칭해 org_unit_id 재배치. 반환은 변경 목록.
 
