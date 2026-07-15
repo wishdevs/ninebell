@@ -66,7 +66,11 @@ build:frontend:
     # 일반 변수면 값 자체를 파일로 기록(마스킹/CRLF 로 깨지기 쉬움 → 'error in libcrypto'). File 타입을 쓸 것.
     - |
       if [ -f "$DEPLOY_SSH_KEY" ]; then echo "[key] DEPLOY_SSH_KEY=File 타입(경로) → cp"; cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519;
-      else echo "[key] DEPLOY_SSH_KEY=일반 Variable(값) → printf (⚠ File 타입으로 바꿔야 함)"; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
+      else echo "[key] DEPLOY_SSH_KEY=일반 Variable(값) → printf"; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
+      # 키 정규화 — CR 제거 + 마지막 개행 보장. 둘 다 OpenSSH 'error in libcrypto'(키 파싱 실패)의
+      # 대표 원인이다(File 변수가 마지막 개행을 흔히 떨어뜨림). busybox tr/tail 로 안전하게 처리.
+      tr -d '\r' < ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.n && mv ~/.ssh/id_ed25519.n ~/.ssh/id_ed25519
+      [ -n "$(tail -c1 ~/.ssh/id_ed25519)" ] && printf '\n' >> ~/.ssh/id_ed25519
       chmod 600 ~/.ssh/id_ed25519
     # 진단(키 미유출 — 첫줄/줄수/지문만): 지문이 SHA256:TEegNaMKtpQ... 면 정상. 파싱실패면 값 손상.
     - 'echo "[key] 첫줄: $(head -1 ~/.ssh/id_ed25519)"; echo "[key] 줄수: $(wc -l < ~/.ssh/id_ed25519)"'
