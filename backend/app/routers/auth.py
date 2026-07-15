@@ -261,7 +261,8 @@ async def signup(body: SignupBody, request: Request, response: Response, db: DbS
     user = User(
         omnisol_userid=userid,
         display_name=body.display_name or None,
-        department=body.department or None,
+        # 부서는 ERP 인증 프로필값(pending)을 권위값으로 사용 — 조직구분 자동배정 키라 클라 입력 무시.
+        department=pending.get("department") or None,
         email=body.email or None,  # 빈문자열/누락은 None 으로 정규화(email 선택 입력)
         status="active",
         role_id=role.id if role is not None else None,

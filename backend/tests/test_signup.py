@@ -66,6 +66,27 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
     assert fastapi_app.state.signup_cache.get(token) is None
 
 
+async def test_signup_department_from_erp_ignores_body(client, sm, monkeypatch):
+    """부서는 ERP 인증값(pending)을 권위값으로 — 클라가 다른 값을 보내도 무시(조직구분 자동배정 키)."""
+    _wire_state(monkeypatch)
+    token = fastapi_app.state.signup_cache.put("newbie", "pw", "홍길동", "개발팀")  # ERP 부서=개발팀
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "홍길동",
+            "department": "위조팀",  # 클라가 조작해 보낸 부서 — 무시돼야 한다.
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
+        assert u.department == "개발팀"  # 클라 '위조팀'이 아니라 ERP 프로필값
+
+
 async def test_signup_succeeds_without_email(client, sm, monkeypatch):
     _wire_state(monkeypatch)
     token = _seed_pending("noemail")
