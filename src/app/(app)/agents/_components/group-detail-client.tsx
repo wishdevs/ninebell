@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { MetaChip } from '@/components/ui/meta-chip';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
@@ -27,7 +27,8 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
     void loadIds();
   }, [loadIds]);
 
-  const agents = (data ?? []).filter((a) => a.group?.id === groupId);
+  // 숨김 대상(해외출장·경조금 등) 제외 후 그룹 필터(UI 전용).
+  const agents = filterVisibleAgents(data ?? []).filter((a) => a.group?.id === groupId);
   const group = agents[0]?.group ?? null;
 
   return (

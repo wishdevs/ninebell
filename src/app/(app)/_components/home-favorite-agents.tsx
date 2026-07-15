@@ -10,7 +10,7 @@ import { MetaChip } from '@/components/ui/meta-chip';
 import { Spinner } from '@/components/ui/spinner';
 import { errorMessage } from '@/lib/api/client';
 import { fetchFavorites, removeFavorite, type Favorite } from '@/lib/api/me-codes';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCardHeader } from '@/app/(app)/agents/_components/agent-card';
 import { cn } from '@/lib/utils';
@@ -60,8 +60,8 @@ export function HomeFavoriteAgents() {
 
   const loading = favorites === null || agents.status === 'loading';
 
-  // 즐겨찾기(sortOrder 순) ↔ 에이전트 정의 조인 — 정의가 사라진 즐겨찾기는 숨긴다.
-  const agentById = new Map((agents.data ?? []).map((a) => [a.id, a] as const));
+  // 즐겨찾기(sortOrder 순) ↔ 에이전트 정의 조인 — 정의가 사라진/숨김 대상 즐겨찾기는 숨긴다.
+  const agentById = new Map(filterVisibleAgents(agents.data ?? []).map((a) => [a.id, a] as const));
   const matched = (favorites ?? [])
     .filter((f) => agentById.has(f.code))
     .sort((a, b) => a.sortOrder - b.sortOrder);

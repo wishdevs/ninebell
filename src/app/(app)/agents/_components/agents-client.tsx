@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
@@ -55,6 +55,8 @@ export function AgentsClient() {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
   const fav = useFavorites('agent');
   const { loadIds } = fav;
+  // 해외출장·경조금 등 숨김 대상은 목록에서 제외(UI 전용 — 백엔드·실행은 그대로).
+  const visible = filterVisibleAgents(data ?? []);
 
   // 마운트 시 내 즐겨찾기(kind=agent)를 불러와 ★ 상태를 채운다.
   useEffect(() => {
@@ -85,20 +87,19 @@ export function AgentsClient() {
             </Button>
           }
         />
-      ) : (data?.length ?? 0) === 0 ? (
+      ) : visible.length === 0 ? (
         <EmptyState
           title="등록된 에이전트가 없습니다"
           description="아직 사용할 수 있는 에이전트가 없습니다."
         />
       ) : (
         (() => {
-          const sections = groupSections(data ?? []);
+          const sections = groupSections(visible);
           // 그룹 = 폴더형 카드(클릭 시 상세로 한 단계 이동), 단독 에이전트 = 실행 카드. 한 그리드에 섞는다.
           // 그룹이 새 에이전트로 불어나도 최상위는 카드 1장으로 유지된다(평평하게 깔리지 않음).
           const groupCards = sections.filter((s) => s.group);
           const standalone =
-            sections.find((s) => !s.group)?.agents ??
-            (sections.length === 0 ? [...(data ?? [])] : []);
+            sections.find((s) => !s.group)?.agents ?? (sections.length === 0 ? [...visible] : []);
           return (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {groupCards.map((section) => (

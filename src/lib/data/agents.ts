@@ -636,6 +636,18 @@ export function findAgent(id: string): Agent | null {
   return AGENTS.find((a) => a.id === id) ?? null;
 }
 
+/**
+ * UI에서만 숨기는 워크플로우 id — 백엔드/실행은 그대로 두고 화면 목록에서만 제외한다.
+ * workflowId 로 매칭하며, 상세 페이지 직접 URL 접근은 막지 않는다. 현재 숨김 대상 없음
+ * (해외출장·경조금 노출 해제). 숨기려면 해당 workflowId 를 이 Set 에 추가한다.
+ */
+export const HIDDEN_WORKFLOW_IDS: ReadonlySet<string> = new Set<string>();
+
+/** 숨김 대상(HIDDEN_WORKFLOW_IDS)을 제외한 목록 — 화면 표시용 필터. */
+export function filterVisibleAgents<T extends { workflowId?: string }>(agents: readonly T[]): T[] {
+  return agents.filter((a) => !a.workflowId || !HIDDEN_WORKFLOW_IDS.has(a.workflowId));
+}
+
 /** 헤드리스 브라우저 슬롯을 점유한 상태(라이브 세션). */
 export const LIVE_SESSION_STATUSES: ReadonlySet<AgentStatus> = new Set([
   'running',
