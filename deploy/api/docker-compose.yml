@@ -11,6 +11,9 @@ services:
     environment:
       # ⚠ 컨테이너 Chromium 필수 인자(/dev/shm 제약·샌드박스 없음).
       CHROMIUM_ARGS: "--disable-dev-shm-usage --no-sandbox"
+      # 온프렘 시스템관리자(super_admin) allowlist — 실제 ERP 계정. 로그인 시 승격(auth.py 재평가).
+      # ⚠ AWS(ECS task def)는 별도라 무관 — 온프렘 한정. 콤마로 여러 계정.
+      SUPER_ADMIN_OMNISOL_IDS: "이트라이브2"
     shm_size: "1gb"
     ports:
       # 프록시(front 52)에서만 접근. 내부 인터페이스 바인딩 + 방화벽으로 52만 허용. 공개 금지.

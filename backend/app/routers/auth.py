@@ -185,6 +185,13 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
     if user is not None:
         _record_success()
         _apply_profile(user, profile)
+        # SUPER_ADMIN_OMNISOL_IDS allowlist 재평가 — 가입 시에만 부여하던 한계 보완.
+        # allowlist 에 있으면 로그인 때도 super_admin 으로 승격(no-op if 이미), 밖이면 강등 안 함.
+        if body.userid in settings.super_admin_id_set():
+            sa_role = await get_role_by_code(db, ROLE_SUPER_ADMIN)
+            if sa_role is not None and user.role_id != sa_role.id:
+                user.role_id = sa_role.id
+                logger.info("super_admin 승격(allowlist): %s", body.userid)
         user.last_login_at = datetime.now(UTC)
         await record_access(
             db, omnisol_userid=body.userid, status="success", user_id=user.id, ip=ip, user_agent=ua

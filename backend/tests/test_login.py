@@ -135,6 +135,27 @@ async def test_existing_omnisol_user_login_succeeds(client, sm, make_user, monke
         assert rows[0].user_id == u.id
 
 
+async def test_existing_omnisol_user_promoted_by_super_admin_allowlist(
+    client, sm, make_user, monkeypatch
+):
+    """가입 이후 SUPER_ADMIN_OMNISOL_IDS 에 추가된 기존 옴니솔 유저 → 로그인 시 super_admin 승격."""
+    await make_user("dave", "user")  # 기존 옴니솔 유저(role=user)
+    monkeypatch.setenv("SUPER_ADMIN_OMNISOL_IDS", "dave")
+    get_settings.cache_clear()
+    _wire_state(monkeypatch, _fake_authenticate)
+
+    try:
+        resp = await client.post("/auth/login", json={"userid": "dave", "password": "pw"})
+        assert resp.status_code == 200
+        async with sm() as s:
+            u = (
+                await s.execute(select(User).where(User.omnisol_userid == "dave"))
+            ).scalar_one()
+            assert u.role.code == "super_admin"  # allowlist 재평가로 승격
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_failed_omnisol_login_records_failed_and_401(client, sm, monkeypatch):
     async def _fail(browser, userid, password, base):
         raise erp_login.ErpAuthError("아이디 또는 비밀번호가 올바르지 않습니다.")
