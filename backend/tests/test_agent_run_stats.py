@@ -70,21 +70,36 @@ async def test_list_agents_stats_scoped_per_agent(client, make_user, auth_as, sm
     assert by_id["trip-domestic"]["runCount"] == 0
 
 
-# ── 숨김 에이전트(hidden=True) — 목록 제외 + 상세 404 ─────────────────────────
-async def test_hidden_agents_excluded_from_list(client, make_user, auth_as):
-    uid = await make_user("hide-list", "super_admin")
+# ── 노출 상태 + 숨김 메커니즘 회귀 ────────────────────────────────────────────
+# 학자금(scholarship) 노출로 hidden=True 픽스처가 0이 됐다(2026-07-15). 목록/상세 노출은 실 상태로,
+# hidden 메커니즘 자체(목록 제외 + 상세 404)는 _HIDDEN_AGENT_IDS 주입으로 검증한다 — 픽스처 플래그가
+# 사라져도 라우터 게이트의 회귀 커버리지를 유지한다.
+async def test_all_real_agents_visible_in_list(client, make_user, auth_as):
+    uid = await make_user("vis-list", "super_admin")
     auth_as(uid)
     rows = (await client.get("/agents")).json()
     ids = {a["id"] for a in rows}
-    # 카드·국내출장·해외출장·경조금 노출(경조금 2026-07-13 라이브 10/10 검증 완료). 학자금만 아직 숨김.
-    assert "card-chat" in ids and "trip-domestic" in ids and "trip-overseas" in ids
-    assert "family-event" in ids  # 경조금 노출됨
-    assert "scholarship" not in ids
+    # 카드·국내출장·해외출장·경조금·학자금 전부 노출(학자금 2026-07-15 라이브 10/10 검증 완료).
+    assert {"card-chat", "trip-domestic", "trip-overseas", "family-event", "scholarship"} <= ids
 
 
-async def test_hidden_agent_detail_returns_404(client, make_user, auth_as):
-    uid = await make_user("hide-detail", "super_admin")
+async def test_exposed_agent_detail_returns_200(client, make_user, auth_as):
+    uid = await make_user("vis-detail", "super_admin")
     auth_as(uid)
-    # scholarship(학자금)은 아직 hidden. family-event(경조금)은 노출됨(2026-07-13 라이브 검증).
+    # family-event(경조금)·scholarship(학자금) 모두 노출 — 상세 200(학자금 2026-07-15 노출).
     assert (await client.get("/agents/family-event")).status_code == 200
-    assert (await client.get("/agents/scholarship")).status_code == 404
+    assert (await client.get("/agents/scholarship")).status_code == 200
+
+
+async def test_hidden_mechanism_excludes_from_list_and_404s_detail(client, make_user, auth_as, monkeypatch):
+    # 픽스처에 hidden 이 없어도 라우터가 _HIDDEN_AGENT_IDS 를 존중하는지 검증(주입).
+    import app.routers.agents as agents_router
+
+    monkeypatch.setattr(agents_router, "_HIDDEN_AGENT_IDS", frozenset({"scholarship"}))
+    uid = await make_user("hide-mech", "super_admin")
+    auth_as(uid)
+    rows = (await client.get("/agents")).json()
+    ids = {a["id"] for a in rows}
+    assert "scholarship" not in ids  # 주입한 숨김 id 는 목록에서 제외
+    assert "card-chat" in ids  # 나머지는 정상 노출
+    assert (await client.get("/agents/scholarship")).status_code == 404  # 상세 존재 자체 숨김

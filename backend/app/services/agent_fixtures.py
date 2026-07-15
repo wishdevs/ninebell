@@ -108,8 +108,8 @@ TRIP_DOMESTIC_FLOW: dict = {
 
 
 # ── 에이전트 그룹 (2뎁스 분류 — 실행 불가, 목록 섹션·브레드크럼 전용) ────────
-# '결의서입력' 문서군: 카드(실동작) + 출장(국내/자차·해외/정산서)·경조금·학자금(더미 —
-# 아래 _RESOLUTION_DUMMY 참조, 구현되면 workflow_id·steps 를 채워 실동작으로 승격).
+# '결의서입력' 문서군: 카드(실동작) + 출장(국내/자차·해외/정산서)·경조금·학자금(전부 실동작·노출).
+# 학자금은 라이브 스모크 10/10 통과 후 노출(2026-07-15, 경조금 관례).
 AGENT_GROUP_FIXTURES: list[dict] = [
     {
         "id": "resolution",
@@ -242,11 +242,6 @@ def _dummy_agent(
         "steps": [],
         "logs": [],
     }
-
-
-def _resolution_dummy(agent_id: str, name: str) -> dict:
-    """'결의서입력' 그룹 더미 — 미검증이라 숨김(카드·국내출장만 노출, 사용자 요청 2026-07-08)."""
-    return _dummy_agent(agent_id, name, group_id="resolution", hidden=True)
 
 
 # ── 출장(국내/자차) — 실동작 승격(trip-domestic 워크플로우) ────────────────────
@@ -441,12 +436,88 @@ _GYEONGJO_GRANT_FIXTURE: dict = {
 }
 
 
+# ── 학자금신청서 결의 플로우 그래프 (hakjagum-grant 그래프의 사람용 요약) ──────
+# 경조금 형제 클론 — 단건(1행), '다음 행?' 반복 루프 없음(학자금 1건 = 결의서 1장). 경조금 대비
+# 델타: 결의구분 학자금신청서·예산단위 복리후생비-기타·공급가액 사용자 입력 그대로(50% 규칙 없음)·
+# 적요 학자금-{본인이름}. 상대계정거래처(bfc) 노드 없음(미사용 확정 — 라이브 11/11, 경조금 동형) → memo→save 직결.
+HAKJAGUM_GRANT_FLOW: dict = {
+    "nodes": [
+        {"id": "access", "kind": "start", "status": "done", "title": "결의서 입력 접속", "sub": "전사공통(회계)", **_col(0)},
+        {"id": "kind", "kind": "step", "status": "done", "title": "결의구분 = 학자금신청서", "sub": "추가(F3)", **_col(1)},
+        {"id": "date", "kind": "step", "status": "done", "title": "회계일자 세팅", "sub": "증빙일자", **_col(2)},
+        {"id": "evd", "kind": "step", "status": "active", "title": "증빙유형 선택", "sub": "10 규정에의한 비용정산", **_col(3)},
+        {"id": "partner", "kind": "step", "status": "pending", "title": "거래처 입력", "sub": "작성자 본인", **_col(4)},
+        {"id": "budget", "kind": "step", "status": "pending", "title": "예산단위", "sub": "복리후생비-기타(부서×판/제)", **_col(5)},
+        {"id": "project", "kind": "step", "status": "pending", "title": "프로젝트", "sub": "기본 제조 500 / 판관 800", **_col(6)},
+        {"id": "amount", "kind": "step", "status": "pending", "title": "공급가액", "sub": "사용자 입력 금액", **_col(7)},
+        {"id": "memo", "kind": "step", "status": "pending", "title": "적요 작성", "sub": "학자금-{본인이름}", **_col(8)},
+        {"id": "save", "kind": "step", "status": "pending", "title": "저장(F7)", "sub": "저장 후 지속 확인", **_col(9)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "전자결재 상신", "sub": "사용자가 직접", **_col(10)},
+    ],
+    "edges": [
+        {"id": "e-access-kind", "source": "access", "target": "kind"},
+        {"id": "e-kind-date", "source": "kind", "target": "date"},
+        {"id": "e-date-evd", "source": "date", "target": "evd"},
+        {"id": "e-evd-partner", "source": "evd", "target": "partner"},
+        {"id": "e-partner-budget", "source": "partner", "target": "budget"},
+        {"id": "e-budget-project", "source": "budget", "target": "project"},
+        {"id": "e-project-amount", "source": "project", "target": "amount"},
+        {"id": "e-amount-memo", "source": "amount", "target": "memo"},
+        {"id": "e-memo-save", "source": "memo", "target": "save"},
+        {"id": "e-save-submit", "source": "save", "target": "submit", "label": "저장 후", "kind": "branch"},
+    ],
+}
+
+
+# ── 학자금신청서 — 실동작 승격(hakjagum-grant 워크플로우) ──────────────────────
+# scholarship 더미를 제자리 승격한다(agent id "scholarship" 유지 — 프론트/시드 연속성). 경조금의
+# 형제 클론(단건·공급가액=사용자 입력 그대로, 50% 규칙 없음). steps 의 key 는 그래프 노드
+# emit_step 키와 1:1. 노출(hidden=False, 2026-07-15) — 단계 3/7 라이브 실저장 10/10 PASS·잔존 0·
+# 저장 금액(SPPRC_AMT2) 일치 검증 완료. D12 상대계정거래처는 학자금 미사용 확정(11/11 사이클 상대계정
+# 스텝 없이 저장 성공·스트레이 빈 행 0)이라 fill 에 없음. 프론트 pre-run 폼(hakjagum-grant) 등록됨.
+_HAKJAGUM_GRANT_FIXTURE: dict = {
+    "id": "scholarship",
+    "workflow_id": "hakjagum-grant",
+    "group_id": "resolution",
+    "hidden": False,
+    "name": "학자금",
+    "description": "학자금 1건을 입력하면 결의서로 만들어 저장합니다.",
+    "handoff_note": "저장된 결의서는 아직 상신 전입니다. 옴니솔 결의서 화면에서 저장된 건을 확인하고, 직접 결제(승인) 상신을 진행해 주세요.",
+    "drive": "browser",
+    "interaction": "autonomous",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    "timeout_seconds": 240,
+    "elapsed_seconds": 0,
+    "current_action": "대기 중 — 입력을 완료하고 실행하면 시작합니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": HAKJAGUM_GRANT_FLOW,
+    "steps": [
+        {"key": "validate_params", "label": "입력 검증", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "실행 전 폼 입력(증빙일·금액·프로젝트)을 검증"},
+        {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
+        {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
+        {"key": "menu_nav", "label": "결의서입력 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "전사공통(회계) 결의서 입력 화면 진입"},
+        {"key": "set_gubun", "label": "결의구분: 학자금신청서", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "결의구분 드롭다운을 학자금신청서로 설정"},
+        {"key": "add_row", "label": "상세행 추가(F3)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "F3로 결의 상세행 생성(단건)"},
+        {"key": "set_acct_date", "label": "회계일 설정", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "증빙일자로 결의서 회계일 설정"},
+        {"key": "fill_rows", "label": "건별 입력", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "증빙(10)·계산서일·거래처(본인)·예산단위(복리후생비-기타)·프로젝트·공급가액(타이핑+예산현황 확인)·적요(학자금-{본인})를 입력(HITL 없음)"},
+        {"key": "save_doc", "label": "저장(F7)", "skill": "save", "status": "pending", "phase": "저장", "detail": "반영된 행을 마지막에 한 번만 저장"},
+    ],
+    "logs": [],
+}
+
+
 AGENT_FIXTURES.extend(
     [
         _TRIP_DOMESTIC_FIXTURE,
         _TRIP_OVERSEAS_FIXTURE,
         _GYEONGJO_GRANT_FIXTURE,  # family-event 더미 → 실동작 승격(gyeongjo-grant).
-        _resolution_dummy("scholarship", "학자금"),
+        _HAKJAGUM_GRANT_FIXTURE,  # scholarship 더미 → 실동작 승격(hakjagum-grant, 노출).
         # 자재팀 그룹 — 내용 없는 더미(준비 중, 노출). 구현 시 workflow_id·steps 를 채워 승격한다.
         _dummy_agent("materials-inbound", "자동 입고 처리", group_id="materials"),
         _dummy_agent("materials-classify", "프로젝트별 자재 자동 분류", group_id="materials"),

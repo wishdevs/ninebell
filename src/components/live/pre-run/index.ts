@@ -12,6 +12,7 @@
 import type { ComponentType } from 'react';
 import type { Agent } from '@/lib/data/agents';
 import { GyeongjoPreRunForm } from './gyeongjo-pre-run-form';
+import { HakjagumPreRunForm } from './hakjagum-pre-run-form';
 import { OverseasPreRunForm } from './overseas-pre-run-form';
 import { TripPreRunForm } from './trip-pre-run-form';
 
@@ -28,4 +29,5 @@ export const PRE_RUN_FORMS: Record<string, ComponentType<PreRunFormProps>> = {
   'trip-domestic': TripPreRunForm,
   'trip-overseas': OverseasPreRunForm,
   'gyeongjo-grant': GyeongjoPreRunForm,
+  'hakjagum-grant': HakjagumPreRunForm,
 };

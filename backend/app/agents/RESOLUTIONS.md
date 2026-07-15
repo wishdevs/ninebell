@@ -12,7 +12,7 @@
 | 출장(국내/자차) | 🟡 진행중 | `app/agents/trip_domestic/` ([PROCESS.md](trip_domestic/PROCESS.md)) | 실행 전 폼→무개입 완주(통행료/유류비 다행·F7 저장) |
 | 출장(해외/정산서) | 🟡 진행중 | `app/agents/trip_overseas/` ([PROCESS.md](trip_overseas/PROCESS.md)) | 국내/자차 복사·수정. 유형 없음(전 행 동일)·거래처 본인·예산단위 여비교통비-해외출장·공급가액 입력. ⏳ 라이브 프로브 대기 |
 | 경조금신청서 | 🟢 완료 | `app/agents/gyeongjo_grant/` ([PROCESS.md](gyeongjo_grant/PROCESS.md)) | 국내출장 형제·단건. 예산단위 복리후생비-경조·적요 경조금-{본인이름}·증빙10·회계일=증빙일·근속<1년 50%. 결의구분 55. 라이브 10/10·프론트 폼·노출 완료(2026-07-13) |
-| 학자금신청 | ⚪ 예정 | (미구현) | |
+| 학자금신청서 | 🟢 완료 | `app/agents/hakjagum_grant/` ([PROCESS.md](hakjagum_grant/PROCESS.md)) | 경조금 형제·단건. 예산단위 복리후생비-기타(511010600/811010600)·적요 학자금-{본인이름}·증빙10·회계일=사용자입력·50% 규칙 없음. 결의구분 56. 상대계정 미사용 확정. 라이브 10/10·프론트 폼·노출 완료(2026-07-15) |
 
 ## 참고
 
