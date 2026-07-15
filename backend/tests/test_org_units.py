@@ -9,6 +9,25 @@ from __future__ import annotations
 import pytest
 
 
+# ── 시드 조직트리에서 id 를 동적으로 뽑는 헬퍼 ─────────────────────────────────────
+# 시드가 옛 2단계 slug(hq_sales 등) 대신 경로해시 id 로 바뀌어, 테스트는 하드코딩 대신
+# GET /org-units 응답에서 본부(parentId=None)·말단 팀(leaf)을 골라 쓴다.
+def _roots(rows: list[dict]) -> list[dict]:
+    """최상위 본부 — parentId 가 없는 행."""
+    return [o for o in rows if o["parentId"] is None]
+
+
+def _leaves(rows: list[dict]) -> list[dict]:
+    """말단 팀 — 부모를 가지되 다른 어떤 org 의 부모도 아닌 행."""
+    parent_ids = {o["parentId"] for o in rows if o["parentId"]}
+    return [o for o in rows if o["parentId"] is not None and o["id"] not in parent_ids]
+
+
+async def _org_rows(client) -> list[dict]:
+    """admin 인증 상태에서 GET /org-units 목록(camelCase dict)을 반환."""
+    return (await client.get("/org-units")).json()
+
+
 # ── 권한 게이트 ────────────────────────────────────────────────────────────────
 async def test_list_org_units_requires_admin(client, make_user, auth_as):
     uid = await make_user("u-user", "user")
@@ -22,11 +41,17 @@ async def test_list_org_units_admin_sees_seeded(client, make_user, auth_as):
     r = await client.get("/org-units")
     assert r.status_code == 200
     rows = r.json()
-    ids = {o["id"] for o in rows}
-    assert {"hq_exec", "hq_sales", "hq_mgmt"} <= ids  # 본부(2뎁스 시드)
-    # 팀(leaf)에는 parentId·costType 이 실린다.
-    team = next(o for o in rows if o["id"] == "hq_mgmt__t0")  # 인사기획팀
-    assert team["parentId"] == "hq_mgmt" and team["costType"] == "판관비"
+    by_label = {o["label"]: o for o in rows}
+    # 본부(전체깊이 ERP 시드)는 라벨로 확인 — parentId=None 인 최상위.
+    assert {"경영본부", "영업본부", "임원실"} <= set(by_label)
+    assert by_label["경영본부"]["parentId"] is None
+    # 말단 팀(leaf)에는 parentId·costType 이 실린다.
+    team = by_label["영업팀"]
+    assert team["parentId"] is not None and team["costType"] is not None
+    # 다단계(본부>그룹>팀): 재무자원관리그룹은 경영본부 밑 중간계층(자식을 가진다).
+    grp = by_label["재무자원관리그룹"]
+    assert grp["parentId"] == by_label["경영본부"]["id"]
+    assert any(o["parentId"] == grp["id"] for o in rows)
 
 
 # ── CRUD 라이프사이클 ──────────────────────────────────────────────────────────
@@ -50,31 +75,36 @@ async def test_org_unit_crud_lifecycle(client, make_user, auth_as):
 async def test_agent_access_unconfigured_returns_all(client, make_user, auth_as):
     uid = await make_user("u-admin3", "admin")
     auth_as(uid)
+    rows = await _org_rows(client)
+    child_ids = [o["id"] for o in rows if o["parentId"] is not None]  # 접근 대상(본부 제외)
+    root_ids = {o["id"] for o in _roots(rows)}
     r = await client.get("/agent-access")
     assert r.status_code == 200
     card = next(a for a in r.json() if a["agentId"] == "card-chat")
-    # access_configured=false(시드 기본) → 전체 팀(leaf 32) + '미지정' 허용.
-    assert len(card["orgUnitIds"]) == 33
+    # access_configured=false(시드 기본) → 전체 접근대상 + '미지정' 허용.
+    assert len(card["orgUnitIds"]) == len(child_ids) + 1
     assert card["orgUnitIds"][-1] == "__none__"
-    assert "hq_mgmt" not in card["orgUnitIds"]  # 본부는 접근 대상 아님(leaf만)
+    assert not (root_ids & set(card["orgUnitIds"]))  # 본부(root)는 접근 대상 아님
 
 
 async def test_set_agent_access_replaces_and_marks_configured(client, make_user, auth_as):
     uid = await make_user("u-admin4", "admin")
     auth_as(uid)
-    r = await client.patch("/agent-access/card-chat", json={"orgUnitIds": ["hq_sales__t0", "hq_mgmt__t0"]})
+    leaf_a, leaf_b = (o["id"] for o in _leaves(await _org_rows(client))[:2])
+    r = await client.patch("/agent-access/card-chat", json={"orgUnitIds": [leaf_a, leaf_b]})
     assert r.status_code == 200
-    assert set(r.json()["orgUnitIds"]) == {"hq_sales__t0", "hq_mgmt__t0"}
+    assert set(r.json()["orgUnitIds"]) == {leaf_a, leaf_b}
     # 이제 configured → GET 이 축소된 목록 반환.
     after = next(a for a in (await client.get("/agent-access")).json() if a["agentId"] == "card-chat")
-    assert set(after["orgUnitIds"]) == {"hq_sales__t0", "hq_mgmt__t0"}
+    assert set(after["orgUnitIds"]) == {leaf_a, leaf_b}
 
 
 async def test_set_agent_access_unknown_agent_404(client, make_user, auth_as):
     uid = await make_user("u-admin5", "admin")
     auth_as(uid)
+    (leaf,) = (o["id"] for o in _leaves(await _org_rows(client))[:1])
     assert (
-        await client.patch("/agent-access/nope", json={"orgUnitIds": ["hq_sales__t0"]})
+        await client.patch("/agent-access/nope", json={"orgUnitIds": [leaf]})
     ).status_code == 404
 
 
@@ -90,18 +120,19 @@ async def test_set_agent_access_unassigned_sentinel_roundtrip(client, make_user,
     """'__none__' 센티널 → allow_unassigned 저장·응답/GET 재노출."""
     uid = await make_user("u-admin7", "admin")
     auth_as(uid)
+    (leaf,) = (o["id"] for o in _leaves(await _org_rows(client))[:1])
     r = await client.patch(
-        "/agent-access/card-chat", json={"orgUnitIds": ["hq_sales__t0", "__none__"]}
+        "/agent-access/card-chat", json={"orgUnitIds": [leaf, "__none__"]}
     )
     assert r.status_code == 200
-    assert r.json()["orgUnitIds"] == ["hq_sales__t0", "__none__"]
+    assert r.json()["orgUnitIds"] == [leaf, "__none__"]
     after = next(
         a for a in (await client.get("/agent-access")).json() if a["agentId"] == "card-chat"
     )
-    assert after["orgUnitIds"] == ["hq_sales__t0", "__none__"]
+    assert after["orgUnitIds"] == [leaf, "__none__"]
     # 센티널 해제 시 allow_unassigned 도 꺼진다.
-    r2 = await client.patch("/agent-access/card-chat", json={"orgUnitIds": ["hq_sales__t0"]})
-    assert r2.json()["orgUnitIds"] == ["hq_sales__t0"]
+    r2 = await client.patch("/agent-access/card-chat", json={"orgUnitIds": [leaf]})
+    assert r2.json()["orgUnitIds"] == [leaf]
 
 
 async def test_set_agent_access_only_unassigned_is_valid(client, make_user, auth_as):
@@ -117,27 +148,30 @@ async def test_set_agent_access_only_unassigned_is_valid(client, make_user, auth
 async def test_create_team_under_hq_with_cost_type(client, make_user, auth_as):
     uid = await make_user("u-admin9", "admin")
     auth_as(uid)
+    hq = _roots(await _org_rows(client))[0]["id"]  # 실제 시드 본부(top-level)
     r = await client.post(
-        "/org-units", json={"label": "신규팀", "parentId": "hq_sales", "costType": "제조원가"}
+        "/org-units", json={"label": "신규팀", "parentId": hq, "costType": "제조원가"}
     )
     assert r.status_code == 201
     body = r.json()
-    assert body["parentId"] == "hq_sales" and body["costType"] == "제조원가"
+    assert body["parentId"] == hq and body["costType"] == "제조원가"
 
 
 async def test_create_team_under_team_rejected(client, make_user, auth_as):
     """팀 아래에는 하위를 만들 수 없다(2뎁스 고정)."""
     uid = await make_user("u-admin10", "admin")
     auth_as(uid)
-    r = await client.post("/org-units", json={"label": "3뎁스", "parentId": "hq_sales__t0"})
+    leaf = _leaves(await _org_rows(client))[0]["id"]  # 팀(leaf) 밑에 하위 생성 시도
+    r = await client.post("/org-units", json={"label": "3뎁스", "parentId": leaf})
     assert r.status_code == 422
 
 
 async def test_invalid_cost_type_rejected(client, make_user, auth_as):
     uid = await make_user("u-admin11", "admin")
     auth_as(uid)
+    hq = _roots(await _org_rows(client))[0]["id"]
     r = await client.post(
-        "/org-units", json={"label": "x", "parentId": "hq_sales", "costType": "엉뚱"}
+        "/org-units", json={"label": "x", "parentId": hq, "costType": "엉뚱"}
     )
     assert r.status_code == 422
 
@@ -146,5 +180,6 @@ async def test_cost_type_on_hq_rejected(client, make_user, auth_as):
     """본부(parent)에는 비용구분을 지정할 수 없다."""
     uid = await make_user("u-admin12", "admin")
     auth_as(uid)
-    r = await client.patch("/org-units/hq_sales", json={"costType": "판관비"})
+    hq = _roots(await _org_rows(client))[0]["id"]  # 본부(top-level)
+    r = await client.patch(f"/org-units/{hq}", json={"costType": "판관비"})
     assert r.status_code == 422

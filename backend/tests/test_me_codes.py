@@ -16,7 +16,22 @@ from sqlalchemy import delete, select
 
 import app.routers.me_codes as me_codes
 import app.services.code_sync as code_sync
-from app.models import CardLearnedSelection, CardSeedSelection, ErpCodeCatalog, User
+from app.models import CardLearnedSelection, CardSeedSelection, ErpCodeCatalog, OrgUnit, User
+
+
+async def _leaf_with_cost(sm, cost_type: str) -> str:
+    """시드 조직트리에서 주어진 비용구분을 가진 말단(leaf) 팀 id 하나.
+
+    시드가 옛 slug(hq_mgmt__t0 등) 대신 경로해시 id 를 쓰므로, 비용구분(판관비/제조원가)에
+    맞는 실제 말단 팀 id 를 동적으로 골라 사용자 소속으로 지정한다.
+    """
+    async with sm() as s:
+        rows = (await s.execute(select(OrgUnit))).scalars().all()
+    parent_ids = {o.parent_id for o in rows if o.parent_id}
+    for o in rows:
+        if o.cost_type == cost_type and o.parent_id is not None and o.id not in parent_ids:
+            return o.id
+    raise AssertionError(f"비용구분 {cost_type} 말단 팀이 시드에 없습니다.")
 
 
 async def _seed_catalog(sm, rows: list[dict]) -> None:
@@ -814,7 +829,7 @@ async def test_trip_defaults_sga_team_returns_800_project(
     client, make_user, auth_as, set_user_org, sm
 ):
     uid = await make_user("trip-sga", "user")
-    await set_user_org(uid, "hq_mgmt__t0")  # 인사기획팀 = 판관비(_SGA)
+    await set_user_org(uid, await _leaf_with_cost(sm, "판관비"))  # 판관비(_SGA) 팀
     await _seed_catalog(
         sm,
         [
@@ -837,7 +852,7 @@ async def test_trip_defaults_mfg_team_returns_500_project(
     client, make_user, auth_as, set_user_org, sm
 ):
     uid = await make_user("trip-mfg", "user")
-    await set_user_org(uid, "hq_mgmt__t3")  # 구매팀 = 제조원가(_MFG)
+    await set_user_org(uid, await _leaf_with_cost(sm, "제조원가"))  # 제조원가(_MFG) 팀
     await _seed_catalog(
         sm,
         [{"kind": "project", "code": "500|500", "name": "제조원가",
@@ -864,7 +879,7 @@ async def test_trip_defaults_wbs_equal_to_pjtno_row_wins(
 ):
     # 같은 프로젝트에 WBS 여러 행이면 wbsNo == pjtNo(=800) 행 우선.
     uid = await make_user("trip-wbs", "user")
-    await set_user_org(uid, "hq_mgmt__t0")  # 판관비
+    await set_user_org(uid, await _leaf_with_cost(sm, "판관비"))  # 판관비 팀
     await _seed_catalog(
         sm,
         [

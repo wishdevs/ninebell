@@ -27,13 +27,37 @@ def _node(path: list[str], is_leaf: bool, count: int | None = None) -> dict:
     return {"path": path, "label": path[-1], "count": count, "is_leaf": is_leaf}
 
 
+async def _seed_id(sm, label: str) -> str:
+    """시드 org_unit id 를 라벨로 조회(정규화 일치, 말단 우선).
+
+    시드가 옛 slug(hq_mgmt__t0 등) 대신 경로해시 id 를 쓰므로, 테스트는 하드코딩 대신
+    라벨로 실제 시드 id 를 뽑아 쓴다. 같은 라벨이 중간·말단에 겹치면 말단을 우선한다.
+    """
+    async with sm() as s:
+        rows = (await s.execute(select(OrgUnit))).scalars().all()
+    n = _norm(label)
+    parent_ids = {o.parent_id for o in rows if o.parent_id}
+    fallback: str | None = None
+    for o in rows:
+        if _norm(o.label) != n:
+            continue
+        if o.id not in parent_ids:  # 말단 우선
+            return o.id
+        fallback = fallback or o.id
+    if fallback is None:
+        raise AssertionError(f"시드에 '{label}' 라벨의 org_unit 이 없습니다.")
+    return fallback
+
+
 # ── apply_org_tree — 다단계 upsert ─────────────────────────────────────────────
 async def test_apply_multilevel_chain_and_new_costtypes(sm):
-    """경영본부 → 재무자원관리그룹 → 자재팀 부모체인 생성. 신규 말단=제조원가·중간=None."""
+    """기존 본부(경영본부) 밑에 신설 그룹→팀 부모체인 생성. 신규 말단=제조원가·중간=None."""
+    seed_hq_id = await _seed_id(sm, "경영본부")  # 시드 본부(재사용 대상)
+    # 신설 라벨을 써 '신규 생성' 동작을 검증한다(시드에 이미 있는 재무자원관리그룹/자재팀은 재사용이라 added 아님).
     nodes = [
         _node(["경영본부"], is_leaf=False),
-        _node(["경영본부", "재무자원관리그룹"], is_leaf=False),
-        _node(["경영본부", "재무자원관리그룹", "자재팀"], is_leaf=True),
+        _node(["경영본부", "신설그룹"], is_leaf=False),
+        _node(["경영본부", "신설그룹", "신설팀"], is_leaf=True),
     ]
     async with sm() as s:
         summary = await apply_org_tree(s, nodes)
@@ -42,8 +66,8 @@ async def test_apply_multilevel_chain_and_new_costtypes(sm):
     async with sm() as s:
         rows = (await s.execute(select(OrgUnit))).scalars().all()
         by_label = {o.label: o for o in rows}
-        hq, grp, team = by_label["경영본부"], by_label["재무자원관리그룹"], by_label["자재팀"]
-        assert hq.id == "hq_mgmt"  # 시드 경영본부 재사용(id 불변)
+        hq, grp, team = by_label["경영본부"], by_label["신설그룹"], by_label["신설팀"]
+        assert hq.id == seed_hq_id  # 시드 경영본부 재사용(id 불변)
         assert hq.parent_id is None
         assert grp.parent_id == hq.id  # 중간 그룹이 본부 밑에
         assert grp.cost_type is None  # 중간 계층 = 비용구분 없음
@@ -51,8 +75,8 @@ async def test_apply_multilevel_chain_and_new_costtypes(sm):
         assert team.cost_type == "제조원가"  # 말단 팀 = 제조원가
 
     assert summary["total"] == 3
-    assert "재무자원관리그룹" in summary["added"]
-    assert "자재팀" in summary["added"]
+    assert "신설그룹" in summary["added"]
+    assert "신설팀" in summary["added"]
     assert "경영본부" not in summary["added"]  # 재사용은 added 아님
 
 
@@ -83,19 +107,21 @@ async def test_apply_is_idempotent(sm):
 
 async def test_apply_reuse_preserves_existing_costtype(sm):
     """경로가 매칭되는 기존 팀은 재사용 — id·cost_type 보존(제조원가로 덮지 않음)."""
+    hr_id = await _seed_id(sm, "인사/기획팀")  # 시드 인사/기획팀(판관비)
+    hq_id = await _seed_id(sm, "경영본부")
     nodes = [
         _node(["경영본부"], is_leaf=False),
-        _node(["경영본부", "인사기획팀"], is_leaf=True),  # 시드 hq_mgmt__t0(판관비)
+        _node(["경영본부", "인사기획팀"], is_leaf=True),  # 시드 인사/기획팀에 정규화 매칭
     ]
     async with sm() as s:
         await apply_org_tree(s, nodes)
         await s.commit()
     async with sm() as s:
-        team = await s.get(OrgUnit, "hq_mgmt__t0")
+        team = await s.get(OrgUnit, hr_id)
         assert team is not None
-        assert team.id == "hq_mgmt__t0"  # id 불변
+        assert team.id == hr_id  # id 불변
         assert team.cost_type == "판관비"  # 기존 비용구분 보존
-        assert team.parent_id == "hq_mgmt"
+        assert team.parent_id == hq_id
 
 
 async def test_apply_moved_leaf_inherits_costtype(sm):
@@ -120,10 +146,11 @@ async def test_apply_moved_leaf_inherits_costtype(sm):
 
 async def test_apply_prunes_absent_orgs(sm):
     """ERP 트리에 없는 로컬 org_unit 은 삭제 — 사용자 org_unit_id=NULL·에이전트 접근 제거."""
-    # 시드 영업팀(hq_sales__t0)에 사용자·에이전트 접근을 걸어 둔다.
-    uid = await _add_user(sm, "emp-prune", None, org_unit_id="hq_sales__t0")
+    # 시드 영업팀에 사용자·에이전트 접근을 걸어 둔다(ERP 트리에 없어 prune 대상).
+    sales_team_id = await _seed_id(sm, "영업팀")
+    uid = await _add_user(sm, "emp-prune", None, org_unit_id=sales_team_id)
     async with sm() as s:
-        s.add(AgentOrgAccess(agent_id="agent-x", org_unit_id="hq_sales__t0"))
+        s.add(AgentOrgAccess(agent_id="agent-x", org_unit_id=sales_team_id))
         await s.commit()
 
     nodes = [
@@ -135,13 +162,13 @@ async def test_apply_prunes_absent_orgs(sm):
         await s.commit()
 
     async with sm() as s:
-        assert await s.get(OrgUnit, "hq_sales__t0") is None  # 삭제됨
+        assert await s.get(OrgUnit, sales_team_id) is None  # 삭제됨
         u = await s.get(User, uid)
         assert u.org_unit_id is None  # 사용자 소속 해제(SET NULL 명시 처리)
         acc = (
             (
                 await s.execute(
-                    select(AgentOrgAccess).where(AgentOrgAccess.org_unit_id == "hq_sales__t0")
+                    select(AgentOrgAccess).where(AgentOrgAccess.org_unit_id == sales_team_id)
                 )
             )
             .scalars()
@@ -168,27 +195,30 @@ async def _add_user(sm, userid: str, department: str | None, org_unit_id: str | 
 
 async def test_reconcile_matches_across_slash_normalization(sm):
     """department '인사/기획팀' → org_unit '인사기획팀'(hq_mgmt__t0) 로 정규화 매칭."""
+    hr_id = await _seed_id(sm, "인사/기획팀")
     uid = await _add_user(sm, "emp-hr", "인사/기획팀")
     async with sm() as s:
         changes = await reconcile_users(s)
         await s.commit()
     async with sm() as s:
         u = await s.get(User, uid)
-        assert u.org_unit_id == "hq_mgmt__t0"
-    assert any(c["userid"] == "emp-hr" and c["to"] == "hq_mgmt__t0" for c in changes)
+        assert u.org_unit_id == hr_id
+    assert any(c["userid"] == "emp-hr" and c["to"] == hr_id for c in changes)
 
 
 async def test_reconcile_moves_user_from_existing_org(sm):
     """소속이 이미 있어도 department 가 다른 팀을 가리키면 재배치한다."""
-    uid = await _add_user(sm, "emp-acct", "회계팀", org_unit_id="hq_sales__t0")
+    sales_team_id = await _seed_id(sm, "영업팀")
+    acct_id = await _seed_id(sm, "회계팀")
+    uid = await _add_user(sm, "emp-acct", "회계팀", org_unit_id=sales_team_id)
     async with sm() as s:
         changes = await reconcile_users(s)
         await s.commit()
     async with sm() as s:
         u = await s.get(User, uid)
-        assert u.org_unit_id == "hq_mgmt__t2"  # 회계팀
+        assert u.org_unit_id == acct_id  # 회계팀
     ch = next(c for c in changes if c["userid"] == "emp-acct")
-    assert ch["from"] == "hq_sales__t0" and ch["to"] == "hq_mgmt__t2"
+    assert ch["from"] == sales_team_id and ch["to"] == acct_id
 
 
 async def test_reconcile_leaves_unmatched_unchanged(sm):
@@ -277,6 +307,7 @@ async def test_org_sync_real_erp_admin_passes_guard(client, make_user, auth_as):
 # ── sync_catalog(org_unit) 요약 스루(fetch_org_tree 몽키패치) ────────────────────
 async def test_sync_catalog_org_unit_threads_summary(sm, monkeypatch):
     """sync_catalog('org_unit') 이 org_units 반영(applied) + 사용자 재배치(reassigned) 요약을 반환."""
+    hr_id = await _seed_id(sm, "인사/기획팀")
     await _add_user(sm, "emp-sync", "인사/기획팀")  # 재배치 대상
 
     async def _fake_tree(userid, password, browser_factory):  # noqa: ANN001
@@ -305,7 +336,7 @@ async def test_sync_catalog_org_unit_threads_summary(sm, monkeypatch):
     assert "신사업팀" in result["applied"]["added"]
     assert result["applied"]["total"] == 4
     assert any(
-        c["userid"] == "emp-sync" and c["to"] == "hq_mgmt__t0" for c in result["reassigned"]
+        c["userid"] == "emp-sync" and c["to"] == hr_id for c in result["reassigned"]
     )
 
     # 실제 org_units 에도 신규 본부/팀이 반영됐는지 확인.

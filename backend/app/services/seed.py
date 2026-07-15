@@ -37,34 +37,52 @@ from app.models import (
     User,
 )
 from app.services.agent_fixtures import AGENT_FIXTURES, AGENT_GROUP_FIXTURES
+from app.services.org_apply import _erp_id, _existing_path, _norm
 
-# 조직구분 기준 데이터 — alembic 0005 와 동일. create_all 부트스트랩/SQLite 테스트 경로에서도
-# 동일하게 존재하도록 여기서도 멱등 시드한다(리뷰 #5·#12: 마이그레이션에만 있으면 경로 불일치).
-# 조직구분 2뎁스 시드 — 마이그레이션 0011 과 동일한 slug/구조를 유지한다(런타임=마이그레이션).
-# (본부 slug, 본부 라벨, [(팀 라벨, 비용구분), ...]). 팀 id = f"{본부slug}__t{index}".
+# 조직구분 시드 — ERP 조직도를 **전체 깊이**로 미러링한 기본 구조(본부>그룹>팀). org_apply 임포트와
+# **같은 경로해시 id**(_erp_id(정규화 경로))로 심어, 'ERP 조직도 불러오기'가 돌면 그대로 매칭돼
+# 중복/드리프트가 없다(옛 2단계 slug 시드를 대체 — 재시작/재배포마다 실제 ERP 구조 유지).
+# 마이그레이션 0011(2단계 slug)은 레거시로, 라이브 임포트가 prune 해 정리한다.
+# (path=[상위라벨...,self], 비용구분). 중간(본부/그룹)=None, 말단 팀=판/제(옛 시드 이름 매핑·신규는 제조원가).
 _SGA = "판관비"
 _MFG = "제조원가"
-_ORG_HIERARCHY: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
-    ("hq_sales_head", "영업본부장", (("영업본부장", _SGA),)),
-    ("hq_sales", "영업본부", (("영업팀", _SGA), ("영업관리팀", _SGA), ("CS팀", _SGA))),
-    ("hq_mgmt", "경영본부", (
-        ("인사기획팀", _SGA), ("총무팀", _SGA), ("회계팀", _SGA),
-        ("구매팀", _MFG), ("자재팀", _MFG), ("품질팀", _MFG),
-    )),
-    ("hq_imp_head", "IMP연구소 본부장", (("IMP연구소 본부장", _SGA),)),
-    ("hq_imp_group", "IMP연구소 그룹장", (("IMP연구소 그룹장", _SGA),)),
-    ("hq_imp", "IMP연구소", (("IMP1팀", _SGA), ("IMP2팀", _SGA), ("IMP3팀", _SGA))),
-    ("hq_fa_head", "FA연구소 본부장", (("FA연구소 본부장", _MFG),)),
-    ("hq_fa_advisor", "FA고문", (("FA고문", _MFG),)),
-    ("hq_fa", "FA연구소", (("연구기획팀", _MFG),)),
-    ("hq_fa_design", "FA연구소 (설계그룹)", (("설계1팀", _MFG), ("설계2팀", _MFG), ("설계3팀", _MFG))),
-    ("hq_fa_control", "FA연구소 (제어그룹)", (("전장팀", _MFG), ("제어1팀", _MFG), ("제어2팀", _MFG))),
-    ("hq_exec", "임원", (("임원실", _SGA),)),
-    ("hq_mfg", "제조본부", (
-        ("제조1-A팀", _MFG), ("제조1-B팀", _MFG), ("제조1-전장팀", _MFG),
-        ("로봇팀", _MFG), ("제조2팀", _MFG), ("생산관리팀", _MFG),
-    )),
-    ("hq_mfg_advisor", "제조고문", (("제조고문", _MFG),)),
+_ORG_TREE_SEED: tuple[tuple[tuple[str, ...], str | None], ...] = (
+    (("임원실",), None),
+    (("임원실", "비서실"), _MFG),
+    (("경영본부",), None),
+    (("경영본부", "재무자원관리그룹"), None),
+    (("경영본부", "재무자원관리그룹", "자재팀"), _MFG),
+    (("경영본부", "재무자원관리그룹", "회계팀"), _SGA),
+    (("경영본부", "재무자원관리그룹", "총무팀"), _SGA),
+    (("경영본부", "구매팀"), _MFG),
+    (("경영본부", "인사/기획팀"), _SGA),
+    (("경영본부", "품질팀"), _MFG),
+    (("영업본부",), None),
+    (("영업본부", "영업본부장"), _SGA),
+    (("영업본부", "영업팀"), _SGA),
+    (("영업본부", "CS팀"), _SGA),
+    (("영업본부", "영업관리팀"), _SGA),
+    (("중국법인",), _MFG),
+    (("FA연구소",), None),
+    (("FA연구소", "FA본부장"), _MFG),
+    (("FA연구소", "설계1팀"), _MFG),
+    (("FA연구소", "전장팀"), _MFG),
+    (("FA연구소", "설계2팀"), _MFG),
+    (("FA연구소", "설계3팀"), _MFG),
+    (("FA연구소", "제어1팀"), _MFG),
+    (("FA연구소", "제어2팀"), _MFG),
+    (("FA연구소", "연구기획팀"), _MFG),
+    (("FA연구소", "고문"), _MFG),
+    (("제조본부",), None),
+    (("제조본부", "제조1팀"), _MFG),
+    (("제조본부", "제조2팀"), _MFG),
+    (("제조본부", "고문"), _MFG),
+    (("IMP연구소",), None),
+    (("IMP연구소", "IMP1팀"), _SGA),
+    (("IMP연구소", "IMP2팀"), _SGA),
+    (("IMP연구소", "IMP3팀"), _SGA),
+    (("IMP연구소", "IMP본부장"), _MFG),
+    (("더존컨설팅",), _MFG),
 )
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
@@ -351,16 +369,38 @@ async def seed_local_admin(db: AsyncSession) -> None:
 
 
 async def seed_org_units(db: AsyncSession) -> None:
-    """조직구분 2뎁스(본부→팀) 멱등 시드(id 슬러그 기준, 이미 있으면 건너뜀)."""
-    existing = set((await db.execute(select(OrgUnit.id))).scalars())
-    for hq_i, (hq_slug, hq_label, teams) in enumerate(_ORG_HIERARCHY):
-        if hq_slug not in existing:
-            db.add(OrgUnit(id=hq_slug, label=hq_label, parent_id=None, cost_type=None, sort_order=hq_i))
-        for t_i, (team_label, cost) in enumerate(teams):
-            team_id = f"{hq_slug}__t{t_i}"
-            if team_id not in existing:
-                db.add(OrgUnit(id=team_id, label=team_label, parent_id=hq_slug,
-                               cost_type=cost, sort_order=t_i))
+    """조직구분 시드 — ERP 전체 깊이 기본 구조를 멱등 삽입(경로해시 id, 이미 있으면 건너뜀).
+
+    id/부모 연결은 org_apply.apply_org_tree 와 동일 규칙(_erp_id(정규화 경로)) — 'ERP 조직도
+    불러오기'가 돌면 같은 id 로 매칭돼 중복이 없다. 여기선 prune 하지 않는다(기본 존재만 보장).
+    """
+    existing = (await db.execute(select(OrgUnit))).scalars().all()
+    by_id = {o.id: o for o in existing}
+    # 기존 행을 **정규화 경로**로 인덱싱 — id 가 무엇이든(옛 slug·임포트 재사용 id) 경로가 같으면
+    # 같은 노드로 보고 재사용한다(중복 생성 방지). apply_org_tree 와 동일한 경로 개념.
+    existing_id_by_path: dict[tuple[str, ...], str] = {}
+    for o in existing:
+        existing_id_by_path.setdefault(_existing_path(o, by_id), o.id)
+
+    id_by_path: dict[tuple[str, ...], str] = {}
+    for order, (path, cost) in enumerate(_ORG_TREE_SEED):
+        npath = tuple(_norm(lbl) for lbl in path)
+        parent_id = id_by_path.get(npath[:-1]) if len(npath) > 1 else None
+        existing_id = existing_id_by_path.get(npath)
+        if existing_id is not None:
+            node_id = existing_id  # 이미 존재(경로 기준) — id 재사용, 중복 생성 안 함.
+        else:
+            node_id = _erp_id("|".join(npath))
+            db.add(
+                OrgUnit(
+                    id=node_id,
+                    label=path[-1],
+                    parent_id=parent_id,
+                    cost_type=cost,
+                    sort_order=order,
+                )
+            )
+        id_by_path[npath] = node_id
     await db.flush()
 
 
