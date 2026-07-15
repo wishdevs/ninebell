@@ -7,7 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { MetaChip } from '@/components/ui/meta-chip';
 import { Spinner } from '@/components/ui/spinner';
-import { fetchCatalog, fetchSyncStatus, startCatalogSync } from '@/lib/api/me-codes';
+import {
+  fetchCatalog,
+  fetchSyncStatus,
+  startCatalogSync,
+  type SyncStatus,
+} from '@/lib/api/me-codes';
 import { errorMessage } from '@/lib/api/client';
 
 /** 조직 카탈로그 행의 extra(백엔드 org_sync 저장). */
@@ -53,33 +58,53 @@ async function loadErpOrg(): Promise<HqGroup[]> {
   }));
 }
 
+/** 반영 요약(status.applied·reassigned) → "추가 N · 갱신 M · ERP 미포함 K · 사용자 재배치 J명". */
+function summarize(status: SyncStatus): string {
+  const a = status.applied;
+  const added = a?.added?.length ?? 0;
+  const updated = a?.updated?.length ?? 0;
+  const localOnly = a?.local_only?.length ?? 0;
+  const reassigned = status.reassigned?.length ?? 0;
+  return `조직구분 반영: 추가 ${added} · 갱신 ${updated} · ERP 미포함 ${localOnly} · 사용자 재배치 ${reassigned}명`;
+}
+
+interface ErpOrgSyncProps {
+  /** 조직도 반영 성공 후 상위 목록(조직구분 탭)을 재조회하도록 호출한다. */
+  onApplied?: () => void;
+}
+
 /**
  * ERP 조직도 불러오기 — 옴니솔 우상단 조직도를 헤드리스로 스크레이프해 본부▸팀으로 가져와
- * 미리보기(팝업)한다. 실측 데이터라 우리 조직구분과 대조·정렬용. (OrgUnit 자동 반영은 후속.)
+ * org_units(조직구분)에 멱등 반영하고 department 기준 사용자를 재배치한다. 결과 요약을 토스트·
+ * 팝업으로 보여주고, 반영된 실제 조직을 미리보기(팝업)한다.
  */
-export function ErpOrgSync() {
+export function ErpOrgSync({ onApplied }: ErpOrgSyncProps) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [groups, setGroups] = useState<HqGroup[] | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
 
   async function run() {
     setBusy(true);
     try {
-      await startCatalogSync('org_unit'); // 409/자격증명 오류는 catch 로.
-      let done = false;
+      await startCatalogSync('org_unit'); // 409/자격증명·로컬admin 400 오류는 catch 로.
+      let final: SyncStatus | null = null;
       for (let i = 0; i < POLL_MAX; i += 1) {
         await sleep(POLL_MS);
         const st = await fetchSyncStatus('org_unit');
         if (!st.running) {
           if (st.error) throw new Error(st.error);
-          done = true;
+          final = st;
           break;
         }
       }
-      if (!done) throw new Error('시간 초과 — 잠시 후 다시 시도하세요.');
+      if (!final) throw new Error('시간 초과 — 잠시 후 다시 시도하세요.');
+      const line = summarize(final);
+      setSummary(line);
       setGroups(await loadErpOrg());
       setOpen(true);
-      toast.success('ERP 조직도를 불러왔습니다.');
+      toast.success('ERP 조직도를 조직구분에 반영했습니다.', { description: line });
+      onApplied?.(); // 조직구분 목록 재조회(반영분 즉시 반영).
     } catch (err) {
       toast.error(errorMessage(err, 'ERP 조직도를 불러오지 못했습니다.'));
     } finally {
@@ -110,6 +135,11 @@ export function ErpOrgSync() {
           }
         >
           <DialogBody>
+            {summary ? (
+              <div className="border-border/60 bg-surface text-foreground-secondary mb-3 rounded-[var(--radius-md)] border px-3 py-2 text-xs">
+                {summary}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-3">
               {groups.map((g) => (
                 <div key={g.hq} className="border-border/60 rounded-[var(--radius-md)] border p-3">

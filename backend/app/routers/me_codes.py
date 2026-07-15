@@ -14,13 +14,14 @@ import uuid
 from contextlib import nullcontext
 from typing import Literal
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
 import app.db as appdb
 from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
+from app.core.permissions import ROLE_ADMIN, role_rank
 from app.core.security import InvalidTokenError, decode_session_token
 from app.models import (
     CardLearnedSelection,
@@ -523,6 +524,9 @@ async def _run_catalog_sync(
             "lastSyncedAt": result["syncedAt"],
             "count": result["count"],
             "error": None,
+            # org_unit 만 채워진다(다른 kind 는 None) — 프론트가 조직구분 반영 요약을 읽는다.
+            "applied": result.get("applied"),
+            "reassigned": result.get("reassigned"),
         }
     except Exception as exc:  # noqa: BLE001 — 백그라운드 실패를 상태로 남긴다
         logger.exception("코드 카탈로그 동기화 실패(kind=%s)", kind)
@@ -541,6 +545,21 @@ async def trigger_sync(body: SyncIn, request: Request, user: CurrentUser):
     """카탈로그 동기화 트리거. 1슬롯 세마포어(진행 중이면 409). 백그라운드 실행 → 202."""
     if body.kind not in _VALID_KINDS:
         return JSONResponse({"error": f"알 수 없는 kind: {body.kind}"}, status_code=422)
+    # 조직도(org_unit)는 관리자 전용 + 실제 ERP 계정 필요 — org_units 반영·사용자 재배치가
+    # 조직/권한 데이터를 바꾸고, 로컬 admin 은 ERP 로그인이 없어 조직도를 스크레이프할 수 없다.
+    # 백그라운드 스폰 전에 막는다(다른 kind 동작은 불변).
+    if body.kind == "org_unit":
+        actor_rank = role_rank(user.role.code if user.role is not None else None)
+        if actor_rank < role_rank(ROLE_ADMIN):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="권한이 부족합니다.")
+        if user.password_hash is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "조직도 불러오기는 실제 ERP 계정으로 로그인한 관리자만 사용할 수 있습니다. "
+                    "로컬 admin 계정은 ERP 로그인이 없어 조직도를 가져올 수 없습니다."
+                ),
+            )
     password = _omnisol_password(request)
     if not password:
         return JSONResponse(

@@ -234,7 +234,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
         <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
           본부·팀을 직접 관리하거나, 옴니솔 조직도를 불러와 대조하세요.
         </p>
-        <ErpOrgSync />
+        <ErpOrgSync onApplied={onOrgsChanged} />
       </div>
 
       <div className="border-border bg-surface flex items-center gap-2 rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">

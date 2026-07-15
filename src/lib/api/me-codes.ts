@@ -67,6 +67,25 @@ export interface CatalogPage {
   syncedAt: string | null;
 }
 
+/** 조직도(org_unit) 동기화 시 org_units 반영 요약 — 백엔드 org_apply.apply_org_tree 반환.
+ * 키는 백엔드 서비스 dict 그대로(snake_case): 추가/갱신/미포함은 라벨 목록, unchanged·total_erp 는 수. */
+export interface OrgApplySummary {
+  added: string[];
+  updated: string[];
+  unchanged: number;
+  local_only: string[];
+  total_erp: number;
+}
+
+/** 조직도 반영 후 department 기준 재배치된 사용자 1건 — 백엔드 org_apply.reconcile_users 반환. */
+export interface OrgReassign {
+  userid: string;
+  from: string | null;
+  to: string;
+  department: string | null;
+  org_label: string;
+}
+
 /** ERP 동기화 진행 상태. */
 export interface SyncStatus {
   running: boolean;
@@ -74,6 +93,10 @@ export interface SyncStatus {
   count: number;
   /** 직전 동기화 실패 사유(있을 때). */
   error?: string;
+  /** org_unit 동기화에서만 채워진다 — 조직구분 반영 요약. */
+  applied?: OrgApplySummary | null;
+  /** org_unit 동기화에서만 채워진다 — 재배치된 사용자 목록. */
+  reassigned?: OrgReassign[] | null;
 }
 
 export interface AddFavoriteInput {
