@@ -140,6 +140,8 @@ export interface LiveHitl {
   budgetUnits?: HitlBudgetUnits;
   /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). */
   projects?: HitlProjects;
+  /** 재개입 공지 — 직전 저장(F7) 실패 사유+조치(왜 다시 선택해야 하는지). 첫 진입엔 없음. */
+  notice?: string;
 }
 
 /** 그리드 개입 제출 한 행 — 비제외(skip=false) 행은 budgetUnit·note 필수, project 선택. */

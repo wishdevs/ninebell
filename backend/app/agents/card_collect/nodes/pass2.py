@@ -179,9 +179,12 @@ def make_switch_evdn_node():
         unmatched: list[str] = []
         for p in pending:
             queue = by_key.get(p["key"]) or []
-            # 재조회에서 사라졌거나(큐 소진) 과세로 재분류된 행은 배제(안전) — 실패로 기록.
+            # 재조회에서 사라진(큐 소진) 행만 배제(실패 기록). ⚠ ERP VAT_TP=='과세' 로는 제외하지
+            # 않는다 — **매입세액 불공제**(복리후생비-업무·해외출장·유류·접대비류 또는 AI 판정, vat.classify_vat)
+            # 행은 ERP 상 VAT_TP 가 '과세'인데도 우리가 의도적으로 불공으로 분류한 것이라, 여기서
+            # VAT_TP='과세' 로 되제외하면 계정/AI 기반 불공이 통째로 누락된다(실측: 네이버파이낸셜㈜).
             hit = queue.pop(0) if queue else None
-            if hit is None or (hit.get("VAT_TP") or "").strip() == "과세":
+            if hit is None:
                 unmatched.append(f"{p['label']}행({p.get('merchant', '')})")
                 continue
             work.append(
@@ -226,6 +229,9 @@ def make_apply_pass2_node():
         await emit_step(events, "apply_pass2", "running")
         t0 = time.monotonic()
         if not work:
+            # switch_evdn 이 불공 재조회로 연 법인카드 팝업이 남아 있으면 닫는다(불공 0매칭). 안 닫으면
+            # save_final 의 F7 이 '카드팝업 열림(적용 단계 누락)'으로 잘못 막힌다. 이미 닫혔으면 no-op.
+            await steps.close_card_popup(page)
             await emit_step(events, "apply_pass2", "done", _shared._ms(t0))
             return {"pass2_filled": 0}
         rows2: list[dict] = state.get("rows2_list") or []
@@ -261,6 +267,10 @@ def make_apply_pass2_node():
             )
             if out.get("error"):
                 return {"error": out["error"]}
+        else:
+            # 적용된 행이 없으면 _apply_doc(=팝업 닫기)가 안 도므로, 재조회로 열린 팝업을 직접 닫아
+            # save_final F7 이 '팝업 열림'으로 오도되지 않게 한다(불공 전건 매칭/적용 실패).
+            await steps.close_card_popup(page)
         await emit_step(events, "apply_pass2", "done", _shared._ms(t0))
         return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx, "pass2_failed": len(failures2)}
 

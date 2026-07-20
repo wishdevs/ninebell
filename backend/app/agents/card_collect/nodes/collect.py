@@ -16,6 +16,7 @@ from app.services.code_sync import dept_matches_budget_name
 
 from .. import steps, vat as vat_rules
 from . import _shared, batch, catalog, prefill
+from .save import MAX_SAVE_RETRIES, _save_guidance  # 재개입 그리드 상단 직전 저장 실패 사유+조치.
 
 logger = logging.getLogger("app.agents.card_collect.nodes.collect")
 
@@ -295,6 +296,15 @@ def make_collect_rows_node(timeout_s: int | None = None):
             else:
                 gr["error"] = "저장 거부 — 예산단위를 다시 선택하세요."
 
+        # 재개입(직전 저장 실패) 사유 배너 — 계정 불일치는 위 행별 오류로도 뜨지만, 필수값 미입력·
+        # 일반 ERP 오류 등은 행별로 안 잡히므로 **왜 1회차가 실패했고 무엇을 고칠지**를 그리드 상단
+        # notice 로 항상 알려준다(사용자 피드백: 재개입만 하고 이유를 안 알려줌). 첫 진입엔 None.
+        save_error = state.get("save_error_msg")
+        retry_no = state.get("save_retries") or 0
+        retry_notice = _save_guidance(issues, save_error) if save_error else None
+        if retry_notice and retry_no:
+            retry_notice = f"[저장 재시도 {retry_no}/{MAX_SAVE_RETRIES}] {retry_notice}"
+
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
         decision_id = uuid.uuid4().hex
@@ -315,6 +325,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 rows=grid_rows,
                 budgetUnits=budget_units,
                 projects={"favorites": project_favs, "searchResults": search_results, "query": query},
+                notice=retry_notice,
             )
 
         last_results: list | None = None  # 마지막 프로젝트 검색 결과(무효 제출 시 프레임 유지용).

@@ -13,6 +13,8 @@ from . import _shared
 
 
 # 저장(F7)이 ERP 에서 거부되면 그리드 재선택으로 되돌리는 최대 재시도 횟수(방식 1).
+# (2026-07-20 임시로 0 으로 껐다가 저장/불공 근본수정 후 재활성화 — 사용자 요청.) 0 = 재시도 없이
+# 1회 실패 즉시 종료(사유+조치는 배너/결과/터미널에 노출).
 MAX_SAVE_RETRIES = 2
 
 # ERP 저장 거부 모달 파싱 — 승인번호·요구 계정을 뽑아 '어느 행을 어떤 계정으로' 안내한다.
@@ -58,30 +60,45 @@ def _parse_save_rejections(reason: str, rows_list: list[dict]) -> list[dict]:
 
 
 def _save_guidance(issues: list[dict], reason: str) -> str:
-    """조치 안내 채팅 본문 — 왜 실패했고(계정 불일치) 어느 행을 어떤 계정으로 고칠지."""
-    if not issues:
-        return (
-            f"저장이 ERP 에서 거부됐습니다:\n{reason}\n\n"
-            "선택을 다시 확인해 주세요. '건별 입력' 화면으로 돌아갑니다."
-        )
-    lines = []
-    for it in issues:
-        where = (
-            f"{it['rowNo']}행 「{it['merchant']}」"
-            if it.get("rowNo")
-            else f"승인번호 {it.get('aprvlNo') or '?'}"
-        )
-        if it.get("requiredAccount"):
-            lines.append(
-                f"• {where}: 이 건은 예산계정이 **‘{it['requiredAccount']}’**와 같아야 합니다. "
-                f"그 계정에 해당하는 예산단위로 다시 선택해 주세요."
+    """조치 안내 본문 — **왜 실패했고 무엇을 고칠지**. 계정 불일치는 어느 행을 어떤 계정으로,
+    그 외 유형(필수값 미입력·적용 누락·일반 ERP 오류)은 사유별 구체 조치를 준다(블라인드 재시도 X).
+    """
+    if issues:
+        lines = []
+        for it in issues:
+            where = (
+                f"{it['rowNo']}행 「{it['merchant']}」"
+                if it.get("rowNo")
+                else f"승인번호 {it.get('aprvlNo') or '?'}"
             )
-        else:
-            lines.append(f"• {where}: 계정이 맞지 않습니다. 예산단위를 다시 선택해 주세요.")
+            if it.get("requiredAccount"):
+                lines.append(
+                    f"• {where}: 이 건은 예산계정이 **‘{it['requiredAccount']}’**와 같아야 합니다. "
+                    f"그 계정에 해당하는 예산단위로 다시 선택해 주세요."
+                )
+            else:
+                lines.append(f"• {where}: 계정이 맞지 않습니다. 예산단위를 다시 선택해 주세요.")
+        return (
+            "저장이 거부됐습니다 — 승인취소 건은 **원 승인 건과 같은 예산계정**이어야 합니다.\n"
+            "아래 항목을 고쳐 다시 저장해 주세요:\n" + "\n".join(lines) +
+            "\n\n'건별 입력' 화면으로 돌아갑니다. 표시된 행만 고치면 됩니다."
+        )
+    # 구조화되지 않은 거부 — 사유 문자열로 유형을 분류해 '무엇이 잘못됐고 무엇을 고칠지'를 준다.
+    r = reason or ""
+    if any(k in r for k in ("필수 값", "필수값", "입력되지 않은", "검증 실패")):
+        return (
+            f"저장이 거부됐습니다 — **필수값이 비어 있는 행**이 있습니다.\n(ERP 사유: {reason})\n\n"
+            "각 행에 **프로젝트 등 필수값**을 채운 뒤 다시 저장해 주세요. '건별 입력' 화면으로 돌아갑니다."
+        )
+    if "적용 단계" in r or "카드팝업" in r:
+        return (
+            f"저장이 완료되지 않았습니다 — **적용 단계가 누락**됐습니다(내부 오류).\n(사유: {reason})\n\n"
+            "문서를 다시 만들어 재입력·적용 후 저장을 시도합니다."
+        )
     return (
-        "저장이 거부됐습니다 — 승인취소 건은 **원 승인 건과 같은 예산계정**이어야 합니다.\n"
-        "아래 항목을 고쳐 다시 저장해 주세요:\n" + "\n".join(lines) +
-        "\n\n'건별 입력' 화면으로 돌아갑니다. 표시된 행만 고치면 됩니다."
+        f"저장이 ERP 에서 거부됐습니다:\n{reason}\n\n"
+        "위 **사유**를 확인해 해당 항목(예산단위·계정·필수값 등)을 고친 뒤 다시 저장해 주세요. "
+        "'건별 입력' 화면으로 돌아갑니다."
     )
 
 
@@ -145,7 +162,12 @@ def make_save_final_node():
                     "save_error_msg": reason,
                     "save_error_issues": issues,
                 }
-            return {"error": f"저장 실패({retries}회 재시도 후 포기): {reason}", "retry_save": False}
+            # 최종 포기 — 원문 사유만 남기지 말고 '왜 실패했고 무엇을 고칠지' 조치까지 결과에 남긴다
+            #  (로깅 resultSummary 로 사용자가 원인·조치를 바로 볼 수 있게. 재시도 중 안내와 동일 본문).
+            return {
+                "error": f"저장 실패({retries}회 재시도 후 포기).\n" + _save_guidance(issues, reason),
+                "retry_save": False,
+            }
         seen = r.get("modals_seen") or []
         if seen:
             await emit_log(
