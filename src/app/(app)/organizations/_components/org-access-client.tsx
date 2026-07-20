@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   RiBuilding2Line,
   RiCheckLine,
@@ -17,6 +17,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
+import { useUnsavedGuard } from '@/app/(app)/_lib/use-unsaved-guard';
 import { ApiError, api, errorMessage } from '@/lib/api/client';
 import {
   buildOrgUnitForest,
@@ -63,7 +64,9 @@ export function OrgAccessClient() {
           <TabsTrigger value="access">에이전트 접근</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="org">
+        {/* forceMount — 탭 전환(에이전트 접근 ↔ 조직구분) 시에도 언마운트되지 않아 비용구분 초안·이탈
+            가드가 유지된다(비활성 시 Radix 가 hidden 처리). */}
+        <TabsContent value="org" forceMount className="data-[state=inactive]:hidden">
           <OrgUnitsTab
             status={orgs.status}
             error={orgs.error}
@@ -123,11 +126,20 @@ interface OrgUnitsTabProps {
 }
 
 function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUnitsTabProps) {
-  // 비용구분 낙관적 오버레이(id→선택값). 새 목록이 도착하면 비운다(서버값이 진실).
-  const [pending, setPending] = useState<Record<string, OrgUnitCostType>>({});
+  // 비용구분 초안(id→변경값). 서버값과 다른 항목만 담는다(즉시저장 아님 — 저장 버튼으로 일괄).
+  const [draft, setDraft] = useState<Record<string, OrgUnitCostType>>({});
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
-    setPending({});
+    setDraft({}); // 새 목록(서버 갱신·불러오기) 도착 시 초안 리셋.
   }, [orgUnits]);
+
+  const serverCost = useMemo(
+    () => new Map(orgUnits.map((u) => [u.id, u.costType])),
+    [orgUnits],
+  );
+  const dirtyIds = Object.keys(draft);
+  const dirty = dirtyIds.length > 0;
+  useUnsavedGuard(dirty); // 변경 있으면 새로고침·앱내 이동 시 이탈 확인.
 
   if (status === 'loading' || status === 'error') {
     return <LoadState error={error} onReload={onReload} />;
@@ -135,22 +147,33 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 
   const forest = buildOrgUnitForest(orgUnits);
 
-  const updateCostType = async (id: string, costType: OrgUnitCostType) => {
-    setPending((prev) => ({ ...prev, [id]: costType }));
-    try {
-      await api.patch(`/org-units/${id}`, { costType });
-      onReload(); // 서버 상태로 재동기화 → 오버레이는 목록 갱신 시 비워진다.
-    } catch (err) {
-      toast.error(errorMessage(err));
-      setPending((prev) => {
-        const next = { ...prev };
-        delete next[id]; // 실패한 항목만 롤백.
-        return next;
-      });
-    }
+  // 스테이징 — 서버값과 같아지면 초안에서 제거(변경 없음 처리).
+  const stageCostType = (id: string, costType: OrgUnitCostType) => {
+    setDraft((prev) => {
+      const next = { ...prev };
+      if (serverCost.get(id) === costType) delete next[id];
+      else next[id] = costType;
+      return next;
+    });
   };
 
-  const costOf = (unit: OrgUnit): OrgUnitCostType | null => pending[unit.id] ?? unit.costType;
+  const costOf = (unit: OrgUnit): OrgUnitCostType | null => draft[unit.id] ?? unit.costType;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await Promise.all(
+        dirtyIds.map((id) => api.patch(`/org-units/${id}`, { costType: draft[id] })),
+      );
+      toast.success(`비용구분 ${dirtyIds.length}건 저장했습니다`);
+      setDraft({});
+      onReload();
+    } catch (err) {
+      toast.error(errorMessage(err, '저장하지 못했습니다.'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -168,18 +191,48 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
           description="상단의 ‘ERP 조직도 불러오기’로 조직 구조를 가져오세요."
         />
       ) : (
-        <div className="border-border bg-surface rounded-[var(--radius-lg)] border p-2 shadow-[var(--shadow-card)]">
-          <ul className="flex flex-col">
-            {forest.map((node) => (
-              <OrgTreeNode
-                key={node.unit.id}
-                node={node}
-                costOf={costOf}
-                onCostType={updateCostType}
-              />
-            ))}
-          </ul>
-        </div>
+        <>
+          <div className="border-border bg-surface rounded-[var(--radius-lg)] border p-2 shadow-[var(--shadow-card)]">
+            <ul className="flex flex-col">
+              {forest.map((node) => (
+                <OrgTreeNode
+                  key={node.unit.id}
+                  node={node}
+                  costOf={costOf}
+                  onCostType={stageCostType}
+                />
+              ))}
+            </ul>
+          </div>
+
+          {/* 저장 바 — 변경이 있을 때만 하단 고정 노출. */}
+          {dirty ? (
+            <div className="border-border bg-surface/95 sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border px-4 py-3 shadow-[var(--shadow-card)] backdrop-blur">
+              <p className="text-foreground-secondary text-sm">
+                <b className="text-foreground">{dirtyIds.length}건</b> 변경 · 저장하지 않음
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setDraft({})}
+                  disabled={saving}
+                >
+                  되돌리기
+                </Button>
+                <Button size="sm" onClick={() => void save()} disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Spinner size={14} /> 저장 중…
+                    </>
+                  ) : (
+                    '저장'
+                  )}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
