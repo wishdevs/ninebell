@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { RiCheckLine, RiSearchLine, RiTableLine } from '@remixicon/react';
+import { RiCheckLine, RiErrorWarningLine, RiSearchLine, RiTableLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
@@ -413,6 +413,17 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <GridHeader title={hitl.title} prompt={hitl.prompt} />
+
+      {/* 재개입 공지 — 직전 저장(F7)이 왜 실패했고 무엇을 고칠지. 계정 불일치는 아래 행별로도
+          표시되지만, 필수값 미입력·일반 오류는 여기서만 뜬다(여러 줄 사유+조치). */}
+      {hitl.notice ? (
+        <div className="border-danger/30 bg-danger/10 text-danger flex shrink-0 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
+          <RiErrorWarningLine size={16} aria-hidden className="mt-0.5 shrink-0" />
+          <p className="text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
+            {hitl.notice}
+          </p>
+        </div>
+      ) : null}
 
       {/* 일괄 지정 — 비제외 행 전체에 같은 예산단위·프로젝트·적요를 한 번에 채운다(이후 개별 수정 가능). */}
       <BulkBar

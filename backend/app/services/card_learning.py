@@ -42,6 +42,53 @@ def norm_merchant(name: str | None) -> str:
     return s.lower()
 
 
+# ── 적요 정규화 — 사람이름 제외 + 판매/제조 구분 동적화(사용자 확정 2026-07-20) ─────────────
+# 접속자 소속 비용구분 → 적요 끝에 붙일 구분 접미사. 판관비=판매, 제조원가=제조.
+COST_TYPE_SUFFIX: dict[str, str] = {"판관비": "판매", "제조원가": "제조"}
+
+# 원본 적요에 붙어 있던 판/제 구분(제거 대상) — 끝의 대시(-판매/-제품/-제조/-판관) 또는 괄호((판매)/…).
+# '제품'은 제조원가 쪽 원본 표기. 끝 1개만 떼어 base 로 되돌린다.
+_TRAILING_DIVISION_RE = re.compile(r"\s*(?:-\s*(?:판매|제품|제조|판관)|\((?:판매|제품|제조|판관)\))\s*$")
+# 사람이름 적요(추천 금지): (A) 콤마로 이어진 2인 이상 이름 나열이 앞에, (B) '출장' 적요 괄호 안 이름.
+# '(법인카드)'·'(불공)' 등 관용 괄호는 negative lookahead 로 제외해 오검출(직원 야근식대 등)을 막는다.
+_NAME_LIST_RE = re.compile(r"^[가-힣]{2,4}(?:\s*,\s*[가-힣]{2,4})+")
+_TRIP_NAME_RE = re.compile(
+    r"출장.*\((?!법인|불공|판매|제품|제조|판관)[가-힣]{2,4}(?:\s*,\s*[가-힣]{2,4})*(?:\s*외\s*\d+명)?\)"
+)
+
+
+def is_person_name_note(note: str | None) -> bool:
+    """적요에 사람이름이 들어가 그대로 추천하면 안 되는지. (A) '박건희, 이재혁 석식' 이름나열,
+    (B) '중국출장 숙박(장일환)' 출장 괄호 이름. 관용 괄호((법인카드) 등)는 오검출 안 하도록 제외."""
+    if not note:
+        return False
+    s = note.strip()
+    return bool(_NAME_LIST_RE.match(s) or _TRIP_NAME_RE.search(s))
+
+
+def strip_division(note: str) -> tuple[str, bool]:
+    """적요 끝의 판/제 구분(-판매/-제품/(판매)…)을 떼고 (base, 원래_구분있었나) 반환. 없으면 (원문, False)."""
+    m = _TRAILING_DIVISION_RE.search(note)
+    if not m:
+        return note.strip(), False
+    return note[: m.start()].strip(), True
+
+
+def apply_cost_suffix(note: str | None, cost_type: str | None) -> str | None:
+    """추천/표시용 적요 정규화 — 판/제 구분을 떼고, **원래 구분이 있던 적요만** 접속자 비용구분
+    (판관비→판매 / 제조원가→제조)으로 재부착. 구분이 원래 없던 적요는 그대로. cost_type 미상이면 base."""
+    if note is None:
+        return None
+    base, had = strip_division(note)
+    if not base:
+        return None
+    if had:
+        suffix = COST_TYPE_SUFFIX.get((cost_type or "").strip())
+        if suffix:
+            return f"{base}-{suffix}"
+    return base
+
+
 def _uuid(owner: str | None) -> uuid.UUID | None:
     if not owner:
         return None
@@ -352,6 +399,7 @@ async def suggest_note(
     acct_code: str | None,
     acct_name: str | None = None,
     allow_ai: bool = False,
+    cost_type: str | None = None,
 ) -> dict:
     """(가맹점 × 계정) → 적요 리졸버 — learned>seed>[AI]>category>heuristic 사다리(첫 히트 반환).
 
@@ -389,8 +437,9 @@ async def suggest_note(
                 .scalars()
                 .first()
             )
-            if learned_note and learned_note.strip():
-                return {"note": learned_note.strip(), "source": "learned"}
+            # 사람이름 적요는 건너뛰고 다음 티어(깨끗한 적요)로 폴백한다.
+            if learned_note and learned_note.strip() and not is_person_name_note(learned_note):
+                return {"note": apply_cost_suffix(learned_note, cost_type), "source": "learned"}
         # 2) seed — (norm, acct) 전사 가맹점×계정 관례.
         if norm:
             seed_note = (
@@ -407,8 +456,8 @@ async def suggest_note(
                 .scalars()
                 .first()
             )
-            if seed_note and seed_note.strip():
-                return {"note": seed_note.strip(), "source": "seed"}
+            if seed_note and seed_note.strip() and not is_person_name_note(seed_note):
+                return {"note": apply_cost_suffix(seed_note, cost_type), "source": "seed"}
         # 3) AI — learned/seed 에 (가맹점×계정) 실이력이 없는 조합. 계정 이름으로 계정 맞춤 적요를
         #    생성한다(캐시 우선, 전사 공유). allow_ai(엔드포인트만 opt-in) + 계정 이름 있을 때만.
         acct_nm = (acct_name or "").strip()
@@ -428,23 +477,25 @@ async def suggest_note(
                     model=gen_model,
                 )
                 return {"note": gen_note, "source": "ai"}
-        # 4) category — 그 계정의 최빈 적요(count 합 최대). 쿼리타임 집계, 별도 테이블 없음.
+        # 4) category — 그 계정의 최빈 적요(count 합 최대). 사람이름 적요는 건너뛰고 상위 후보 중 첫
+        #    깨끗한 것을 쓴다(쿼리타임 집계, 별도 테이블 없음).
         total = func.sum(CardSeedNote.count)
-        cat_note = (
+        cat_rows = (
             (
                 await session.execute(
                     select(CardSeedNote.note)
                     .where(CardSeedNote.acct_code == acct, CardSeedNote.note.isnot(None))
                     .group_by(CardSeedNote.note)
                     .order_by(total.desc(), CardSeedNote.note.asc())
-                    .limit(1)
+                    .limit(5)
                 )
             )
             .scalars()
-            .first()
+            .all()
         )
-        if cat_note and cat_note.strip():
-            return {"note": cat_note.strip(), "source": "category"}
+        for cat_note in cat_rows:
+            if cat_note and cat_note.strip() and not is_person_name_note(cat_note):
+                return {"note": apply_cost_suffix(cat_note, cost_type), "source": "category"}
 
     # 5) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
     from app.agents.card_collect.nodes._shared import recommend_note

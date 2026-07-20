@@ -28,6 +28,11 @@ export interface AgentAccess {
   orgUnitIds: string[];
 }
 
+/** 조직구분 id → 라벨. 못 찾거나 id가 null이면 '미지정'(멤버 테이블·상세 드로워 공용). */
+export function orgUnitLabel(orgUnits: readonly OrgUnit[], id: string | null): string {
+  return (id && orgUnits.find((o) => o.id === id)?.label) || '미지정';
+}
+
 /** 본부 1개 + 그 아래 팀 목록(sortOrder 정렬됨). */
 export interface OrgUnitGroup {
   parent: OrgUnit;

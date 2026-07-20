@@ -241,6 +241,12 @@ export interface SeedSelection {
   count: number;
   dominance: number;
   lastYear: number | null;
+  /** 이 가맹점의 계정별 순위 적요(card_seed_notes) 개수. >1이면 '구분'(다중 계정)이 있는 가맹점. */
+  noteCount?: number;
+  /** 원본에 판/제 구분이 있어, 추천 시 접속자 비용구분(판매/제조)이 붙는 적요. */
+  costDivided?: boolean;
+  /** 사람이름이 든 적요라 추천에서 제외됨(적요는 숨김). */
+  excluded?: boolean;
 }
 
 export interface SeedResult {
@@ -265,6 +271,29 @@ export async function fetchCardSeed(
     offset: res.offset ?? opts.offset ?? 0,
     items: res.items ?? [],
   };
+}
+
+/** 한 가맹점의 계정별 순위 적요 1건(card_seed_notes). 빈도순 = 1·2·3순위. */
+export interface SeedNote {
+  id: string;
+  acctCode: string | null;
+  acctName: string | null;
+  note: string | null;
+  count: number;
+  dominance: number;
+  lastYear: number | null;
+  /** 원본에 판/제 구분이 있어, 추천 시 접속자 비용구분(판매/제조)이 붙는 적요. */
+  costDivided?: boolean;
+  /** 사람이름이 든 적요라 추천에서 제외됨(적요는 숨김). */
+  excluded?: boolean;
+}
+
+/** `GET /me/card-learning/seed-notes?norm` — 가맹점(norm_merchant)의 계정별 순위 적요(빈도순). */
+export async function fetchCardSeedNotes(norm: string): Promise<SeedNote[]> {
+  const res = await api.get<{ items?: SeedNote[] }>(
+    `/me/card-learning/seed-notes?norm=${encodeURIComponent(norm)}`,
+  );
+  return res.items ?? [];
 }
 
 // ── 계정 인지 적요 추천(note-suggest) ─────────────────────────────────────────

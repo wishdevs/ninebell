@@ -57,17 +57,21 @@ async def list_runs(
     *,
     user_id: uuid.UUID | None,
     agent_id: str | None = None,
+    status: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[AgentRun]:
     """런 목록(최신순). user_id=None 이면 전체 유저(로깅 뷰 — logs:read 관리자용),
-    값이 주어지면 해당 유저로 스코프. agent_id 주어지면 워크플로우로 추가 필터."""
+    값이 주어지면 해당 유저로 스코프. agent_id 주어지면 워크플로우로, status 주어지면
+    실행 상태로 추가 필터."""
     async with get_sessionmaker()() as s:
         stmt = select(AgentRun)
         if user_id is not None:
             stmt = stmt.where(AgentRun.user_id == user_id)
         if agent_id:
             stmt = stmt.where(AgentRun.agent_id == agent_id)
+        if status:
+            stmt = stmt.where(AgentRun.status == status)
         stmt = stmt.order_by(AgentRun.started_at.desc()).limit(limit).offset(offset)
         return list((await s.execute(stmt)).scalars().all())
 
@@ -76,6 +80,7 @@ async def count_runs(
     *,
     user_id: uuid.UUID | None,
     agent_id: str | None = None,
+    status: str | None = None,
 ) -> int:
     """list_runs 와 동일 필터의 전체 건수(페이지네이션 total 용). LIMIT/OFFSET 없음."""
     async with get_sessionmaker()() as s:
@@ -84,6 +89,8 @@ async def count_runs(
             stmt = stmt.where(AgentRun.user_id == user_id)
         if agent_id:
             stmt = stmt.where(AgentRun.agent_id == agent_id)
+        if status:
+            stmt = stmt.where(AgentRun.status == status)
         return (await s.execute(stmt)).scalar_one()
 
 

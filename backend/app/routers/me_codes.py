@@ -25,6 +25,7 @@ from app.core.permissions import ROLE_ADMIN, role_rank
 from app.core.security import InvalidTokenError, decode_session_token
 from app.models import (
     CardLearnedSelection,
+    CardSeedNote,
     CardSeedSelection,
     ErpCodeCatalog,
     OrgUnit,
@@ -313,24 +314,83 @@ async def list_card_seed(
             .offset(offset)
         )
     ).scalars().all()
+    # 가맹점별 계정 수(card_seed_notes) — 요약 행에 '계정 N개'로 표시해 다중 계정(구분 있는) 가맹점을
+    # 바로 알아보고 펼칠 수 있게 한다. 현재 페이지 가맹점만 1회 grouped 조회.
+    norms = [r.norm_merchant for r in rows]
+    note_counts: dict[str, int] = {}
+    if norms:
+        nc = await db.execute(
+            select(CardSeedNote.norm_merchant, func.count())
+            .where(CardSeedNote.norm_merchant.in_(norms))
+            .group_by(CardSeedNote.norm_merchant)
+        )
+        note_counts = {n: int(c) for n, c in nc.all()}
+
+    def _item(r) -> dict:
+        raw = r.note
+        excluded = card_learning.is_person_name_note(raw)
+        if excluded or not raw:
+            note_disp, divided = None, False
+        else:
+            note_disp, divided = card_learning.strip_division(raw)
+            note_disp = note_disp or None
+        return {
+            "id": str(r.id),
+            "merchant": r.merchant,
+            "normMerchant": r.norm_merchant,
+            "acctCode": r.acct_code,
+            "acctName": r.acct_name,
+            "note": note_disp,
+            "costDivided": divided,
+            "excluded": excluded,
+            "count": r.count,
+            "dominance": r.dominance,
+            "lastYear": r.last_year,
+            "noteCount": note_counts.get(r.norm_merchant, 0),
+        }
+
+    return {"total": int(total), "limit": limit, "offset": offset, "items": [_item(r) for r in rows]}
+
+
+@router.get("/card-learning/seed-notes")
+async def list_card_seed_notes(user: CurrentUser, db: DbSession, norm: str) -> dict:
+    """한 가맹점(norm_merchant)의 **계정별 순위 적요**(card_seed_notes) — 개발 디버그용.
+
+    '공통' 시드는 가맹점당 최상위 1건(card_seed_selections)만 보여주지만, 실제 추천은 계정을
+    바꾸면 그 계정에 맞는 적요(note-suggest → card_seed_notes)를 채운다. 이 엔드포인트는 그
+    계정별 순위(빈도순=1·2·3순위)를 그대로 반환해 디버그 화면에서 펼쳐 볼 수 있게 한다.
+    """
+    rows = (
+        await db.execute(
+            select(CardSeedNote)
+            .where(CardSeedNote.norm_merchant == norm)
+            .order_by(CardSeedNote.count.desc(), CardSeedNote.acct_name)
+        )
+    ).scalars().all()
+    return {"items": [_display_seed_note(r) for r in rows]}
+
+
+def _display_seed_note(r) -> dict:
+    """시드 적요 1행을 **추천과 동일하게 정규화**해 표시용으로 반환한다: 사람이름 적요는 제외
+    (excluded=True, 적요 숨김), 판/제 구분은 떼어 base 로 보이고(costDivided=True면 접속자
+    비용구분에 따라 판매/제조가 붙는다는 표시), 그 외는 원문 base."""
+    raw = r.note
+    excluded = card_learning.is_person_name_note(raw)
+    if excluded or not raw:
+        note_disp, divided = None, False
+    else:
+        note_disp, divided = card_learning.strip_division(raw)
+        note_disp = note_disp or None
     return {
-        "total": int(total),
-        "limit": limit,
-        "offset": offset,
-        "items": [
-            {
-                "id": str(r.id),
-                "merchant": r.merchant,
-                "normMerchant": r.norm_merchant,
-                "acctCode": r.acct_code,
-                "acctName": r.acct_name,
-                "note": r.note,
-                "count": r.count,
-                "dominance": r.dominance,
-                "lastYear": r.last_year,
-            }
-            for r in rows
-        ],
+        "id": str(r.id),
+        "acctCode": r.acct_code,
+        "acctName": r.acct_name,
+        "note": note_disp,
+        "costDivided": divided,
+        "excluded": excluded,
+        "count": r.count,
+        "dominance": r.dominance,
+        "lastYear": r.last_year,
     }
 
 
@@ -350,7 +410,15 @@ async def note_suggest(
     조합(예: 네이버파이낸셜 + 회의비)은 계정 이름(acctName)으로 AI 가 계정 맞춤 적요를 생성한다.
     merchant 필수, acct/acctName 선택(계정 없으면 키워드 휴리스틱만, acctName 없으면 AI 스킵).
     반환 {note, source} — source(learned·seed·ai·category·heuristic·null).
+
+    반환 적요는 정규화된다: 사람이름 든 적요는 건너뛰고, 원본의 판/제 구분(-판매/-제품 등)은 떼어
+    **접속자 소속 비용구분(판관비→판매 / 제조원가→제조)**으로 재부착한다(구분이 원래 있던 적요만).
     """
+    cost_type: str | None = None
+    if user.org_unit_id:
+        team = await db.get(OrgUnit, user.org_unit_id)
+        if team is not None:
+            cost_type = team.cost_type
     return await card_learning.suggest_note(
         db,
         user_id=user.id,
@@ -358,6 +426,7 @@ async def note_suggest(
         acct_code=acct,
         acct_name=acctName,
         allow_ai=True,
+        cost_type=cost_type,
     )
 
 

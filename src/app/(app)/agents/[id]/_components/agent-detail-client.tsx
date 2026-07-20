@@ -6,6 +6,7 @@ import {
   RiBugLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiErrorWarningLine,
   RiCloseLine,
   RiPlayLine,
   RiRestartLine,
@@ -219,6 +220,21 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           </div>
         </div>
       </div>
+
+      {/* 실패 사유 배너 — 종료(실패) 시 '왜 실패했고 무엇을 고칠지'를 메인 상단에 크게 노출한다.
+          결과 탭에도 나오지만 그리드 개입/브라우저 스테이지를 보느라 놓치기 쉬워, 메인에 무조건
+          보이게 둔다(사용자 피드백: 실패했는데 이유를 안 알려줌). error 는 여러 줄(사유+조치)일 수 있다. */}
+      {isLive && terminal && run.status === 'failed' && run.error ? (
+        <div className="border-danger/30 bg-danger/10 text-danger flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3">
+          <RiErrorWarningLine size={18} aria-hidden className="mt-0.5 shrink-0" />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p className="text-[length:var(--text-body-sm)] font-semibold">실행 실패 — 사유</p>
+            <p className="text-foreground-secondary text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
+              {run.error}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {/* 디버그 — 단계 이동(이전/다음). 현재는 숨김(SHOW_DEBUG로 토글). */}
       {SHOW_DEBUG ? (

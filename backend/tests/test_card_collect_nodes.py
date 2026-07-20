@@ -183,6 +183,53 @@ async def test_grid_frame_emitted_with_rows_budget_units_and_favorites(monkeypat
     assert (await asyncio.wait_for(task, timeout=2)) == {"filled": 0, "pending_nontax": [], "pass1_applied_idx": [], "pass1_failed": 0}
 
 
+async def test_grid_retry_frame_carries_save_failure_notice(monkeypatch):
+    """저장 실패로 재개입(그리드) 시, 프레임 상단 notice 에 '왜 1회차가 실패했고 무엇을 고칠지'가 실린다.
+    계정 불일치가 아닌 필수값 미입력은 행별로 안 잡혀 이 notice 로만 사유가 전달된다."""
+    _stub_dumps(monkeypatch)
+
+    async def _fake_favs(owner):
+        return ([], [], "")
+
+    monkeypatch.setattr(catalog, "_load_user_favorites", _fake_favs)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {
+        "events": events,
+        "page": object(),
+        "rows_list": _rows(2),
+        "owner": None,
+        # 재개입: 직전 저장이 필수값 미입력으로 거부됨(계정 불일치 아님).
+        "save_error_msg": "저장(F7)이 검증 실패로 거부됨: 필수 값이 입력되지 않은 항목이 있습니다",
+        "save_retries": 1,
+    }
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    notice = frame.get("notice") or ""
+    assert "필수값" in notice and "프로젝트" in notice  # 유형별 구체 조치
+    assert "재시도 1/" in notice  # 몇 회차 재시도인지
+    resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_grid_first_entry_has_no_notice(monkeypatch):
+    """최초 진입(재시도 아님)엔 notice 가 없다."""
+    _stub_dumps(monkeypatch)
+
+    async def _fake_favs(owner):
+        return ([], [], "")
+
+    monkeypatch.setattr(catalog, "_load_user_favorites", _fake_favs)
+
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "rows_list": _rows(1), "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    assert frame.get("notice") is None
+    resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}]})
+    await asyncio.wait_for(task, timeout=2)
+
+
 async def test_grid_rows_carry_note_source_badge(monkeypatch):
     """적요 프리필 출처 배지: 개인 학습→'learned', 전사 seed→'seed', 키워드 휴리스틱→None."""
     from app.services import card_learning
@@ -517,6 +564,56 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     assert out["pass2_work"][0]["idx"] == rows2[1]["i"]
 
 
+async def test_switch_evdn_matches_taxable_vat_reclassified_nondeductible(monkeypatch):
+    """매입세액 불공제로 과세→불공 재분류된 행(재조회 VAT_TP='과세')도 복합키로 매칭돼 pass2_work
+    에 포함된다 — VAT_TP='과세' 로 되제외하지 않는다(네이버파이낸셜㈜ 실측 회귀)."""
+
+    async def _ok(*a, **k):
+        return {"ok": True}
+
+    async def _ok_cards(page, **kwargs):
+        return {"ok": True, "n": 1, "checked": 1, "by": "all"}
+
+    async def _ok_period(page, s, e):
+        return {"ok": True}
+
+    async def _q(page, timeout_polls=20):
+        return 1
+
+    # 재조회 행: ERP VAT_TP='과세' 이지만 우리는 이미 불공으로 분류(매입세액 불공제).
+    rows2 = [{"i": 0, "APRVL_NO": "19188217", "TRAN_DT": "20260701", "TRAN_AMT": "1248000",
+              "TRAN_NM": "네이버파이낸셜㈜", "VAT_TP": "과세"}]
+
+    async def _read(page, limit=200):
+        return rows2
+
+    async def _no_modals(page, rounds=3):
+        return []
+
+    monkeypatch.setattr(steps, "close_card_popup", _ok)
+    monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
+    monkeypatch.setattr(steps, "set_period", _ok_period)
+    monkeypatch.setattr(steps, "run_query", _q)
+    monkeypatch.setattr(steps, "read_rows", _read)
+    monkeypatch.setattr(steps, "dismiss_blocking_modals", _no_modals)
+
+    async def _noop_node(state):
+        return {}
+
+    monkeypatch.setattr(pass2, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(pass2, "make_select_evdn_node", lambda code="01": _noop_node)
+
+    events: asyncio.Queue = asyncio.Queue()
+    pending = [{"label": 21, "key": _row_key(rows2[0]),
+                "budgetUnit": {"code": "2000", "name": "경영본부"}, "project": None,
+                "note": "결제대행", "merchant": "네이버파이낸셜㈜"}]
+    state = {"events": events, "page": object(), "owner": None, "run_id": None,
+             "pending_nontax": pending, "period": ["2026-07-01", "2026-07-20"]}
+    out = await make_switch_evdn_node()(state)
+    assert out["pass2_unmatched"] == 0  # 과세 VAT_TP 여도 제외 안 됨
+    assert [w["label"] for w in out["pass2_work"]] == [21]
+
+
 async def test_apply_pass2_applies_matched_work(monkeypatch):
     calls: list[int] = []
 
@@ -551,6 +648,71 @@ async def test_apply_pass2_applies_matched_work(monkeypatch):
     out = await make_apply_pass2_node()(state)
     assert out == {"pass2_filled": 1, "pass2_applied_idx": [1], "pass2_failed": 0} and calls == [1]
     assert doc_applied == [[1]]  # 불공분도 문서 적용까지 자동(저장은 save_final 1회)
+
+
+async def test_apply_pass2_closes_popup_when_no_matched_work(monkeypatch):
+    """불공 0매칭(pass2_work=[])이면 switch_evdn 이 재조회로 연 카드팝업을 닫고 반환한다 —
+    안 그러면 save_final F7 이 '카드팝업 열림(적용 단계 누락)'으로 잘못 막힌다(GAP A)."""
+    closed: list[bool] = []
+
+    async def _close(page):
+        closed.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "close_card_popup", _close)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(pass2, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_apply_pass2_node()({"events": events, "page": object(), "pass2_work": []})
+    assert out == {"pass2_filled": 0}
+    assert closed == [True]  # 열린 카드팝업 닫기 호출됨
+
+
+async def test_apply_pass2_closes_popup_when_all_apply_fail(monkeypatch):
+    """불공 work 는 있으나 전건 적용 실패(applied2_idx=[])면 _apply_doc(팝업 닫기)가 안 도므로
+    카드팝업을 직접 닫는다(GAP B)."""
+
+    async def _fail_apply(page, events, rows, collected):
+        return False, "적용 실패"
+
+    monkeypatch.setattr(batch, "_apply_group_fields", _fail_apply)
+
+    doc_applied: list = []
+
+    async def _doc_apply(page, idx):
+        doc_applied.append(list(idx))
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "apply_rows_to_document", _doc_apply)
+
+    closed: list[bool] = []
+
+    async def _close(page):
+        closed.append(True)
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "close_card_popup", _close)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(pass2, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    rows2 = _mixed_rows()
+    state = {
+        "events": events, "page": object(), "rows2_list": rows2,
+        "pass2_work": [
+            {"idx": 1, "label": 2, "budgetUnit": {"code": "2000", "name": "경영본부"},
+             "project": None, "note": "소모품"},
+        ],
+    }
+    out = await make_apply_pass2_node()(state)
+    assert doc_applied == []  # 적용 실패 → _apply_doc(팝업 닫기 경로) 미호출
+    assert closed == [True]  # 대신 close_card_popup 직접 호출
+    assert out["pass2_applied_idx"] == []
 
 
 async def test_save_final_saves_without_confirmation(monkeypatch):
@@ -605,6 +767,149 @@ def test_parse_save_rejections_falls_back_when_unparseable():
     assert "알 수 없는 오류" in _save_guidance([], "알 수 없는 오류")
 
 
+def test_save_guidance_classifies_non_account_failures():
+    """계정 불일치 외 실패도 사유별 구체 조치를 준다(블라인드 재시도가 아니라 '무엇을 고칠지')."""
+    from app.agents.card_collect.nodes import _save_guidance
+
+    # 필수값 미입력(검증 실패 토스트) → 필수값/프로젝트 조치.
+    g1 = _save_guidance(
+        [], "저장(F7)이 검증 실패로 거부됨: 상세그리드에 필수 값이 입력되지 않은 항목이 있습니다"
+    )
+    assert "필수값" in g1 and "프로젝트" in g1
+    # 적용 단계 누락 → 적용 단계 안내.
+    g2 = _save_guidance([], "카드팝업이 열려 있어 저장 불가(적용 단계 누락)")
+    assert "적용 단계" in g2
+    # 일반 ERP 오류 → 사유 원문 + '고쳐 다시 저장' 조치.
+    g3 = _save_guidance([], "저장(F7)이 ERP 오류로 거부됨: 예산 잔액 부족")
+    assert "예산 잔액 부족" in g3 and "다시 저장" in g3
+    # 회계일 마감 → 재시도 무의미, 관리자 마감 해제/타 회계월 안내.
+    g4 = _save_guidance([], "저장(F7)이 ERP 오류로 거부됨: 회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.")
+    assert "마감" in g4 and "마감 해제" in g4 and "재시도해도" in g4
+
+
+def test_is_error_modal_matches_error_title_and_closed_period():
+    """저장거부 모달 판별 — title '오류'뿐 아니라 '에러', 그리고 마감 문구도 잡는다."""
+    assert steps._is_error_modal({"title": "오류", "text": "승인 건 계정과 다릅니다."})
+    assert steps._is_error_modal({"title": "에러", "text": "회계일이 마감되어 추가, 수정, 삭제할 수 없습니다."})
+    # 마감 문구는 title 이 밋밋해도(예: 알림) text 로 잡는다.
+    assert steps._is_error_modal({"title": "알림", "text": "회계일이 마감되어 삭제할 수 없습니다."})
+    assert steps._is_closed_period({"title": "에러", "text": "회계일이 마감되어 삭제할 수 없습니다."})
+    # 성공/일반 확인 모달은 오탐하지 않는다.
+    assert not steps._is_error_modal({"title": "확인", "text": "저장하시겠습니까?"})
+
+
+async def test_save_document_treats_closed_period_modal_as_failure(monkeypatch):
+    """회계일 마감 '에러' 모달을 성공으로 오판하지 않고 ok:False·closed_period 로 반환한다."""
+    from app.agents.card_collect import js
+
+    async def _no_pre(page, rounds=3):
+        return []
+
+    monkeypatch.setattr(steps, "dismiss_blocking_modals", _no_pre)
+
+    class _Kbd:
+        def __init__(self):
+            self.pressed = []
+
+        async def press(self, k):
+            self.pressed.append(k)
+
+    class _Mouse:
+        def __init__(self):
+            self.clicks = []
+
+        async def click(self, x, y):
+            self.clicks.append((x, y))
+
+    class _Page:
+        def __init__(self):
+            self.keyboard = _Kbd()
+            self.mouse = _Mouse()
+            self._closed = False
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        async def evaluate(self, js_str, *args):
+            if js_str == js.CARD_WIN_EXISTS_JS:
+                return False
+            if js_str == js.VALIDATION_TOAST_JS:
+                return []
+            if js_str == js.MODALS_SNAPSHOT_JS:
+                if self._closed:
+                    return []
+                return [{
+                    "title": "에러",
+                    "text": "회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.",
+                    "buttons": ["닫기"],
+                }]
+            if js_str == js.MODAL_BTN_BOX_JS:
+                if args and args[0] == "닫기":
+                    self._closed = True
+                    return {"x": 10, "y": 20, "title": "에러"}
+                return None
+            return None
+
+    page = _Page()
+    out = await steps.save_document(page, confirm=True)
+    assert out["ok"] is False
+    assert out.get("closed_period") is True
+    assert "회계일이 마감" in out["reason"]
+    assert page.keyboard.pressed == ["F7"]  # F7 은 눌렀지만 저장은 거부됨
+    assert page.mouse.clicks  # '닫기'로 에러 모달 정리(헛대기 방지)
+
+
+async def test_save_final_closed_period_is_terminal_no_retry(monkeypatch):
+    """마감월 저장 거부는 재시도(그리드 재선택)를 타지 않고 즉시 사유+조치로 종료한다."""
+
+    async def _reject(page, confirm):
+        return {
+            "ok": False,
+            "reason": "저장(F7)이 ERP 오류로 거부됨: 회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.",
+            "closed_period": True,
+        }
+
+    monkeypatch.setattr(steps, "save_document", _reject)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+
+    # save_retries=0, 재시도 여력이 있어도(MAX>=1) 마감건은 재시도하지 않는다.
+    out = await make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
+    )
+    assert out["retry_save"] is False
+    assert "save_retries" not in out  # 재시도 신호를 켜지 않음
+    assert "마감 해제" in out["error"] and "재시도해도" in out["error"]
+    assert "0회 재시도 후 포기" not in out["error"]  # 확정 실패엔 '재시도 후 포기' 접두 없음
+
+
+async def test_save_final_giveup_includes_guidance(monkeypatch):
+    """최종 포기(재시도 초과) 메시지에 원인+조치가 담긴다 — 원문 사유만 남기지 않는다."""
+
+    async def _reject(page, confirm):
+        return {
+            "ok": False,
+            "reason": "저장(F7)이 검증 실패로 거부됨: 필수 값이 입력되지 않은 항목이 있습니다",
+        }
+
+    monkeypatch.setattr(steps, "save_document", _reject)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+
+    out = await make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 2}
+    )
+    assert out["retry_save"] is False
+    assert "저장 실패" in out["error"]
+    assert "필수값" in out["error"] and "프로젝트" in out["error"]  # 조치까지 포함
+
+
 async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
     """저장 거부(ERP 오류) 시 상한까지 retry_save 를 켜 그리드로 되돌리고, 초과하면 실패 종료."""
 
@@ -618,20 +923,31 @@ async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
 
     monkeypatch.setattr(save, "emit_shot", _noop_shot)
 
-    # 1차 실패(save_retries 0) → 재시도 신호 + 카운터 1.
+    from app.agents.card_collect.nodes.save import MAX_SAVE_RETRIES
+
+    # 1차 실패(save_retries 0): 재시도가 켜져 있으면(MAX>=1) 재시도 신호, 꺼져 있으면(MAX=0) 즉시 종료.
     out1 = await make_save_final_node()(
         {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
     )
-    assert out1 == {
-        "retry_save": True,
-        "save_retries": 1,
-        "save_error_msg": "승인 건 계정과 다릅니다.",
-        "save_error_issues": [],  # 승인번호/요구계정 없는 메시지 → 파싱 없음(원문 폴백)
-    }
+    if MAX_SAVE_RETRIES >= 1:
+        assert out1 == {
+            "retry_save": True,
+            "save_retries": 1,
+            "save_error_msg": "승인 건 계정과 다릅니다.",
+            "save_error_issues": [],  # 승인번호/요구계정 없는 메시지 → 파싱 없음(원문 폴백)
+        }
+    else:
+        assert out1["retry_save"] is False and "저장 실패" in out1["error"]
 
-    # 상한(2) 도달 후 또 실패 → 재시도 안 하고 error(retry_save False).
+    # 상한 도달(save_retries==MAX) 후 또 실패 → 재시도 안 하고 error(retry_save False).
     out2 = await make_save_final_node()(
-        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 2}
+        {
+            "events": asyncio.Queue(),
+            "page": object(),
+            "filled": 3,
+            "pass2_filled": 1,
+            "save_retries": MAX_SAVE_RETRIES,
+        }
     )
     assert out2["retry_save"] is False and "저장 실패" in out2["error"]
 

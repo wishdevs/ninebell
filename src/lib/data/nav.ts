@@ -63,9 +63,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members', permission: 'users:read' },
-      // 에이전트별 세부설정(스키마 기반 폼) 관리(관리자+).
+      // 에이전트별 세부설정(스키마 기반 폼) 관리(관리자+). 에이전트별 접근(사용 가능 조직) 설정은
+      // 이 아래 /manage/agents/access 서브라우트로 옮겨졌다(사이드바에는 별도 항목 없음).
       { href: '/manage/agents', label: '에이전트 관리', icon: 'agents', minRole: 'admin' },
-      // 조직구분별 에이전트 사용 권한 관리(관리자+).
+      // 조직구분(ERP 조직도 미러링) 관리 — 팀별 비용구분 설정(관리자+).
       { href: '/organizations', label: '조직구분 관리', icon: 'org', minRole: 'admin' },
       // 감사 = 사용자 접속/행동 감시(로그인 access_logs). 로깅 = 에이전트 사용 내역(runs).
       { href: '/audit', label: '감사', icon: 'audit', permission: 'logs:read' },

@@ -9,7 +9,7 @@
  *
  * 백엔드 계약(p5-backend, camelCase):
  *   POST   /runs/cancel            {runId}                      → 세션 즉시 close(멱등)
- *   GET    /runs?agentId=&limit=&offset=                        → RunSummary[]
+ *   GET    /runs?agentId=&status=&limit=&offset=                 → RunSummary[]
  *   GET    /runs/{id}                                           → RunDetail
  *   POST   /runs/templates         {agentId, name, selections}  → RunTemplate
  *   GET    /runs/templates?agentId                              → RunTemplate[]
@@ -140,6 +140,8 @@ export function cancelRun(runId: string): void {
 export interface RunsQuery {
   /** 지정하면 해당 워크플로우로 스코프(에이전트 상세). 생략하면 전체(로깅 페이지). */
   agentId?: string;
+  /** 지정하면 해당 실행 상태로 스코프(로깅 페이지 상태 필터). */
+  status?: string;
   limit?: number;
   offset?: number;
 }
@@ -159,6 +161,7 @@ export interface RunsPage {
 export async function fetchRuns(query: RunsQuery = {}): Promise<RunsPage> {
   const qs = new URLSearchParams();
   if (query.agentId) qs.set('agentId', query.agentId);
+  if (query.status) qs.set('status', query.status);
   if (query.limit != null) qs.set('limit', String(query.limit));
   if (query.offset != null) qs.set('offset', String(query.offset));
   const suffix = qs.toString();
