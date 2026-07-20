@@ -56,6 +56,7 @@ def _org_dict(o: OrgUnit) -> dict:
         "label": o.label,
         "parentId": o.parent_id,
         "costType": o.cost_type,
+        "memberCount": o.member_count,
         "sortOrder": o.sort_order,
     }
 

@@ -15,6 +15,7 @@ import app.services.code_sync as code_sync
 import app.services.org_sync as org_sync
 from app.models import AgentOrgAccess, OrgUnit, User
 from app.services.org_apply import (
+    _has_own_member_ids,
     _norm,
     apply_org_tree,
     match_org_unit_for_department,
@@ -55,9 +56,9 @@ async def test_apply_multilevel_chain_and_new_costtypes(sm):
     seed_hq_id = await _seed_id(sm, "경영본부")  # 시드 본부(재사용 대상)
     # 신설 라벨을 써 '신규 생성' 동작을 검증한다(시드에 이미 있는 재무자원관리그룹/자재팀은 재사용이라 added 아님).
     nodes = [
-        _node(["경영본부"], is_leaf=False),
-        _node(["경영본부", "신설그룹"], is_leaf=False),
-        _node(["경영본부", "신설그룹", "신설팀"], is_leaf=True),
+        _node(["경영본부"], is_leaf=False, count=8),
+        _node(["경영본부", "신설그룹"], is_leaf=False, count=5),
+        _node(["경영본부", "신설그룹", "신설팀"], is_leaf=True, count=5),
     ]
     async with sm() as s:
         summary = await apply_org_tree(s, nodes)
@@ -70,9 +71,12 @@ async def test_apply_multilevel_chain_and_new_costtypes(sm):
         assert hq.id == seed_hq_id  # 시드 경영본부 재사용(id 불변)
         assert hq.parent_id is None
         assert grp.parent_id == hq.id  # 중간 그룹이 본부 밑에
-        assert grp.cost_type is None  # 중간 계층 = 비용구분 없음
+        assert grp.cost_type is None  # 상속할 동명 비용구분 없음 → None
         assert team.parent_id == grp.id  # 말단 팀이 그룹 밑에(전체 깊이 보존)
         assert team.cost_type is None  # 신규 말단 팀 = 미선택(None) — 제조원가 임의 기본값 아님
+        # 신규 삽입 시 member_count(ERP 인원수) 저장.
+        assert grp.member_count == 5
+        assert team.member_count == 5
 
     assert summary["total"] == 3
     assert "신설그룹" in summary["added"]
@@ -234,12 +238,14 @@ async def test_reconcile_leaves_unmatched_unchanged(sm):
 
 
 async def test_department_resolves_to_leaf_not_intermediate(sm):
-    """같은 라벨이 중간 계층과 말단에 모두 있을 때, 부서는 말단(leaf)로 배정된다."""
+    """같은 라벨이 중간 계층과 말단에 모두 있을 때, 부서는 직속 인원 보유 노드(=말단 설계)로 배정된다."""
     # '설계'가 중간(연구소>설계)과 말단(연구소>설계>설계) 둘 다로 등장하는 트리를 반영.
+    # 인원수: 연구소 5 = 중간 설계 5(직속 0), 중간 설계 5 = 말단 설계 5(직속 0), 말단 설계 5(직속 5).
+    # → 직속 인원을 가진 건 말단 설계뿐이라, '설계' 부서는 말단으로 배정된다.
     nodes = [
-        _node(["연구소"], is_leaf=False),
-        _node(["연구소", "설계"], is_leaf=False),  # 중간 '설계'(자식 있음)
-        _node(["연구소", "설계", "설계"], is_leaf=True),  # 말단 '설계'
+        _node(["연구소"], is_leaf=False, count=5),
+        _node(["연구소", "설계"], is_leaf=False, count=5),  # 중간 '설계'(자식 있음, 직속 0)
+        _node(["연구소", "설계", "설계"], is_leaf=True, count=5),  # 말단 '설계'(직속 5)
     ]
     async with sm() as s:
         await apply_org_tree(s, nodes)
@@ -263,6 +269,44 @@ async def test_department_resolves_to_leaf_not_intermediate(sm):
         parent_ids = {o.parent_id for o in all_units if o.parent_id}
         assert u.org_unit_id is not None
         assert u.org_unit_id not in parent_ids  # 말단으로 배정
+
+
+async def test_has_own_member_ids_includes_member_bearing_group(sm):
+    """직속 인원을 가진 중간 그룹은 own-member 에 포함, 순수 컨테이너(직속 0)는 제외.
+
+    나인벨 실측 구조 축약: 경영본부 11 = 재무자원관리그룹 11(본부 직속 0=순수 컨테이너),
+    재무자원관리그룹 11 - 자식합(자재3+회계4+총무3=10) = 직속 1 → 배정 대상(말단 팀뿐 아님).
+    apply_org_tree 가 member_count 를 저장하는 것도 함께 확인한다.
+    """
+    nodes = [
+        _node(["경영본부"], is_leaf=False, count=11),
+        _node(["경영본부", "재무자원관리그룹"], is_leaf=False, count=11),
+        _node(["경영본부", "재무자원관리그룹", "자재팀"], is_leaf=True, count=3),
+        _node(["경영본부", "재무자원관리그룹", "회계팀"], is_leaf=True, count=4),
+        _node(["경영본부", "재무자원관리그룹", "총무팀"], is_leaf=True, count=3),
+    ]
+    async with sm() as s:
+        await apply_org_tree(s, nodes)
+        await s.commit()
+
+    async with sm() as s:
+        rows = (await s.execute(select(OrgUnit))).scalars().all()
+    by_label = {o.label: o for o in rows}
+    own = _has_own_member_ids(rows)
+
+    # apply 가 인원수(member_count)를 저장했는지.
+    assert by_label["경영본부"].member_count == 11
+    assert by_label["재무자원관리그룹"].member_count == 11
+    assert by_label["자재팀"].member_count == 3
+
+    # 직속 인원 보유 판별.
+    assert by_label["재무자원관리그룹"].id in own  # 직속 1 → 배정 대상(순수 컨테이너 아님)
+    assert by_label["경영본부"].id not in own  # 직속 0 → 순수 컨테이너 제외
+    assert by_label["자재팀"].id in own  # 말단 팀 → 포함
+    # 부서 매칭도 그룹 노드로 이어진다(말단이 아니어도).
+    async with sm() as s:
+        matched = await match_org_unit_for_department(s, "재무자원관리그룹")
+    assert matched is not None and matched.id == by_label["재무자원관리그룹"].id
 
 
 def test_norm_handles_separators():

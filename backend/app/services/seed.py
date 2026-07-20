@@ -43,46 +43,48 @@ from app.services.org_apply import _erp_id, _existing_path, _norm
 # **같은 경로해시 id**(_erp_id(정규화 경로))로 심어, 'ERP 조직도 불러오기'가 돌면 그대로 매칭돼
 # 중복/드리프트가 없다(옛 2단계 slug 시드를 대체 — 재시작/재배포마다 실제 ERP 구조 유지).
 # 마이그레이션 0011(2단계 slug)은 레거시로, 라이브 임포트가 prune 해 정리한다.
-# (path=[상위라벨...,self], 비용구분). 중간(본부/그룹)=None, 말단 팀=판/제(옛 시드 이름 매핑·신규는 제조원가).
+# (path=[상위라벨...,self], 비용구분, 인원수). 인원수=서브트리 합계(직속 인원 판별용). 순수
+# 컨테이너(직속 0, 예: 경영본부 31 = 자식합)는 cost_type=None. 직속 인원을 가진 노드(말단 팀,
+# 그리고 재무자원관리그룹 11≠자식합 10 처럼 직속 1 인 중간 그룹)는 판/제 비용구분을 가질 수 있다.
 _SGA = "판관비"
 _MFG = "제조원가"
-_ORG_TREE_SEED: tuple[tuple[tuple[str, ...], str | None], ...] = (
-    (("임원실",), None),
-    (("임원실", "비서실"), _MFG),
-    (("경영본부",), None),
-    (("경영본부", "재무자원관리그룹"), None),
-    (("경영본부", "재무자원관리그룹", "자재팀"), _MFG),
-    (("경영본부", "재무자원관리그룹", "회계팀"), _SGA),
-    (("경영본부", "재무자원관리그룹", "총무팀"), _SGA),
-    (("경영본부", "구매팀"), _MFG),
-    (("경영본부", "인사/기획팀"), _SGA),
-    (("경영본부", "품질팀"), _MFG),
-    (("영업본부",), None),
-    (("영업본부", "영업본부장"), _SGA),
-    (("영업본부", "영업팀"), _SGA),
-    (("영업본부", "CS팀"), _SGA),
-    (("영업본부", "영업관리팀"), _SGA),
-    (("중국법인",), _MFG),
-    (("FA연구소",), None),
-    (("FA연구소", "FA본부장"), _MFG),
-    (("FA연구소", "설계1팀"), _MFG),
-    (("FA연구소", "전장팀"), _MFG),
-    (("FA연구소", "설계2팀"), _MFG),
-    (("FA연구소", "설계3팀"), _MFG),
-    (("FA연구소", "제어1팀"), _MFG),
-    (("FA연구소", "제어2팀"), _MFG),
-    (("FA연구소", "연구기획팀"), _MFG),
-    (("FA연구소", "고문"), _MFG),
-    (("제조본부",), None),
-    (("제조본부", "제조1팀"), _MFG),
-    (("제조본부", "제조2팀"), _MFG),
-    (("제조본부", "고문"), _MFG),
-    (("IMP연구소",), None),
-    (("IMP연구소", "IMP1팀"), _SGA),
-    (("IMP연구소", "IMP2팀"), _SGA),
-    (("IMP연구소", "IMP3팀"), _SGA),
-    (("IMP연구소", "IMP본부장"), _MFG),
-    (("더존컨설팅",), _MFG),
+_ORG_TREE_SEED: tuple[tuple[tuple[str, ...], str | None, int], ...] = (
+    (("임원실",), None, 6),
+    (("임원실", "비서실"), _MFG, 1),
+    (("경영본부",), None, 31),
+    (("경영본부", "재무자원관리그룹"), None, 11),
+    (("경영본부", "재무자원관리그룹", "자재팀"), _MFG, 3),
+    (("경영본부", "재무자원관리그룹", "회계팀"), _SGA, 4),
+    (("경영본부", "재무자원관리그룹", "총무팀"), _SGA, 3),
+    (("경영본부", "구매팀"), _MFG, 6),
+    (("경영본부", "인사/기획팀"), _SGA, 4),
+    (("경영본부", "품질팀"), _MFG, 10),
+    (("영업본부",), None, 10),
+    (("영업본부", "영업본부장"), _SGA, 1),
+    (("영업본부", "영업팀"), _SGA, 5),
+    (("영업본부", "CS팀"), _SGA, 1),
+    (("영업본부", "영업관리팀"), _SGA, 3),
+    (("중국법인",), _MFG, 12),
+    (("FA연구소",), None, 44),
+    (("FA연구소", "FA본부장"), _MFG, 1),
+    (("FA연구소", "설계1팀"), _MFG, 7),
+    (("FA연구소", "전장팀"), _MFG, 6),
+    (("FA연구소", "설계2팀"), _MFG, 7),
+    (("FA연구소", "설계3팀"), _MFG, 5),
+    (("FA연구소", "제어1팀"), _MFG, 6),
+    (("FA연구소", "제어2팀"), _MFG, 8),
+    (("FA연구소", "연구기획팀"), _MFG, 2),
+    (("FA연구소", "고문"), _MFG, 2),
+    (("제조본부",), None, 43),
+    (("제조본부", "제조1팀"), _MFG, 25),
+    (("제조본부", "제조2팀"), _MFG, 17),
+    (("제조본부", "고문"), _MFG, 1),
+    (("IMP연구소",), None, 13),
+    (("IMP연구소", "IMP1팀"), _SGA, 4),
+    (("IMP연구소", "IMP2팀"), _SGA, 5),
+    (("IMP연구소", "IMP3팀"), _SGA, 2),
+    (("IMP연구소", "IMP본부장"), _MFG, 1),
+    (("더존컨설팅",), _MFG, 9),
 )
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
@@ -383,12 +385,16 @@ async def seed_org_units(db: AsyncSession) -> None:
         existing_id_by_path.setdefault(_existing_path(o, by_id), o.id)
 
     id_by_path: dict[tuple[str, ...], str] = {}
-    for order, (path, cost) in enumerate(_ORG_TREE_SEED):
+    for order, (path, cost, count) in enumerate(_ORG_TREE_SEED):
         npath = tuple(_norm(lbl) for lbl in path)
         parent_id = id_by_path.get(npath[:-1]) if len(npath) > 1 else None
         existing_id = existing_id_by_path.get(npath)
         if existing_id is not None:
             node_id = existing_id  # 이미 존재(경로 기준) — id 재사용, 중복 생성 안 함.
+            # 인원수만 백필한다(None 인 기존 행에만). cost_type 은 운영자 설정을 덮지 않도록 건드리지 않음.
+            row = by_id.get(node_id)
+            if row is not None and row.member_count is None:
+                row.member_count = count
         else:
             node_id = _erp_id("|".join(npath))
             db.add(
@@ -397,6 +403,7 @@ async def seed_org_units(db: AsyncSession) -> None:
                     label=path[-1],
                     parent_id=parent_id,
                     cost_type=cost,
+                    member_count=count,
                     sort_order=order,
                 )
             )

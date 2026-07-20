@@ -50,11 +50,14 @@ def _existing_path(row: OrgUnit, by_id: dict[str, OrgUnit]) -> tuple[str, ...]:
     return tuple(reversed(labels))
 
 
-def _apply_match(match: OrgUnit, label: str, parent_id: str | None, order: int) -> bool:
-    """매칭된 기존 행에 라벨·부모·정렬을 반영. cost_type 은 그대로 보존한다 — 말단 팀의 None(미선택)도
-    유지해, 임포트로 새로 편입된 팀을 관리 UI 가 '선택 필요'로 표시하고 사용자가 판/제를 고르게 한다.
+def _apply_match(
+    match: OrgUnit, label: str, parent_id: str | None, order: int, member_count: int | None
+) -> bool:
+    """매칭된 기존 행에 라벨·부모·정렬·인원수를 반영. cost_type 은 그대로 보존한다 — None(미선택)도
+    유지해, 임포트로 새로 편입된 노드를 관리 UI 가 '선택 필요'로 표시하고 사용자가 판/제를 고르게 한다.
 
-    id 는 절대 바꾸지 않는다(사용자/에이전트 링크 유지). 실제로 무언가 바뀌면 True.
+    id 는 절대 바꾸지 않는다(사용자/에이전트 링크 유지). member_count 는 ERP 최신값으로 갱신한다
+    (직속 인원 판별의 소스). 실제로 무언가 바뀌면 True.
     """
     changed = False
     if match.label != label:  # ERP 표기로 라벨 정정.
@@ -66,6 +69,9 @@ def _apply_match(match: OrgUnit, label: str, parent_id: str | None, order: int) 
     if match.sort_order != order:
         match.sort_order = order
         changed = True
+    if match.member_count != member_count:  # ERP 인원수 갱신(직속 인원 판별용).
+        match.member_count = member_count
+        changed = True
     return changed
 
 
@@ -73,8 +79,8 @@ async def apply_org_tree(session: AsyncSession, nodes: list[dict]) -> dict:
     """nodes(전체 깊이·전위순회) → org_units 멱등 미러링. 반환은 요약 dict.
 
     nodes = org_sync.build_full_tree 반환 [{path:[상위라벨...,self], label, count, is_leaf}].
-    매칭: 정규화 라벨 경로(root→self)로 기존 행과 잇는다. 매칭되면 재사용(id 불변, 라벨·부모·정렬
-    갱신, cost_type 보존·leaf 보정), 없으면 신규(id=erp-<sha1(경로)>). 전위순회 index 로 sort_order.
+    매칭: 정규화 라벨 경로(root→self)로 기존 행과 잇는다. 매칭되면 재사용(id 불변, 라벨·부모·정렬·
+    인원수 갱신, cost_type 보존), 없으면 신규(id=erp-<sha1(경로)>). 전위순회 index 로 sort_order.
     ERP 에 없는 로컬 행은 prune 한다 — 사용자 org_unit_id=NULL·에이전트 접근 삭제 후 행 삭제.
     commit 은 호출자가 한다.
     """
@@ -101,25 +107,27 @@ async def apply_org_tree(session: AsyncSession, nodes: list[dict]) -> dict:
     for order, node in enumerate(nodes):  # 전위순회 — 부모가 자식보다 먼저 온다.
         npath = tuple(_norm(lbl) for lbl in node["path"])
         parent_id = id_by_path.get(npath[:-1]) if len(npath) > 1 else None
-        is_leaf = bool(node["is_leaf"])
+        member_count = node.get("count")
         match = existing_by_path.get(npath)
         if match is not None:
             actual_id = match.id
-            if _apply_match(match, node["label"], parent_id, order):
+            if _apply_match(match, node["label"], parent_id, order, member_count):
                 updated += 1
             else:
                 unchanged += 1
         else:
             actual_id = _erp_id("|".join(npath))
-            # 중간(그룹/본부)은 cost_type=None. 말단 팀은 기존 동명 팀의 비용구분을 상속하되,
-            # 상속할 값이 없으면 None(미선택) — 신규 팀에 제조원가를 임의 기본값으로 넣지 않는다.
-            cost_type = None if not is_leaf else costtype_by_label.get(npath[-1])
+            # 직속 인원 보유 여부와 무관하게 동명 노드의 비용구분을 상속한다(중간 그룹도 직속이면
+            # 비용구분을 가질 수 있음). 상속할 값이 없으면 None(미선택) — 임의 기본값을 넣지 않는다.
+            # 순수 컨테이너(직속 0)는 자연히 None 으로 남아 UI 가 토글을 노출하지 않는다.
+            cost_type = costtype_by_label.get(npath[-1])
             session.add(
                 OrgUnit(
                     id=actual_id,
                     label=node["label"],
                     parent_id=parent_id,
                     cost_type=cost_type,
+                    member_count=member_count,
                     sort_order=order,
                 )
             )
@@ -152,42 +160,54 @@ async def apply_org_tree(session: AsyncSession, nodes: list[dict]) -> dict:
     }
 
 
-def _leaf_ids(org_units: list[OrgUnit]) -> set[str]:
-    """말단(leaf) org_unit id 집합 — 다른 어떤 org_unit 의 parent 도 아닌 행(=배정 대상 팀).
+def _has_own_member_ids(org_units: list[OrgUnit]) -> set[str]:
+    """직속 인원 보유 org_unit id 집합 — 직속 = (member_count) - Σ(직속 자식 member_count) > 0.
 
-    이제 본부/그룹은 중간 계층이므로, 멤버 배정·부서 매칭은 leaf 에만 건다.
+    서브트리 합계 인원수에서 직속 자식들의 인원수를 빼면 그 노드 자체에 소속된 직속 인원이 남는다.
+    직속 > 0 인 노드는 배정·비용구분 대상(말단 팀뿐 아니라, 직속 인원을 가진 중간 그룹도 포함).
+    순수 컨테이너(본부 등, 직속 0)는 제외한다. member_count 미상(None)은 0 으로 본다.
     """
-    parent_ids = {o.parent_id for o in org_units if o.parent_id is not None}
-    return {o.id for o in org_units if o.id not in parent_ids}
+    children_by_parent: dict[str, list[OrgUnit]] = {}
+    for o in org_units:
+        if o.parent_id is not None:
+            children_by_parent.setdefault(o.parent_id, []).append(o)
+    own: set[str] = set()
+    for o in org_units:
+        total = o.member_count or 0
+        child_sum = sum((c.member_count or 0) for c in children_by_parent.get(o.id, []))
+        if total - child_sum > 0:
+            own.add(o.id)
+    return own
 
 
 async def match_org_unit_for_department(session: AsyncSession, department: object) -> OrgUnit | None:
-    """부서명(ERP)을 org_units 라벨에 정규화 매칭 — 말단(leaf) 우선, 없으면 아무 매칭. 없으면 None.
+    """부서명(ERP)을 org_units 라벨에 정규화 매칭 — 직속 인원 보유 노드 우선, 없으면 아무 매칭. 없으면 None.
 
     가입·로그인 시 사용자 소속(org_unit_id)을 부서(=조직구분)로 자동 배정하는 단건 조회.
     부서와 조직구분은 같은 개념이라, 부서 문자열이 조직구분 라벨과 정규화 일치하면 그 조직으로 잇는다.
+    '재무자원관리그룹'처럼 직속 인원을 가진 중간 그룹도 그 그룹 노드로 매칭된다(말단 팀뿐 아님).
     """
     n = _norm(department)
     if not n:
         return None
     org_units = (await session.execute(select(OrgUnit))).scalars().all()
-    leaf_ids = _leaf_ids(org_units)
-    leaf: OrgUnit | None = None
+    own_ids = _has_own_member_ids(org_units)
+    owner: OrgUnit | None = None
     fallback: OrgUnit | None = None
     for o in org_units:
         if _norm(o.label) != n:
             continue
-        if o.id in leaf_ids and leaf is None:
-            leaf = o
+        if o.id in own_ids and owner is None:
+            owner = o
         if fallback is None:
             fallback = o
-    return leaf or fallback
+    return owner or fallback
 
 
 async def reconcile_users(session: AsyncSession) -> list[dict]:
     """department 있는 사용자를 org_unit 라벨에 정규화 매칭해 org_unit_id 재배치. 반환은 변경 목록.
 
-    매칭은 말단(leaf) 우선, 없으면 아무 매칭 폴백. 매칭돼 소속이 달라질 때만 갱신한다.
+    매칭은 직속 인원 보유 노드 우선, 없으면 아무 매칭 폴백. 매칭돼 소속이 달라질 때만 갱신한다.
     매칭 안 되는 사용자는 그대로 둔다. commit 은 호출자가 한다.
     """
     org_units = (
@@ -195,14 +215,14 @@ async def reconcile_users(session: AsyncSession) -> list[dict]:
         .scalars()
         .all()
     )
-    leaf_ids = _leaf_ids(org_units)
-    leaf_by_norm: dict[str, OrgUnit] = {}
+    own_ids = _has_own_member_ids(org_units)
+    owner_by_norm: dict[str, OrgUnit] = {}
     any_by_norm: dict[str, OrgUnit] = {}
     for o in org_units:
         n = _norm(o.label)
         any_by_norm.setdefault(n, o)
-        if o.id in leaf_ids:
-            leaf_by_norm.setdefault(n, o)
+        if o.id in own_ids:
+            owner_by_norm.setdefault(n, o)
 
     users = (
         (await session.execute(select(User).where(User.department.is_not(None)))).scalars().all()
@@ -212,7 +232,7 @@ async def reconcile_users(session: AsyncSession) -> list[dict]:
         n = _norm(u.department)
         if not n:
             continue
-        target = leaf_by_norm.get(n) or any_by_norm.get(n)
+        target = owner_by_norm.get(n) or any_by_norm.get(n)
         if target is None:
             continue
         if u.org_unit_id != target.id:

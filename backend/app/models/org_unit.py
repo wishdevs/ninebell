@@ -33,8 +33,10 @@ class OrgUnit(Base):
     parent_id: Mapped[str | None] = mapped_column(
         String(40), ForeignKey("org_units.id", ondelete="CASCADE"), nullable=True
     )
-    # 비용구분(팀에만 의미). 판관비|제조원가. 본부는 NULL.
+    # 비용구분(직속 인원 보유 노드에 의미). 판관비|제조원가. 순수 컨테이너(본부 등)는 NULL.
     cost_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # ERP 조직도 인원수(서브트리 합계) — 직속 인원 판별용. (member_count - 직속자식합) > 0 이면 직속 보유.
+    member_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

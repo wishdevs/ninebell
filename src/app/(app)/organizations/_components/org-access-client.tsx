@@ -21,9 +21,9 @@ import { useUnsavedGuard } from '@/app/(app)/_lib/use-unsaved-guard';
 import { ApiError, api, errorMessage } from '@/lib/api/client';
 import {
   buildOrgUnitForest,
-  descendantLeafTeamIds,
-  isLeafTeam,
-  leafTeamUnits,
+  descendantOwnMemberIds,
+  hasOwnMembers,
+  ownMemberUnits,
   type AgentAccess,
   type OrgUnit,
   type OrgUnitCostType,
@@ -155,9 +155,9 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
   };
 
   const costOf = (unit: OrgUnit): OrgUnitCostType | null => draft[unit.id] ?? unit.costType;
-  const isStaged = (id: string): boolean => id in draft; // 초안에 담긴(변경된) 팀인지.
-  // 미선택(effective cost=null) 말단 팀 수 — 상단 안내·발견성용(신규 편입 팀).
-  const unsetCount = leafTeamUnits(forest).filter((u) => costOf(u) === null).length;
+  const isStaged = (id: string): boolean => id in draft; // 초안에 담긴(변경된) 노드인지.
+  // 미선택(effective cost=null) 직접 소속원 노드 수 — 상단 안내·발견성용(신규 편입). 컨테이너는 제외.
+  const unsetCount = ownMemberUnits(forest).filter((u) => costOf(u) === null).length;
 
   const save = async () => {
     setSaving(true);
@@ -181,7 +181,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
           제거 — 플로팅 채팅 버튼과 겹치지 않게). 저장/되돌리기는 항상 렌더하되 변경 없음·저장 중엔 비활성. */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-muted-foreground text-[length:var(--text-body-sm)] min-w-0 flex-1">
+          <p className="text-muted-foreground min-w-0 flex-1 text-[length:var(--text-body-sm)]">
             조직 구조는 ERP 조직도에서 동기화됩니다. 여기서는 각 팀의 비용구분만 설정할 수 있습니다.
           </p>
           <div className="flex flex-wrap items-center gap-2">
@@ -251,7 +251,8 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 
 /**
  * 조직 트리 노드(재귀). 임의 깊이를 중첩 `ul`(좌측 가이드선)로 들여쓴다. 본부(building)·그룹(folder)·
- * 팀(점)을 아이콘·굵기로 구분하고, 팀(leaf)만 비용구분 세그먼트 토글, 상위 노드는 하위 팀 수 배지.
+ * 팀(점)을 아이콘·굵기로 구분하고, 직접 소속원을 가진 노드는 비용구분 세그먼트 토글(자식이 있어도
+ * 아래에 그대로 중첩), 순수 컨테이너는 하위 배정 대상 수 배지.
  */
 function OrgTreeNode({
   node,
@@ -264,12 +265,12 @@ function OrgTreeNode({
   isStaged: (id: string) => boolean;
   onCostType: (id: string, costType: OrgUnitCostType) => void;
 }) {
-  const isTeam = isLeafTeam(node); // leaf + parentId!==null → 비용구분 대상.
+  const hasOwn = hasOwnMembers(node); // 직접 소속원 보유 → 비용구분 대상(말단 팀·중간 그룹 모두).
   const hasChildren = node.children.length > 0;
   const isHq = node.unit.parentId === null;
-  const effectiveCost = isTeam ? costOf(node.unit) : null;
-  const unset = isTeam && effectiveCost === null; // 비용구분 미선택(신규 편입) — 주의(amber) 표시.
-  const staged = isTeam && isStaged(node.unit.id); // 초안에 담긴 변경 — accent '변경됨' 표시.
+  const effectiveCost = hasOwn ? costOf(node.unit) : null;
+  const unset = hasOwn && effectiveCost === null; // 비용구분 미선택(신규 편입) — 주의(amber) 표시.
+  const staged = hasOwn && isStaged(node.unit.id); // 초안에 담긴 변경 — accent '변경됨' 표시.
 
   return (
     <li>
@@ -310,7 +311,7 @@ function OrgTreeNode({
         >
           {node.unit.label}
         </span>
-        {isTeam ? (
+        {hasOwn ? (
           <div className="flex shrink-0 items-center gap-2">
             {unset ? (
               <span className="bg-warning/10 text-warning inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold">
@@ -332,7 +333,7 @@ function OrgTreeNode({
           </div>
         ) : hasChildren ? (
           <span className="text-foreground-tertiary bg-muted shrink-0 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums">
-            {descendantLeafTeamIds(node).length}팀
+            {descendantOwnMemberIds(node).length}팀
           </span>
         ) : null}
       </div>
@@ -450,13 +451,13 @@ function AgentAccessTab({
     return <LoadState error={accessError ?? orgError} onReload={onReload} />;
   }
 
-  // 팀(leaf)만 접근 대상 — 본부·그룹(중간 노드)은 배정 단위가 아니다(백엔드가 거부).
+  // 직접 소속원을 가진 노드만 접근 대상 — 말단 팀 + 직속 인원이 있는 중간 그룹. 순수 컨테이너는 제외.
   const forest = buildOrgUnitForest(orgUnits);
-  const leaves = leafTeamUnits(forest);
+  const assignableUnits = ownMemberUnits(forest);
 
-  // 체크 옵션 = 실 팀 전체 + '미지정'(조직 미배정 사용자 허용, 항상 마지막).
+  // 체크 옵션 = 배정 대상 노드 전체 + '미지정'(조직 미배정 사용자 허용, 항상 마지막).
   const options: { id: string; label: string }[] = [
-    ...leaves.map((leaf) => ({ id: leaf.id, label: leaf.label })),
+    ...assignableUnits.map((unit) => ({ id: unit.id, label: unit.label })),
     { id: ORG_NONE, label: '미지정' },
   ];
 
@@ -495,11 +496,11 @@ function AgentAccessTab({
     schedulePersist(agentId);
   };
 
-  // 상위 노드 '전체' 토글 — 그 노드 하위 팀 전부 선택/해제(on=true 선택).
-  const toggleParent = (agentId: string, leafIds: string[], on: boolean) => {
+  // 그룹 헤더 '전체' 토글 — 그 노드 하위(자기 포함) 배정 대상 전부 선택/해제(on=true 선택).
+  const toggleParent = (agentId: string, unitIds: string[], on: boolean) => {
     setLocal((prev) => {
       const current = new Set(prev[agentId] ?? []);
-      for (const id of leafIds) {
+      for (const id of unitIds) {
         if (on) current.add(id);
         else current.delete(id);
       }
@@ -609,7 +610,7 @@ function AgentAccessTab({
               selected={editingSel}
               noneChecked={editingSel.has(ORG_NONE)}
               onToggle={(id) => toggle(editing.agentId, id)}
-              onToggleParent={(leafIds, on) => toggleParent(editing.agentId, leafIds, on)}
+              onToggleParent={(unitIds, on) => toggleParent(editing.agentId, unitIds, on)}
             />
           </DialogBody>
         </Dialog>
@@ -630,7 +631,7 @@ function AgentAccessEditor({
   selected: Set<string>;
   noneChecked: boolean;
   onToggle: (orgId: string) => void;
-  onToggleParent: (leafIds: string[], on: boolean) => void;
+  onToggleParent: (unitIds: string[], on: boolean) => void;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -656,8 +657,11 @@ function AgentAccessEditor({
 }
 
 /**
- * 접근 편집 트리 노드(재귀). 팀(leaf)은 체크박스, 상위 노드는 하위 팀 전체 토글(tri-state)
- * 헤더 + 중첩 자식. 배정 대상 팀이 없는 가지는 렌더하지 않는다.
+ * 접근 편집 트리 노드(재귀).
+ * - 자식이 없는 노드: 직접 소속원이 있으면 단일 체크박스, 없으면(0명 말단) 렌더하지 않는다.
+ * - 자식이 있는 노드: 하위(자기 포함) 배정 대상 전체 토글(tri-state) 헤더 + 중첩 자식.
+ *   직접 소속원을 가진 그룹은 자기 id도 헤더 토글/집계에 포함되어, 헤더 선택 시 그룹 자체도 선택된다.
+ *   배정 대상이 하나도 없는 가지는 렌더하지 않는다.
  */
 function AgentAccessNode({
   node,
@@ -668,9 +672,12 @@ function AgentAccessNode({
   node: OrgUnitNode;
   selected: Set<string>;
   onToggle: (orgId: string) => void;
-  onToggleParent: (leafIds: string[], on: boolean) => void;
+  onToggleParent: (unitIds: string[], on: boolean) => void;
 }) {
-  if (isLeafTeam(node)) {
+  const hasChildren = node.children.length > 0;
+
+  if (!hasChildren) {
+    if (!hasOwnMembers(node)) return null; // 직속 인원 0인 말단은 배정 대상 아님.
     return (
       <OrgAccessCheckbox
         label={node.unit.label}
@@ -680,10 +687,11 @@ function AgentAccessNode({
     );
   }
 
-  const leafIds = descendantLeafTeamIds(node);
-  if (leafIds.length === 0) return null; // 배정 대상 팀이 없는 본부/그룹은 숨김.
-  const selCount = leafIds.filter((id) => selected.has(id)).length;
-  const allOn = selCount === leafIds.length;
+  // 자식이 있는 노드 = 그룹 헤더. unitIds 는 하위(자기 포함) 배정 대상 전부 — 직접 소속원 그룹은 자기 id도 포함.
+  const unitIds = descendantOwnMemberIds(node);
+  if (unitIds.length === 0) return null; // 배정 대상이 없는 컨테이너는 숨김.
+  const selCount = unitIds.filter((id) => selected.has(id)).length;
+  const allOn = selCount === unitIds.length;
 
   return (
     <div className="border-border/60 overflow-hidden rounded-[var(--radius-md)] border">
@@ -692,7 +700,7 @@ function AgentAccessNode({
           type="button"
           role="checkbox"
           aria-checked={allOn ? true : selCount > 0 ? 'mixed' : false}
-          onClick={() => onToggleParent(leafIds, !allOn)}
+          onClick={() => onToggleParent(unitIds, !allOn)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <span
@@ -713,7 +721,7 @@ function AgentAccessNode({
           </span>
         </button>
         <span className="text-foreground-tertiary shrink-0 text-xs tabular-nums">
-          {selCount}/{leafIds.length}
+          {selCount}/{unitIds.length}
         </span>
       </div>
       <div className="flex flex-col gap-1.5 p-2 pl-3">
