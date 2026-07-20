@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   RiAlertLine,
   RiArrowDownSLine,
+  RiCloseLine,
   RiErrorWarningLine,
   RiHistoryLine,
   RiLockLine,
@@ -12,14 +13,17 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
+import { FilterPill } from '@/components/ui/filter-pill';
 import { Pagination } from '@/components/ui/pagination';
 import { RunStatusBadge } from '@/components/ui/run-status-badge';
+import { SelectItem } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
-import { ApiError, toApiError } from '@/lib/api/client';
+import { api, ApiError, toApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { formatDateTime } from '@/lib/data/format';
+import type { Agent } from '@/lib/data/agents';
 import {
   extractSelections,
   fetchRunDetail,
@@ -28,6 +32,7 @@ import {
   type ChatSelection,
   type RunDetail,
   type RunLogEntry,
+  type RunStatus,
   type RunSummary,
 } from '@/lib/live/runs-api';
 
@@ -45,6 +50,19 @@ function agentLabel(agentId: string): string {
   return WORKFLOW_LABEL[agentId] ?? agentId;
 }
 
+/** 상태 필터 옵션 — DB에 실제로 저장되는 런 상태만(RunStatusBadge 라벨과 동일 문구). */
+const STATUS_FILTER_OPTIONS: { value: RunStatus; label: string }[] = [
+  { value: 'running', label: '실행 중' },
+  { value: 'succeeded', label: '완료' },
+  { value: 'failed', label: '실패' },
+  { value: 'cancelled', label: '종료됨' },
+];
+
+interface AgentOption {
+  value: string;
+  label: string;
+}
+
 /**
  * 에이전트 실행 로깅 테이블 — 어떤 에이전트를 누가 언제 돌렸고 어떤 상태로 끝났는지,
  * 실패 시 어느 단계에서 멈췄는지. logs:read(admin+)만 열람(관리자는 전체, 백엔드가 스코프).
@@ -57,25 +75,68 @@ export function LogsClient() {
   const [page, setPage] = useState(1);
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<ApiError | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | RunStatus>('all');
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+  const filtersActive = statusFilter !== 'all' || agentFilter !== 'all';
 
-  const loadPage = useCallback(async (target: number) => {
-    setPhase('loading');
-    setError(null);
-    try {
-      const res = await fetchRuns({ limit: PAGE_SIZE, offset: (target - 1) * PAGE_SIZE });
-      setRows(res.runs);
-      setTotal(res.total);
-      setPage(target);
-      setPhase('ready');
-    } catch (err: unknown) {
-      setError(toApiError(err));
-      setPhase('error');
-    }
-  }, []);
+  // 필터 칩용 에이전트 옵션 — 실패해도 상태 필터만 남기고 무해히 강등한다.
+  useEffect(() => {
+    if (!canRead) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const agents = await api.get<Agent[]>('/agents');
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const options: AgentOption[] = [];
+        for (const a of agents) {
+          if (!a.workflowId || seen.has(a.workflowId)) continue;
+          seen.add(a.workflowId);
+          options.push({ value: a.workflowId, label: a.name });
+        }
+        setAgentOptions(options);
+      } catch {
+        setAgentOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canRead]);
 
+  const loadPage = useCallback(
+    async (target: number) => {
+      setPhase('loading');
+      setError(null);
+      try {
+        const res = await fetchRuns({
+          limit: PAGE_SIZE,
+          offset: (target - 1) * PAGE_SIZE,
+          agentId: agentFilter === 'all' ? undefined : agentFilter,
+          status: statusFilter === 'all' ? undefined : statusFilter,
+        });
+        setRows(res.runs);
+        setTotal(res.total);
+        setPage(target);
+        setPhase('ready');
+      } catch (err: unknown) {
+        setError(toApiError(err));
+        setPhase('error');
+      }
+    },
+    [agentFilter, statusFilter],
+  );
+
+  // 최초 로드 + 필터 변경 시 1페이지부터 재조회(loadPage 재생성이 트리거).
   useEffect(() => {
     if (canRead) loadPage(1);
   }, [canRead, loadPage]);
+
+  function resetFilters() {
+    setStatusFilter('all');
+    setAgentFilter('all');
+  }
 
   return (
     <div className="animate-page-enter flex flex-col gap-8">
@@ -91,55 +152,108 @@ export function LogsClient() {
           title="접근 권한이 없습니다"
           description="실행 로깅은 관리자 이상만 열람할 수 있습니다."
         />
-      ) : phase === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="로그 불러오는 중" />
-          실행 내역을 불러오는 중…
-        </div>
-      ) : phase === 'error' && rows.length === 0 ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="실행 내역을 불러오지 못했습니다"
-          description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
-          action={
-            <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
-              다시 시도
-            </Button>
-          }
-        />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={<RiHistoryLine size={18} aria-hidden />}
-          title="실행 내역이 없습니다"
-          description="아직 기록된 에이전트 실행이 없습니다."
-        />
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-            <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
-                <tr>
-                  <Th className="w-6">
-                    <span className="sr-only">펼치기</span>
-                  </Th>
-                  <Th>에이전트</Th>
-                  <Th>실행자</Th>
-                  <Th>실행시각</Th>
-                  <Th>상태</Th>
-                  <Th>실패 단계</Th>
-                  <Th>결과 요약</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((run) => (
-                  <RunRow key={run.id} run={run} />
-                ))}
-              </tbody>
-            </table>
+        <>
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+            <FilterPill
+              label="상태"
+              ariaLabel="상태 필터"
+              value={statusFilter}
+              active={statusFilter !== 'all'}
+              onValueChange={(v) => setStatusFilter(v as 'all' | RunStatus)}
+            >
+              <SelectItem value="all">전체</SelectItem>
+              {STATUS_FILTER_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </FilterPill>
+
+            <FilterPill
+              label="에이전트"
+              ariaLabel="에이전트 필터"
+              value={agentFilter}
+              active={agentFilter !== 'all'}
+              onValueChange={setAgentFilter}
+            >
+              <SelectItem value="all">전체</SelectItem>
+              {agentOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </FilterPill>
+
+            {filtersActive ? (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="text-foreground-tertiary hover:text-foreground-secondary inline-flex h-9 items-center gap-1 rounded-full px-2.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
+              >
+                <RiCloseLine size={14} aria-hidden />
+                초기화
+              </button>
+            ) : null}
           </div>
 
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
-        </div>
+          {phase === 'loading' ? (
+            <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
+              <Spinner size={18} label="로그 불러오는 중" />
+              실행 내역을 불러오는 중…
+            </div>
+          ) : phase === 'error' && rows.length === 0 ? (
+            <EmptyState
+              icon={<RiErrorWarningLine size={18} aria-hidden />}
+              title="실행 내역을 불러오지 못했습니다"
+              description={
+                error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')
+              }
+              action={
+                <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
+                  다시 시도
+                </Button>
+              }
+            />
+          ) : rows.length === 0 ? (
+            <EmptyState
+              icon={<RiHistoryLine size={18} aria-hidden />}
+              title="실행 내역이 없습니다"
+              description={
+                filtersActive
+                  ? '검색·필터 조건에 맞는 실행 내역이 없습니다.'
+                  : '아직 기록된 에이전트 실행이 없습니다.'
+              }
+            />
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
+                <table className="w-full min-w-[900px] text-left text-sm">
+                  <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
+                    <tr>
+                      <Th className="w-6">
+                        <span className="sr-only">펼치기</span>
+                      </Th>
+                      <Th>에이전트</Th>
+                      <Th>실행자</Th>
+                      <Th>실행시각</Th>
+                      <Th>상태</Th>
+                      <Th>실패 단계</Th>
+                      <Th>결과 요약</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((run) => (
+                      <RunRow key={run.id} run={run} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
+            </div>
+          )}
+        </>
       )}
     </div>
   );

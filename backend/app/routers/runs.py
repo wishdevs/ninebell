@@ -495,10 +495,12 @@ async def delete_template(template_id: str, user: CurrentUser):
 async def list_runs(
     user: CurrentUser,
     agentId: str | None = None,
+    status: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ):
-    """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우 필터.
+    """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우, status 로 실행
+    상태 필터.
 
     스코프: logs:read(관리자)는 전체 유저의 run 을, 그 외는 본인 것만 본다(감사와 달리
     로깅은 관리자가 전체를 봐야 보완 가능)."""
@@ -507,9 +509,9 @@ async def list_runs(
     # 관리자(logs:read)는 전체 조회(user_id=None), 일반 사용자는 소유 스코프.
     scope_user_id = None if user_has_permission(user, LOGS_READ) else user.id
     runs = await store.list_runs(
-        user_id=scope_user_id, agent_id=agentId, limit=limit, offset=offset
+        user_id=scope_user_id, agent_id=agentId, status=status, limit=limit, offset=offset
     )
-    total = await store.count_runs(user_id=scope_user_id, agent_id=agentId)
+    total = await store.count_runs(user_id=scope_user_id, agent_id=agentId, status=status)
     return {"runs": [_run_summary(r) for r in runs], "total": total}
 
 
