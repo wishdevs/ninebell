@@ -4,8 +4,8 @@ code_sync._sync_org 가 erp_code_catalog(미리보기)를 upsert 한 뒤, 실제
 org_units 로도 ERP 트리를 **깊이 그대로** 미러링한다(본부>그룹>…>팀 중간 계층 보존).
 ERP 에는 안정 코드가 없어 **정규화 라벨 경로**로 기존 행과 잇고(재편돼도 같은 경로→같은 행),
 신규만 결정적 id(`erp-<sha1>`)로 만든다. 기존 행의 id 는 보존하고(사용자/에이전트 링크 유지),
-cost_type 도 원칙적으로 보존한다 — 다만 말단(leaf) 팀은 카드 자동화 (판)/(제) 규칙상 반드시
-비용구분이 있어야 하므로 없으면 제조원가로 보정한다("재편되면 기존의 것을 따라간다").
+cost_type 도 보존한다 — 재편·개명된 팀은 기존 동명 팀의 비용구분을 상속하고, 상속할 값이 없는
+새 팀은 None(미선택)으로 두어 관리 UI 가 '선택 필요'로 노출한다(제조원가로 임의 보정하지 않는다).
 ERP 트리에 없는 로컬 조직은 삭제한다(미러링 — 사용자는 org_unit_id=NULL, 에이전트 접근은 제거).
 """
 
@@ -19,7 +19,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OrgUnit, User
-from app.models.org_unit import COST_TYPE_MFG, AgentOrgAccess
+from app.models.org_unit import AgentOrgAccess
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,9 @@ def _existing_path(row: OrgUnit, by_id: dict[str, OrgUnit]) -> tuple[str, ...]:
     return tuple(reversed(labels))
 
 
-def _apply_match(match: OrgUnit, label: str, parent_id: str | None, order: int, is_leaf: bool) -> bool:
-    """매칭된 기존 행에 라벨·부모·정렬을 반영. cost_type 은 보존(단, leaf+None 이면 제조원가 보정).
+def _apply_match(match: OrgUnit, label: str, parent_id: str | None, order: int) -> bool:
+    """매칭된 기존 행에 라벨·부모·정렬을 반영. cost_type 은 그대로 보존한다 — 말단 팀의 None(미선택)도
+    유지해, 임포트로 새로 편입된 팀을 관리 UI 가 '선택 필요'로 표시하고 사용자가 판/제를 고르게 한다.
 
     id 는 절대 바꾸지 않는다(사용자/에이전트 링크 유지). 실제로 무언가 바뀌면 True.
     """
@@ -64,9 +65,6 @@ def _apply_match(match: OrgUnit, label: str, parent_id: str | None, order: int, 
         changed = True
     if match.sort_order != order:
         match.sort_order = order
-        changed = True
-    if is_leaf and match.cost_type is None:  # 말단 팀은 비용구분 필수 — 없으면 제조원가.
-        match.cost_type = COST_TYPE_MFG
         changed = True
     return changed
 
@@ -107,14 +105,15 @@ async def apply_org_tree(session: AsyncSession, nodes: list[dict]) -> dict:
         match = existing_by_path.get(npath)
         if match is not None:
             actual_id = match.id
-            if _apply_match(match, node["label"], parent_id, order, is_leaf):
+            if _apply_match(match, node["label"], parent_id, order):
                 updated += 1
             else:
                 unchanged += 1
         else:
             actual_id = _erp_id("|".join(npath))
-            # 중간(그룹/본부)은 cost_type=None, 말단 팀은 기존 동명 팀의 비용구분(없으면 제조원가).
-            cost_type = None if not is_leaf else (costtype_by_label.get(npath[-1]) or COST_TYPE_MFG)
+            # 중간(그룹/본부)은 cost_type=None. 말단 팀은 기존 동명 팀의 비용구분을 상속하되,
+            # 상속할 값이 없으면 None(미선택) — 신규 팀에 제조원가를 임의 기본값으로 넣지 않는다.
+            cost_type = None if not is_leaf else costtype_by_label.get(npath[-1])
             session.add(
                 OrgUnit(
                     id=actual_id,

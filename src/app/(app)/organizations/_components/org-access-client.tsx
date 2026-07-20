@@ -133,10 +133,7 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
     setDraft({}); // 새 목록(서버 갱신·불러오기) 도착 시 초안 리셋.
   }, [orgUnits]);
 
-  const serverCost = useMemo(
-    () => new Map(orgUnits.map((u) => [u.id, u.costType])),
-    [orgUnits],
-  );
+  const serverCost = useMemo(() => new Map(orgUnits.map((u) => [u.id, u.costType])), [orgUnits]);
   const dirtyIds = Object.keys(draft);
   const dirty = dirtyIds.length > 0;
   useUnsavedGuard(dirty); // 변경 있으면 새로고침·앱내 이동 시 이탈 확인.
@@ -158,6 +155,9 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
   };
 
   const costOf = (unit: OrgUnit): OrgUnitCostType | null => draft[unit.id] ?? unit.costType;
+  const isStaged = (id: string): boolean => id in draft; // 초안에 담긴(변경된) 팀인지.
+  // 미선택(effective cost=null) 말단 팀 수 — 상단 안내·발견성용(신규 편입 팀).
+  const unsetCount = leafTeamUnits(forest).filter((u) => costOf(u) === null).length;
 
   const save = async () => {
     setSaving(true);
@@ -177,11 +177,51 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-muted-foreground text-[length:var(--text-body-sm)]">
-          조직 구조는 ERP 조직도에서 동기화됩니다. 여기서는 각 팀의 비용구분만 설정할 수 있습니다.
-        </p>
-        <ErpOrgSync onApplied={onOrgsChanged} />
+      {/* 상단 툴바 — 안내·ERP 불러오기·저장 컨트롤을 한 줄에. 저장 바는 항상 상단 노출(하단 sticky
+          제거 — 플로팅 채팅 버튼과 겹치지 않게). 저장/되돌리기는 항상 렌더하되 변경 없음·저장 중엔 비활성. */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-muted-foreground text-[length:var(--text-body-sm)] min-w-0 flex-1">
+            조직 구조는 ERP 조직도에서 동기화됩니다. 여기서는 각 팀의 비용구분만 설정할 수 있습니다.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ErpOrgSync onApplied={onOrgsChanged} />
+            <span className="bg-border-subtle mx-0.5 hidden h-5 w-px sm:block" aria-hidden />
+            {dirty ? (
+              <span className="text-foreground-secondary text-xs whitespace-nowrap">
+                <b className="text-foreground tabular-nums">{dirtyIds.length}건</b> 변경
+              </span>
+            ) : null}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setDraft({})}
+              disabled={!dirty || saving}
+            >
+              되돌리기
+            </Button>
+            <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}>
+              {saving ? (
+                <>
+                  <Spinner size={14} /> 저장 중…
+                </>
+              ) : (
+                '저장'
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {/* 미선택(신규 편입 팀) 안내 — 발견 가능하도록 상단에 건수 노출. */}
+        {unsetCount > 0 ? (
+          <div className="border-warning/40 bg-warning/5 text-warning flex items-center gap-2 rounded-[var(--radius-md)] border border-dashed px-3 py-2 text-xs">
+            <RiErrorWarningLine size={14} aria-hidden />
+            <span>
+              비용구분 <b className="tabular-nums">미선택 {unsetCount}개</b> — 새로 편입된 팀의
+              판관비/제조원가를 선택하세요.
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {forest.length === 0 ? (
@@ -191,48 +231,19 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
           description="상단의 ‘ERP 조직도 불러오기’로 조직 구조를 가져오세요."
         />
       ) : (
-        <>
-          <div className="border-border bg-surface rounded-[var(--radius-lg)] border p-2 shadow-[var(--shadow-card)]">
-            <ul className="flex flex-col">
-              {forest.map((node) => (
-                <OrgTreeNode
-                  key={node.unit.id}
-                  node={node}
-                  costOf={costOf}
-                  onCostType={stageCostType}
-                />
-              ))}
-            </ul>
-          </div>
-
-          {/* 저장 바 — 변경이 있을 때만 하단 고정 노출. */}
-          {dirty ? (
-            <div className="border-border bg-surface/95 sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border px-4 py-3 shadow-[var(--shadow-card)] backdrop-blur">
-              <p className="text-foreground-secondary text-sm">
-                <b className="text-foreground">{dirtyIds.length}건</b> 변경 · 저장하지 않음
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setDraft({})}
-                  disabled={saving}
-                >
-                  되돌리기
-                </Button>
-                <Button size="sm" onClick={() => void save()} disabled={saving}>
-                  {saving ? (
-                    <>
-                      <Spinner size={14} /> 저장 중…
-                    </>
-                  ) : (
-                    '저장'
-                  )}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </>
+        <div className="border-border bg-surface rounded-[var(--radius-lg)] border p-2 shadow-[var(--shadow-card)]">
+          <ul className="flex flex-col">
+            {forest.map((node) => (
+              <OrgTreeNode
+                key={node.unit.id}
+                node={node}
+                costOf={costOf}
+                isStaged={isStaged}
+                onCostType={stageCostType}
+              />
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -245,19 +256,33 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
 function OrgTreeNode({
   node,
   costOf,
+  isStaged,
   onCostType,
 }: {
   node: OrgUnitNode;
   costOf: (unit: OrgUnit) => OrgUnitCostType | null;
+  isStaged: (id: string) => boolean;
   onCostType: (id: string, costType: OrgUnitCostType) => void;
 }) {
   const isTeam = isLeafTeam(node); // leaf + parentId!==null → 비용구분 대상.
   const hasChildren = node.children.length > 0;
   const isHq = node.unit.parentId === null;
+  const effectiveCost = isTeam ? costOf(node.unit) : null;
+  const unset = isTeam && effectiveCost === null; // 비용구분 미선택(신규 편입) — 주의(amber) 표시.
+  const staged = isTeam && isStaged(node.unit.id); // 초안에 담긴 변경 — accent '변경됨' 표시.
 
   return (
     <li>
-      <div className="group hover:bg-muted/40 flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 transition-colors">
+      <div
+        className={cn(
+          'group flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 transition-colors',
+          unset
+            ? 'bg-warning/5 ring-warning/30 ring-1 ring-inset'
+            : staged
+              ? 'bg-accent/5 ring-accent/20 hover:bg-accent/10 ring-1 ring-inset'
+              : 'hover:bg-muted/40',
+        )}
+      >
         <span
           aria-hidden
           className={cn(
@@ -286,11 +311,25 @@ function OrgTreeNode({
           {node.unit.label}
         </span>
         {isTeam ? (
-          <CostTypeToggle
-            label={node.unit.label}
-            value={costOf(node.unit)}
-            onChange={(ct) => onCostType(node.unit.id, ct)}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {unset ? (
+              <span className="bg-warning/10 text-warning inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold">
+                <RiErrorWarningLine size={11} aria-hidden />
+                선택 필요
+              </span>
+            ) : staged ? (
+              <span className="text-accent inline-flex items-center gap-1 text-[10px] font-semibold">
+                <span className="bg-accent size-1.5 rounded-full" aria-hidden />
+                변경됨
+              </span>
+            ) : null}
+            <CostTypeToggle
+              label={node.unit.label}
+              value={effectiveCost}
+              attention={unset}
+              onChange={(ct) => onCostType(node.unit.id, ct)}
+            />
+          </div>
         ) : hasChildren ? (
           <span className="text-foreground-tertiary bg-muted shrink-0 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums">
             {descendantLeafTeamIds(node).length}팀
@@ -300,7 +339,13 @@ function OrgTreeNode({
       {hasChildren ? (
         <ul className="border-border-subtle ml-[19px] flex flex-col border-l pl-2">
           {node.children.map((child) => (
-            <OrgTreeNode key={child.unit.id} node={child} costOf={costOf} onCostType={onCostType} />
+            <OrgTreeNode
+              key={child.unit.id}
+              node={child}
+              costOf={costOf}
+              isStaged={isStaged}
+              onCostType={onCostType}
+            />
           ))}
         </ul>
       ) : null}
@@ -312,17 +357,22 @@ function OrgTreeNode({
 function CostTypeToggle({
   label,
   value,
+  attention = false,
   onChange,
 }: {
   label: string;
   value: OrgUnitCostType | null;
+  attention?: boolean;
   onChange: (ct: OrgUnitCostType) => void;
 }) {
   return (
     <div
       role="group"
       aria-label={`${label} 비용구분`}
-      className="border-border bg-surface inline-flex shrink-0 items-center rounded-full border p-0.5"
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-full border p-0.5',
+        attention ? 'border-warning/60 bg-warning/5' : 'border-border bg-surface',
+      )}
     >
       {COST_TYPE_OPTIONS.map((ct) => {
         const active = value === ct;

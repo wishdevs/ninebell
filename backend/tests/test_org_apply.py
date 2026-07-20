@@ -51,7 +51,7 @@ async def _seed_id(sm, label: str) -> str:
 
 # ── apply_org_tree — 다단계 upsert ─────────────────────────────────────────────
 async def test_apply_multilevel_chain_and_new_costtypes(sm):
-    """기존 본부(경영본부) 밑에 신설 그룹→팀 부모체인 생성. 신규 말단=제조원가·중간=None."""
+    """기존 본부(경영본부) 밑에 신설 그룹→팀 부모체인 생성. 신규 말단=None(미선택)·중간=None."""
     seed_hq_id = await _seed_id(sm, "경영본부")  # 시드 본부(재사용 대상)
     # 신설 라벨을 써 '신규 생성' 동작을 검증한다(시드에 이미 있는 재무자원관리그룹/자재팀은 재사용이라 added 아님).
     nodes = [
@@ -72,7 +72,7 @@ async def test_apply_multilevel_chain_and_new_costtypes(sm):
         assert grp.parent_id == hq.id  # 중간 그룹이 본부 밑에
         assert grp.cost_type is None  # 중간 계층 = 비용구분 없음
         assert team.parent_id == grp.id  # 말단 팀이 그룹 밑에(전체 깊이 보존)
-        assert team.cost_type == "제조원가"  # 말단 팀 = 제조원가
+        assert team.cost_type is None  # 신규 말단 팀 = 미선택(None) — 제조원가 임의 기본값 아님
 
     assert summary["total"] == 3
     assert "신설그룹" in summary["added"]
