@@ -19,6 +19,7 @@ from app.core.deps import DbSession, require_role_min
 from app.core.permissions import ROLE_ADMIN, role_rank
 from app.models import Agent, AgentOrgAccess, OrgUnit, User
 from app.models.org_unit import COST_TYPES
+from app.services.org_apply import _has_own_member_ids
 
 router = APIRouter(tags=["org-units"])
 
@@ -67,6 +68,16 @@ def _validate_cost_type(cost: str | None) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"비용구분은 {'/'.join(COST_TYPES)} 중 하나여야 합니다.",
         )
+
+
+async def _own_member_ids(db: DbSession) -> set[str]:
+    """직속 인원이 있는 org_unit id 집합 — 비용구분·에이전트 접근 대상.
+
+    팀(leaf)뿐 아니라 직속 인원을 가진 중간 그룹·leaf 본부(재무자원관리그룹·임원실·중국법인 등)도 포함.
+    순수 컨테이너(직속 0, 예: 경영본부)는 제외. 판별은 org_apply 와 동일(_has_own_member_ids).
+    """
+    org_units = (await db.execute(select(OrgUnit))).scalars().all()
+    return _has_own_member_ids(org_units)
 
 
 # ── 조직구분 CRUD ─────────────────────────────────────────────────────────────
@@ -133,10 +144,10 @@ async def update_org_unit(
         org.label = label
     if body.costType is not None:
         _validate_cost_type(body.costType)
-        if org.parent_id is None:
+        if org.id not in await _own_member_ids(db):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="비용구분은 팀에만 지정할 수 있습니다.",
+                detail="비용구분은 소속 인원이 있는 조직(팀·직속 인원 있는 그룹)에만 지정할 수 있습니다.",
             )
         org.cost_type = body.costType
     await db.commit()
@@ -191,16 +202,12 @@ async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
     access_configured=false 면 '최초 모두 선택'으로 전체 조직구분 id(+미지정)를 반환한다.
     '미지정'(조직 미배정 사용자 허용)은 ORG_NONE_SENTINEL 로 orgUnitIds 끝에 표현한다.
     """
-    # 접근 배정은 팀(leaf, parent_id IS NOT NULL)에만. 본부는 그룹핑용이라 제외.
-    all_org_ids = list(
-        (
-            await db.execute(
-                select(OrgUnit.id)
-                .where(OrgUnit.parent_id.is_not(None))
-                .order_by(OrgUnit.sort_order.asc())
-            )
-        ).scalars()
+    # 접근 배정은 직속 인원이 있는 노드(팀 + 직속인원 있는 그룹/leaf 본부)에만. 순수 컨테이너는 제외.
+    _rows = (
+        (await db.execute(select(OrgUnit).order_by(OrgUnit.sort_order.asc()))).scalars().all()
     )
+    _own = _has_own_member_ids(_rows)
+    all_org_ids = [o.id for o in _rows if o.id in _own]
     agents = (
         (await db.execute(select(Agent).order_by(Agent.created_at.asc()))).scalars().all()
     )
@@ -233,10 +240,8 @@ async def set_agent_access(
     ).scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
-    # 팀(leaf)만 유효한 접근 대상 — 본부 id 로는 접근을 줄 수 없다.
-    valid_ids = set(
-        (await db.execute(select(OrgUnit.id).where(OrgUnit.parent_id.is_not(None)))).scalars()
-    )
+    # 직속 인원이 있는 노드만 유효한 접근 대상 — 순수 컨테이너(본부)엔 접근을 줄 수 없다.
+    valid_ids = await _own_member_ids(db)
     allow_unassigned = ORG_NONE_SENTINEL in body.orgUnitIds
     requested = [oid for oid in dict.fromkeys(body.orgUnitIds) if oid in valid_ids]
     # 비어있지 않은 요청인데 전부 무효(미지정 센티널도 없음) = 클라 목록이 오래됨 → 조용히 전체 해제하지 말고 거부(리뷰 #4).

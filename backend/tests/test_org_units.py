@@ -23,6 +23,21 @@ def _leaves(rows: list[dict]) -> list[dict]:
     return [o for o in rows if o["parentId"] is not None and o["id"] not in parent_ids]
 
 
+def _own_members(rows: list[dict]) -> list[dict]:
+    """직속 인원이 있는 노드 — memberCount − sum(직속자식 memberCount) > 0(팀 + 직속인원 있는 그룹/본부)."""
+    child_sum: dict[str, int] = {}
+    for o in rows:
+        if o["parentId"]:
+            child_sum[o["parentId"]] = child_sum.get(o["parentId"], 0) + (o.get("memberCount") or 0)
+    return [o for o in rows if (o.get("memberCount") or 0) - child_sum.get(o["id"], 0) > 0]
+
+
+def _containers(rows: list[dict]) -> list[dict]:
+    """직속 인원이 없는 순수 컨테이너(예: 경영본부 31=자식합)."""
+    own = {o["id"] for o in _own_members(rows)}
+    return [o for o in rows if o["id"] not in own]
+
+
 async def _org_rows(client) -> list[dict]:
     """admin 인증 상태에서 GET /org-units 목록(camelCase dict)을 반환."""
     return (await client.get("/org-units")).json()
@@ -76,15 +91,15 @@ async def test_agent_access_unconfigured_returns_all(client, make_user, auth_as)
     uid = await make_user("u-admin3", "admin")
     auth_as(uid)
     rows = await _org_rows(client)
-    child_ids = [o["id"] for o in rows if o["parentId"] is not None]  # 접근 대상(본부 제외)
-    root_ids = {o["id"] for o in _roots(rows)}
+    own_ids = [o["id"] for o in _own_members(rows)]  # 접근 대상 = 직속 인원 있는 노드
+    container_ids = {o["id"] for o in _containers(rows)}
     r = await client.get("/agent-access")
     assert r.status_code == 200
     card = next(a for a in r.json() if a["agentId"] == "card-chat")
     # access_configured=false(시드 기본) → 전체 접근대상 + '미지정' 허용.
-    assert len(card["orgUnitIds"]) == len(child_ids) + 1
+    assert len(card["orgUnitIds"]) == len(own_ids) + 1
     assert card["orgUnitIds"][-1] == "__none__"
-    assert not (root_ids & set(card["orgUnitIds"]))  # 본부(root)는 접근 대상 아님
+    assert not (container_ids & set(card["orgUnitIds"]))  # 순수 컨테이너는 접근 대상 아님
 
 
 async def test_set_agent_access_replaces_and_marks_configured(client, make_user, auth_as):
@@ -176,10 +191,15 @@ async def test_invalid_cost_type_rejected(client, make_user, auth_as):
     assert r.status_code == 422
 
 
-async def test_cost_type_on_hq_rejected(client, make_user, auth_as):
-    """본부(parent)에는 비용구분을 지정할 수 없다."""
+async def test_cost_type_on_container_rejected_own_member_allowed(client, make_user, auth_as):
+    """순수 컨테이너(직속 인원 0)엔 비용구분 불가 — 직속 인원 있는 노드(팀·그룹)엔 허용."""
     uid = await make_user("u-admin12", "admin")
     auth_as(uid)
-    hq = _roots(await _org_rows(client))[0]["id"]  # 본부(top-level)
-    r = await client.patch(f"/org-units/{hq}", json={"costType": "판관비"})
+    rows = await _org_rows(client)
+    container = _containers(rows)[0]["id"]  # 예: 경영본부(31=자식합)
+    r = await client.patch(f"/org-units/{container}", json={"costType": "판관비"})
     assert r.status_code == 422
+    member = _own_members(rows)[0]["id"]  # 직속 인원 있는 노드
+    r2 = await client.patch(f"/org-units/{member}", json={"costType": "제조원가"})
+    assert r2.status_code == 200
+    assert r2.json()["costType"] == "제조원가"
