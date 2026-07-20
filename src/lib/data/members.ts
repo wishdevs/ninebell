@@ -23,6 +23,29 @@ export const MEMBER_ROLE_LABEL: Record<Role, string> = {
   user: '사용자',
 };
 
+/** 셀렉트/필터용 전체 역할 옵션. */
+export const MEMBER_ROLE_OPTIONS: readonly Role[] = ['super_admin', 'admin', 'user'];
+
+/** 셀렉트/필터용 전체 상태 옵션. */
+export const MEMBER_STATUS_OPTIONS: readonly MemberStatus[] = ['active', 'invited', 'suspended'];
+
+/** 역할 읽기 전용 배지 톤(StatusPill variant='custom'). */
+export const MEMBER_ROLE_BADGE: Record<Role, string> = {
+  super_admin: 'bg-accent/10 text-accent',
+  admin: 'bg-warning/10 text-warning',
+  user: 'bg-muted text-muted-foreground',
+};
+
+/** 상태 → StatusPill 톤 매핑. */
+export const MEMBER_STATUS_VARIANT: Record<MemberStatus, 'success' | 'info' | 'danger'> = {
+  active: 'success',
+  invited: 'info',
+  suspended: 'danger',
+};
+
+/** 조직구분 셀렉트/필터의 '미지정' 센티넬(Select 값은 문자열이라야 하므로 null 대체). */
+export const ORG_NONE = '__none__';
+
 export interface WorkspaceMember {
   id: string;
   name: string;
@@ -35,4 +58,10 @@ export interface WorkspaceMember {
   joinedAt: string;
   /** 소속 조직구분 id(에이전트 실행 조직접근 게이트 기준). 미지정이면 null. */
   orgUnitId: string | null;
+  /** 옴니솔 로그인 식별자 — 상세 드로워 표시용(구버전 응답엔 없을 수 있어 optional). */
+  omnisolUserid?: string;
+  /** 부서(ERP 문자열, 조직구분과 별개). 없으면 null/undefined. */
+  department?: string | null;
+  /** 마지막 수정 시각 — 상세 드로워 표시용. */
+  updatedAt?: string;
 }

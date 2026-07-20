@@ -245,6 +245,61 @@ samp {
   animation: page-enter var(--duration-normal) var(--ease-out) both;
 }
 
+/* ==========================================================================
+   Drawer enter animation — panel slides in from the right edge
+   ========================================================================== */
+@keyframes drawer-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-drawer-in-right {
+  animation: drawer-in-right var(--duration-normal) var(--ease-out) both;
+}
+/* Drawer exit — panel slides back out to the right edge (open=false, still mounted
+   during the close window before unmount). */
+@keyframes drawer-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+.animate-drawer-out-right {
+  animation: drawer-out-right var(--duration-normal) var(--ease-out) both;
+}
+/* Overlay fade — dims/undims behind the drawer in step with the panel. */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes overlay-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.animate-overlay-in {
+  animation: overlay-fade-in var(--duration-normal) var(--ease-out) both;
+}
+.animate-overlay-out {
+  animation: overlay-fade-out var(--duration-normal) var(--ease-out) both;
+}
+
 /* ETA 타임라인 — 실행 중 세그먼트의 shimmer(작업 중 시각 신호). AI 추천처럼 화면 변화가
    없는 긴 자동 구간이 멈춰 보이지 않게 한다. 컴포지터 속성(transform)만 사용, reduced-motion
    은 아래 전역 블록이 차단한다. */
