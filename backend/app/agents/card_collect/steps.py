@@ -574,6 +574,26 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
             "clicks": clicks, "elapsed_ms": int((_t.monotonic() - t0) * 1000)}
 
 
+# 저장(F7) 거부를 알리는 오류/에러 모달 판별. 실측 모달 title 은 '오류'뿐 아니라 '에러'
+# (회계일 마감 등)로도 뜬다 — 둘 다 잡아야 미저장을 성공으로 오판하지 않는다.
+_ERR_MODAL_TITLE_HINTS = ("오류", "에러", "경고", "실패")
+# 마감된 회계월에 저장 시도 — 재시도로 못 고치는 확정 실패(관리자 마감 해제 필요).
+_CLOSED_PERIOD_HINTS = ("회계일이 마감", "마감되어", "마감된")
+
+
+def _is_closed_period(m: dict) -> bool:
+    blob = f"{m.get('title') or ''} {m.get('text') or ''}"
+    return any(h in blob for h in _CLOSED_PERIOD_HINTS)
+
+
+def _is_error_modal(m: dict) -> bool:
+    """오류/에러/경고 계열 저장거부 모달이면 True — 성공 오판 방지의 단일 기준."""
+    title = (m.get("title") or "").strip()
+    if any(h in title for h in _ERR_MODAL_TITLE_HINTS):
+        return True
+    return _is_closed_period(m)
+
+
 async def save_document(page: Any, confirm: bool) -> dict:
     """결의서 저장(F7) + 확인 모달 처리 + 관찰 결과 반환. confirm=True 일 때만 실행.
 
@@ -605,7 +625,16 @@ async def save_document(page: Any, confirm: bool) -> dict:
         modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
         if modals:
             modals_seen.extend(modals)
-            for label in ("예", "확인"):
+            # 오류/에러 모달(회계일 마감 등)은 확정 실패 — 닫고 즉시 종료(성공 오판·헛대기 방지).
+            # 이 모달은 '예/확인'이 없고 '닫기'만 있어, 아래 성공 확인 루프로는 안 닫힌다.
+            if any(_is_error_modal(m) for m in modals):
+                for label in ("확인", "닫기"):
+                    btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
+                    if btn:
+                        await page.mouse.click(btn["x"], btn["y"])
+                        break
+                break
+            for label in ("예", "확인", "닫기"):
                 btn = await page.evaluate(js.MODAL_BTN_BOX_JS, label)
                 if btn:
                     await page.mouse.click(btn["x"], btn["y"])
@@ -627,8 +656,14 @@ async def save_document(page: Any, confirm: bool) -> dict:
     # 실전 실측(2026-07-02): 저장 검증 실패 시 '[오류] 승인 건 계정과 다릅니다…' 류의
     # 오류 모달이 뜬다 — 확인만 누르고 성공 보고하면 미저장 가짜 성공. 오류 모달이
     # 하나라도 관찰되면 실패로 반환해 사용자가 원인(모달 전문)을 볼 수 있게 한다.
-    errors = [m for m in modals_seen if "오류" in (m.get("title") or "")]
+    errors = [m for m in modals_seen if _is_error_modal(m)]
     if errors:
         detail = " / ".join((m.get("text") or m.get("title") or "")[:200] for m in errors[:3])
-        return {"ok": False, "reason": f"저장(F7)이 ERP 오류로 거부됨: {detail}", "modals_seen": modals_seen[:6]}
+        closed = any(_is_closed_period(m) for m in errors)
+        return {
+            "ok": False,
+            "reason": f"저장(F7)이 ERP 오류로 거부됨: {detail}",
+            "modals_seen": modals_seen[:6],
+            "closed_period": closed,
+        }
     return {"ok": True, "via": "F7", "modals_seen": modals_seen[:6], "pre_modals": pre[:4]}

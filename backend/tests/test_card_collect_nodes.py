@@ -782,6 +782,108 @@ def test_save_guidance_classifies_non_account_failures():
     # 일반 ERP 오류 → 사유 원문 + '고쳐 다시 저장' 조치.
     g3 = _save_guidance([], "저장(F7)이 ERP 오류로 거부됨: 예산 잔액 부족")
     assert "예산 잔액 부족" in g3 and "다시 저장" in g3
+    # 회계일 마감 → 재시도 무의미, 관리자 마감 해제/타 회계월 안내.
+    g4 = _save_guidance([], "저장(F7)이 ERP 오류로 거부됨: 회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.")
+    assert "마감" in g4 and "마감 해제" in g4 and "재시도해도" in g4
+
+
+def test_is_error_modal_matches_error_title_and_closed_period():
+    """저장거부 모달 판별 — title '오류'뿐 아니라 '에러', 그리고 마감 문구도 잡는다."""
+    assert steps._is_error_modal({"title": "오류", "text": "승인 건 계정과 다릅니다."})
+    assert steps._is_error_modal({"title": "에러", "text": "회계일이 마감되어 추가, 수정, 삭제할 수 없습니다."})
+    # 마감 문구는 title 이 밋밋해도(예: 알림) text 로 잡는다.
+    assert steps._is_error_modal({"title": "알림", "text": "회계일이 마감되어 삭제할 수 없습니다."})
+    assert steps._is_closed_period({"title": "에러", "text": "회계일이 마감되어 삭제할 수 없습니다."})
+    # 성공/일반 확인 모달은 오탐하지 않는다.
+    assert not steps._is_error_modal({"title": "확인", "text": "저장하시겠습니까?"})
+
+
+async def test_save_document_treats_closed_period_modal_as_failure(monkeypatch):
+    """회계일 마감 '에러' 모달을 성공으로 오판하지 않고 ok:False·closed_period 로 반환한다."""
+    from app.agents.card_collect import js
+
+    async def _no_pre(page, rounds=3):
+        return []
+
+    monkeypatch.setattr(steps, "dismiss_blocking_modals", _no_pre)
+
+    class _Kbd:
+        def __init__(self):
+            self.pressed = []
+
+        async def press(self, k):
+            self.pressed.append(k)
+
+    class _Mouse:
+        def __init__(self):
+            self.clicks = []
+
+        async def click(self, x, y):
+            self.clicks.append((x, y))
+
+    class _Page:
+        def __init__(self):
+            self.keyboard = _Kbd()
+            self.mouse = _Mouse()
+            self._closed = False
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        async def evaluate(self, js_str, *args):
+            if js_str == js.CARD_WIN_EXISTS_JS:
+                return False
+            if js_str == js.VALIDATION_TOAST_JS:
+                return []
+            if js_str == js.MODALS_SNAPSHOT_JS:
+                if self._closed:
+                    return []
+                return [{
+                    "title": "에러",
+                    "text": "회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.",
+                    "buttons": ["닫기"],
+                }]
+            if js_str == js.MODAL_BTN_BOX_JS:
+                if args and args[0] == "닫기":
+                    self._closed = True
+                    return {"x": 10, "y": 20, "title": "에러"}
+                return None
+            return None
+
+    page = _Page()
+    out = await steps.save_document(page, confirm=True)
+    assert out["ok"] is False
+    assert out.get("closed_period") is True
+    assert "회계일이 마감" in out["reason"]
+    assert page.keyboard.pressed == ["F7"]  # F7 은 눌렀지만 저장은 거부됨
+    assert page.mouse.clicks  # '닫기'로 에러 모달 정리(헛대기 방지)
+
+
+async def test_save_final_closed_period_is_terminal_no_retry(monkeypatch):
+    """마감월 저장 거부는 재시도(그리드 재선택)를 타지 않고 즉시 사유+조치로 종료한다."""
+
+    async def _reject(page, confirm):
+        return {
+            "ok": False,
+            "reason": "저장(F7)이 ERP 오류로 거부됨: 회계일이 마감되어 추가, 수정, 삭제할 수 없습니다.",
+            "closed_period": True,
+        }
+
+    monkeypatch.setattr(steps, "save_document", _reject)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+
+    # save_retries=0, 재시도 여력이 있어도(MAX>=1) 마감건은 재시도하지 않는다.
+    out = await make_save_final_node()(
+        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
+    )
+    assert out["retry_save"] is False
+    assert "save_retries" not in out  # 재시도 신호를 켜지 않음
+    assert "마감 해제" in out["error"] and "재시도해도" in out["error"]
+    assert "0회 재시도 후 포기" not in out["error"]  # 확정 실패엔 '재시도 후 포기' 접두 없음
 
 
 async def test_save_final_giveup_includes_guidance(monkeypatch):

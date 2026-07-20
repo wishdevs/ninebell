@@ -85,6 +85,13 @@ def _save_guidance(issues: list[dict], reason: str) -> str:
         )
     # 구조화되지 않은 거부 — 사유 문자열로 유형을 분류해 '무엇이 잘못됐고 무엇을 고칠지'를 준다.
     r = reason or ""
+    if any(k in r for k in ("회계일이 마감", "마감되어", "마감된")):
+        return (
+            f"저장이 거부됐습니다 — **해당 회계일이 마감**되어 추가·수정·삭제할 수 없습니다.\n"
+            f"(ERP 사유: {reason})\n\n"
+            "이 건은 재시도해도 동일하게 거부됩니다. 옴니솔(회계) 관리자에게 **해당 월 마감 해제**를 "
+            "요청하거나, 마감되지 않은 회계월로 처리해야 합니다."
+        )
     if any(k in r for k in ("필수 값", "필수값", "입력되지 않은", "검증 실패")):
         return (
             f"저장이 거부됐습니다 — **필수값이 비어 있는 행**이 있습니다.\n(ERP 사유: {reason})\n\n"
@@ -143,8 +150,10 @@ def make_save_final_node():
             reason = r.get("reason") or str(r)
             retries = state.get("save_retries", 0)
             issues = _parse_save_rejections(reason, state.get("rows_list") or [])
+            # 회계일 마감 등은 재시도로 못 고치는 확정 실패 — 그리드 재선택을 건너뛰고 즉시 사유를 알린다.
+            terminal = bool(r.get("closed_period"))
             # ERP 거부(계정 불일치 등)는 재선택으로 고칠 수 있다 — 상한까지 그리드로 되돌린다.
-            if retries < MAX_SAVE_RETRIES:
+            if not terminal and retries < MAX_SAVE_RETRIES:
                 await emit_chat(
                     events,
                     chat_id="cc-retry",
@@ -162,10 +171,12 @@ def make_save_final_node():
                     "save_error_msg": reason,
                     "save_error_issues": issues,
                 }
-            # 최종 포기 — 원문 사유만 남기지 말고 '왜 실패했고 무엇을 고칠지' 조치까지 결과에 남긴다
+            # 최종 실패 — 원문 사유만 남기지 말고 '왜 실패했고 무엇을 고칠지' 조치까지 결과에 남긴다
             #  (로깅 resultSummary 로 사용자가 원인·조치를 바로 볼 수 있게. 재시도 중 안내와 동일 본문).
+            #  재시도를 실제로 소진한 경우에만 '재시도 후 포기' 접두 — 확정 실패(마감 등)엔 붙이지 않는다.
+            prefix = f"저장 실패({retries}회 재시도 후 포기).\n" if retries else ""
             return {
-                "error": f"저장 실패({retries}회 재시도 후 포기).\n" + _save_guidance(issues, reason),
+                "error": prefix + _save_guidance(issues, reason),
                 "retry_save": False,
             }
         seen = r.get("modals_seen") or []
