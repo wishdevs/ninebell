@@ -12,39 +12,25 @@ import { errorMessage, updateMe } from '@/lib/api/client';
 import { MEMBER_ROLE_LABEL } from '@/lib/data/members';
 
 /**
- * 계정 설정 폼 — 본인의 이름·부서·이메일을 수정한다(`PATCH /auth/me`).
- * 로그인 식별자(옴니솔 아이디)·역할은 읽기 전용으로만 표시한다.
+ * 계정 설정 폼 — 본인의 이메일을 수정한다(`PATCH /auth/me`).
+ * 이름·부서는 옴니솔(ERP) 프로필 동기화 값이라 로그인 식별자·역할과 함께 읽기 전용으로만 표시한다.
  */
 export function AccountClient() {
   const user = useCurrentUser();
   const setUser = useSetCurrentUser();
 
-  const [displayName, setDisplayName] = useState(user.displayName);
-  const [department, setDepartment] = useState(user.department ?? '');
   const [email, setEmail] = useState(user.email ?? '');
   const [saving, setSaving] = useState(false);
 
-  const dirty =
-    displayName.trim() !== user.displayName ||
-    department.trim() !== (user.department ?? '') ||
-    email.trim() !== (user.email ?? '');
+  const dirty = email.trim() !== (user.email ?? '');
 
   async function handleSave() {
-    const name = displayName.trim();
-    if (!name) {
-      toast.error('이름을 입력하세요.');
-      return;
-    }
     setSaving(true);
     try {
       const updated = await updateMe({
-        displayName: name,
-        department: department.trim() || null,
         email: email.trim() || null,
       });
       setUser(updated);
-      setDisplayName(updated.displayName);
-      setDepartment(updated.department ?? '');
       setEmail(updated.email ?? '');
       toast.success('저장했습니다');
     } catch (err) {
@@ -59,7 +45,7 @@ export function AccountClient() {
       <PageHeader
         caption="개인"
         title="계정 설정"
-        description="내 이름·부서·이메일을 관리합니다. 로그인 아이디와 역할은 관리자만 변경할 수 있습니다."
+        description="내 이메일을 관리합니다. 이름·부서는 옴니솔 프로필과 동기화되며, 로그인 아이디와 역할은 관리자만 변경할 수 있습니다."
       />
 
       <SectionCard
@@ -76,23 +62,12 @@ export function AccountClient() {
           <Input id="account-role" value={MEMBER_ROLE_LABEL[user.role]} readOnly disabled />
         </FormField>
 
-        <FormField id="account-name" label="이름" required>
-          <Input
-            id="account-name"
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-            maxLength={255}
-          />
+        <FormField id="account-name" label="이름" hint="옴니솔 프로필과 동기화됩니다.">
+          <Input id="account-name" value={user.displayName} readOnly disabled />
         </FormField>
 
-        <FormField id="account-department" label="부서">
-          <Input
-            id="account-department"
-            value={department}
-            onChange={(event) => setDepartment(event.target.value)}
-            maxLength={255}
-            placeholder="예: 경영본부"
-          />
+        <FormField id="account-department" label="부서" hint="옴니솔 프로필과 동기화됩니다.">
+          <Input id="account-department" value={user.department ?? ''} readOnly disabled />
         </FormField>
 
         <FormField id="account-email" label="이메일" hint="알림·초대 수신에 사용됩니다.">

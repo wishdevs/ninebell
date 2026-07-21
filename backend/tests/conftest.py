@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 import app.db as appdb
-from app.core.deps import get_current_user, get_db, get_role_by_code
+from app.core.deps import DbSession, get_current_user, get_db, get_role_by_code
 from app.main import app as fastapi_app
 from app.models import Base, User
 from app.services.seed import seed_all
@@ -119,14 +119,18 @@ def set_user_org(sm):
 
 @pytest.fixture
 def auth_as(sm):
-    """get_current_user 를 주어진 user_id 로 오버라이드한다."""
+    """get_current_user 를 주어진 user_id 로 오버라이드한다.
+
+    요청의 DbSession(get_db 오버라이드)을 그대로 재사용해야 한다 — 실제 운영 코드의
+    get_current_user(request, db: DbSession)와 동일하게 세션을 공유해야, 엔드포인트가
+    반환된 User 를 그 db 로 커밋/리프레시하는 케이스(예: PATCH /auth/me)가 성립한다.
+    """
 
     def _set(user_id):
-        async def _dep():
-            async with sm() as s:
-                return (
-                    await s.execute(select(User).where(User.id == user_id))
-                ).scalar_one()
+        async def _dep(db: DbSession):
+            return (
+                await db.execute(select(User).where(User.id == user_id))
+            ).scalar_one()
 
         fastapi_app.dependency_overrides[get_current_user] = _dep
 
