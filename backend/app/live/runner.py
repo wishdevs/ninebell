@@ -73,6 +73,11 @@ BrowserFactory = Callable[[], Awaitable[Any]]
 # 셀렉터가 화면 밖으로 밀릴 수 있어, 탐색 단계에서 검증된 크기(1440×900)로 고정한다.
 LIVE_VIEWPORT: dict[str, int] = {"width": 1440, "height": 900}
 
+# 자식 팝업(전자결재 결제창) 전용 뷰포트 — 결제 전표는 세로로 긴 문서라 부모(900) 높이로는
+# 아래가 잘린다. 세로를 키워 한 프레임에 더 많은 폼이 렌더·캡처되게 한다(FE 는 고정 카드에
+# object-contain 으로 얹어 카드 너비와 무관하게 전체를 보여준다).
+CHILD_VIEWPORT: dict[str, int] = {"width": 1440, "height": 1120}
+
 # ── 세션 워밍(storage_state 캐시) — Phase 2b 속도 최적화 ─────────────────────────
 # 인증 쿠키(세션 스코프)를 userid 별로 **RAM 에만** 보관한다(디스크 저장 금지 — 세션 토큰).
 # 프로브 실측(2026-07-04): 같은 상태로 컨텍스트 3개 동시 사용해도 ERP 킥 없음, 웜 진입 ~4s
@@ -204,12 +209,20 @@ async def run_workflow(
         if screencast and page is not None:
             cast = asyncio.create_task(screencast_pump(page, events))
 
+            async def _cast_child(pg: Any) -> None:
+                # 자식 팝업(전자결재 결제창 등)은 window.open 고정 크기라 부모 컨텍스트 뷰포트를
+                # 못 물려받는다 → 결제 폼이 창보다 넓으면 캐스트가 뜨기도 전에 오른쪽이 잘린다.
+                # 부모와 같은 크기로 강제 리사이즈해 폼 전체가 렌더·캡처되게 한다(FE 는 실제 비율로 표시).
+                try:
+                    await pg.set_viewport_size(CHILD_VIEWPORT)
+                except Exception:
+                    logger.debug("자식 페이지 뷰포트 강제 실패(무시)", exc_info=True)
+                await screencast_pump(pg, events, window="child")
+
             def _on_new_page(new_page: Any) -> None:
                 # context 에 새 Page 가 생기면(팝업/window.open) 자식 스크린캐스트를 시작하고,
                 # 그 페이지가 닫히면 펌프를 취소한 뒤 closed 전이 프레임을 방출한다(FE=부모창 복귀).
-                child_cast = asyncio.create_task(
-                    screencast_pump(new_page, events, window="child")
-                )
+                child_cast = asyncio.create_task(_cast_child(new_page))
                 child_casts.append(child_cast)
 
                 def _on_child_close(_evt: Any = None) -> None:

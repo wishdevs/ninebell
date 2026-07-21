@@ -14,7 +14,7 @@ import asyncio
 
 import pytest
 
-from app.live.runner import run_workflow
+from app.live.runner import CHILD_VIEWPORT, run_workflow
 from app.live.screencast import screencast_pump
 
 
@@ -49,9 +49,13 @@ class FakePage:
         self.cdp = FakeCDP()
         self._closed = False
         self._close_cbs: list = []
+        self.viewport: dict | None = None  # set_viewport_size 기록(자식창 뷰포트 강제 검증)
 
     def is_closed(self) -> bool:
         return self._closed
+
+    async def set_viewport_size(self, viewport: dict) -> None:
+        self.viewport = viewport
 
     def on(self, event: str, cb) -> None:
         if event == "close":
@@ -161,6 +165,8 @@ async def test_run_workflow_child_popup_lifecycle():
     # 자식 펌프가 생성돼 자식 스크린샷(window=child)이 흘렀다.
     child_shots = [ev for ev in frames if ev.get("window") == "child" and "screenshot" in ev]
     assert child_shots and child_shots[-1]["screenshot"].endswith("CHILD")
+    # 자식 팝업 뷰포트를 세로로 큰 전용 크기로 강제해야 결제 폼이 잘리지 않는다(캡처 전 리사이즈).
+    assert graph.child is not None and graph.child.viewport == CHILD_VIEWPORT
     # 닫힘 전이 프레임이 방출됐다(펌프 취소 경로 실행 증거).
     assert {"window": "child", "closed": True} in frames
     # 닫힌 뒤 늦은 프레임은 자식 슬롯을 되살리지 않는다(스트림에 LATE 없음).

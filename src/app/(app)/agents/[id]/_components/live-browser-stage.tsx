@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  RiExternalLinkLine,
   RiLockLine,
   RiPlayCircleLine,
   RiPlayLine,
@@ -72,8 +73,9 @@ export function LiveBrowserStage({
   const live = LIVE_STATUSES.has(status);
   // 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열려 자식 화면이 있으면 탭 토글을 노출한다.
   const hasChild = screenshots.child != null;
-  // 활성 창 화면(자식 탭인데 자식이 닫혀 없으면 부모로 폴백).
-  const activeScreenshot = screenshots[activeWindow] ?? screenshots.parent;
+  // 자식창은 부모를 덮는 게 아니라 부모 위로 뜨는 PIP 카드로 표현한다(실제 팝업 멘탈모델).
+  // 부모는 항상 베이스에 유지, 자식 탭이 활성일 때만 그 위에 결제창 카드를 얹는다.
+  const showChildPip = hasChild && activeWindow === 'child';
   return (
     // 카드 폭 = min(셀폭, (셀높이 − 크롬)×16/9). 하단 바 제거로 비-화면 높이가 크롬(≈48px)만 남는다.
     <div className="[container-type:size] flex min-h-0 items-start justify-center lg:h-full">
@@ -97,7 +99,10 @@ export function LiveBrowserStage({
         {/* 스크린캐스트 종횡비(≈16:10, CDP 1280×800)에 맞춘 컨테이너 — LiveScreen 은 object-contain
             이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
         <div className="bg-muted/30 relative aspect-[16/10] w-full">
-          <LiveScreen src={activeScreenshot} live={live} />
+          {/* 베이스 = 항상 부모창(자식창이 떠도 뒤에 유지된다). */}
+          <LiveScreen src={screenshots.parent} live={live} />
+          {/* 자식창(전자결재 결제창) — 부모를 살짝 어둡게 깔고 그 위로 별도 카드로 띄운다. */}
+          {showChildPip ? <ChildPipCard src={screenshots.child as string} /> : null}
           {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
               화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
           {aiWorking ? (
@@ -116,6 +121,39 @@ export function LiveBrowserStage({
           ) : null}
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * 자식창 PIP 카드 — 전자결재 결제창(window.open 팝업)을 부모 화면 위에 뜨는 별도 창처럼 표현한다.
+ *
+ * 카드는 스테이지를 거의 꽉 채우는 고정 크기라 프레임 비율과 무관하게 좌우 여백(디밍된 부모)이
+ * 최소화된다. 결제 폼은 카드 안에서 상단 고정 object-contain 으로 얹어, 세로가 길어도 잘리지 않고
+ * 전체가 보인다. 부모는 뒤에서 dim 처리돼 "두 번째 창이 열렸다"는 맥락이 유지된다.
+ */
+function ChildPipCard({ src }: { src: string }) {
+  return (
+    <div className="bg-background/50 absolute inset-0 z-20 flex items-center justify-center p-2 backdrop-blur-[1.5px]">
+      {/* 카드는 스테이지를 거의 꽉 채우는 고정 크기 — 프레임 비율과 무관하게 항상 넓게 유지해
+          좌우 여백(디밍된 부모)을 최소화한다. 결제 폼은 카드 안에서 상단 고정 object-contain 으로
+          전체를 보여준다(세로가 길면 하단 여백만 생기고 잘리지 않는다). */}
+      <div className="animate-pip-in border-border bg-surface flex h-[97%] w-[98%] flex-col overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-overlay)]">
+        {/* 결제창 타이틀바 — 실제 창 크롬 느낌 */}
+        <div className="border-border bg-surface-raised text-foreground-secondary flex shrink-0 items-center gap-1.5 border-b px-3 py-1.5 text-[11px] font-medium">
+          <RiExternalLinkLine size={12} aria-hidden className="text-accent shrink-0" />
+          전자결재 결제창
+          <span className="text-foreground-tertiary ml-auto text-[10px] font-normal">자식 창</span>
+        </div>
+        <div className="relative min-h-0 flex-1">
+          {/* eslint-disable-next-line @next/next/no-img-element -- dataURL 스트림이라 next/image 부적합 */}
+          <img
+            src={src}
+            alt="전자결재 결제창"
+            className="bg-surface-raised absolute inset-0 h-full w-full object-contain object-top"
+          />
+        </div>
+      </div>
     </div>
   );
 }

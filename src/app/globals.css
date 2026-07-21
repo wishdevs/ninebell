@@ -246,6 +246,23 @@ samp {
 }
 
 /* ==========================================================================
+   PIP enter — 자식창(전자결재 결제창) 플로팅 카드가 부모 위로 뜰 때
+   ========================================================================== */
+@keyframes pip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-pip-in {
+  animation: pip-in var(--duration-normal) var(--ease-out) both;
+}
+
+/* ==========================================================================
    Drawer enter animation — panel slides in from the right edge
    ========================================================================== */
 @keyframes drawer-in-right {
