@@ -73,7 +73,12 @@ function upsertStep(steps: readonly LiveStepState[], next: LiveStepState): LiveS
   const i = steps.findIndex((s) => s.step === next.step);
   if (i === -1) return [...steps, next];
   const copy = steps.slice();
-  copy[i] = { ...copy[i], status: next.status, ms: next.ms ?? copy[i].ms };
+  copy[i] = {
+    ...copy[i],
+    status: next.status,
+    ms: next.ms ?? copy[i].ms,
+    progress: next.progress ?? copy[i].progress,
+  };
   return copy;
 }
 
@@ -141,7 +146,12 @@ function applyFrame(state: LiveRunState, frame: LiveFrame): LiveRunState {
     return { ...state, logs: [...state.logs, line], status: progressStatus(state) };
   }
   if (frame.step && frame.status) {
-    const steps = upsertStep(state.steps, { step: frame.step, status: frame.status, ms: frame.ms });
+    const steps = upsertStep(state.steps, {
+      step: frame.step,
+      status: frame.status,
+      ms: frame.ms,
+      progress: frame.progress,
+    });
     return { ...state, steps, status: progressStatus(state) };
   }
   return state;
