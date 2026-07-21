@@ -72,11 +72,6 @@ export function SignupForm() {
     if (submitting) return;
     setError(null);
 
-    if (!displayName.trim()) {
-      setError('이름을 입력해주세요.');
-      return;
-    }
-    // 이메일은 선택 입력(추후 필수화) — 비어 있어도 제출 허용.
     if (!agreedTerms) {
       setError('약관에 동의해주세요.');
       return;
@@ -86,8 +81,6 @@ export function SignupForm() {
     try {
       await api.post('/auth/signup', {
         signupToken,
-        displayName: displayName.trim(),
-        department: department.trim(),
         // 빈값이면 email 키 생략(EmailStr("") 검증 회피) — 백엔드가 선택으로 처리.
         ...(email.trim() ? { email: email.trim() } : {}),
         agreedTerms: true,

@@ -331,9 +331,7 @@ async def me(user: CurrentUser) -> AuthMe:
 
 @router.patch("/me", response_model=AuthMe)
 async def update_me(body: AuthMeUpdate, user: CurrentUser, db: DbSession) -> AuthMe:
-    """본인 프로필(이름/부서/이메일) 수정 — 로그인 식별자(omnisol_userid)·롤·상태는 불변."""
-    user.display_name = body.display_name.strip()
-    user.department = (body.department or "").strip() or None
+    """본인 이메일 수정 — 이름/부서(ERP 동기화값)·로그인 식별자(omnisol_userid)·롤·상태는 불변."""
     user.email = (body.email or "").strip() or None
     await db.commit()
     await db.refresh(user)
