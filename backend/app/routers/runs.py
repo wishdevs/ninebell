@@ -33,6 +33,7 @@ from app.live.registry import get_spec
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
 from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate, OrgUnit
+from app.routers.agents import _HIDDEN_AGENT_IDS, _is_org_admin
 from app.services.agent_settings import effective_settings
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,13 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     if agent_row is None:
         return JSONResponse(
             {"error": f"실행할 수 없는 에이전트입니다: {body.agentId}"}, status_code=404
+        )
+    # 숨김(검증 전) 에이전트 라이브 실행 차단 — UI 노출 차단(agents.py 목록/상세 제외)과 동일
+    # 소스(_HIDDEN_AGENT_IDS)로 실행 경로도 막는다. 관리자만 게이트 스모크 실행 허용(도메인 검증 전).
+    if agent_row.id in _HIDDEN_AGENT_IDS and not _is_org_admin(user):
+        return JSONResponse(
+            {"error": "아직 공개되지 않은(검증 전) 에이전트입니다. 관리자만 실행할 수 있습니다."},
+            status_code=403,
         )
     # 조직구분 접근제어: 명시 설정된 에이전트는 user 롤에 한해 소속 조직구분을 검사(admin+ 우회).
     role_code = user.role.code if user.role is not None else None

@@ -21,7 +21,7 @@ from app.agents.common import doc_steps
 from app.config import get_settings
 from nbkit.browser.actions import js_click
 from nbkit.omnisol import js_lib, selectors
-from nbkit.omnisol.menu_schemas import EXPENSE_CARD
+from nbkit.omnisol.menu_schemas import EXPENSE_CARD, MenuSchema
 from nbkit.patterns import emit_log, emit_shot, emit_step
 from nbkit.patterns.login_flow import ensure_logged_in
 from nbkit.patterns.menu_navigate_flow import navigate_schema
@@ -66,8 +66,12 @@ def make_user_type_node(target_type: str):
     return user_type
 
 
-def make_menu_nav_node():
-    """결의서입력(EXPENSE_CARD) 메뉴로 딥링크 진입(nbkit navigate_schema)."""
+def make_menu_nav_node(schema: MenuSchema = EXPENSE_CARD):
+    """지정 MenuSchema(기본 결의서입력 EXPENSE_CARD) 메뉴로 딥링크 진입(nbkit navigate_schema).
+
+    schema 를 파라미터화해 결의서입력 외 화면(전표조회승인 VOUCHER_RECEIVABLE 등)도
+    같은 노드로 진입한다 — 기존 무인자 호출부는 EXPENSE_CARD 기본값으로 그대로 동작한다.
+    """
 
     async def menu_nav(state: dict) -> dict:
         if state.get("error"):
@@ -75,7 +79,7 @@ def make_menu_nav_node():
         emit = state["events"].put
         base = get_settings().erp_base
         try:
-            await navigate_schema(state["page"], EXPENSE_CARD, base, emit=emit)
+            await navigate_schema(state["page"], schema, base, emit=emit)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"메뉴 진입 실패: {exc}"}
         return {}
