@@ -118,16 +118,10 @@ AGENT_GROUP_FIXTURES: list[dict] = [
         "sort_order": 0,
     },
     {
-        "id": "materials",
-        "name": "자재팀",
-        "description": "자재 입고·분류를 대신 처리합니다.",
-        "sort_order": 1,
-    },
-    {
         "id": "voucher",
         "name": "회계전표",
         "description": "외상매입·매출, 미지급금 등 회계전표를 종류별로 대신 입력합니다.",
-        "sort_order": 2,
+        "sort_order": 1,
     },
 ]
 
@@ -685,12 +679,9 @@ AGENT_FIXTURES.extend(
         _TRIP_OVERSEAS_FIXTURE,
         _GYEONGJO_GRANT_FIXTURE,  # family-event 더미 → 실동작 승격(gyeongjo-grant).
         _HAKJAGUM_GRANT_FIXTURE,  # scholarship 더미 → 실동작 승격(hakjagum-grant, 노출).
-        # 자재팀 그룹 — 내용 없는 더미(준비 중, 노출). 구현 시 workflow_id·steps 를 채워 승격한다.
-        _dummy_agent("materials-inbound", "자동 입고 처리", group_id="materials"),
-        _dummy_agent("materials-classify", "프로젝트별 자재 자동 분류", group_id="materials"),
-        # 회계전표 그룹 — 외상매출금/매입금/미지급금 법인카드 실동작 승격(공유 graph 재사용).
-        _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable
+        # 회계전표 그룹 — 표시 순서: 외상매입금 → 외상매출금 → 미지급금 법인카드(사용자 지정 2026-07-21).
         _VOUCHER_PAYABLE_FIXTURE,  # voucher-trade-payable → voucher-payable(내수구매)
+        _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable
         _VOUCHER_CARD_FIXTURE,  # voucher-card-payable → voucher-card(미지급금 법인카드)
     ]
 )
