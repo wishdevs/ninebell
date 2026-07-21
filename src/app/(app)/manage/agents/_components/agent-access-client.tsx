@@ -54,7 +54,7 @@ export function AgentAccessClient() {
   };
 
   return (
-    <div className="animate-page-enter flex flex-col gap-8">
+    <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-8">
       <div className="flex flex-col gap-3">
         <Link
           href="/manage/agents"

@@ -34,7 +34,7 @@ export function OrgAccessClient() {
   const orgs = useApiResource<OrgUnit[]>('/org-units');
 
   return (
-    <div className="animate-page-enter flex flex-col gap-8">
+    <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-8">
       <PageHeader
         caption="운영"
         title="조직구분 관리"
