@@ -41,10 +41,17 @@ async def emit_log(emit: Optional[EmitFn], message: str, level: str = "info") ->
     await resolve_emit(emit)({"log": message, "level": level})
 
 
-async def emit_shot(emit: Optional[EmitFn], page: Any) -> None:
-    """현재 화면 스냅샷 이벤트 ``{screenshot: dataURL}``(실패 시 생략)."""
+async def emit_shot(emit: Optional[EmitFn], page: Any, window: str = "parent") -> None:
+    """현재 화면 스냅샷 이벤트 ``{screenshot: dataURL}``(실패 시 생략).
+
+    window: 어느 브라우저 창의 스냅샷인지('parent' 기본 / 'child'=팝업·자식 창). 기본 'parent'
+    이면 window 키를 넣지 않아 기존 ~30개 호출부와 프레임이 바이트 동일하다(하위 호환).
+    """
     if emit is None:
         return
     data_url = await screenshot_data_url(page)
     if data_url:
-        await emit({"screenshot": data_url})
+        frame: dict = {"screenshot": data_url}
+        if window != "parent":
+            frame["window"] = window
+        await emit(frame)

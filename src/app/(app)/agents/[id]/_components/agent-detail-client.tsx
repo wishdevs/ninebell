@@ -271,7 +271,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           <LiveBrowserStage
             targetUrl={agent.targetUrl}
             status={run.status}
-            screenshot={run.screenshot}
+            screenshots={run.screenshots}
+            activeWindow={run.activeWindow}
+            onSelectWindow={run.selectWindow}
             connected={run.connected}
             canRun={canRun}
             etaHint={etaHint}

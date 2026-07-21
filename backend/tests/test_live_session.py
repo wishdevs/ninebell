@@ -77,6 +77,46 @@ async def test_screenshot_is_latest_only_not_buffered():
 
 
 @pytest.mark.asyncio
+async def test_parent_and_child_screenshots_kept_per_window():
+    async def producer():
+        yield {"screenshot": "data:image/jpeg;base64,PARENT"}
+        yield {"window": "child", "screenshot": "data:image/jpeg;base64,CHILD"}
+        yield {"result": "ok"}
+
+    sess = LiveSession("kw1", None, lambda: producer(), _noop_terminal)
+    sess.start()
+    got = await _drain(sess, 0)
+    # 창별로 최신 1장씩 유지(부모/자식 분리).
+    assert sess.latest_shots["parent"]["screenshot"].endswith("PARENT")
+    assert sess.latest_shots["child"]["screenshot"].endswith("CHILD")
+    # 스크린샷은 버퍼(커서 대상) 아님 — 부모/자식 모두 제외.
+    assert all("screenshot" not in ev for ev in sess.buffer)
+    # 스트림엔 두 창 프레임이 모두 흘렀고, 자식은 window 키를 달고 온다.
+    child_shots = [ev for ev in got if ev.get("window") == "child" and "screenshot" in ev]
+    assert child_shots and child_shots[-1]["screenshot"].endswith("CHILD")
+
+
+@pytest.mark.asyncio
+async def test_child_closed_frame_is_buffered_and_clears_child_slot():
+    async def producer():
+        yield {"window": "child", "screenshot": "data:image/jpeg;base64,CHILD"}
+        yield {"window": "child", "closed": True}
+        yield {"result": "ok"}
+
+    sess = LiveSession("kw2", None, lambda: producer(), _noop_terminal)
+    sess.start()
+    await _drain(sess, 0)
+    # closed 전이는 버퍼(재생 가능)에 남고, 자식 최신 화면 슬롯은 비워진다(스테일 재활성 방지).
+    assert {"window": "child", "closed": True} in sess.buffer
+    assert "child" not in sess.latest_shots
+    # 늦은 구독자(커서 0 재접속)는 버퍼에서 closed 를 재생받아 자식 닫힘을 알 수 있다.
+    late = await _drain(sess, 0)
+    assert {"window": "child", "closed": True} in late
+    # 닫힌 자식 스크린샷은 다시 흐르지 않는다(슬롯이 비어 있음).
+    assert not [ev for ev in late if ev.get("window") == "child" and "screenshot" in ev]
+
+
+@pytest.mark.asyncio
 async def test_reconnect_after_disconnect_resumes():
     gate = asyncio.Event()
 

@@ -196,8 +196,42 @@ async def run_workflow(
 
         task = asyncio.create_task(runner())
         cast: asyncio.Task | None = None
+        # 자식 창(팝업) 스크린캐스트 태스크들 — 진짜 두 번째 Playwright Page(예: SSO 교차출처
+        # 전자결재 창)가 열리면 창별로 하나씩 생기고, 종료 시 부모 cast 와 함께 취소한다.
+        child_casts: list[asyncio.Task] = []
+        # context.on("page") 를 등록한 컨텍스트(teardown 에서 리스너 제거용). None = 미등록.
+        page_listener_ctx: Any | None = None
         if screencast and page is not None:
             cast = asyncio.create_task(screencast_pump(page, events))
+
+            def _on_new_page(new_page: Any) -> None:
+                # context 에 새 Page 가 생기면(팝업/window.open) 자식 스크린캐스트를 시작하고,
+                # 그 페이지가 닫히면 펌프를 취소한 뒤 closed 전이 프레임을 방출한다(FE=부모창 복귀).
+                child_cast = asyncio.create_task(
+                    screencast_pump(new_page, events, window="child")
+                )
+                child_casts.append(child_cast)
+
+                def _on_child_close(_evt: Any = None) -> None:
+                    child_cast.cancel()
+                    try:
+                        events.put_nowait({"window": "child", "closed": True})
+                    except Exception:
+                        pass
+
+                try:
+                    new_page.on("close", _on_child_close)
+                except Exception:
+                    logger.debug("자식 페이지 close 핸들러 등록 실패(무시)", exc_info=True)
+
+            # raw_page(프록시 우회)의 실제 context 에 등록 — 초기 페이지는 이미 생성돼 이 핸들러
+            # 이전이라 트리거되지 않고, 이후 열리는 팝업만 잡는다.
+            if raw_page is not None:
+                try:
+                    raw_page.context.on("page", _on_new_page)
+                    page_listener_ctx = raw_page.context
+                except Exception:
+                    logger.debug("context.on('page') 등록 실패(무시)", exc_info=True)
         try:
             while True:
                 ev = await events.get()
@@ -212,8 +246,17 @@ async def run_workflow(
                 yield ev
         finally:
             # 클라 끊김/종료 시 러너·캐스트를 즉시 취소하고 브라우저를 닫아 메모리를 반환한다.
+            # 새 팝업 리스너를 먼저 제거해, teardown 중(browser.close 전) 열리는 팝업이 또 다른
+            # 자식 펌프를 만들지 않게 한다(늦은 펌프 유출 방지).
+            if page_listener_ctx is not None:
+                try:
+                    page_listener_ctx.remove_listener("page", _on_new_page)
+                except Exception:
+                    logger.debug("context.remove_listener('page') 실패(무시)", exc_info=True)
             if cast is not None:
                 cast.cancel()
+            for child_cast in child_casts:
+                child_cast.cancel()
             task.cancel()
             try:
                 await task
@@ -228,3 +271,7 @@ async def run_workflow(
                     await browser.close()
                 except Exception:
                     logger.debug("browser.close 예외 무시", exc_info=True)
+            # browser.close 전후로 열렸을 수 있는 자식 펌프까지 확실히 취소 — 초기 스냅샷 이후
+            # 추가된 late 펌프(teardown 중 팝업)를 fresh 스냅샷으로 다시 취소한다.
+            for child_cast in list(child_casts):
+                child_cast.cancel()

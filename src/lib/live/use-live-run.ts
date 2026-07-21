@@ -23,6 +23,7 @@ import type {
   LiveLogLine,
   LiveRunState,
   LiveStepState,
+  LiveWindow,
   UseLiveRunReturn,
 } from './types';
 
@@ -47,6 +48,8 @@ const initialState: LiveRunState = {
   steps: [],
   logs: [],
   screenshot: null,
+  screenshots: { parent: null, child: null },
+  activeWindow: 'parent',
   hitl: null,
   chat: [],
   transactions: null,
@@ -63,6 +66,7 @@ type Action =
   | { type: 'connected'; value: boolean }
   | { type: 'failure'; message: string }
   | { type: 'clearHitl' }
+  | { type: 'selectWindow'; window: LiveWindow }
   | { type: 'detach' };
 
 function upsertStep(steps: readonly LiveStepState[], next: LiveStepState): LiveStepState[] {
@@ -114,9 +118,19 @@ function applyFrame(state: LiveRunState, frame: LiveFrame): LiveRunState {
     const chat = c.note === 'action' ? [...state.chat, msg] : upsertChat(state.chat, msg);
     return { ...state, chat, status: progressStatus(state) };
   }
+  if (frame.closed && frame.window === 'child') {
+    // 자식 창(팝업) 닫힘 — 자식 화면을 버리고 부모창으로 되돌린다. 상태머신은 건드리지 않는다.
+    const screenshots = { ...state.screenshots, child: null };
+    return { ...state, screenshots, activeWindow: 'parent', screenshot: screenshots.parent };
+  }
   if (frame.screenshot != null) {
-    // 스크린캐스트(최신 1장) — 상태만 갱신, 상태머신은 건드리지 않는다.
-    return { ...state, screenshot: frame.screenshot };
+    // 스크린캐스트(창별 최신 1장) — 상태만 갱신, 상태머신은 건드리지 않는다. window 미지정=parent.
+    const window = frame.window ?? 'parent';
+    const screenshots = { ...state.screenshots, [window]: frame.screenshot };
+    // 자식 화면이 처음 도착하면(child 가 null→값) 자식 탭을 자동 활성화한다.
+    const childOpened = window === 'child' && state.screenshots.child == null;
+    const activeWindow: LiveWindow = childOpened ? 'child' : state.activeWindow;
+    return { ...state, screenshots, activeWindow, screenshot: screenshots[activeWindow] };
   }
   if (frame.log != null) {
     const line: LiveLogLine = {
@@ -158,6 +172,14 @@ function reducer(state: LiveRunState, action: Action): LiveRunState {
       if (state.hitl == null || state.status === 'succeeded' || state.status === 'failed')
         return state;
       return { ...state, hitl: null, status: 'running' };
+    case 'selectWindow':
+      // 사용자가 부모창/자식창 탭을 수동 선택 — 활성 창과 파생 screenshot 을 함께 갱신한다.
+      if (state.activeWindow === action.window) return state;
+      return {
+        ...state,
+        activeWindow: action.window,
+        screenshot: state.screenshots[action.window],
+      };
     case 'failure':
       return { ...state, status: 'failed', hitl: null, connected: false, error: action.message };
     case 'detach':
@@ -418,5 +440,9 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
     return postHitl(runIdRef.current, decisionId, { rows });
   }, []);
 
-  return { ...state, sendHitl, sendChat, finishChat, sendQuery, sendRows };
+  const selectWindow = useCallback((window: LiveWindow): void => {
+    dispatch({ type: 'selectWindow', window });
+  }, []);
+
+  return { ...state, sendHitl, sendChat, finishChat, sendQuery, sendRows, selectWindow };
 }
