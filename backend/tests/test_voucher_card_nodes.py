@@ -385,7 +385,8 @@ async def test_loop_on_popup_receives_mapped_gwdocu(monkeypatch):
     assert seen == ["GW-A", "GW-B"]
 
 
-async def test_loop_on_popup_none_gwdocu_when_unmapped(monkeypatch):
+async def test_loop_skips_row_without_gwdocu_mapping(monkeypatch):
+    # 카드: 결의서번호(ABDOCU_NO)가 payment_map 에 없으면(직접 전표 등) 결제창을 안 열고 건너뛴다.
     child = _LoopChild()
     _patch_loop_for_card(monkeypatch, child, {0: "RN-UNKNOWN"})
     seen: list = []
@@ -397,8 +398,31 @@ async def test_loop_on_popup_none_gwdocu_when_unmapped(monkeypatch):
     out = await node(
         {"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1, "payment_map": {}}
     )
-    assert out["processed"] == 1
-    assert seen == [None]  # 매핑 없으면 None 을 넘겨 훅이 우아하게 처리.
+    assert out["processed"] == 0  # 매핑 없는 행은 건너뜀(결제창 미오픈)
+    assert seen == []  # 훅도 호출되지 않음
+
+
+async def test_loop_processes_only_rows_with_gwdocu(monkeypatch):
+    # 사용자 시나리오(2026-07-21): 결의서번호 있는 행만 처리, 없는 행은 건너뜀.
+    child = _LoopChild()
+    _patch_loop_for_card(monkeypatch, child, {0: "RN-A", 1: "RN-NONE", 2: "RN-B"})
+    seen: list = []
+
+    async def _on_popup(c, gwdocu_no, events):
+        seen.append(gwdocu_no)
+
+    node = make_loop_approvals_node(on_popup=_on_popup)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 3,
+            "max_rows": 3,
+            "payment_map": {"RN-A": "GW-A", "RN-B": "GW-B"},  # RN-NONE 은 미수집
+        }
+    )
+    assert out["processed"] == 2  # 3건 중 결의서번호 있는 2건만
+    assert seen == ["GW-A", "GW-B"]  # 건너뛴 행엔 훅 미호출
 
 
 async def test_loop_on_popup_exception_does_not_abort_batch(monkeypatch):

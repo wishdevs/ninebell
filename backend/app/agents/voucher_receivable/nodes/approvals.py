@@ -74,6 +74,7 @@ def make_loop_approvals_node(on_popup=None):
         # 워크플로우 노드에 진행 카운트 노출(0/N 부터) — 각 건 완료 시 갱신.
         await emit_step(events, "loop_approvals", "running", progress={"done": 0, "total": process_count})
         processed_docu_nos: list[str] = []
+        skipped = 0
 
         async def fail(idx: int, reason) -> dict:
             await emit_step(events, "loop_approvals", "failed")
@@ -84,6 +85,30 @@ def make_loop_approvals_node(on_popup=None):
         for idx in range(process_count):
             key = await steps.read_row_key(page, idx)
             key_label = key or "(번호미상)"
+
+            # 카드(on_popup): 결의서번호(ABDOCU_NO)가 있는 '카드 결의서' 행만 처리한다. 결의서번호가
+            # 없거나(직접 전표=전표입력/지급내역전표처리) 카드 결의서로 수집되지 않은(payment_map
+            # 미존재) 행은 참조문서 대상이 아니므로 **결제창을 열지 않고 건너뛴다**(사용자 확인
+            # 2026-07-21). 외상매출/매입(on_popup=None)은 이 필터 없이 전체 처리(기존과 동일).
+            gwdocu_no = None
+            if on_popup is not None:
+                abdocu_no = await steps.read_row_abdocu_no(page, idx)
+                payment_map = state.get("payment_map") or {}
+                gwdocu_no = payment_map.get(abdocu_no) if abdocu_no else None
+                if gwdocu_no is None:
+                    skipped += 1
+                    await emit_log(
+                        events,
+                        f"[{idx + 1}/{process_count}] 결의서번호 없음 — 결재 대상 아님, 건너뜀(전표 {key_label}).",
+                        "info",
+                    )
+                    await emit_step(
+                        events,
+                        "loop_approvals",
+                        "running",
+                        progress={"done": idx + 1, "total": process_count},
+                    )
+                    continue
 
             # 진행 상황 노출 — 몇 건 중 몇 번째를 여는지(사용자 가시성).
             await emit_log(
@@ -158,9 +183,7 @@ def make_loop_approvals_node(on_popup=None):
                     # 훅은 확인·상신을 절대 클릭하지 않으며 0건/오류를 우아하게 로그한다 —
                     # 참조문서 이슈로 배치가 중단되지 않게 여기서 예외를 삼킨다(best-effort).
                     if on_popup is not None:
-                        abdocu_no = await steps.read_row_abdocu_no(page, idx)
-                        payment_map = state.get("payment_map") or {}
-                        gwdocu_no = payment_map.get(abdocu_no) if abdocu_no else None
+                        # gwdocu_no 는 이 행의 결의서번호로 위에서 이미 해소(없으면 이 행은 스킵됐다).
                         try:
                             await on_popup(child, gwdocu_no, events)
                         except Exception as exc:  # noqa: BLE001 — 참조문서 훅은 비크리티컬.
@@ -201,10 +224,11 @@ def make_loop_approvals_node(on_popup=None):
             await emit_shot(events.put, page)
 
         summary = ", ".join(processed_docu_nos)
+        skip_txt = f", {skipped}건 건너뜀(결의서번호 없음)" if skipped else ""
         await emit_log(
             events,
-            f"결재창 확인 완료 — 대상 {process_count}건 중 {len(processed_docu_nos)}건 가상 상신"
-            f"(실제 상신 없음). 전표: {summary}",
+            f"결재창 확인 완료 — 대상 {rowcount}건 중 {len(processed_docu_nos)}건 가상 상신"
+            f"(실제 상신 없음){skip_txt}. 전표: {summary}",
             "ok",
         )
         await emit_step(events, "loop_approvals", "done", _ms(t0))
@@ -212,8 +236,8 @@ def make_loop_approvals_node(on_popup=None):
             "processed": len(processed_docu_nos),
             "processed_docu_nos": processed_docu_nos,
             "result": (
-                f"처리 완료 — {len(processed_docu_nos)}건 결제창 확인(가상 상신, 실제 상신 없음). "
-                f"전표: {summary}. 실제 상신은 옴니솔에서 직접 진행하세요."
+                f"처리 완료 — {len(processed_docu_nos)}건 결제창 확인(가상 상신, 실제 상신 없음)"
+                f"{skip_txt}. 전표: {summary}. 실제 상신은 옴니솔에서 직접 진행하세요."
             ),
         }
 
