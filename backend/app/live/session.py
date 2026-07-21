@@ -56,10 +56,12 @@ class LiveSession:
         self._producer_factory = producer_factory
         self._on_terminal = on_terminal
         self.buffer: list[dict] = []  # 재생용 히스토리(스크린샷 제외 — 커서 기준)
-        # 라이브 화면(스크린샷)은 버퍼에 쌓지 않고 '최신 1장'만 유지(메모리 폭증 방지).
-        # 16fps 캐스트를 버퍼링하면 세션당 수백 MB가 되므로, 재생 대상에서 제외한다.
-        self.latest_shot: dict | None = None
-        self.shot_seq = 0
+        # 라이브 화면(스크린샷)은 버퍼에 쌓지 않고 '창별 최신 1장'만 유지(메모리 폭증 방지).
+        # 16fps 캐스트를 버퍼링하면 세션당 수백 MB가 되므로, 재생 대상에서 제외한다. 부모/자식
+        # 창(진짜 두 번째 브라우저 창)을 각각 유지해 스테이지가 탭으로 전환한다.
+        self.latest_shots: dict[str, dict] = {}  # window('parent'|'child') → 최신 프레임
+        self.shot_seqs: dict[str, int] = {}  # window → 창별 시퀀스(구독자별 최신 감지)
+        self.shot_seq = 0  # 전역 tick — 아무 창이나 갱신되면 증가(Condition wake 판정)
         self._cond = asyncio.Condition()
         self.terminal = False
         self.subscribers = 0
@@ -82,13 +84,21 @@ class LiveSession:
         self._agen = agen
         try:
             async for ev in agen:
-                # 라이브 화면 — 버퍼/커서 대상 아님. 최신 1장만 유지하고 구독자에게 라이브 전달.
+                # 라이브 화면 — 버퍼/커서 대상 아님. 창별 최신 1장만 유지하고 구독자에게 라이브 전달.
                 if "screenshot" in ev:
+                    window = ev.get("window", "parent")
                     async with self._cond:
-                        self.latest_shot = ev
+                        self.latest_shots[window] = ev
+                        self.shot_seqs[window] = self.shot_seqs.get(window, 0) + 1
                         self.shot_seq += 1
                         self._cond.notify_all()
                     continue
+                # 자식 창 닫힘 전이({"window","closed"}) — 창별 최신 화면 슬롯을 비워(늦은 구독자가
+                # 닫힌 창 스크린샷을 다시 활성화하지 않게) 두되, 프레임 자체는 버퍼로 재생 가능하게
+                # 남긴다(상태 전이라 커서 대상). 아래 _push 로 흘려보낸다.
+                if ev.get("closed") and "window" in ev:
+                    async with self._cond:
+                        self.latest_shots.pop(ev["window"], None)
                 if self.owner and isinstance(ev.get("hitl"), dict):
                     hid = ev["hitl"].get("id")
                     if hid:
@@ -196,23 +206,31 @@ class LiveSession:
             self.detached_at = None
         try:
             i = max(0, cursor)
-            last_shot = 0  # 이 구독자가 마지막으로 보낸 화면 버전(라이브, 커서 무관)
+            last_tick = 0  # 이 구독자가 마지막으로 소비한 전역 화면 tick(Condition wake 판정)
+            last_shots: dict[str, int] = {}  # 창별로 이 구독자가 마지막으로 보낸 시퀀스
             while True:
                 async with self._cond:
                     while (
                         i >= len(self.buffer)
-                        and last_shot == self.shot_seq
+                        and last_tick == self.shot_seq
                         and not self.terminal
                     ):
                         await self._cond.wait()
                     chunk = self.buffer[i:]
                     i = len(self.buffer)
-                    shot = self.latest_shot if self.shot_seq != last_shot else None
-                    last_shot = self.shot_seq
+                    # 창별로 새 프레임이 있으면 각 창 최신 1장씩 모아 보낸다(밀린 프레임은 합쳐짐).
+                    shots = [
+                        self.latest_shots[w]
+                        for w, seq in self.shot_seqs.items()
+                        if last_shots.get(w, 0) != seq and w in self.latest_shots
+                    ]
+                    for w, seq in self.shot_seqs.items():
+                        last_shots[w] = seq
+                    last_tick = self.shot_seq
                     done = self.terminal and i >= len(self.buffer)
                 for ev in chunk:
                     yield ev
-                if shot is not None:  # 최신 화면 1장만(밀린 프레임은 합쳐짐)
+                for shot in shots:  # 창별 최신 화면(부모/자식 각 1장)
                     yield shot
                 if done:
                     return

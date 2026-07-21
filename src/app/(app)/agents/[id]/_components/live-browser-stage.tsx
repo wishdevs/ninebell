@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
 import { formatEta } from '@/lib/data/format';
-import type { LiveRunStatus } from '@/lib/live/types';
+import type { LiveRunStatus, LiveWindow } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -28,7 +28,12 @@ export interface StageEtaHint {
 interface LiveBrowserStageProps {
   targetUrl: string;
   status: LiveRunStatus;
-  screenshot: string | null;
+  /** 창별 최신 스크린캐스트 dataURL. child 가 있으면 부모/자식 탭 토글을 노출한다. */
+  screenshots: { parent: string | null; child: string | null };
+  /** 라이브 뷰에 현재 표시할 창 — 자식 창(팝업)이 열리면 자동 활성화된다. */
+  activeWindow: LiveWindow;
+  /** 부모창/자식창 탭 클릭 — 활성 창 수동 전환. */
+  onSelectWindow?: (window: LiveWindow) => void;
   connected: boolean;
   /** 실행 워크플로우가 매핑돼 있는지 — false 면 스테이지 CTA 를 비활성화한다. */
   canRun?: boolean;
@@ -55,7 +60,9 @@ const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
 export function LiveBrowserStage({
   targetUrl,
   status,
-  screenshot,
+  screenshots,
+  activeWindow,
+  onSelectWindow,
   connected,
   canRun = false,
   onStart,
@@ -63,6 +70,10 @@ export function LiveBrowserStage({
   aiWorking = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
+  // 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열려 자식 화면이 있으면 탭 토글을 노출한다.
+  const hasChild = screenshots.child != null;
+  // 활성 창 화면(자식 탭인데 자식이 닫혀 없으면 부모로 폴백).
+  const activeScreenshot = screenshots[activeWindow] ?? screenshots.parent;
   return (
     // 카드 폭 = min(셀폭, (셀높이 − 크롬)×16/9). 하단 바 제거로 비-화면 높이가 크롬(≈48px)만 남는다.
     <div className="[container-type:size] flex min-h-0 items-start justify-center lg:h-full">
@@ -78,6 +89,7 @@ export function LiveBrowserStage({
             <RiLockLine size={11} aria-hidden className="text-foreground-tertiary shrink-0" />
             <span className="truncate font-mono">{targetUrl}</span>
           </div>
+          {hasChild ? <WindowTabs active={activeWindow} onSelect={onSelectWindow} /> : null}
           <StatusBadge status={status} connected={connected} />
         </div>
 
@@ -85,7 +97,7 @@ export function LiveBrowserStage({
         {/* 스크린캐스트 종횡비(≈16:10, CDP 1280×800)에 맞춘 컨테이너 — LiveScreen 은 object-contain
             이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
         <div className="bg-muted/30 relative aspect-[16/10] w-full">
-          <LiveScreen src={screenshot} live={live} />
+          <LiveScreen src={activeScreenshot} live={live} />
           {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
               화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
           {aiWorking ? (
@@ -207,4 +219,58 @@ function StatusBadge({ status, connected }: { status: LiveRunStatus; connected: 
       ? 'static'
       : 'pulse';
   return <RunStatusBadge status={effective} dot={dot} />;
+}
+
+/**
+ * 부모창/자식창 세그먼트 토글 — 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열렸을 때만
+ * 크롬 바 우측(상태 배지 옆)에 노출한다. 활성 창은 accent 로 채워 명확히, 비활성은 muted hover.
+ */
+function WindowTabs({
+  active,
+  onSelect,
+}: {
+  active: LiveWindow;
+  onSelect?: (window: LiveWindow) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="브라우저 창 선택"
+      className="border-border bg-surface flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] border p-0.5"
+    >
+      <WindowTab
+        label="부모창"
+        selected={active === 'parent'}
+        onClick={() => onSelect?.('parent')}
+      />
+      <WindowTab label="자식창" selected={active === 'child'} onClick={() => onSelect?.('child')} />
+    </div>
+  );
+}
+
+function WindowTab({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={cn(
+        'focus-visible:ring-accent rounded-[3px] px-2 py-0.5 text-[11px] font-medium transition-colors outline-none focus-visible:ring-2',
+        selected
+          ? 'bg-accent text-accent-foreground shadow-sm'
+          : 'text-foreground-tertiary hover:bg-muted hover:text-foreground-secondary',
+      )}
+    >
+      {label}
+    </button>
+  );
 }

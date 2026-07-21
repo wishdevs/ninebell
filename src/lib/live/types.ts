@@ -5,10 +5,11 @@
  * hitl/chat/transactions/result/error)만 들어온다. 그래서 유니온을 태그드 유니온이 아니라
  * 모든 키가 옵셔널인 {@link LiveFrame} 로 모델링하고, 키 존재로 좁힌다(파싱이 단순해진다).
  *
- * 프레임 계약(고정):
+ * 프레임 계약(고정 — 백엔드 app/live/events.py 와 1:1):
  *   {"step": str, "status": "running"|"done"|"failed", "ms"?: int}
  *   {"log": str, "level": "info"|"ok"|"error"|"warn"}
- *   {"screenshot": "data:image/jpeg;base64,..."}          // 비버퍼(최신 1장)
+ *   {"screenshot": "data:image/jpeg;base64,...", "window"?: "parent"|"child"}  // 비버퍼(창별 최신 1장)
+ *   {"window": "child", "closed": true}                    // 자식 창 닫힘 전이(버퍼/커서 대상 — 재생 가능)
  *   {"hitl": {"id","kind","title","prompt","options"?}}
  *   {"chat": {"id","role","content","streaming"?,"done"?,"note"?}}
  *   {"transactions": {"title","columns","rows"}}
@@ -198,12 +199,22 @@ export interface LiveFrame {
   log?: string;
   level?: LiveLogLevel;
   screenshot?: string;
+  /**
+   * 스크린샷/닫힘 프레임이 어느 브라우저 창인지 — 'parent'(주 페이지) 또는 'child'(진짜 두 번째
+   * 창, 예: SSO 교차출처 전자결재 팝업). 없으면 'parent'(하위 호환 — 기존 단일 페이지 프레임).
+   */
+  window?: LiveWindow;
+  /** 자식 창 닫힘 전이(window='child' 와 함께) — FE 는 자식 화면을 버리고 부모창으로 복귀한다. */
+  closed?: boolean;
   hitl?: LiveHitl;
   chat?: ChatFrame;
   transactions?: LiveTransactions;
   result?: string;
   error?: string;
 }
+
+/** 라이브 뷰의 브라우저 창 구분 — 주 페이지(parent) / 팝업·자식 창(child). */
+export type LiveWindow = 'parent' | 'child';
 
 /** HITL 응답 페이로드 — 종류에 따라 하나 이상이 채워진다(POST /runs/hitl body). */
 export interface HitlPayload {
@@ -260,8 +271,12 @@ export interface LiveRunState {
   status: LiveRunStatus;
   steps: readonly LiveStepState[];
   logs: readonly LiveLogLine[];
-  /** 최신 스크린캐스트 dataURL. 없으면 null. */
+  /** 활성 창의 최신 스크린캐스트 dataURL(하위 호환 파생 — screenshots[activeWindow]). 없으면 null. */
   screenshot: string | null;
+  /** 창별 최신 스크린캐스트 dataURL. 자식 창(팝업)이 없으면 child=null. */
+  screenshots: { parent: string | null; child: string | null };
+  /** 라이브 뷰에 현재 표시할 창 — 자식 창이 열리면 자동 활성화, 닫히면 parent 로 복귀. */
+  activeWindow: LiveWindow;
   /** 활성 HITL(대기 중). 없으면 null. */
   hitl: LiveHitl | null;
   chat: readonly ChatMessage[];
@@ -283,6 +298,8 @@ export interface LiveRunActions {
   sendQuery: (decisionId: string, query: string) => Promise<boolean>;
   /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). */
   sendRows: (decisionId: string, rows: GridRowSubmit[]) => Promise<boolean>;
+  /** 라이브 뷰 창 수동 전환(부모창/자식창 탭). 자식 창은 열릴 때 자동 활성화된다. */
+  selectWindow: (window: LiveWindow) => void;
 }
 
 export type UseLiveRunReturn = LiveRunState & LiveRunActions;

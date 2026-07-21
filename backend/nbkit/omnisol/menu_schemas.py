@@ -64,9 +64,23 @@ EXPENSE_CARD = MenuSchema(
     master_id_field=None,
 )
 
+# 전표조회승인(총계정원장>전표관리>전표조회승인) — voucher_receivable 라이브 프로브로 확정
+# (2026-07-20). 결의서입력과 달리 **조회+결재** 아키타입: 마스터(조회결과)+디테일(계정정보) 2그리드.
+VOUCHER_RECEIVABLE = MenuSchema(
+    key="voucher-receivable",
+    menu_id="GLDDOC00700",
+    deeplink="/FI/GLDDOC00700",
+    label="전표조회승인",
+    user_type=USER_TYPE_ACCT,
+    grids_expected=2,  # 마스터(조회결과) + 디테일(계정정보)
+    detail_service_url=None,  # 조회 폼 기반(수집 아님)
+    master_id_field=None,
+)
+
 MENU_MAP: dict[str, MenuSchema] = {
     BOM_COLLECTION.key: BOM_COLLECTION,
     EXPENSE_CARD.key: EXPENSE_CARD,
+    VOUCHER_RECEIVABLE.key: VOUCHER_RECEIVABLE,
 }
 
 
