@@ -20,6 +20,10 @@ LOGIN_SUBMIT = "button[type=submit]"
 # ── 사용자 패널 / 아바타 ───────────────────────────────────────────────────────
 AVATAR = "img[src*=profile_circle]"
 
+# 로그인 직후 공지 레이어 팝업(전 화면 차단) — 고유 앵커. dismiss_notice_popup 참조.
+NOTICE_CHECKBOX_TODAY = "#close-today-chk"  # '하루동안 보지 않기'
+NOTICE_CLOSE_BTN = "#notice-dialog-close"  # '닫기'
+
 # ── 그리드(더존 dews 래퍼; 내부는 RealGrid 캔버스) ─────────────────────────────
 GRID = ".dews-ui-grid"  # 순서: [0]=마스터, [1]=디테일, [2]=항목, 팝업 내부 그리드는 별도.
 

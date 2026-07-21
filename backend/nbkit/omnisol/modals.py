@@ -11,7 +11,7 @@ from typing import Any
 
 from nbkit.omnisol import js_lib
 
-__all__ = ["dismiss_blocking_modals"]
+__all__ = ["dismiss_blocking_modals", "dismiss_notice_popup"]
 
 
 async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
@@ -49,3 +49,43 @@ async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
         if not modals:
             quiet += interval
     return seen
+
+
+async def dismiss_notice_popup(page: Any, *, appear_cap_ms: int = 2_000, interval: int = 300) -> bool:
+    """로그인 직후 뜨는 '공지' 레이어 팝업을 '하루동안 보지 않기' 체크 후 '닫기'로 닫는다.
+
+    전 에이전트 공통(2026-07-21 프로브 실측): 이 팝업은 로그인 직후 ~1.5s 뒤 렌더되며 Kendo
+    백드롭(.k-overlay)으로 **화면 전체를 차단**한다 → 로그인 성공 직후·다른 어떤 조작(아바타
+    클릭·메뉴 진입)보다 **먼저** 닫아야 한다. 영속은 브라우저 localStorage 단독이라 새 브라우저
+    로 시작하는 헤드리스 세션에선 **매번 재현**된다.
+
+    고유 앵커 #close-today-chk 로만 판정(``dismiss_blocking_modals`` 는 '확인/예' 확정 전용이라
+    '닫기' 버튼을 못 눌러 이 팝업을 못 닫는다). 팝업이 없으면(오늘 이미 닫힘/공지 없음) no-op.
+    자체 방어(evaluate 실패 등은 삼켜 로그인 자체를 막지 않는다). 반환 True=닫음 / False=없음.
+    """
+    boxes = None
+    waited = 0
+    # appear_cap_ms=0 이면 대기 없이 1회만 확인(just-in-time 재확인용 — 피커 클릭 직전 등).
+    while True:
+        try:
+            boxes = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
+        except Exception:  # noqa: BLE001 — best-effort, 로그인 진행 우선.
+            return False
+        if boxes or waited >= appear_cap_ms:
+            break
+        await page.wait_for_timeout(interval)
+        waited += interval
+    if not boxes:
+        return False
+    try:
+        if not boxes.get("checked"):  # '하루동안 보지 않기' 체크(이미 체크면 스킵)
+            await page.mouse.click(boxes["checkbox"]["x"], boxes["checkbox"]["y"])
+            await page.wait_for_timeout(200)
+        # 체크 후 레이아웃 안정 뒤 '닫기' 좌표 재평가(없으면 기존값).
+        again = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
+        close = (again or boxes)["close"]
+        await page.mouse.click(close["x"], close["y"])
+        await page.wait_for_timeout(400)
+    except Exception:  # noqa: BLE001 — 닫기 실패해도 로그인 자체는 진행.
+        return False
+    return True
