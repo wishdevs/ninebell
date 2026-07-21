@@ -40,8 +40,9 @@ function readPending(): PendingSignup | null {
  *
  * 로그인이 첫 접속으로 판정하면 signupToken+prefill을 sessionStorage에 넣고
  * 이 화면으로 보낸다. pending 정보가 없으면(직접 URL 접근 등) `/login`으로
- * 되돌린다. 이름/부서는 prefill(수정 가능), 이메일은 선택 입력(추후 필수화)이며
- * 약관 동의 후 `POST /auth/signup`으로 계정을 생성하고 세션을 발급받아 홈으로 이동한다.
+ * 되돌린다. 이름/부서는 옴니솔 프로필값(읽기 전용 표시), 이메일은 선택 입력
+ * (추후 필수화)이며 약관 동의 후 `POST /auth/signup`으로 계정을 생성하고
+ * 세션을 발급받아 홈으로 이동한다.
  */
 export function SignupForm() {
   const router = useRouter();
@@ -71,11 +72,6 @@ export function SignupForm() {
     if (submitting) return;
     setError(null);
 
-    if (!displayName.trim()) {
-      setError('이름을 입력해주세요.');
-      return;
-    }
-    // 이메일은 선택 입력(추후 필수화) — 비어 있어도 제출 허용.
     if (!agreedTerms) {
       setError('약관에 동의해주세요.');
       return;
@@ -85,8 +81,6 @@ export function SignupForm() {
     try {
       await api.post('/auth/signup', {
         signupToken,
-        displayName: displayName.trim(),
-        department: department.trim(),
         // 빈값이면 email 키 생략(EmailStr("") 검증 회피) — 백엔드가 선택으로 처리.
         ...(email.trim() ? { email: email.trim() } : {}),
         agreedTerms: true,
@@ -118,39 +112,12 @@ export function SignupForm() {
 
   return (
     <form onSubmit={handleSubmit} className="grid gap-5" noValidate>
-      <FormField id="displayName" label="이름" required>
-        <Input
-          id="displayName"
-          name="displayName"
-          type="text"
-          autoComplete="name"
-          placeholder="이름"
-          value={displayName}
-          onChange={(event) => {
-            setDisplayName(event.target.value);
-            if (error) setError(null);
-          }}
-          required
-        />
+      <FormField id="displayName" label="이름" hint="옴니솔 프로필에서 불러왔어요.">
+        <Input id="displayName" name="displayName" value={displayName} readOnly disabled />
       </FormField>
 
-      <FormField
-        id="department"
-        label="부서"
-        hint="옴니솔 프로필에서 불러왔어요. 필요하면 수정하세요."
-      >
-        <Input
-          id="department"
-          name="department"
-          type="text"
-          autoComplete="organization-title"
-          placeholder="부서"
-          value={department}
-          onChange={(event) => {
-            setDepartment(event.target.value);
-            if (error) setError(null);
-          }}
-        />
+      <FormField id="department" label="부서" hint="옴니솔 프로필에서 불러왔어요.">
+        <Input id="department" name="department" value={department} readOnly disabled />
       </FormField>
 
       <FormField id="email" label="이메일" hint="선택 입력" error={error ?? undefined}>

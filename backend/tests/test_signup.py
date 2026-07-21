@@ -1,6 +1,7 @@
 """회원가입 흐름 검증(CONTRACT_V2 A) — POST /auth/signup.
 
 - 유효 토큰 + agreedTerms → 유저 생성 + 세션 발급 + 약관 동의 시각/이메일 저장.
+- 이름/부서는 ERP 프로필값(pending)이 권위값 — 클라이언트가 보낸 값은 무시.
 - SUPER_ADMIN_OMNISOL_IDS 에 속한 userid → super_admin 롤.
 - agreedTerms 미동의 → 400. 유효하지 않은/만료 토큰 → 400.
 """
@@ -44,8 +45,6 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": True,
         },
@@ -57,6 +56,8 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
     async with sm() as s:
         u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
         assert u.role.code == "user"
+        assert u.display_name == "홍길동"  # pending(ERP 프로필)값 — 클라 미전송
+        assert u.department == "개발팀"
         assert u.email == "hong@example.com"
         assert u.agreed_terms_at is not None
         assert u.last_login_at is not None
@@ -64,6 +65,29 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
 
     # 토큰은 소비되어 재사용 불가.
     assert fastapi_app.state.signup_cache.get(token) is None
+
+
+async def test_signup_ignores_client_display_name_and_department(client, sm, monkeypatch):
+    """이름/부서는 ERP 프로필(pending)이 권위값 — 요청 바디에 보내도 무시된다."""
+    _wire_state(monkeypatch)
+    token = _seed_pending("newbie2")
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "가짜이름",
+            "department": "가짜부서",
+            "email": "hong2@example.com",
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "newbie2"))).scalar_one()
+        assert u.display_name == "홍길동"
+        assert u.department == "개발팀"
 
 
 async def test_signup_succeeds_without_email(client, sm, monkeypatch):
@@ -75,8 +99,6 @@ async def test_signup_succeeds_without_email(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "agreedTerms": True,
         },
     )
@@ -98,8 +120,6 @@ async def test_signup_normalizes_empty_email_to_none(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "",
             "agreedTerms": True,
         },
@@ -121,8 +141,6 @@ async def test_signup_assigns_super_admin_from_env(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "보스",
-            "department": "경영지원",
             "email": "boss@example.com",
             "agreedTerms": True,
         },
@@ -144,8 +162,6 @@ async def test_signup_rejects_when_terms_not_agreed(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": False,
         },
@@ -166,8 +182,6 @@ async def test_signup_rejects_invalid_token(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": "does-not-exist",
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": True,
         },
@@ -187,8 +201,6 @@ async def test_login_then_signup_end_to_end(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "e2e@example.com",
             "agreedTerms": True,
         },
@@ -199,5 +211,7 @@ async def test_login_then_signup_end_to_end(client, sm, monkeypatch):
 
     async with sm() as s:
         u = (await s.execute(select(User).where(User.omnisol_userid == "e2euser"))).scalar_one()
+        assert u.display_name == "홍길동"
+        assert u.department == "개발팀"
         assert u.email == "e2e@example.com"
         assert u.role.code == "user"
