@@ -5,7 +5,7 @@
 를 읽는다). 워크플로우 노드는 `state["events"]`(asyncio.Queue)로 이 헬퍼를 통해 방출한다.
 
 프레임 계약(고정):
-    {"step": str, "status": "running"|"done"|"failed", "ms"?: int}
+    {"step": str, "status": "running"|"done"|"failed", "ms"?: int, "progress"?: {"done": int, "total": int}}
     {"log": str, "level": "info"|"ok"|"error"|"warn"}
     {"screenshot": "data:image/jpeg;base64,...", "window"?: "parent"|"child"}  # 비버퍼(창별 최신 1장)
     {"window": "child", "closed": true}                   # 자식 창 닫힘 전이(버퍼/커서 대상 — 재생 가능)
@@ -27,10 +27,20 @@ from __future__ import annotations
 import asyncio
 
 
-async def emit_step(events: asyncio.Queue, step: str, status: str, ms: int | None = None) -> None:
+async def emit_step(
+    events: asyncio.Queue,
+    step: str,
+    status: str,
+    ms: int | None = None,
+    *,
+    progress: dict | None = None,
+) -> None:
     ev: dict = {"step": step, "status": status}
     if ms is not None:
         ev["ms"] = ms
+    if progress is not None:
+        # 반복 스텝의 진행 카운트 — 워크플로우 노드에 "done/total" 표시. 예 {"done":2,"total":5}.
+        ev["progress"] = progress
     await events.put(ev)
 
 

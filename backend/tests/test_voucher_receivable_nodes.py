@@ -279,12 +279,18 @@ async def test_loop_emits_progress_i_of_n(monkeypatch):
     q = _q()
     out = await node({"events": q, "page": object(), "master_rowcount": 3})  # 전체(None)
     assert out["processed"] == 3
-    logs = _logs(_drain(q))
+    frames = _drain(q)
+    logs = _logs(frames)
     assert any("대상 3건" in m for m in logs)  # 시작 배너에 총 건수
     for i in (1, 2, 3):  # 각 건 [i/3] 진행 표기
         assert any(m.startswith(f"[{i}/3]") for m in logs)
     assert any("누적 3/3" in m for m in logs)  # 최종 누적 실행 건수
     assert any("대상 3건 중 3건 가상 상신" in m for m in logs)  # 완료 배너
+    # 워크플로우 노드용 step progress 프레임(done/total) 방출 — 0/3 시작 ~ 3/3 완료.
+    prog = [f["progress"] for f in frames if f.get("step") == "loop_approvals" and "progress" in f]
+    assert {p["total"] for p in prog} == {3}
+    dones = [p["done"] for p in prog]
+    assert 0 in dones and 3 in dones
 
 
 async def test_loop_batch_checks_exactly_one_row_at_each_approval(monkeypatch):

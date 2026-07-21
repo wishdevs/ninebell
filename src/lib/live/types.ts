@@ -196,6 +196,8 @@ export interface LiveFrame {
   step?: string;
   status?: LiveStepStatus;
   ms?: number;
+  /** 반복 스텝 진행 카운트(백엔드 emit_step progress) — 워크플로우 노드에 done/total 표시. */
+  progress?: LiveStepProgress;
   log?: string;
   level?: LiveLogLevel;
   screenshot?: string;
@@ -240,10 +242,17 @@ export type LiveRunStatus =
   | 'failed'; // error/연결실패(종료)
 
 /** 누적 단계(스텝 이름으로 upsert). */
+/** 반복 스텝 진행 카운트 — 예: 결재 순회 {done:2,total:5} → "2/5". */
+export interface LiveStepProgress {
+  done: number;
+  total: number;
+}
+
 export interface LiveStepState {
   step: string;
   status: LiveStepStatus;
   ms?: number;
+  progress?: LiveStepProgress;
 }
 
 /** 누적 로그 한 줄. */

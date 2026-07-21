@@ -62,6 +62,8 @@ def make_loop_approvals_node():
         # 처리 범위를 명시적으로 노출(전체/부분·건수) — 조용한 상한 방지.
         scope = "전체" if max_rows is None or int(max_rows) >= rowcount else f"{process_count}/{rowcount}"
         await emit_log(events, f"대상 {rowcount}건 중 {scope} 순회 시작(각 건 결제창 열기→가상 상신→닫기).", "info")
+        # 워크플로우 노드에 진행 카운트 노출(0/N 부터) — 각 건 완료 시 갱신.
+        await emit_step(events, "loop_approvals", "running", progress={"done": 0, "total": process_count})
         processed_docu_nos: list[str] = []
 
         async def fail(idx: int, reason) -> dict:
@@ -149,6 +151,13 @@ def make_loop_approvals_node():
                         f"[{idx + 1}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
                         f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
                         "ok",
+                    )
+                    # 워크플로우 노드 진행 카운트 갱신(누적 완료/전체).
+                    await emit_step(
+                        events,
+                        "loop_approvals",
+                        "running",
+                        progress={"done": len(processed_docu_nos), "total": process_count},
                     )
             finally:
                 # 성공/실패 무관하게 결제창은 반드시 닫는다(상신/보관 미클릭 = 비영속).

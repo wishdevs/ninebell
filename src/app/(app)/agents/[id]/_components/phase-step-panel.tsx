@@ -12,7 +12,7 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import type { WorkflowStep } from '@/lib/data/agents';
 import { formatEta } from '@/lib/data/format';
-import type { LiveRunStatus, LiveStepState } from '@/lib/live/types';
+import type { LiveRunStatus, LiveStepProgress, LiveStepState } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -51,6 +51,8 @@ interface DisplayStep {
   intervention?: boolean;
   /** 예상 소요(ms, 계획 스텝에서). 자동 스텝 전부에 있어야 예상 시간 UI 를 켠다. */
   expectedMs?: number;
+  /** 반복 스텝 진행 카운트(라이브) — 예: 결재 순회 {done,total} → "2/5". */
+  progress?: LiveStepProgress;
 }
 
 type PhaseStatus = DisplayStepStatus;
@@ -80,7 +82,7 @@ function buildDisplaySteps(
   if (!planSteps || planSteps.length === 0) {
     // 계획 없는 에이전트(DB 스텝 없는 데모 등) — 도착한 라이브 단계 id 그대로 폴백.
     return liveSteps.map((s) => ({
-      step: { id: s.step, label: s.step, status: s.status, ms: s.ms },
+      step: { id: s.step, label: s.step, status: s.status, ms: s.ms, progress: s.progress },
       phase: FALLBACK_PHASE,
     }));
   }
@@ -97,13 +99,14 @@ function buildDisplaySteps(
       detail: d.detail,
       intervention: d.intervention,
       expectedMs: d.expectedMs,
+      progress: byId.get(d.id)?.progress,
     },
     phase: d.phase ?? FALLBACK_PHASE,
   }));
   const extra = liveSteps
     .filter((s) => !known.has(s.step))
     .map((s) => ({
-      step: { id: s.step, label: s.step, status: s.status, ms: s.ms },
+      step: { id: s.step, label: s.step, status: s.status, ms: s.ms, progress: s.progress },
       phase: FALLBACK_PHASE,
     }));
   return [...merged, ...extra];
@@ -410,6 +413,13 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
                   <>
                     <span className="text-foreground-tertiary font-medium">지금: </span>
                     {currentStep.label}
+                    {/* 반복 스텝(결재 순회 등) 진행 카운트 — 몇 건 중 몇 건 처리됐는지. */}
+                    {currentStep.progress ? (
+                      <span className="text-foreground-tertiary tabular-nums">
+                        {' '}
+                        · {currentStep.progress.done}/{currentStep.progress.total}
+                      </span>
+                    ) : null}
                     {/* 진행 중 시각 신호 — 화면 변화 없는 긴 자동 구간에서 멈춘 게 아님을
                         보여준다(사용자 피드백 2026-07-06). */}
                     {runningStep ? (
@@ -831,13 +841,23 @@ function StepRow({
               </span>
             ) : null}
           </span>
-          <span
-            className={cn(
-              'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-              STEP_DOT[step.status],
-            )}
-          >
-            {STEP_LABEL[step.status]}
+          <span className="flex shrink-0 items-center gap-1.5">
+            {step.progress ? (
+              <span
+                className="text-foreground-secondary bg-muted rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                title="처리 진행(완료/전체 건수)"
+              >
+                {step.progress.done}/{step.progress.total}
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                'rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                STEP_DOT[step.status],
+              )}
+            >
+              {STEP_LABEL[step.status]}
+            </span>
           </span>
         </div>
         {step.skill || step.ms != null ? (
