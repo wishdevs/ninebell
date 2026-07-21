@@ -19,9 +19,9 @@ def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
-def make_set_query_node():
+def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
     """조회 조건 세팅 — 패널 확장 → 작성부서 전체 → 회계일 당월 → 작성자 비움 → 전표상태 미결
-    → 전자결재상태 저장 → 전표유형 국내/해외매출."""
+    → 전자결재상태 저장 → 전표유형(docu_types). 전표유형만 에이전트별로 다르다(매출/내수구매)."""
 
     async def set_query(state: dict) -> dict:
         if state.get("error"):
@@ -37,6 +37,8 @@ def make_set_query_node():
             await emit_log(events, msg, "error")
             return {"error": msg}
 
+        # 공지 팝업은 공유 로그인 플로우(ensure_logged_in)가 로그인 직후 닫고, 각 피커 클릭 직전
+        # (_open_picker)에도 just-in-time 재확인한다 — 여기선 별도 처리 불필요.
         # 전표유형이 optional-area 라 패널을 먼저 펼친다(없으면 no-op).
         await steps.expand_condition_panel(page)
 
@@ -61,11 +63,15 @@ def make_set_query_node():
         if not r.get("ok"):
             return await fail("전자결재상태", r.get("reason"))
 
-        r = await steps.set_docu_types(page)
+        r = await steps.set_docu_types(page, docu_types)
         if not r.get("ok"):
             return await fail("전표유형", r.get("reason"))
 
-        await emit_log(events, "조회 조건 세팅 완료(미결·전자결재저장·국내/해외매출).", "ok")
+        await emit_log(
+            events,
+            f"조회 조건 세팅 완료(미결·전자결재저장·전표유형 {'·'.join(docu_types)}).",
+            "ok",
+        )
         await emit_shot(events.put, page)
         await emit_step(events, "set_query", "done", _ms(t0))
         return {}

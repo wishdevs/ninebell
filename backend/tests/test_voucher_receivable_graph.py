@@ -16,6 +16,7 @@ import app.agents  # noqa: F401 — import 시 'voucher-receivable' 등록
 from app.agents.common.nodes import make_menu_nav_node
 from app.agents.voucher_receivable.graph import (
     RECURSION_LIMIT,
+    build_voucher_payable_graph,
     build_voucher_receivable_graph,
 )
 from app.live.registry import get_spec, get_workflow, list_workflows
@@ -58,6 +59,31 @@ def test_recursion_limit_configured():
 
 def test_graph_is_recompilable():
     assert build_voucher_receivable_graph() is not None
+
+
+# ── 외상매입금(voucher-payable) — 공유 그래프 재사용, 전표유형만 다름 ──────────────────
+def test_payable_graph_same_backbone_as_receivable():
+    # 전표유형만 파라미터로 다르고 노드 백본은 완전 동일해야 한다(공유 빌더).
+    assert _graph_nodes(build_voucher_payable_graph()) == _EXPECTED_NODES
+
+
+def test_payable_workflow_registered():
+    assert "voucher-payable" in list_workflows()
+    spec = get_spec("voucher-payable")
+    assert spec is not None and spec.needs_browser is True and spec.delay_scale == 0.4
+
+
+def _voucher_payable_fixture() -> dict:
+    return next(a for a in AGENT_FIXTURES if a["id"] == "voucher-trade-payable")
+
+
+def test_payable_fixture_promoted_and_lockstep():
+    fx = _voucher_payable_fixture()
+    assert fx["workflow_id"] == "voucher-payable"
+    assert fx["group_id"] == "voucher" and fx["name"] == "외상매입금"
+    assert fx["hidden"] is False
+    # steps 키가 그래프 노드와 1:1(진행 하이라이트 정합) — 매출과 동일 백본.
+    assert {s["key"] for s in fx["steps"]} == _EXPECTED_NODES
 
 
 # ── registry ──────────────────────────────────────────────────────────────────

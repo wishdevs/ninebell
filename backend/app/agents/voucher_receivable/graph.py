@@ -28,6 +28,7 @@ from app.agents.common.nodes import (
 from app.agents.common.state import BaseAgentState
 from nbkit.omnisol.menu_schemas import VOUCHER_RECEIVABLE
 
+from . import steps  # 전표유형 상수(DOCU_TYPES_RECEIVABLE/PAYABLE)
 from .nodes import (
     make_loop_approvals_node,
     make_run_query_node,
@@ -51,16 +52,20 @@ class VoucherReceivableState(BaseAgentState, total=False):
     processed_docu_nos: list[str]  # 가상 상신한 전표번호(DOCU_NO) 목록
 
 
-def build_voucher_receivable_graph():
-    """전표조회승인 체인을 컴파일해 반환(stateless·재사용 가능)."""
+def build_voucher_graph(docu_types: tuple[str, ...]):
+    """전표조회승인 조회+결재 체인을 컴파일해 반환(stateless·재사용).
+
+    전표유형(docu_types)만 에이전트별로 다르고 나머지(조회 8필드·결과그리드·checkRow·결제창·
+    D7·로딩대기·진행)는 전부 공유한다 — 외상매출금/외상매입금이 이 빌더를 값만 바꿔 쓴다.
+    """
     g = StateGraph(VoucherReceivableState)
     # 진입 앞단: validate_params(브라우저 앞) → 공유 프리미티브(login/user_type/menu_nav).
     g.add_node("validate_params", make_validate_params_node())
     g.add_node("login", make_login_node())
     g.add_node("user_type", make_user_type_node("회계"))
     g.add_node("menu_nav", make_menu_nav_node(VOUCHER_RECEIVABLE))
-    # 신규(조회 조건·조회·결재 순회)
-    g.add_node("set_query", make_set_query_node())
+    # 신규(조회 조건·조회·결재 순회) — set_query 만 전표유형 파라미터를 받는다.
+    g.add_node("set_query", make_set_query_node(docu_types))
     g.add_node("run_query", make_run_query_node())
     g.add_node("loop_approvals", make_loop_approvals_node())
 
@@ -77,3 +82,13 @@ def build_voucher_receivable_graph():
         g.add_edge(a, b)
 
     return g.compile().with_config({"recursion_limit": RECURSION_LIMIT})
+
+
+def build_voucher_receivable_graph():
+    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출."""
+    return build_voucher_graph(steps.DOCU_TYPES_RECEIVABLE)
+
+
+def build_voucher_payable_graph():
+    """외상매입금(voucher-payable) — 전표유형 내수구매. 나머지 전부 공유."""
+    return build_voucher_graph(steps.DOCU_TYPES_PAYABLE)

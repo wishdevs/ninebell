@@ -17,7 +17,10 @@ from .gyeongjo_grant.graph import build_gyeongjo_grant_graph
 from .hakjagum_grant.graph import build_hakjagum_grant_graph
 from .trip_domestic.graph import build_trip_domestic_graph
 from .trip_overseas.graph import build_trip_overseas_graph
-from .voucher_receivable.graph import build_voucher_receivable_graph
+from .voucher_receivable.graph import (
+    build_voucher_payable_graph,
+    build_voucher_receivable_graph,
+)
 
 # 1회 컴파일 후 재사용(demo_echo 등록 패턴과 동일).
 _expense_card_chat_graph = build_expense_card_chat_graph()
@@ -47,9 +50,13 @@ _hakjagum_grant_graph = build_hakjagum_grant_graph()
 register_workflow("hakjagum-grant", lambda: _hakjagum_grant_graph, delay_scale=0.4)
 
 _voucher_receivable_graph = build_voucher_receivable_graph()
-# delay_scale 0.4: 헤드리스 프로브(2026-07-20, 3회 그린)가 검증한 대기 배율. 조회+결재(결제창=별도
-# 팝업 Page) 아키타입. ⚠ 실제 상신 없음(가상 상신 로그만) · 기본 1건(배치는 params.allow_batch 게이트).
+# delay_scale 0.4: 헤드리스 프로브(2026-07-20~21, 단건·3건 배치 그린)가 검증한 대기 배율.
+# 조회+결재(결제창=별도 팝업 Page) 아키타입. ⚠ 실제 상신 없음(가상 상신 로그만) · 전체 진행.
 register_workflow("voucher-receivable", lambda: _voucher_receivable_graph, delay_scale=0.4)
+
+# 외상매입금 — 외상매출금과 전부 공유하고 전표유형만 내수구매(build_voucher_graph 재사용).
+_voucher_payable_graph = build_voucher_payable_graph()
+register_workflow("voucher-payable", lambda: _voucher_payable_graph, delay_scale=0.4)
 
 __all__ = [
     "build_card_collect_graph",
@@ -58,5 +65,6 @@ __all__ = [
     "build_hakjagum_grant_graph",
     "build_trip_domestic_graph",
     "build_trip_overseas_graph",
+    "build_voucher_payable_graph",
     "build_voucher_receivable_graph",
 ]

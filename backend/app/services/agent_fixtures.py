@@ -588,6 +588,23 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
 }
 
 
+# 외상매입금 — 외상매출금과 전부 공유, 전표유형만 내수구매(build_voucher_payable_graph).
+# 픽스처도 receivable 를 스프레드로 재사용하고 id/workflow_id/name/설명·set_query detail 만 덮는다.
+_VOUCHER_PAYABLE_FIXTURE: dict = {
+    **_VOUCHER_RECEIVABLE_FIXTURE,
+    "id": "voucher-trade-payable",
+    "workflow_id": "voucher-payable",
+    "name": "외상매입금",
+    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 건별로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
+    "steps": [
+        {**s, "detail": "작성부서 전체·회계일 당월·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
+        if s["key"] == "set_query"
+        else s
+        for s in _VOUCHER_RECEIVABLE_FIXTURE["steps"]
+    ],
+}
+
+
 AGENT_FIXTURES.extend(
     [
         _TRIP_DOMESTIC_FIXTURE,
@@ -597,9 +614,9 @@ AGENT_FIXTURES.extend(
         # 자재팀 그룹 — 내용 없는 더미(준비 중, 노출). 구현 시 workflow_id·steps 를 채워 승격한다.
         _dummy_agent("materials-inbound", "자동 입고 처리", group_id="materials"),
         _dummy_agent("materials-classify", "프로젝트별 자재 자동 분류", group_id="materials"),
-        # 회계전표 그룹.
-        _dummy_agent("voucher-trade-payable", "외상매입금", group_id="voucher"),
-        _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable 더미 → 실동작 승격(voucher-receivable, 숨김).
+        # 회계전표 그룹 — 외상매출금/외상매입금 실동작 승격(공유 graph, 전표유형만 다름).
+        _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable
+        _VOUCHER_PAYABLE_FIXTURE,  # voucher-trade-payable → voucher-payable(내수구매)
         _dummy_agent("voucher-card-payable", "미지급금 법인카드", group_id="voucher"),
     ]
 )
