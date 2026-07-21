@@ -33,6 +33,7 @@ interface ChatStream {
 
 const CONNECT_ERROR = 'AI 어시스턴트에 연결할 수 없습니다. 잠시 후 다시 시도하세요.';
 const SESSION_ERROR = '세션이 만료되었습니다. 다시 로그인해 주세요.';
+const EMPTY_ERROR = '응답을 받지 못했습니다. 다시 시도해 주세요.';
 
 /** 모델의 함수호출(action 프레임)을 프론트 AssistantAction 으로 매핑. */
 function mapAction(tc: {
@@ -65,6 +66,9 @@ export function useChatStream(options: ChatStreamOptions = {}): ChatStream {
   const lastInputRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  // isStreaming(상태)은 비동기 반영이라 빠른 더블클릭이 가드를 함께 통과해 이중 스트림을 연다.
+  // 동기 ref 로 시작을 직렬화한다.
+  const streamingRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -82,7 +86,8 @@ export function useChatStream(options: ChatStreamOptions = {}): ChatStream {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || isStreaming) return;
+      if (!trimmed || streamingRef.current) return;
+      streamingRef.current = true;
 
       lastInputRef.current = trimmed;
 
@@ -120,7 +125,8 @@ export function useChatStream(options: ChatStreamOptions = {}): ChatStream {
             action?: { name?: string; args?: Record<string, unknown> };
           };
           if (obj.error) {
-            fail(CONNECT_ERROR);
+            // 백엔드가 사용자에게 안전한 메시지를 이미 선별해 보낸다(민감정보는 일반화됨) — 그대로 노출.
+            fail(typeof obj.error === 'string' && obj.error ? obj.error : CONNECT_ERROR);
             errored = true;
           } else if (obj.action) {
             const a = mapAction(obj.action);
@@ -175,23 +181,41 @@ export function useChatStream(options: ChatStreamOptions = {}): ChatStream {
         }
 
         if (!errored) {
-          patch((m) => ({ ...m, streaming: false }));
+          // delta·action 이 하나도 없이 스트림이 끝나면(빈 완료·조용한 절단) 빈 말풍선이 영구히
+          // 남고 재시도도 불가하다 — 재시도 가능한 에러로 표면화한다.
+          patch((m) =>
+            m.content || m.action
+              ? { ...m, streaming: false }
+              : { ...m, content: EMPTY_ERROR, streaming: false, error: true },
+          );
         }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         fail(CONNECT_ERROR);
       } finally {
+        streamingRef.current = false;
         if (abortRef.current === controller) abortRef.current = null;
         if (mountedRef.current) setIsStreaming(false);
       }
     },
-    [commit, isStreaming],
+    [commit],
   );
 
   const retry = useCallback(() => {
     const last = lastInputRef.current;
-    if (last) void send(last);
-  }, [send]);
+    if (!last) return;
+    // 실패한 마지막 교환(사용자 질문 + 에러 말풍선)을 걷어낸 뒤 재전송한다. 그러지 않으면 send 가
+    // 같은 질문을 화면과 요청 이력 양쪽에 중복으로 쌓는다.
+    commit((prev) => {
+      const next = [...prev];
+      if (next[next.length - 1]?.error) {
+        next.pop();
+        if (next[next.length - 1]?.role === 'user') next.pop();
+      }
+      return next;
+    });
+    void send(last);
+  }, [commit, send]);
 
   return { messages, isStreaming, send, retry };
 }
