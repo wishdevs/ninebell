@@ -35,8 +35,17 @@ def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
-def make_loop_approvals_node():
-    """조회된 전표를 max_rows 만큼 순회하며 결제창을 열고 '가상 상신' 로그만 남기고 닫는다."""
+def make_loop_approvals_node(on_popup=None):
+    """조회된 전표를 max_rows 만큼 순회하며 결제창을 열고 '가상 상신' 로그만 남기고 닫는다.
+
+    on_popup(child, gwdocu_no, events) (기본 None): 결제창(EAP) 안에서 **가상 상신 로그 전에**
+    추가 조작이 필요한 에이전트(미지급금 법인카드=참조문서 선택)를 위한 optional 훅.
+      - None(외상매출금/매입금): 기존과 100% 동일(훅 미호출 — read/close 만).
+      - 콜러블(카드): 렌더+D7 통과 후, 이 행의 결의서번호(ABDOCU_NO)로 state['payment_map']에서
+        GWDOCU_NO 를 구해 `await on_popup(child, gwdocu_no, events)` 를 호출한다. 훅은 참조문서
+        검색·선택까지만 하고 **확인·상신은 절대 클릭하지 않는다**(훅 자체가 게이트·우아한 실패
+        책임을 진다 — 여기서는 예외를 삼켜 배치가 참조문서 이슈로 중단되지 않게 한다).
+    """
 
     async def loop_approvals(state: dict) -> dict:
         if state.get("error"):
@@ -144,6 +153,22 @@ def make_loop_approvals_node():
                     await emit_log(events, f"D7 정합성 확인 ✅ — 전표 {key_label} 결제창 일치.", "ok")
 
                 if mismatch is None:
+                    # 카드 고유(on_popup): 결제창 안 참조문서 선택 — 가상 상신 로그 **전에** 수행.
+                    # 이 행의 결의서번호(ABDOCU_NO)로 payment_map 에서 GWDOCU_NO 를 구해 넘긴다.
+                    # 훅은 확인·상신을 절대 클릭하지 않으며 0건/오류를 우아하게 로그한다 —
+                    # 참조문서 이슈로 배치가 중단되지 않게 여기서 예외를 삼킨다(best-effort).
+                    if on_popup is not None:
+                        abdocu_no = await steps.read_row_abdocu_no(page, idx)
+                        payment_map = state.get("payment_map") or {}
+                        gwdocu_no = payment_map.get(abdocu_no) if abdocu_no else None
+                        try:
+                            await on_popup(child, gwdocu_no, events)
+                        except Exception as exc:  # noqa: BLE001 — 참조문서 훅은 비크리티컬.
+                            await emit_log(
+                                events,
+                                f"참조문서 처리 중 경고(무시하고 진행) — 전표 {key_label}: {exc}",
+                                "warn",
+                            )
                     # ⚠ 상신(~922,30)·보관(~860,30) 절대 클릭 금지 — 가상 상신 로그만 남긴다.
                     processed_docu_nos.append(key_label)
                     await emit_log(

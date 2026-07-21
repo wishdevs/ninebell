@@ -240,6 +240,18 @@ async def read_row_key(page: Any, idx: int) -> str | None:
     return await page.evaluate(js.READ_ROW_KEY_JS, idx)
 
 
+async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
+    """마스터 그리드 idx 행의 결의서번호(ABDOCU_NO). 못 읽거나 없으면 None.
+
+    카드(voucher-card) on_popup 훅이 이 값으로 payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다 —
+    매출/매입 백본(on_popup=None)은 호출하지 않으므로 무영향(신규 함수 추가일 뿐).
+    """
+    try:
+        return await page.evaluate(js.READ_ROW_ABDOCU_NO_JS, idx)
+    except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
+        return None
+
+
 async def uncheck_all_rows(page: Any) -> bool:
     """마스터 그리드 전체 체크 해제 — 배치 순회에서 직전 대상 행의 체크가 남지 않게 한다
     (결재가 여러 문서를 잡는 위험 차단; 대상 행 checkRow 직전에 호출)."""

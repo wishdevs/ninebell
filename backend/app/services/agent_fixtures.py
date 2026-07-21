@@ -605,6 +605,80 @@ _VOUCHER_PAYABLE_FIXTURE: dict = {
 }
 
 
+# ── 미지급금 법인카드 결재 플로우 그래프 (voucher-card 그래프의 사람용 요약) ──────
+# 공유 조회+결재에 카드 3대 확장: (B) 결의서조회승인 다중탭 결재번호 수집, (C) 결제창 안
+# 참조문서 선택. 실제 상신·참조문서 확인 없음(가상 상신 로그만).
+VOUCHER_CARD_FLOW: dict = {
+    "nodes": [
+        {"id": "access", "kind": "start", "status": "done", "title": "전표조회승인 접속", "sub": "전사공통(회계)", **_col(0)},
+        {"id": "setq", "kind": "step", "status": "done", "title": "조회 조건 세팅", "sub": "미결·전자결재저장·전표유형 일반", **_col(1)},
+        {"id": "query", "kind": "step", "status": "done", "title": "조회(F2)", "sub": "대상=결의구분 카드·결의서번호 있는 행", **_col(2)},
+        {"id": "collect", "kind": "step", "status": "active", "title": "결재번호 수집", "sub": "결의서조회승인(다중탭)·결의구분 카드 일괄", **_col(3)},
+        {"id": "pick", "kind": "step", "status": "pending", "title": "행 선택(checkRow)", "sub": "결재 대상 지정", **_col(4)},
+        {"id": "pay", "kind": "step", "status": "pending", "title": "결제창 열기", "sub": "별도 전자결재 창(EAP)", **_col(5)},
+        {"id": "refdoc", "kind": "step", "status": "pending", "title": "참조문서 선택", "sub": "문서번호=결재번호 검색→선택→아래버튼", **_col(6)},
+        {"id": "virtual", "kind": "step", "status": "pending", "title": "가상 상신", "sub": "확인·상신 미클릭 — 로그만", **_col(7)},
+        {"id": "close", "kind": "step", "status": "pending", "title": "결제창 닫기", "sub": "비영속(다음 건)", **_col(8)},
+        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 건?", "sub": "대상 전 건 반복(기본 전체)", **_col(9)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "실제 상신", "sub": "사용자가 직접(EAP)", **_col(10)},
+    ],
+    "edges": [
+        {"id": "e-access-setq", "source": "access", "target": "setq"},
+        {"id": "e-setq-query", "source": "setq", "target": "query"},
+        {"id": "e-query-collect", "source": "query", "target": "collect"},
+        {"id": "e-collect-pick", "source": "collect", "target": "pick"},
+        {"id": "e-pick-pay", "source": "pick", "target": "pay"},
+        {"id": "e-pay-refdoc", "source": "pay", "target": "refdoc"},
+        {"id": "e-refdoc-virtual", "source": "refdoc", "target": "virtual"},
+        {"id": "e-virtual-close", "source": "virtual", "target": "close"},
+        {"id": "e-close-more", "source": "close", "target": "more"},
+        {"id": "e-more-pick", "source": "more", "target": "pick", "label": "다음 건 ↩", "kind": "loop"},
+        {"id": "e-more-submit", "source": "more", "target": "submit", "label": "마지막 건", "kind": "branch"},
+    ],
+}
+
+
+# ── 미지급금 법인카드 — 실동작 승격(voucher-card 워크플로우) ────────────────────
+# voucher-card-payable 더미를 제자리 승격한다(agent id 유지 — 프론트/시드 연속성). 공유 백본
+# (전표조회승인 조회+결재)에 카드 3대 확장(collect_payments 결재번호 수집 · 참조문서 선택 훅).
+# steps 의 key 는 그래프 노드(emit_step 키)와 1:1(진행 하이라이트 정합). ⚠ 실제 상신·참조문서
+# 확인 없음(가상). 참조문서 검색 0건(현재 테스트 계정 시스템 승인 이슈)은 우아하게 로그 후 진행.
+_VOUCHER_CARD_FIXTURE: dict = {
+    "id": "voucher-card-payable",
+    "workflow_id": "voucher-card",
+    "group_id": "voucher",
+    "hidden": False,
+    "name": "미지급금 법인카드",
+    "description": "미결·전자결재저장 상태의 법인카드(결의구분 카드) 전표를 조회해, 건별로 결제창을 열고 참조문서(결재번호)를 선택한 뒤 상신 대기 상태를 확인합니다(실제 상신·참조문서 확인은 하지 않습니다).",
+    "handoff_note": "이 에이전트는 실제 상신·참조문서 확인을 하지 않습니다 — 결제창을 열어 참조문서를 선택(선택+아래버튼)하고 '가상 상신'만 확인한 뒤 닫습니다. 옴니솔 전표조회승인에서 대상 전표를 확인하고 전자결재(EAP)에서 직접 참조문서 확인·상신을 진행하세요. ⚠ 결제창을 여는 것만으로 EAP 임시문서가 생길 수 있습니다. ⚠ 현재 테스트 계정은 시스템 승인 이슈로 참조문서가 0건 조회될 수 있습니다(추후 손봄).",
+    "drive": "browser",
+    "interaction": "autonomous",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    "timeout_seconds": 240,
+    "elapsed_seconds": 0,
+    "current_action": "대기 중 — 실행을 누르면 시작합니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": VOUCHER_CARD_FLOW,
+    "steps": [
+        {"key": "validate_params", "label": "실행 파라미터 확인", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "처리 건수(기본 전체)·회계일(기본 당월)을 확인"},
+        {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
+        {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
+        {"key": "menu_nav", "label": "전표조회승인 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "총계정원장 > 전표관리 > 전표조회승인(GLDDOC00700) 진입"},
+        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 당월·전표상태 미결·전자결재상태 저장·전표유형 일반"},
+        {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고(대상=결의구분 카드·결의서번호 있는 행)"},
+        {"key": "collect_payments", "label": "결재번호 수집", "skill": "grid-read", "status": "pending", "phase": "수집", "detail": "결의서조회승인(다중탭)에서 결의구분=카드 일괄 조회 → ABDOCU_NO→GWDOCU_NO(결재번호) 맵 수집 → 전표조회승인 탭 복귀"},
+        {"key": "loop_approvals", "label": "결재창 순회(참조문서·가상 상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "대상 전표를 건별로 결제창까지 열어 참조문서(문서번호=결재번호)를 선택(선택+아래버튼)하고 '가상 상신' 로그만 남기고 닫음(참조문서 확인·상신 미클릭, 실제 상신 없음)"},
+    ],
+    "logs": [],
+}
+
+
 AGENT_FIXTURES.extend(
     [
         _TRIP_DOMESTIC_FIXTURE,
@@ -614,9 +688,9 @@ AGENT_FIXTURES.extend(
         # 자재팀 그룹 — 내용 없는 더미(준비 중, 노출). 구현 시 workflow_id·steps 를 채워 승격한다.
         _dummy_agent("materials-inbound", "자동 입고 처리", group_id="materials"),
         _dummy_agent("materials-classify", "프로젝트별 자재 자동 분류", group_id="materials"),
-        # 회계전표 그룹 — 외상매출금/외상매입금 실동작 승격(공유 graph, 전표유형만 다름).
+        # 회계전표 그룹 — 외상매출금/매입금/미지급금 법인카드 실동작 승격(공유 graph 재사용).
         _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable
         _VOUCHER_PAYABLE_FIXTURE,  # voucher-trade-payable → voucher-payable(내수구매)
-        _dummy_agent("voucher-card-payable", "미지급금 법인카드", group_id="voucher"),
+        _VOUCHER_CARD_FIXTURE,  # voucher-card-payable → voucher-card(미지급금 법인카드)
     ]
 )

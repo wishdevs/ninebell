@@ -17,6 +17,7 @@ from .gyeongjo_grant.graph import build_gyeongjo_grant_graph
 from .hakjagum_grant.graph import build_hakjagum_grant_graph
 from .trip_domestic.graph import build_trip_domestic_graph
 from .trip_overseas.graph import build_trip_overseas_graph
+from .voucher_card.graph import build_voucher_card_graph
 from .voucher_receivable.graph import (
     build_voucher_payable_graph,
     build_voucher_receivable_graph,
@@ -58,6 +59,11 @@ register_workflow("voucher-receivable", lambda: _voucher_receivable_graph, delay
 _voucher_payable_graph = build_voucher_payable_graph()
 register_workflow("voucher-payable", lambda: _voucher_payable_graph, delay_scale=0.4)
 
+# 미지급금 법인카드 — 공유 백본(전표조회승인 조회+결재) + 카드 3대 확장(결의서조회승인 결재번호
+# 수집 · 참조문서 선택 훅). ⚠ 실제 상신·참조문서 확인 없음(가상 상신 로그만).
+_voucher_card_graph = build_voucher_card_graph()
+register_workflow("voucher-card", lambda: _voucher_card_graph, delay_scale=0.4)
+
 __all__ = [
     "build_card_collect_graph",
     "build_expense_card_chat_graph",
@@ -65,6 +71,7 @@ __all__ = [
     "build_hakjagum_grant_graph",
     "build_trip_domestic_graph",
     "build_trip_overseas_graph",
+    "build_voucher_card_graph",
     "build_voucher_payable_graph",
     "build_voucher_receivable_graph",
 ]

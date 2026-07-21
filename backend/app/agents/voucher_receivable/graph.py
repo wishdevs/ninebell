@@ -52,33 +52,55 @@ class VoucherReceivableState(BaseAgentState, total=False):
     processed_docu_nos: list[str]  # 가상 상신한 전표번호(DOCU_NO) 목록
 
 
-def build_voucher_graph(docu_types: tuple[str, ...]):
+def build_voucher_graph(
+    docu_types: tuple[str, ...],
+    *,
+    state_cls: type = VoucherReceivableState,
+    validate_node=None,
+    pre_loop_node=None,
+    on_popup=None,
+):
     """전표조회승인 조회+결재 체인을 컴파일해 반환(stateless·재사용).
 
     전표유형(docu_types)만 에이전트별로 다르고 나머지(조회 8필드·결과그리드·checkRow·결제창·
     D7·로딩대기·진행)는 전부 공유한다 — 외상매출금/외상매입금이 이 빌더를 값만 바꿔 쓴다.
+
+    카드(미지급금 법인카드) 확장을 위한 optional 훅(전부 기본 None → 매출/매입 무영향):
+      state_cls      그래프 State TypedDict(신규 키 선언용). 카드는 payment_map 등을 더한
+                     서브클래스를 넘긴다(미선언 키는 LangGraph silent drop).
+      validate_node  진입 검증 노드 override(카드는 회계일 override 를 파싱). None=공유.
+      pre_loop_node  run_query 와 loop_approvals **사이**에 삽입할 노드(카드=collect_payments,
+                     결의서조회승인 다중탭에서 ABDOCU_NO→GWDOCU_NO 맵 수집). None=미삽입.
+      on_popup       loop_approvals 결제창 훅(카드=참조문서 선택). None=미호출.
     """
-    g = StateGraph(VoucherReceivableState)
+    g = StateGraph(state_cls)
     # 진입 앞단: validate_params(브라우저 앞) → 공유 프리미티브(login/user_type/menu_nav).
-    g.add_node("validate_params", make_validate_params_node())
+    g.add_node("validate_params", validate_node or make_validate_params_node())
     g.add_node("login", make_login_node())
     g.add_node("user_type", make_user_type_node("회계"))
     g.add_node("menu_nav", make_menu_nav_node(VOUCHER_RECEIVABLE))
     # 신규(조회 조건·조회·결재 순회) — set_query 만 전표유형 파라미터를 받는다.
     g.add_node("set_query", make_set_query_node(docu_types))
     g.add_node("run_query", make_run_query_node())
-    g.add_node("loop_approvals", make_loop_approvals_node())
+    g.add_node("loop_approvals", make_loop_approvals_node(on_popup=on_popup))
 
-    g.set_entry_point("validate_params")
-    for a, b in [
+    edges = [
         ("validate_params", "login"),
         ("login", "user_type"),
         ("user_type", "menu_nav"),
         ("menu_nav", "set_query"),
         ("set_query", "run_query"),
-        ("run_query", "loop_approvals"),
-        ("loop_approvals", END),
-    ]:
+    ]
+    if pre_loop_node is not None:
+        # run_query → collect_payments → loop_approvals(카드) — 매출/매입은 직결(아래 else).
+        g.add_node("collect_payments", pre_loop_node)
+        edges += [("run_query", "collect_payments"), ("collect_payments", "loop_approvals")]
+    else:
+        edges += [("run_query", "loop_approvals")]
+    edges += [("loop_approvals", END)]
+
+    g.set_entry_point("validate_params")
+    for a, b in edges:
         g.add_edge(a, b)
 
     return g.compile().with_config({"recursion_limit": RECURSION_LIMIT})

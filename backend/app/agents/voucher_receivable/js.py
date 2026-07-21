@@ -185,6 +185,17 @@ READ_ROW_KEY_JS = r"""(idx) => {
   } catch (e) { return null; }
 }"""
 
+# 마스터 그리드 idx 행의 결의서번호(ABDOCU_NO) 읽기 — 카드 참조문서(on_popup) 훅이 이 값으로
+# payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다. 매출/매입 백본은 호출하지 않는다(on_popup=None).
+# arg=idx. 반환 문자열 또는 null(ABDOCU_NO 없는 행 — 결의서입력 미경유 전표).
+READ_ROW_ABDOCU_NO_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const rows = g.getDataSource().getJsonRows(idx, idx);
+    return rows && rows[0] ? (rows[0].ABDOCU_NO || null) : null;
+  } catch (e) { return null; }
+}"""
+
 # 마스터 그리드 idx 행 선택 — setCurrent(하이라이트/디테일 연동) + checkRow(결재 대상 인식 필수).
 # D4 실측: checkRow 없이 setCurrent 만으론 결재 버튼이 대상을 인식하지 못한다. arg=idx. 반환 bool.
 CHECK_ROW_JS = r"""(idx) => {
