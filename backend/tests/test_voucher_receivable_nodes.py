@@ -17,6 +17,7 @@ import pytest
 
 from app.agents.voucher_receivable import js as vjs
 from app.agents.voucher_receivable import steps as vsteps
+from nbkit.omnisol import js_lib
 from app.agents.voucher_receivable.graph import VoucherReceivableState
 from app.agents.voucher_receivable.nodes import approvals, query, validate
 from app.agents.voucher_receivable.nodes.approvals import make_loop_approvals_node
@@ -109,6 +110,7 @@ async def test_set_query_success_order(monkeypatch):
     assert out == {}
     assert_keys_declared(VoucherReceivableState, out)
     # 순서: 패널 확장 → 부서 → 회계일 → 작성자 → 전표상태 → 전자결재상태 → 전표유형.
+    # (공지 팝업 닫기는 공유 로그인 플로우 + _open_picker just-in-time 재확인으로 이관 — set_query 무관.)
     assert calls == ["expand", "dept", "period", "writer", "status", "gwaprvlst", "docutypes"]
 
 
@@ -128,6 +130,20 @@ async def test_set_query_field_failure_errors(monkeypatch):
 async def test_set_query_short_circuits():
     out = await make_set_query_node()({"events": _q(), "error": "x", "page": _FakePage()})
     assert out == {}
+
+
+async def test_set_query_passes_docu_types(monkeypatch):
+    # 전표유형(docu_types)만 에이전트별로 다르다 — set_query 가 인자를 set_docu_types 로 그대로 전달.
+    _patch_set_query_ok(monkeypatch, [])
+    seen: dict = {}
+
+    async def _capture(page, targets):
+        seen["targets"] = targets
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "set_docu_types", _capture)
+    out = await make_set_query_node(("내수구매",))({"events": _q(), "page": _FakePage()})
+    assert out == {} and seen["targets"] == ("내수구매",)
 
 
 # ── run_query ─────────────────────────────────────────────────────────────────
@@ -721,8 +737,12 @@ class _DocuTypesFakePage:
     async def evaluate(self, js_src, arg=None):
         if js_src == vjs.FIELD_LABEL_VISIBLE_JS:
             return True  # 이미 보임 — 토글 불필요.
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            return None  # 공지 모달 없음.
         if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
             return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            return True  # 그리드 즉시 준비됨 — 폴링 1회만.
         if js_src == vjs.POPUP_CHECK_ROWS_JS:
             self.check_rows_arg = arg
             targets, _field = arg
@@ -744,6 +764,115 @@ async def test_set_docu_types_queries_sysdef_nm_field():
     assert res["ok"] is True
     assert page.check_rows_arg is not None
     assert page.check_rows_arg[1] == "SYSDEF_NM"
+
+
+# ── _open_picker 그리드 준비 폴링 회귀(2026-07-21 voucher-payable 라이브 크래시 재현) ──────
+class _GridReadyFakePage:
+    """_open_picker 가 POPUP_GRID_READY_JS 로 실제 폴링하는지, 그리고 그리드가 끝까지
+    준비되지 않아도(폴링 상한 소진) 크래시 대신 우아한 실패로 이어지는지 검증한다."""
+
+    def __init__(self, ready_after_polls: int) -> None:
+        self.mouse = _VisFakeMouse(self)  # type: ignore[arg-type]
+        self.clicks: list[tuple[int, int]] = []
+        self.waits: list[int] = []
+        self.grid_ready_polls = 0
+        self._ready_after = ready_after_polls
+        self.check_all_called = False
+
+    @property
+    def _is_ready(self) -> bool:
+        return self.grid_ready_polls >= self._ready_after
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            return None  # 공지 모달 없음.
+        if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+            return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            self.grid_ready_polls += 1
+            return self._is_ready
+        if js_src == vjs.POPUP_CHECK_ALL_JS:
+            self.check_all_called = True
+            # 실제 JS 와 동일하게 동작(2026-07-21 하드닝): 그리드 미부착 시 크래시 대신
+            # {ok:false} 를 돌려준다.
+            if not self._is_ready:
+                return {"ok": False, "reason": "grid-not-ready"}
+            return {"ok": True, "n": 46}
+        if js_src == vjs.POPUP_APPLY_BTN_JS:
+            return {"x": 20, "y": 20}
+        if js_src == vjs.FIELD_DISPLAY_JS:
+            return "인사/기획팀 외 45건"
+        raise AssertionError(f"unexpected evaluate: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+class _OrderedMouse:
+    def __init__(self, page: "_NoticeThenPickerFakePage") -> None:
+        self._page = page
+
+    async def click(self, x, y):
+        self._page.clicks.append((x, y))
+
+
+class _NoticeThenPickerFakePage:
+    """공지 팝업이 _open_picker 첫 확인 시 떠 있다가 닫히는 레이스(비동기 지연 로드)를
+    흉내낸다 — _open_picker 가 피커 클릭 **직전** 공유 dismiss_notice_popup 으로 먼저 닫아야
+    잡힌다. 클릭 순서를 그대로 기록해 '공지 닫기 → 대상 클릭' 순서를 검증한다."""
+
+    def __init__(self) -> None:
+        self.clicks: list[tuple[int, int]] = []
+        self.mouse = _OrderedMouse(self)  # type: ignore[arg-type]
+        self._notice_shown = True  # _open_picker 의 첫 확인엔 팝업이 떠 있다.
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            if self._notice_shown:
+                self._notice_shown = False  # 한 번 닫으면 사라짐.
+                return {"checkbox": {"x": 400, "y": 500}, "close": {"x": 500, "y": 500}, "checked": False}
+            return None
+        if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+            return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            return True
+        raise AssertionError(f"unexpected evaluate: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+async def test_open_picker_dismisses_late_appearing_notice_popup_just_in_time():
+    """근본원인 회귀(2026-07-21 voucher-payable 라이브 재현): 공지 팝업이 비동기 지연 로드돼
+    로그인 시 1회 닫아도 이후 뜨는 레이스가 있다 — _open_picker 가 피커 클릭 **직전** 공유
+    dismiss_notice_popup 으로 '하루동안 보지 않기' 체크→닫기 후에야 대상을 클릭한다(순서 검증)."""
+    page = _NoticeThenPickerFakePage()
+    ok = await vsteps._open_picker(page, "작성부서")
+    assert ok is True
+    # 공지 체크박스(400,500)→닫기(500,500)를 먼저, 그 다음에야 실제 피커(10,10)를 클릭.
+    assert page.clicks == [(400, 500), (500, 500), (10, 10)]
+
+
+async def test_open_picker_polls_grid_ready_before_check_all():
+    """근본원인 회귀(2026-07-21 voucher-payable 라이브 재현: 서버 응답이 느린 세션에서 팝업
+    클릭 직후 고정 대기만으로 checkAll 을 부르면 그리드 미부착 크래시). 그리드가 몇 번의
+    폴링 뒤에야 붙어도 _open_picker 가 대기한 '뒤에' 호출자가 checkAll 을 부른다."""
+    page = _GridReadyFakePage(ready_after_polls=3)
+    res = await vsteps.set_dept_all(page)
+    assert res["ok"] is True
+    assert page.grid_ready_polls >= 3
+    assert page.check_all_called is True
+
+
+async def test_set_dept_all_gracefully_fails_when_grid_never_ready():
+    """그리드가 폴링 상한까지 끝내 준비되지 않아도(극단적으로 느린 세션) 크래시가 아니라
+    우아한 실패({ok:false, reason:'...'})를 돌려준다 — 이전엔 raw JS TypeError 로 그래프
+    전체가 죽었다(runner 최상위 except 로 떨어짐, 필드별 에러 메시지 없음)."""
+    page = _GridReadyFakePage(ready_after_polls=99999)  # 절대 준비 안 됨.
+    res = await vsteps.set_dept_all(page)
+    assert res["ok"] is False
+    assert "실패" in res["reason"]
+    assert page.check_all_called is True  # 최종 방어선(JS 자체의 grid-not-ready)까지 도달했다.
 
 
 # ── D7(배치 순회 정합성) — 행/팝업 어긋남 안전 크리티컬 검증(2026-07-21 배치 라이브 스모크) ──

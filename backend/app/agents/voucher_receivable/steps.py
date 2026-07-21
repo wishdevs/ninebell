@@ -16,6 +16,7 @@ from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol.modals import dismiss_notice_popup
 
 from . import js
 
@@ -26,7 +27,12 @@ DEPT_LABEL = "작성부서"  # 전체선택(checkAll)
 GWAPRVLST_LABEL = "전자결재상태"
 GWAPRVLST_TARGET = "저장"  # SYSDEF_NM='저장'(code=1)
 DOCU_TYPE_LABEL = "전표유형"
-DOCU_TYPE_TARGETS = ("국내매출", "해외매출")  # code 21·23
+# 전표유형(SYSDEF_NM) 대상 — 에이전트(=전표유형)별로만 다르고 나머지 플로우는 전부 공유한다.
+DOCU_TYPES_RECEIVABLE = ("국내매출", "해외매출")  # 외상매출금(voucher-receivable)
+# 외상매입금(voucher-payable) 전표유형 — 내수구매(SYSDEF_CD=31). 사용자 확정 2026-07-21
+#   ("내구수매"는 오타였고 피커 실존값은 "내수구매"임을 프로브로 확인).
+DOCU_TYPES_PAYABLE = ("내수구매",)
+DOCU_TYPE_TARGETS = DOCU_TYPES_RECEIVABLE  # set_docu_types 기본값(하위호환)
 DOCU_ST_SELECT = "#s_docu_st_cd"  # native kendo dropdownlist
 DOCU_ST_TARGET = "미결"
 
@@ -75,13 +81,43 @@ async def ensure_field_visible(page: Any, label: str, *, max_toggles: int = 4) -
     return False
 
 
-async def _open_picker(page: Any, label: str) -> bool:
-    """라벨의 돋보기(검색) 버튼을 실클릭해 MultiCodePicker 팝업을 연다."""
+async def _open_picker(
+    page: Any, label: str, *, ready_cap_ms: int = 12_000, ready_interval_ms: int = 300
+) -> bool:
+    """라벨의 돋보기(검색) 버튼을 실클릭해 MultiCodePicker 팝업을 연다.
+
+    ⚠ 근본원인 확정(2026-07-21 voucher-payable 라이브 스모크 3회 재현): 클릭 후 고정 1200ms
+    대기만으로 곧장 checkAll/checkRow 를 호출하면, 서버 응답이 느린 세션에서 팝업의 RealGrid
+    가 아직 안 붙어 `Cannot read properties of undefined (reading '_grid')` 로 **그래프 전체가
+    크래시**한다(우아한 실패가 아님 — set_query 가 error 로 단락하지 못하고 runner 의 최상위
+    except 로 떨어짐). 고정 1200ms 대기 뒤, 그리드가 실제로 붙었는지(`POPUP_GRID_READY_JS`)
+    조건 폴링한다(상한 내 미확인이어도 호출자는 계속 진행 — 호출부 JS 가 이제 grid-not-ready
+    를 우아하게 반환하므로 최종 방어선이 있다).
+    ⚠ 상한 12s(2026-07-21 실측 상향): 같은 세션에서 user_type 전환이 4~5.6s 로 관측될 만큼
+    서버 응답이 느린 구간이 있었다 — 5s 상한으론 그 구간에 그리드 부착이 끝나지 못했다.
+    `page.wait_for_timeout` 은 delay_scale 로 스케일되지만 `page.evaluate` 왕복(실 네트워크)은
+    스케일되지 않으므로, 상한을 넉넉히 잡아도 그리드가 실제로 빨리 붙으면 즉시 break 한다.
+    ⚠ just-in-time 공지 팝업 재확인(2026-07-21 실측): 로그인 시 1회 닫아도, 공지 팝업이
+    **비동기 지연 로드**돼(localStorage `gerp:notice:loaded:time`) 그 시점 이후에 떠 화면을
+    덮어 클릭을 가로채는 레이스가 있었다. 실제 클릭 **직전**(매 피커 호출마다) 공유
+    ``dismiss_notice_popup`` 을 대기 없이(appear_cap_ms=0) 한 번 더 확인해 방어한다.
+    """
+    await dismiss_notice_popup(page, appear_cap_ms=0)
     rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
     if not rect:
         return False
     await mouse_click(page, rect["x"], rect["y"])
     await page.wait_for_timeout(1_200)
+    waited = 0
+    while waited < ready_cap_ms:
+        try:
+            ready = await page.evaluate(js.POPUP_GRID_READY_JS)
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+            return True
+        if ready:
+            break
+        await page.wait_for_timeout(ready_interval_ms)
+        waited += ready_interval_ms
     return True
 
 
@@ -202,6 +238,18 @@ async def read_master_rows(page: Any, limit: int = 5) -> dict:
 async def read_row_key(page: Any, idx: int) -> str | None:
     """마스터 그리드 idx 행의 키(DOCU_NO). 못 읽으면 None."""
     return await page.evaluate(js.READ_ROW_KEY_JS, idx)
+
+
+async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
+    """마스터 그리드 idx 행의 결의서번호(ABDOCU_NO). 못 읽거나 없으면 None.
+
+    카드(voucher-card) on_popup 훅이 이 값으로 payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다 —
+    매출/매입 백본(on_popup=None)은 호출하지 않으므로 무영향(신규 함수 추가일 뿐).
+    """
+    try:
+        return await page.evaluate(js.READ_ROW_ABDOCU_NO_JS, idx)
+    except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
+        return None
 
 
 async def uncheck_all_rows(page: Any) -> bool:

@@ -164,6 +164,12 @@ async def seed_agent_groups(db: AsyncSession) -> None:
             group.description = fx.get("description")
         if group.sort_order != fx.get("sort_order", 0):
             group.sort_order = fx.get("sort_order", 0)
+    # 픽스처에서 제거된 그룹은 DB 에서도 정리(자재팀 제거 2026-07-21 — 픽스처가 단일 소스).
+    # 소속 에이전트의 group_id 는 FK ondelete=SET NULL 로 끊기고, 에이전트 자체는 seed_agents 가 prune.
+    fixture_gids = {fx["id"] for fx in AGENT_GROUP_FIXTURES}
+    for gid, group in existing.items():
+        if gid not in fixture_gids:
+            await db.delete(group)
     await db.flush()
 
 
@@ -312,6 +318,12 @@ async def seed_agents(db: AsyncSession) -> None:
                     placeholder=iv.get("placeholder"),
                 )
             )
+    # 픽스처에서 제거된 에이전트는 DB 에서도 정리(자재팀 더미·구 데모 등 — 픽스처가 단일 소스).
+    # steps/logs/interventions 는 Agent 관계 cascade(all, delete-orphan)로 함께 삭제된다.
+    fixture_ids = {fx["id"] for fx in AGENT_FIXTURES}
+    for aid, row in existing.items():
+        if aid not in fixture_ids:
+            await db.delete(row)
     await db.flush()
 
 

@@ -101,7 +101,8 @@ export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' })
                   key={p}
                   type="button"
                   onClick={() => send(p)}
-                  className="border-border bg-surface text-muted-foreground hover:text-foreground hover:bg-muted rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11px] transition-colors"
+                  disabled={isStreaming}
+                  className="border-border bg-surface text-muted-foreground hover:text-foreground hover:bg-muted rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-40"
                 >
                   {p}
                 </button>

@@ -9,6 +9,7 @@ import time
 from typing import Any, Optional
 
 from nbkit.omnisol.auth import omnisol_login
+from nbkit.omnisol.modals import dismiss_notice_popup
 from nbkit.omnisol.profile import read_profile
 from nbkit.patterns import EmitFn, emit_shot, emit_step
 
@@ -33,6 +34,9 @@ async def ensure_logged_in(
     except Exception:
         await emit_step(emit, "login", "failed")
         raise
+    # 로그인 직후 뜨는 '공지' 레이어 팝업(전 화면 차단)을 먼저 닫는다 — 이후 어떤 조작(아바타
+    # 클릭·프로필 읽기·메뉴 진입)보다 반드시 먼저. 전 에이전트 공통(2026-07-21). 없으면 no-op.
+    await dismiss_notice_popup(page)
     profile = await read_profile(page) if read_profile_after else None
     await emit_shot(emit, page)
     await emit_step(emit, "login", "done", int((time.monotonic() - t0) * 1000))

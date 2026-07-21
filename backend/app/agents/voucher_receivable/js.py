@@ -11,6 +11,10 @@
 
 from __future__ import annotations
 
+# ⚠ 공지 팝업 닫기는 공유 프리미티브 nbkit.omnisol.modals.dismiss_notice_popup(고유 앵커
+#   #close-today-chk/#notice-dialog-close, '하루동안 보지 않기' 체크 후 닫기)로 이관했다 —
+#   전 에이전트 공통(login_flow 에서 로그인 직후 호출 + _open_picker just-in-time 재확인).
+
 # 라벨 텍스트로 그 필드의 '검색(돋보기)' dews-multicodepicker-button 좌표를 찾는다.
 # 같은 li 안 두 번째 버튼(1=화살표 드롭다운, 2=돋보기). 반환 {x, y}(중앙좌표) 또는 null.
 # ⚠ 방어: 라벨이 optional-area(패널 접힘) 안에 있으면 버튼은 DOM엔 있지만 rect 가 0×0/숨김
@@ -45,13 +49,35 @@ FIELD_LABEL_VISIBLE_JS = r"""(label) => {
   return r.width > 0 && r.height > 0 && btn.offsetParent !== null;
 }"""
 
+# 최상단 k-window 팝업의 RealGrid 가 **결과검증형 폴링**용으로 붙었는지 확인한다.
+# ⚠ 근본원인(2026-07-21 voucher-payable 라이브 스모크 2회 재현): 팝업 클릭 직후 고정 1200ms
+# 대기만으로 POPUP_CHECK_ALL_JS/POPUP_CHECK_ROWS_JS 를 호출하면, 서버 응답이 느린 세션에서
+# `.dews-ui-grid` 는 DOM에 있어도 dewsControl/`_grid` 바인딩이 아직 안 끝나 `Cannot read
+# properties of undefined (reading '_grid')` 로 **크래시**한다(우아한 실패가 아니라 전체
+# 그래프가 죽음). _open_picker 가 클릭 후 이 값이 true 가 될 때까지 폴링한다. 반환 bool.
+POPUP_GRID_READY_JS = r"""() => {
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const dlg = wins[wins.length - 1];
+  if (!dlg) return false;
+  const el = dlg.querySelector('.dews-ui-grid');
+  if (!el) return false;
+  const ctrl = window.jQuery(el).data('dewsControl');
+  return !!(ctrl && ctrl._grid);
+}"""
+
 # 최상단 k-window 팝업의 RealGrid 에서 지정 필드값과 일치하는 행을 checkRow.
 # arg = [targets(문자열 배열), fieldName]. 반환 {ok, idxs:[{t,idx,code}], n}. 무매칭 target 은 빠짐.
+# ⚠ 방어(위 POPUP_GRID_READY_JS 참조): 그리드가 아직 안 붙었으면 크래시 대신 {ok:false,
+# reason:'grid-not-ready'} 를 돌려준다 — 호출자가 이미 하는 `res.get('ok')` 체크로 우아하게
+# 실패 처리된다(폴링이 놓친 잔여 레이스의 최종 방어선).
 POPUP_CHECK_ROWS_JS = r"""([targets, fieldName]) => {
   const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
   const dlg = wins[wins.length - 1];
   if (!dlg) return { ok: false, reason: 'no-popup' };
-  const g = window.jQuery(dlg.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+  const el = dlg.querySelector('.dews-ui-grid');
+  const ctrl = el && window.jQuery(el).data('dewsControl');
+  if (!ctrl || !ctrl._grid) return { ok: false, reason: 'grid-not-ready' };
+  const g = ctrl._grid;
   const ds = g.getDataSource();
   const n = ds.getRowCount();
   const rows = ds.getJsonRows(0, n - 1);
@@ -64,11 +90,15 @@ POPUP_CHECK_ROWS_JS = r"""([targets, fieldName]) => {
 }"""
 
 # 팝업의 checkAll(작성부서 전체선택 전용 — checkbox 컬럼 헤더 체크와 동일 효과). 반환 {ok, n}.
+# ⚠ 방어는 POPUP_CHECK_ROWS_JS 와 동일(그리드 미부착 시 크래시 대신 {ok:false} — 아래 참조).
 POPUP_CHECK_ALL_JS = r"""() => {
   const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
   const dlg = wins[wins.length - 1];
-  if (!dlg) return { ok: false };
-  const g = window.jQuery(dlg.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+  if (!dlg) return { ok: false, reason: 'no-popup' };
+  const el = dlg.querySelector('.dews-ui-grid');
+  const ctrl = el && window.jQuery(el).data('dewsControl');
+  if (!ctrl || !ctrl._grid) return { ok: false, reason: 'grid-not-ready' };
+  const g = ctrl._grid;
   g.checkAll();
   return { ok: true, n: g.getDataSource().getRowCount() };
 }"""
@@ -152,6 +182,17 @@ READ_ROW_KEY_JS = r"""(idx) => {
     const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
     const rows = g.getDataSource().getJsonRows(idx, idx);
     return rows && rows[0] ? rows[0].DOCU_NO : null;
+  } catch (e) { return null; }
+}"""
+
+# 마스터 그리드 idx 행의 결의서번호(ABDOCU_NO) 읽기 — 카드 참조문서(on_popup) 훅이 이 값으로
+# payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다. 매출/매입 백본은 호출하지 않는다(on_popup=None).
+# arg=idx. 반환 문자열 또는 null(ABDOCU_NO 없는 행 — 결의서입력 미경유 전표).
+READ_ROW_ABDOCU_NO_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const rows = g.getDataSource().getJsonRows(idx, idx);
+    return rows && rows[0] ? (rows[0].ABDOCU_NO || null) : null;
   } catch (e) { return null; }
 }"""
 

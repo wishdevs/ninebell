@@ -607,3 +607,18 @@ VALIDATION_TOAST_JS = r"""() => {
   }
   return [...out];
 }"""
+
+# 로그인 직후 뜨는 '공지' 레이어 팝업(전 화면 차단) 감지 — 고유 앵커 #close-today-chk('하루동안
+# 보지 않기' 체크박스) + #notice-dialog-close('닫기'). 팝업이 보일 때만 두 요소의 중앙 좌표를,
+# 없거나 이미 닫혀 숨김이면 null 을 반환한다. ⚠ 광범위 텍스트/`.k-window.dialog` 스캔 금지(예산현황
+# 등 다른 확정모달과 클래스 겹침) — 이 팝업 고유 id 로만 판정한다(2026-07-21 프로브 실측).
+NOTICE_POPUP_BOXES_JS = r"""() => {
+  const chk = document.querySelector('#close-today-chk');
+  const btn = document.querySelector('#notice-dialog-close');
+  if (!chk || !btn) return null;
+  const dlg = chk.closest('.k-window') || document.querySelector('#notice-list-dialog');
+  if (dlg && dlg.offsetParent === null) return null;  // 닫힌 뒤 DOM 잔존 대비
+  const center = (el) => { const r = el.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; };
+  return { checkbox: center(chk), close: center(btn), checked: !!chk.checked };
+}"""
