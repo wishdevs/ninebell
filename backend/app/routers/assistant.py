@@ -19,6 +19,7 @@ from starlette.background import BackgroundTask
 from app.config import Settings, get_settings
 from app.core.deps import CurrentUser
 from app.llm.base import ChatMessage, LLMProvider
+from app.llm.etribe import ContextLengthExceededError, EtribeProvider
 from app.llm.gemini import GeminiProvider
 from app.schemas.assistant import ChatRequest
 
@@ -34,6 +35,9 @@ _TIMEOUT_ERROR = "응답 시간이 초과되어 중단되었습니다. 다시 �
 
 
 def _stream_error_message(exc: Exception) -> str:
+    # 컨텍스트 한도 초과(etribe)는 사용자 행동 안내(요약 후 새 대화)가 담긴 메시지라 그대로 표면화.
+    if isinstance(exc, ContextLengthExceededError):
+        return str(exc)
     if isinstance(exc, RuntimeError):
         text = str(exc)
         if any(marker in text for marker in _CONFIG_ERROR_MARKERS):
@@ -89,6 +93,13 @@ ASSISTANT_TOOLS = [
 
 def build_llm(request: Request, settings: Settings) -> LLMProvider:
     """스트림 제너레이터 안에서 지연 호출된다 — 키 누락은 여기서 RuntimeError 로 표면화."""
+    # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — 인증 불필요.
+    if settings.llm_provider == "etribe":
+        return EtribeProvider(
+            request.app.state.http,
+            model=settings.etribe_model,
+            base_url=settings.etribe_base_url,
+        )
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY 가 설정되지 않아 AI 어시스턴트를 사용할 수 없습니다.")
     return GeminiProvider(

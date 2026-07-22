@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,9 +48,28 @@ class Settings(BaseSettings):
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
-    # gemini-2.0-flash retired(404) → 2.5-flash → 3.5-flash 로 상향(env GEMINI_MODEL 로 오버라이드).
-    gemini_model: str = "gemini-3.5-flash"
+    # gemini-2.0-flash retired(404) → 2.5 → 3.5 → 3.6-flash 상향(GA 2026-07-21, env GEMINI_MODEL 오버라이드).
+    gemini_model: str = "gemini-3.6-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    # LLM 프로바이더 선택 — 'gemini'(기본: GitHub/AWS 배포) | 'etribe'(온프렘 GitLab 배포, 사내
+    # Etribe-LLM OpenAI 호환 서버 — 회계 데이터·ERP 스크린샷이 사외로 나가지 않는다). env LLM_PROVIDER.
+    llm_provider: str = "gemini"
+    etribe_base_url: str = "http://192.168.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
+    etribe_model: str = "Etribe-LLM"  # env ETRIBE_MODEL
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _normalize_llm_provider(cls, v: str) -> str:
+        """공백·대소문자 정규화 + 미지 값 즉시 실패(부팅 차단).
+
+        오타(LLM_PROVIDER=Etribe / 'etribe ' 등)가 조용히 gemini 폴백되면 온프렘의 회계
+        데이터·ERP 스크린샷이 무음으로 사외(구글)에 나간다 — 이 기능의 존재 이유가 무너지는
+        사고라 런타임 폴백 대신 부팅 시점에 명확히 실패시킨다.
+        """
+        norm = (v or "").strip().lower()
+        if norm not in {"gemini", "etribe"}:
+            raise ValueError(f"LLM_PROVIDER 는 'gemini'|'etribe' 만 허용합니다(입력: {v!r})")
+        return norm
 
     # --- 라이브 세션(run) / 스크린캐스트 ---
     # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).

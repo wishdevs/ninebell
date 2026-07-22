@@ -1,6 +1,6 @@
 """card_collect AI 추천(recommend) + collect_rows 프리셀렉트 통합 테스트(브라우저·네트워크 불필요).
 
-- recommend_selections: 가짜 gemini_chat_decide 로 응답을 주입해 검증 로직만 본다
+- recommend_selections: 가짜 chat_decide(LLM 디스패처)로 응답을 주입해 검증 로직만 본다
   (범위 밖 no 무시 · 후보에 없는 code 무시 · confidence 0..1 클램프 · 키/후보 없음 → {}).
 - collect_rows 통합: 추천을 몽키패치해 프레임 rows 의 budgetUnit/project·Source 프리셀렉트를 본다
   (높은 확신 → 'ai' · 낮은 확신/무추천 → 기본지정 'default' · 없으면 None · 추천 예외 → 기본 폴백).
@@ -35,7 +35,7 @@ def _fake_settings() -> SimpleNamespace:
 
 # ── recommend_selections 순수 검증 ─────────────────────────────────────────────
 async def test_recommend_selections_validates_range_codes_and_clamp(monkeypatch):
-    async def _fake_decide(http, key, model, base, system, history, context, shot, tools):
+    async def _fake_decide(http, **_kw):
         return "submit_recommendations", {
             "recommendations": [
                 # confidence>1 → 1.0 클램프, 정상 코드.
@@ -47,7 +47,7 @@ async def test_recommend_selections_validates_range_codes_and_clamp(monkeypatch)
             ]
         }
 
-    monkeypatch.setattr(recommend, "gemini_chat_decide", _fake_decide)
+    monkeypatch.setattr(recommend, "chat_decide", _fake_decide)
     rows = [{"no": 1, "merchant": "a"}, {"no": 2, "merchant": "b"}]
     budget = [{"code": "B1", "name": "예산1"}]
     project = [{"code": "P1", "name": "프로젝트1"}]
@@ -89,7 +89,7 @@ async def test_recommend_selections_swallows_gemini_error(monkeypatch):
     async def _boom(*args, **kwargs):
         raise RuntimeError("gemini down")
 
-    monkeypatch.setattr(recommend, "gemini_chat_decide", _boom)
+    monkeypatch.setattr(recommend, "chat_decide", _boom)
     out = await recommend.recommend_selections(
         [{"no": 1}], [{"code": "B1", "name": "n"}], [], http=object(), settings=_fake_settings()
     )
@@ -250,7 +250,7 @@ async def test_collect_rows_recommend_exception_uses_default_fallback(monkeypatc
         raise RuntimeError("gemini down")
 
     # 실제 recommend_selections 를 태우되 그 안의 gemini 호출만 폭발 → {} 흡수 → 기본 폴백.
-    monkeypatch.setattr(recommend, "gemini_chat_decide", _boom)
+    monkeypatch.setattr(recommend, "chat_decide", _boom)
 
     events: asyncio.Queue = asyncio.Queue()
     state = {"events": events, "page": object(), "rows_list": _rows(2), "owner": None}

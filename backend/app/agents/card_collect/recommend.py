@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.agents.common.gemini import gemini_chat_decide
+from app.agents.common.llm import chat_decide, llm_ready
 
 logger = logging.getLogger("app.agents.card_collect.recommend")
 
@@ -118,7 +118,7 @@ async def recommend_selections(
         return {}
     if not budget_candidates and not project_candidates:
         return {}
-    if not getattr(settings, "gemini_api_key", ""):
+    if not llm_ready(settings):  # etribe 는 무인증(항상 가능) — gemini 만 키 필요.
         return {}
 
     budget_codes = {_code(c.get("code")) for c in budget_candidates if _code(c.get("code"))}
@@ -158,16 +158,14 @@ async def recommend_selections(
     }
 
     try:
-        name, args = await gemini_chat_decide(
+        name, args = await chat_decide(
             http,
-            settings.gemini_api_key,
-            settings.gemini_model,
-            settings.gemini_base_url,
-            _SYSTEM,
-            "",  # 대화 기록 없음(단발 배치 판단).
-            context,
-            None,  # 스크린샷 불필요.
-            _TOOLS,
+            system=_SYSTEM,
+            history="",  # 대화 기록 없음(단발 배치 판단).
+            context=context,
+            shot_b64=None,  # 스크린샷 불필요.
+            tools=_TOOLS,
+            settings=settings,
         )
     except Exception:  # noqa: BLE001 — 추천 실패는 런을 죽이지 않는다.
         logger.exception("card-collect recommend_selections gemini call failed")

@@ -1,7 +1,7 @@
 """expense_card.chat_form 통합 단위테스트 — wait_hitl 멀티턴 루프 + 도구 디스패치(모킹).
 
 실 브라우저/실 Gemini 없이: page 는 FakePage(identity 라우팅), Gemini 판단은
-`gemini_chat_decide` 를 스크립트 함수로 monkeypatch. app.live.hitl.resolve_hitl 로 사용자
+`chat_decide`(LLM 디스패처)를 스크립트 함수로 monkeypatch. app.live.hitl.resolve_hitl 로 사용자
 메시지/‘선택 완료’를 주입한다. 저장(F7) 액션이 없음을 mouse.click 미발생으로 확인한다.
 """
 
@@ -68,7 +68,7 @@ async def test_chat_form_loop_dispatches_fill_then_completes(monkeypatch):
     async def fake_decide(*_a: Any, **_k: Any):
         return next(scripted)
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", fake_decide)
+    monkeypatch.setattr(CF, "chat_decide", fake_decide)
 
     def handler(script, arg):  # noqa: ANN001
         if script is CF.MODAL_IDLE_JS:
@@ -129,7 +129,7 @@ async def test_chat_form_ignores_empty_then_completes(monkeypatch, bad_message):
     async def fake_decide(*_a: Any, **_k: Any):  # 빈 입력은 Gemini 까지 가지 않아야 함
         raise AssertionError("빈 메시지에 Gemini 를 호출하면 안 됨")
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", fake_decide)
+    monkeypatch.setattr(CF, "chat_decide", fake_decide)
 
     def handler(script, arg):  # noqa: ANN001
         if script is CF.MODAL_IDLE_JS:
@@ -195,7 +195,7 @@ async def test_chat_form_auto_replay_applies_selections_without_gemini(monkeypat
     async def no_gemini(*_a: Any, **_k: Any):
         raise AssertionError("AUTO 재생에서 Gemini 를 호출하면 안 됨")
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", no_gemini)
+    monkeypatch.setattr(CF, "chat_decide", no_gemini)
 
     page = FakePage(lambda s, a: True)  # MODAL_IDLE 등 True
     events: asyncio.Queue = asyncio.Queue()

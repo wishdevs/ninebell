@@ -329,31 +329,29 @@ async def _ai_note_cached(session: AsyncSession, norm: str, acct: str) -> str | 
 
 
 async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | None:
-    """(가맹점, 계정이름) → Gemini 계정 맞춤 적요. 반환 (note, model).
+    """(가맹점, 계정이름) → LLM 계정 맞춤 적요(활성 프로바이더). 반환 (note, model).
 
     키 없음/네트워크·모델 오류/빈 응답이면 None → 호출자가 category·heuristic 로 폴백한다.
     """
     settings = get_settings()
-    key = (settings.gemini_api_key or "").strip()
-    if not key:  # 키 없으면 조용히 스킵(결정적 폴백).
-        return None
     # 지연 import 로 app.agents 순환참조 회피(heuristic tier 와 동일 규율).
-    from app.agents.common.gemini import gemini_generate_text
+    from app.agents.common.llm import generate_text, llm_model_name, llm_ready
 
-    model = settings.gemini_model
+    if not llm_ready(settings):  # gemini 키 없으면 조용히 스킵(결정적 폴백). etribe 는 무인증.
+        return None
+
+    model = llm_model_name(settings)  # 캐시(CardAiNote.model) 기록용 — 활성 프로바이더 모델명.
     user = f"예산계정: {acct_name.strip()}\n가맹점: {merchant.strip()}\n적요:"
     try:
         async with httpx.AsyncClient(timeout=15.0) as http:
-            raw = await gemini_generate_text(
+            raw = await generate_text(
                 http,
-                key,
-                model,
-                settings.gemini_base_url,
                 system=_AI_NOTE_SYSTEM,
                 user=user,
                 temperature=0.2,
                 max_output_tokens=128,
                 thinking_budget=0,  # 적요 생성엔 사고 불필요 — 사고 토큰이 출력을 잠식하지 않게 끈다.
+                settings=settings,
             )
     except Exception:  # noqa: BLE001 — LLM 실패가 추천을 죽여선 안 된다(폴백 존재).
         logger.warning("ai note generate failed (merchant=%r acct_name=%r)", merchant, acct_name)

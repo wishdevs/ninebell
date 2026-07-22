@@ -34,7 +34,7 @@ from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.patterns import emit_shot
 
 from .domain import remark_for, use_item_from_remark
-from app.agents.common.gemini import gemini_chat_decide
+from app.agents.common.llm import chat_decide, llm_ready
 from .tools import (
     CHAT_TOOLS,
     SCAFFOLD_DROPDOWN_FIELDS,
@@ -298,7 +298,7 @@ def make_chat_form_node(timeout_s: int | None = None):
             return await _auto_replay(events, page, template)
 
         settings = get_settings()
-        if not settings.gemini_api_key:
+        if not llm_ready(settings):  # etribe 는 무인증(항상 가능) — gemini 만 키 필요.
             await emit_step(events, "chat_form", "failed")
             return {"error": "GEMINI_API_KEY 가 설정되지 않아 대화형 폼 에이전트를 실행할 수 없습니다."}
 
@@ -488,16 +488,14 @@ def make_chat_form_node(timeout_s: int | None = None):
                             b64 = base64.b64encode(buf).decode()
                         except Exception:  # noqa: BLE001
                             b64 = None
-                        name, args = await gemini_chat_decide(
+                        name, args = await chat_decide(
                             http,
-                            settings.gemini_api_key,
-                            settings.gemini_model,
-                            settings.gemini_base_url,
-                            system,
-                            "\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
-                            schema,
-                            b64,
-                            CHAT_TOOLS,
+                            system=system,
+                            history="\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
+                            context=schema,
+                            shot_b64=b64,
+                            tools=CHAT_TOOLS,
+                            settings=settings,
                         )
                     except Exception:  # noqa: BLE001
                         logger.exception("chat gemini decide failed")

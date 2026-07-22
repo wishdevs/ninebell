@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from app.agents.common.llm import llm_ready
 from app.live.events import emit_log
 from app.services import card_learning
 
@@ -113,7 +114,7 @@ async def _prefill_selections(
                 seed_budget_by_no[idx + 1] = sb
 
     recommendations: dict[int, dict] = {}
-    if settings.gemini_api_key and (budget_candidates or project_candidates):
+    if llm_ready(settings) and (budget_candidates or project_candidates):
         rec_rows = [
             {
                 "no": idx + 1,
