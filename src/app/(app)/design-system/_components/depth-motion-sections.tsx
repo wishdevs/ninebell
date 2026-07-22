@@ -146,11 +146,13 @@ export function MotionSection() {
         <p className="text-foreground-tertiary mb-3 text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
           .card-interactive — hover 승격 실물
         </p>
-        <div className="card-interactive border-border bg-surface max-w-xs cursor-pointer rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
-          <p className="text-foreground text-sm font-semibold">클릭 가능한 카드</p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            hover: translateY(-2px) + shadow-card-raised · active: scale(0.995)
-          </p>
+        <div className="card-lift grid w-fit">
+          <div className="card-interactive border-border bg-surface max-w-xs cursor-pointer rounded-[var(--radius-lg)] border p-4 shadow-[var(--shadow-card)]">
+            <p className="text-foreground text-sm font-semibold">클릭 가능한 카드</p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              hover: translateY(-2px) + shadow-card-raised · active: scale(0.995)
+            </p>
+          </div>
         </div>
       </div>
 

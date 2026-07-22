@@ -127,28 +127,30 @@ export function HomeFavoriteAgents() {
  */
 function FavoriteAgentCard({ agent, onUnfavorite }: { agent: Agent; onUnfavorite: () => void }) {
   return (
-    <div className="card-interactive border-border bg-surface group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
-      <AgentCardHeader
-        agent={agent}
-        action={
-          <button
-            type="button"
-            onClick={onUnfavorite}
-            aria-pressed
-            aria-label="자주쓰는 해제"
-            title="자주쓰는 해제"
-            className={cn(
-              'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-              'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
-            )}
-          >
-            <RiStarFill size={15} aria-hidden />
-          </button>
-        }
-      />
+    <div className="card-lift grid min-w-0">
+      <div className="card-interactive border-border bg-surface group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
+        <AgentCardHeader
+          agent={agent}
+          action={
+            <button
+              type="button"
+              onClick={onUnfavorite}
+              aria-pressed
+              aria-label="자주쓰는 해제"
+              title="자주쓰는 해제"
+              className={cn(
+                'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+                'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+              )}
+            >
+              <RiStarFill size={15} aria-hidden />
+            </button>
+          }
+        />
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <MetaChip>{agent.targetSystem}</MetaChip>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MetaChip>{agent.targetSystem}</MetaChip>
+        </div>
       </div>
     </div>
   );

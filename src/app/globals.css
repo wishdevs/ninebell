@@ -209,12 +209,17 @@ samp {
     box-shadow var(--duration-normal) var(--ease-out),
     border-color var(--duration-fast) ease;
 }
-.card-interactive:hover {
+/* 리프트는 카드 자신이 아니라 '안 움직이는 부모(.card-lift)'에 커서가 있을 때 발동한다.
+   카드가 위로 떠도 hover 타깃(부모)은 제자리라 :hover 가 풀리지 않아, 경계에서 카드가
+   떴다 내렸다 반복하는 '드드득'(hover jitter)이 사라진다. (부모 hover = Tailwind group-hover 동치) */
+.card-lift:hover .card-interactive {
   transform: translateY(-2px);
   box-shadow: var(--shadow-card-raised);
   border-color: var(--border-strong);
 }
-.card-interactive:active {
+/* press 피드백도 부모 스코프로 — hover 규칙과 동일 specificity(0,3,0)이고 뒤에 와서, 누르는
+   동안(hover+active 동시)에는 active 가 이겨 리프트 대신 살짝 눌리는 느낌이 유지된다. */
+.card-lift:active .card-interactive {
   transform: translateY(0) scale(0.995);
 }
 

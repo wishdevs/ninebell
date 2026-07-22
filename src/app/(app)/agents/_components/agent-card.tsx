@@ -32,62 +32,64 @@ interface AgentCardProps {
  */
 export function AgentCard({ agent, favorite }: AgentCardProps) {
   return (
-    <div className="card-interactive border-border bg-surface group relative flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
-      <AgentCardHeader
-        agent={agent}
-        action={
-          <>
-            {favorite ? (
-              <button
-                type="button"
-                onClick={favorite.onToggle}
-                aria-pressed={favorite.active}
-                aria-label={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
-                title={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
-                className={cn(
-                  'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-                  'focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
-                  favorite.active
-                    ? 'text-warning hover:bg-warning/10'
-                    : 'text-foreground-tertiary hover:bg-muted',
-                )}
-              >
-                {favorite.active ? (
-                  <RiStarFill size={15} aria-hidden />
-                ) : (
-                  <RiStarLine size={15} aria-hidden />
-                )}
-              </button>
-            ) : null}
-            <RiArrowRightUpLine
-              size={15}
-              aria-hidden
-              className="text-foreground-tertiary group-hover:text-accent mt-0.5 shrink-0 transition-colors"
-            />
-          </>
-        }
-      />
+    <div className="card-lift grid min-w-0">
+      <div className="card-interactive border-border bg-surface group relative flex flex-col gap-4 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
+        <AgentCardHeader
+          agent={agent}
+          action={
+            <>
+              {favorite ? (
+                <button
+                  type="button"
+                  onClick={favorite.onToggle}
+                  aria-pressed={favorite.active}
+                  aria-label={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+                  title={favorite.active ? '자주쓰는 해제' : '자주쓰는 추가'}
+                  className={cn(
+                    'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+                    'focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+                    favorite.active
+                      ? 'text-warning hover:bg-warning/10'
+                      : 'text-foreground-tertiary hover:bg-muted',
+                  )}
+                >
+                  {favorite.active ? (
+                    <RiStarFill size={15} aria-hidden />
+                  ) : (
+                    <RiStarLine size={15} aria-hidden />
+                  )}
+                </button>
+              ) : null}
+              <RiArrowRightUpLine
+                size={15}
+                aria-hidden
+                className="text-foreground-tertiary group-hover:text-accent mt-0.5 shrink-0 transition-colors"
+              />
+            </>
+          }
+        />
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <MetaChip>{AGENT_DRIVE_LABEL[agent.drive]}</MetaChip>
-        <MetaChip>{agent.targetSystem}</MetaChip>
-        <MetaChip tone="soft">{AGENT_INTERACTION_LABEL[agent.interaction]}</MetaChip>
-      </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MetaChip>{AGENT_DRIVE_LABEL[agent.drive]}</MetaChip>
+          <MetaChip>{agent.targetSystem}</MetaChip>
+          <MetaChip tone="soft">{AGENT_INTERACTION_LABEL[agent.interaction]}</MetaChip>
+        </div>
 
-      <div className="border-border-subtle text-foreground-tertiary flex items-center gap-4 border-t pt-3 text-[11px]">
-        <span className="inline-flex items-center gap-1">
-          <RiRepeatLine size={12} aria-hidden />
-          <span className="tabular-nums">{agent.runCount}회</span>
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <RiTimerLine size={12} aria-hidden />
-          <span className="tabular-nums">평균 {formatSeconds(agent.avgSeconds)}</span>
-        </span>
-        {/* 실행 이력 없는 에이전트(준비 중 더미 등)는 '—' — null 이 1970년 기준 상대시간
+        <div className="border-border-subtle text-foreground-tertiary flex items-center gap-4 border-t pt-3 text-[11px]">
+          <span className="inline-flex items-center gap-1">
+            <RiRepeatLine size={12} aria-hidden />
+            <span className="tabular-nums">{agent.runCount}회</span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <RiTimerLine size={12} aria-hidden />
+            <span className="tabular-nums">평균 {formatSeconds(agent.avgSeconds)}</span>
+          </span>
+          {/* 실행 이력 없는 에이전트(준비 중 더미 등)는 '—' — null 이 1970년 기준 상대시간
             ('2947주 전')으로 포맷되는 오표시 방지. */}
-        <span className="ml-auto tabular-nums">
-          최근 {agent.lastRunAt ? formatRelativeKorean(agent.lastRunAt) : '—'}
-        </span>
+          <span className="ml-auto tabular-nums">
+            최근 {agent.lastRunAt ? formatRelativeKorean(agent.lastRunAt) : '—'}
+          </span>
+        </div>
       </div>
     </div>
   );
