@@ -255,15 +255,20 @@ SET_ACCT_DATE_JS = """(ymd) => {
   } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
 }"""
 
-# 증빙유형 팝업(.k-window.dialog)이 떴는지.
+# 증빙유형 팝업(.k-window.dialog)이 떴는지 — ⚠ 로그인 공지 팝업도 **동일 클래스**(k-widget
+# k-window k-window-titleless dialog, notice_popup_probe 실측)라 '보이는 다이얼로그 존재'만으론
+# 공지를 증빙 팝업으로 오탐한다(2026-07-22 card-chat 장애: 돋보기 클릭이 공지에 먹혔는데 열림
+# 판정 → select 가 공지를 잡아 ._grid TypeError). 증빙 팝업 고유 특징인 내부 .dews-ui-grid
+# 보유까지 요구한다 — 아래 EVDN_* 다이얼로그 탐색 전부 동일 규칙.
 EVDN_POPUP_OPEN_JS = (
-    "() => [...document.querySelectorAll('.k-window.dialog')].some(d => d.offsetParent !== null)"
+    "() => [...document.querySelectorAll('.k-window.dialog')]"
+    ".some(d => d.offsetParent !== null && d.querySelector('.dews-ui-grid'))"
 )
 
 # 팝업 그리드에서 지정 코드들의 옵션(코드+이름) 읽기. arg = codes[]. 반환 {ok, options?}.
 EVDN_OPTIONS_JS = """(codes) => {
   try {
-    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null);
+    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null && d.querySelector('.dews-ui-grid'));
     if (!dlg) return { ok: false };
     const pg = window.jQuery(dlg.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const ds = pg.getDataSource();
@@ -278,7 +283,7 @@ EVDN_OPTIONS_JS = """(codes) => {
 # 코드로 증빙유형 행 선택. arg = code(예 '01'). 반환 {ok, code?, name?}.
 EVDN_SELECT_BY_CODE_JS = """(code) => {
   try {
-    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null);
+    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null && d.querySelector('.dews-ui-grid'));
     if (!dlg) return { ok: false, reason: 'no-dialog' };
     const pg = window.jQuery(dlg.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const ds = pg.getDataSource();
@@ -294,7 +299,7 @@ EVDN_SELECT_BY_CODE_JS = """(code) => {
 # 자유 입력(이름)으로 증빙유형 코드 매칭. arg = text. 반환 {ok, code?, name?}.
 EVDN_MATCH_BY_NAME_JS = """(text) => {
   try {
-    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null);
+    const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null && d.querySelector('.dews-ui-grid'));
     if (!dlg) return { ok: false };
     const pg = window.jQuery(dlg.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const ds = pg.getDataSource();
@@ -309,7 +314,7 @@ EVDN_MATCH_BY_NAME_JS = """(text) => {
 
 # 모달 '적용' 버튼 중심 좌표(실클릭용).
 EVDN_APPLY_BOX_JS = """() => {
-  const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null);
+  const dlg = [...document.querySelectorAll('.k-window.dialog')].find(d => d.offsetParent !== null && d.querySelector('.dews-ui-grid'));
   if (!dlg) return null;
   const btn = [...dlg.querySelectorAll('button')].find(b => (b.innerText || '').trim() === '적용');
   if (!btn) return null;

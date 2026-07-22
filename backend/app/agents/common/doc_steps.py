@@ -13,6 +13,7 @@ from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol.modals import dismiss_notice_popup
 
 # 재수출(하위호환·가독성) — card js.SET_ACCT_DATE_JS 도 js_lib 단일소스를 재수출한다.
 SET_ACCT_DATE_JS = js_lib.SET_ACCT_DATE_JS
@@ -63,6 +64,10 @@ async def open_evdn_editor(page: Any) -> dict:
     반환 {ok:True, shown} | {ok:False, reason}. shown 은 대상 행 로깅용 {ok, idx, rows}.
     """
     for _attempt in range(1, 4):
+        # 늦게 뜬 공지 팝업 방어(just-in-time) — 로그인 시점 닫기(2s 관찰창)를 넘겨 비동기
+        # 렌더된 공지가 돋보기 클릭을 삼킨 실전 장애(2026-07-22 card-chat). voucher
+        # _open_picker 와 동일한 검증 패턴(appear_cap_ms=0: 대기 없이 1회 확인).
+        await dismiss_notice_popup(page, appear_cap_ms=0)
         shown = await page.evaluate(js_lib.OPEN_EVDN_EDITOR_JS)
         if not shown:
             continue
@@ -97,6 +102,9 @@ async def select_evdn_code(page: Any, code: str) -> dict:
     **순수 스텝**(emit 없음). 반환 {ok:True, name, code} | {ok:False, reason}. 저장(F7) 안 함.
     팝업 '창'은 떠도 내부 그리드 행이 늦게 로드되는 레이스가 있어 선택 자체를 폴링한다.
     """
+    # 증빙 팝업이 뜬 뒤 공지가 늦게 화면을 덮으면 아래 '적용' 실클릭이 공지에 먹힌다 — 선택
+    # 전 1회 재확인(EVDN_* JS 는 그리드 보유 다이얼로그만 잡아 오인은 없지만 클릭은 좌표라 방어).
+    await dismiss_notice_popup(page, appear_cap_ms=0)
     r: dict = {}
     for _ in range(20):  # 행 로드 폴링(상한 ~6s)
         r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
