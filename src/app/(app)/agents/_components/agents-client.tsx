@@ -1,11 +1,8 @@
 'use client';
 
 import { useEffect } from 'react';
-import { RiErrorWarningLine } from '@remixicon/react';
 import { PageHeader } from '@/components/ui/page-header';
-import { Spinner } from '@/components/ui/spinner';
-import { EmptyState } from '@/components/ui/empty-state';
-import { Button } from '@/components/ui/button';
+import { ListStatePanel } from '@/components/ui/list-state';
 import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
@@ -71,29 +68,20 @@ export function AgentsClient() {
         description="반복되는 업무를 대신 처리하는 자동화입니다. 할 일을 고르면 알아서 진행하고, 중요한 선택만 직접 확인하면 됩니다."
       />
 
-      {status === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="에이전트 불러오는 중" />
-          에이전트를 불러오는 중…
-        </div>
-      ) : status === 'error' ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="에이전트를 불러오지 못했습니다"
-          description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
-          action={
-            <Button variant="secondary" size="sm" onClick={reload}>
-              다시 시도
-            </Button>
-          }
-        />
-      ) : visible.length === 0 ? (
-        <EmptyState
-          title="등록된 에이전트가 없습니다"
-          description="아직 사용할 수 있는 에이전트가 없습니다."
-        />
-      ) : (
-        (() => {
+      {/* loading/error/빈 상태 3분기는 ListStatePanel 이 단일 소유. */}
+      <ListStatePanel
+        phase={status === 'success' ? 'ready' : status}
+        error={error}
+        loadingLabel="에이전트를 불러오는 중…"
+        errorTitle="에이전트를 불러오지 못했습니다"
+        onRetry={reload}
+        isEmpty={visible.length === 0}
+        empty={{
+          title: '등록된 에이전트가 없습니다',
+          description: '아직 사용할 수 있는 에이전트가 없습니다.',
+        }}
+      >
+        {(() => {
           const sections = groupSections(visible);
           // 그룹 = 폴더형 카드(클릭 시 상세로 한 단계 이동), 단독 에이전트 = 실행 카드. 한 그리드에 섞는다.
           // 그룹이 새 에이전트로 불어나도 최상위는 카드 1장으로 유지된다(평평하게 깔리지 않음).
@@ -117,8 +105,8 @@ export function AgentsClient() {
               ))}
             </div>
           );
-        })()
-      )}
+        })()}
+      </ListStatePanel>
     </div>
   );
 }

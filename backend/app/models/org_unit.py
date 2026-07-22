@@ -10,12 +10,10 @@ agent_org_access = (agent_id, org_unit_id) 존재 = 그 조직구분(팀)이 그
 
 from __future__ import annotations
 
-from datetime import datetime
-
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TimestampMixin
 
 # 비용구분 값(팀에만). 카드 자동화에서 예산계정 접두사로 매핑: 판관비→'(판)', 제조원가→'(제)'.
 COST_TYPE_SGA = "판관비"
@@ -24,7 +22,7 @@ COST_TYPES = (COST_TYPE_SGA, COST_TYPE_MFG)
 COST_TYPE_PREFIX = {COST_TYPE_SGA: "(판)", COST_TYPE_MFG: "(제)"}
 
 
-class OrgUnit(Base):
+class OrgUnit(Base, TimestampMixin):
     __tablename__ = "org_units"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -38,12 +36,6 @@ class OrgUnit(Base):
     # ERP 조직도 인원수(서브트리 합계) — 직속 인원 판별용. (member_count - 직속자식합) > 0 이면 직속 보유.
     member_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
 
     def __repr__(self) -> str:
         return f"<OrgUnit id={self.id} label={self.label!r} parent={self.parent_id}>"

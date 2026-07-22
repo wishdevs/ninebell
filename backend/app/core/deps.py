@@ -2,6 +2,7 @@
 
 - get_current_user: httpOnly 쿠키 `session`(JWT) → User(롤·권한 eager-load).
 - require_permission(code) / require_any_permission(*codes) / require_role_min(rank): 인가 게이트.
+- RequireAdmin: 관리자(admin+) 전용 게이트 별칭(여러 라우터 공유).
 - collect_user_permissions(user): 평탄화된 권한 코드 집합.
 """
 
@@ -15,7 +16,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import role_rank
+from app.core.permissions import ROLE_ADMIN, role_rank
 from app.core.security import InvalidTokenError, decode_session_token
 from app.db import get_db
 from app.models import Role, User
@@ -125,6 +126,11 @@ def require_role_min(min_rank: int) -> Callable[..., Awaitable[User]]:
 
     _checker.__name__ = f"require_role_min_{min_rank}"
     return _checker
+
+
+# 관리자(admin+) 전용 게이트 별칭 — org_units/agents 등 여러 라우터가 공유(단일 소유,
+# 이전에는 두 라우터가 각자 재정의했다 — docs/LIST-COMMONALIZATION-BE.md §4).
+RequireAdmin = Annotated[User, Depends(require_role_min(role_rank(ROLE_ADMIN)))]
 
 
 async def get_role_by_code(db: AsyncSession, code: str) -> Role | None:

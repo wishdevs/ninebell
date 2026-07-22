@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from contextlib import nullcontext
 from typing import Literal
 
@@ -20,20 +19,26 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
 import app.db as appdb
-from app.core.deps import SESSION_COOKIE, CurrentUser, DbSession
+
+# 옴니솔 비밀번호 조회의 단일 소스는 core.creds — 모듈 전역 별칭(_omnisol_password)은 테스트
+# 주입 앵커(test_me_codes.py 가 monkeypatch). trigger_sync 가 호출 시점에 이 전역을 읽는다.
+from app.core.creds import omnisol_password as _omnisol_password
+from app.core.deps import CurrentUser, DbSession
+from app.core.listing import PageQuery, page_slice, paginate
 from app.core.permissions import ROLE_ADMIN, role_rank
-from app.core.security import InvalidTokenError, decode_session_token
 from app.models import (
     CardLearnedSelection,
     CardSeedNote,
     CardSeedSelection,
     ErpCodeCatalog,
-    OrgUnit,
     UserCodeFavorite,
 )
 from app.services import card_learning
 from app.services.code_sync import dept_matches_budget_name, sync_catalog
 from app.services.cost_project import resolve_cost_project
+from app.services.ordering import reorder_by_client_order
+from app.services.org_lookup import user_cost_type
+from app.services.owner_scope import get_owned_or_none
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/me", tags=["me-codes"])
@@ -127,17 +132,7 @@ async def create_favorite(body: FavoriteCreate, user: CurrentUser, db: DbSession
 @router.delete("/favorites/{fav_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_favorite(fav_id: str, user: CurrentUser, db: DbSession):
     """소유자 스코프 삭제. 대상이 없거나 소유자 불일치면 404."""
-    try:
-        parsed = uuid.UUID(fav_id)
-    except ValueError:
-        return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
-    fav = (
-        await db.execute(
-            select(UserCodeFavorite).where(
-                UserCodeFavorite.id == parsed, UserCodeFavorite.user_id == user.id
-            )
-        )
-    ).scalar_one_or_none()
+    fav = await get_owned_or_none(db, UserCodeFavorite, fav_id, user.id)
     if fav is None:
         return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
     await db.delete(fav)
@@ -159,16 +154,7 @@ async def reorder_favorites(body: ReorderIn, user: CurrentUser, db: DbSession) -
         .scalars()
         .all()
     )
-    by_id = {str(f.id): f for f in rows}
-    ordered: list[str] = []
-    for fid in body.orderedIds:  # 클라가 준 순서 중 실재하는 것만, 중복 제거.
-        if fid in by_id and fid not in ordered:
-            ordered.append(fid)
-    for f in rows:  # 목록에 빠진 나머지는 현재 순서대로 뒤에 붙인다.
-        if str(f.id) not in ordered:
-            ordered.append(str(f.id))
-    for index, fid in enumerate(ordered):
-        by_id[fid].sort_order = index
+    reorder_by_client_order(rows, body.orderedIds)
     await db.commit()
     return await list_favorites(user, db, kind=body.kind)
 
@@ -180,17 +166,7 @@ async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
 
     소유자 스코프. 대상이 없거나 소유자 불일치면 404. 갱신된 항목을 반환.
     """
-    try:
-        parsed = uuid.UUID(fav_id)
-    except ValueError:
-        return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
-    target = (
-        await db.execute(
-            select(UserCodeFavorite).where(
-                UserCodeFavorite.id == parsed, UserCodeFavorite.user_id == user.id
-            )
-        )
-    ).scalar_one_or_none()
+    target = await get_owned_or_none(db, UserCodeFavorite, fav_id, user.id)
     if target is None:
         return JSONResponse({"error": "즐겨찾기를 찾을 수 없습니다."}, status_code=404)
     if target.is_default:
@@ -270,17 +246,7 @@ async def clear_card_learning(user: CurrentUser, db: DbSession) -> dict:
 @router.delete("/card-learning/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_card_learning(item_id: str, user: CurrentUser, db: DbSession):
     """개입 학습 1건 삭제(소유자 스코프) — 대상 없거나 소유자 불일치면 404."""
-    try:
-        parsed = uuid.UUID(item_id)
-    except ValueError:
-        return JSONResponse({"error": "학습 항목을 찾을 수 없습니다."}, status_code=404)
-    row = (
-        await db.execute(
-            select(CardLearnedSelection).where(
-                CardLearnedSelection.id == parsed, CardLearnedSelection.user_id == user.id
-            )
-        )
-    ).scalar_one_or_none()
+    row = await get_owned_or_none(db, CardLearnedSelection, item_id, user.id)
     if row is None:
         return JSONResponse({"error": "학습 항목을 찾을 수 없습니다."}, status_code=404)
     await db.delete(row)
@@ -290,30 +256,23 @@ async def delete_card_learning(item_id: str, user: CurrentUser, db: DbSession):
 
 @router.get("/card-learning/seed")
 async def list_card_seed(
-    user: CurrentUser, db: DbSession, q: str | None = None, limit: int = 50, offset: int = 0
+    user: CurrentUser, db: DbSession, page: PageQuery, q: str | None = None
 ) -> dict:
     """전사 기초자료(seed, 가맹점→계정·적요) 목록 — 개발 디버그용. 공용 데이터(user 무관).
 
     개인 학습이 없을 때 AI 힌트·폴백으로 쓰는 전사 관례. q 로 가맹점 검색, 빈도순 페이지네이션
-    (limit/offset). total 은 **필터 적용 후** 전체 건수라 프론트가 페이지 수를 계산한다. 동빈도
-    타이는 norm_merchant 로 안정 정렬(페이지 간 순서 흔들림 방지).
+    (limit/offset — 수동 clamp 대신 PageQuery, 범위 밖=422). total 은 **필터 적용 후** 전체
+    건수라 프론트가 페이지 수를 계산한다. 동빈도 타이는 norm_merchant 로 안정 정렬(페이지 간
+    순서 흔들림 방지).
     """
-    base = select(CardSeedSelection)
-    count_stmt = select(func.count()).select_from(CardSeedSelection)
+    stmt = select(CardSeedSelection).order_by(
+        CardSeedSelection.count.desc(), CardSeedSelection.norm_merchant
+    )
     if q and q.strip():
-        cond = CardSeedSelection.merchant.ilike(f"%{q.strip()}%")
-        base = base.where(cond)
-        count_stmt = count_stmt.where(cond)
-    total = (await db.execute(count_stmt)).scalar() or 0
-    limit = max(1, min(200, limit))
-    offset = max(0, offset)
-    rows = (
-        await db.execute(
-            base.order_by(CardSeedSelection.count.desc(), CardSeedSelection.norm_merchant)
-            .limit(limit)
-            .offset(offset)
-        )
-    ).scalars().all()
+        stmt = stmt.where(CardSeedSelection.merchant.ilike(f"%{q.strip()}%"))
+    # count 는 rows 쿼리에서 파생(paginate) — 기존 count/rows 이중 필터 조립 대체.
+    result = await paginate(db, stmt, page)
+    rows = result.items
     # 가맹점별 계정 수(card_seed_notes) — 요약 행에 '계정 N개'로 표시해 다중 계정(구분 있는) 가맹점을
     # 바로 알아보고 펼칠 수 있게 한다. 현재 페이지 가맹점만 1회 grouped 조회.
     norms = [r.norm_merchant for r in rows]
@@ -349,7 +308,12 @@ async def list_card_seed(
             "noteCount": note_counts.get(r.norm_merchant, 0),
         }
 
-    return {"total": int(total), "limit": limit, "offset": offset, "items": [_item(r) for r in rows]}
+    return {
+        "total": result.total,
+        "limit": result.limit,
+        "offset": result.offset,
+        "items": [_item(r) for r in rows],
+    }
 
 
 @router.get("/card-learning/seed-notes")
@@ -414,11 +378,7 @@ async def note_suggest(
     반환 적요는 정규화된다: 사람이름 든 적요는 건너뛰고, 원본의 판/제 구분(-판매/-제품 등)은 떼어
     **접속자 소속 비용구분(판관비→판매 / 제조원가→제조)**으로 재부착한다(구분이 원래 있던 적요만).
     """
-    cost_type: str | None = None
-    if user.org_unit_id:
-        team = await db.get(OrgUnit, user.org_unit_id)
-        if team is not None:
-            cost_type = team.cost_type
+    cost_type = await user_cost_type(db, user)
     return await card_learning.suggest_note(
         db,
         user_id=user.id,
@@ -439,11 +399,7 @@ async def get_trip_defaults(user: CurrentUser, db: DbSession) -> dict:
     카드 자동화(collect 노드)와 동일 규칙(app.services.cost_project). 팀 미지정·구분 없음·
     카탈로그 미존재면 defaultProject=null(프론트가 기본지정 즐겨찾기로 폴백).
     """
-    cost_type: str | None = None
-    if user.org_unit_id:
-        team = await db.get(OrgUnit, user.org_unit_id)
-        if team is not None:
-            cost_type = team.cost_type
+    cost_type = await user_cost_type(db, user)
     project = await resolve_cost_project(cost_type)
     return {"costType": cost_type, "department": user.department, "defaultProject": project}
 
@@ -452,23 +408,21 @@ async def get_trip_defaults(user: CurrentUser, db: DbSession) -> dict:
 async def get_catalog(
     user: CurrentUser,
     db: DbSession,
+    page: PageQuery,
     kind: str,
     q: str | None = None,
     dept: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
 ) -> dict:
     """공용 코드 카탈로그 조회. kind 필수. q=name/code 검색, 페이지네이션.
 
-    예산단위의 '내 부서' 필터는 dept 컬럼이 아니라 **예산단위명 ↔ 부서명 정규화 매칭**
-    (dept_matches_budget_name: '인사/기획팀' ↔ '인사기획팀')이다 — ERP 예산단위 목록은 전사
-    공통이고 이름이 곧 부서라서다. dept 파라미터: 없음=내 부서 매칭(부서 없으면 전체),
-    'all'=전체, 그 외 값=그 부서명으로 매칭.
+    limit/offset 은 수동 clamp 대신 PageQuery(범위 밖=422), envelope 는 page_slice 로 통일
+    ({items,total,limit,offset} + syncedAt). 예산단위의 '내 부서' 필터는 dept 컬럼이 아니라
+    **예산단위명 ↔ 부서명 정규화 매칭**(dept_matches_budget_name: '인사/기획팀' ↔ '인사기획팀')
+    이다 — ERP 예산단위 목록은 전사 공통이고 이름이 곧 부서라서다. dept 파라미터: 없음=내 부서
+    매칭(부서 없으면 전체), 'all'=전체, 그 외 값=그 부서명으로 매칭.
     """
     if kind not in _VALID_KINDS:
         return JSONResponse({"error": f"알 수 없는 kind: {kind}"}, status_code=422)
-    limit = max(1, min(limit, 200))
-    offset = max(0, offset)
 
     # 두 kind 모두 조합/부가 필드 검색이 필요해 파이썬 필터(행 수천 건 이내라 충분).
     # 예산단위=사업계획·예산계정, 프로젝트=WBS요소명·위치·프로젝트번호까지 커버한다.
@@ -534,8 +488,8 @@ async def get_catalog(
             ),
         )
 
-    total = len(rows)
-    page_rows = rows[offset : offset + limit]
+    # 파이썬 인메모리 필터 경로 — page_slice 로 envelope 통일(limit/offset 키 additive 추가).
+    result = page_slice(rows, page)
 
     # syncedAt 은 q/필터 무관하게 kind 전체의 최신 동기화 시각.
     synced_at = (
@@ -543,33 +497,17 @@ async def get_catalog(
             select(func.max(ErpCodeCatalog.synced_at)).where(ErpCodeCatalog.kind == kind)
         )
     ).scalar()
-    items = [{"code": r.code, "name": r.name, "extra": r.extra} for r in page_rows]
+    items = [{"code": r.code, "name": r.name, "extra": r.extra} for r in result.items]
     return {
         "items": items,
-        "total": total,
+        "total": result.total,
+        "limit": result.limit,
+        "offset": result.offset,
         "syncedAt": synced_at.isoformat() if synced_at else None,
     }
 
 
 # ── 헤드리스 동기화 트리거/상태 ─────────────────────────────────────────────────
-def _omnisol_password(request: Request) -> str | None:
-    """세션 쿠키 JWT 의 jti 로 CredCache 에서 옴니솔 비밀번호 조회(runs.py 와 동일 규약)."""
-    cache = getattr(request.app.state, "cred_cache", None)
-    if cache is None:
-        return None
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        return None
-    try:
-        jti = decode_session_token(token).get("jti")
-    except InvalidTokenError:
-        return None
-    if not jti:
-        return None
-    entry = cache.get(jti)
-    return entry.get("p") if entry else None
-
-
 async def _run_catalog_sync(
     kind: str,
     userid: str,

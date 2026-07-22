@@ -18,23 +18,23 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.core.deps import (
-    SESSION_COOKIE,
-    CurrentUser,
-    DbSession,
-    require_permission,
-    user_has_permission,
-)
-from app.core.permissions import AGENTS_RUN, LOGS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
-from app.core.security import InvalidTokenError, decode_session_token
+from app.core.creds import omnisol_password as _omnisol_password
+from app.core.deps import CurrentUser, DbSession, require_permission, user_has_permission
+from app.core.listing import PageQuery
+from app.core.permissions import AGENTS_RUN, LOGS_READ
 from app.live import store
 from app.live.hitl import hitl_owner, hitl_run_id, resolve_hitl
 from app.live.registry import get_spec
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
-from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate, OrgUnit
-from app.routers.agents import _HIDDEN_AGENT_IDS, _is_org_admin
+from app.models import Agent, AgentRun, AgentTemplate
 from app.services.agent_settings import effective_settings
+
+# 숨김 집합의 단일 소스는 services.agent_visibility — 모듈 전역 별칭(_HIDDEN_AGENT_IDS)은
+# 테스트 주입 앵커(test_runs_hidden.py 가 monkeypatch). collect 가 호출 시점에 이 전역을 읽는다.
+from app.services.agent_visibility import HIDDEN_AGENT_IDS as _HIDDEN_AGENT_IDS
+from app.services.agent_visibility import ensure_can_run
+from app.services.org_lookup import user_cost_type
 
 logger = logging.getLogger(__name__)
 # 전 엔드포인트 AGENTS_RUN 강제(라우터 레벨) — 인증 + 실행 권한. 조직구분 접근은 collect 에서 추가.
@@ -127,30 +127,6 @@ class HitlDecision(BaseModel):
     rows: list[GridRowIn] | None = Field(default=None, max_length=500)
 
 
-def _omnisol_password(request: Request) -> str | None:
-    """세션 쿠키 JWT 의 jti 로 CredCache 에서 옴니솔 비밀번호를 조회(없으면 None).
-
-    비밀번호는 로그인 시 서버 RAM(CredCache)에만 jti 키로 보관된다(디스크/DB 미저장).
-    실 옴니솔 워크플로우(expense-card-chat)의 로그인 노드가 이 값을 쓴다. demo-echo 는
-    비밀번호를 쓰지 않으므로 None 이어도 무해하다. 테스트(lifespan 미실행)에서는 cred_cache
-    가 없거나 쿠키가 없어 None 을 반환한다.
-    """
-    cache = getattr(request.app.state, "cred_cache", None)
-    if cache is None:
-        return None
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        return None
-    try:
-        jti = decode_session_token(token).get("jti")
-    except InvalidTokenError:
-        return None
-    if not jti:
-        return None
-    entry = cache.get(jti)
-    return entry.get("p") if entry else None
-
-
 def _browser_factory(request: Request):
     """fresh 헤드리스 브라우저를 여는 async 콜러블. 테스트는 app.state override 로 주입."""
     override = getattr(request.app.state, "browser_factory", None)
@@ -192,37 +168,12 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
         return JSONResponse(
             {"error": f"실행할 수 없는 에이전트입니다: {body.agentId}"}, status_code=404
         )
-    # 숨김(검증 전) 에이전트 라이브 실행 차단 — UI 노출 차단(agents.py 목록/상세 제외)과 동일
-    # 소스(_HIDDEN_AGENT_IDS)로 실행 경로도 막는다. 관리자만 게이트 스모크 실행 허용(도메인 검증 전).
-    if agent_row.id in _HIDDEN_AGENT_IDS and not _is_org_admin(user):
-        return JSONResponse(
-            {"error": "아직 공개되지 않은(검증 전) 에이전트입니다. 관리자만 실행할 수 있습니다."},
-            status_code=403,
-        )
-    # 조직구분 접근제어: 명시 설정된 에이전트는 user 롤에 한해 소속 조직구분을 검사(admin+ 우회).
-    role_code = user.role.code if user.role is not None else None
-    if agent_row.access_configured and role_rank(role_code) < ROLE_RANK[ROLE_ADMIN]:
-        if not user.org_unit_id:
-            # 미지정 사용자는 에이전트 접근 설정의 '미지정' 체크(allow_unassigned)로 허용 가능.
-            if not agent_row.allow_unassigned:
-                return JSONResponse(
-                    {"error": "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."},
-                    status_code=403,
-                )
-        else:
-            allowed = (
-                await db.execute(
-                    select(AgentOrgAccess.agent_id).where(
-                        AgentOrgAccess.agent_id == agent_row.id,
-                        AgentOrgAccess.org_unit_id == user.org_unit_id,
-                    )
-                )
-            ).first()
-            if allowed is None:
-                return JSONResponse(
-                    {"error": "이 에이전트를 실행할 권한이 없습니다(조직구분 접근 제한)."},
-                    status_code=403,
-                )
+    # 실행 게이트(숨김 + 조직구분 접근) — agents.py 목록/상세 가시성과 동일 소스
+    # (services.agent_visibility)로 통합. 숨김은 비관리자만 차단(관리자는 게이트 스모크 허용),
+    # 조직접근은 명시 설정된 에이전트에 한해 user 롤만 검사(admin+ 우회).
+    gate_error = await ensure_can_run(db, user, agent_row, hidden_ids=_HIDDEN_AGENT_IDS)
+    if gate_error is not None:
+        return JSONResponse({"error": gate_error}, status_code=403)
 
     spec = get_spec(body.agentId)
     if spec is None:
@@ -258,10 +209,9 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
 
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).
-    if user.org_unit_id:
-        team = await db.get(OrgUnit, user.org_unit_id)
-        if team is not None and team.cost_type:
-            params.setdefault("cost_type", team.cost_type)
+    team_cost_type = await user_cost_type(db, user)
+    if team_cost_type:
+        params.setdefault("cost_type", team_cost_type)
     # 사용자 부서(BG_NM) 주입 → 출장 자동화가 예산단위(여비교통비-국내출장) 조합을 부서×비용구분
     # 으로 특정한다(카드 경로는 department 를 읽지 않아 불변). body.params 가 있으면 우선.
     if user.department:
@@ -502,25 +452,36 @@ async def delete_template(template_id: str, user: CurrentUser):
 @router.get("")
 async def list_runs(
     user: CurrentUser,
+    page: PageQuery,
     agentId: str | None = None,
     status: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
 ):
     """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우, status 로 실행
     상태 필터.
 
     스코프: logs:read(관리자)는 전체 유저의 run 을, 그 외는 본인 것만 본다(감사와 달리
     로깅은 관리자가 전체를 봐야 보완 가능)."""
-    limit = max(1, min(limit, 100))
-    offset = max(0, offset)
+    # 수동 clamp(max(1,min(limit,100))) → PageQuery(범위 밖=422). 상한 100→200 · 기본 20→50 은
+    # 의도된 통일 결정(docs/LIST-COMMONALIZATION.md — DEFAULT_LIMIT=50/MAX_LIMIT=200).
     # 관리자(logs:read)는 전체 조회(user_id=None), 일반 사용자는 소유 스코프.
     scope_user_id = None if user_has_permission(user, LOGS_READ) else user.id
     runs = await store.list_runs(
-        user_id=scope_user_id, agent_id=agentId, status=status, limit=limit, offset=offset
+        user_id=scope_user_id,
+        agent_id=agentId,
+        status=status,
+        limit=page.limit,
+        offset=page.offset,
     )
     total = await store.count_runs(user_id=scope_user_id, agent_id=agentId, status=status)
-    return {"runs": [_run_summary(r) for r in runs], "total": total}
+    items = [_run_summary(r) for r in runs]
+    # dual-key: 구 키(runs)와 표준 키(items)에 같은 목록 병기 — FE 전환 후 별도 커밋에서 구 키 제거 예정.
+    return {
+        "runs": items,
+        "items": items,
+        "total": total,
+        "limit": page.limit,
+        "offset": page.offset,
+    }
 
 
 @router.get("/{run_id}")

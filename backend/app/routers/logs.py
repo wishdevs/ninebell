@@ -6,9 +6,10 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.deps import DbSession, require_permission
+from app.core.listing import PageQuery, paginate
 from app.core.permissions import LOGS_READ
 from app.models import AccessLog, User
 from app.schemas.log import AccessLogOut, AccessLogPage
@@ -20,27 +21,22 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 async def list_access_logs(
     db: DbSession,
     _actor: Annotated[User, Depends(require_permission(LOGS_READ))],
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    page: PageQuery,
     q: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = None,
 ) -> AccessLogPage:
     # 서버사이드 검색은 omnisol_userid 대상. displayName 은 아래에서 별도 조회하는 User
     # 조인 결과라 여기서는 필터링할 수 없다.
-    conditions = []
+    # 고정 정렬(logged_at desc)은 stmt 인라인 유지 — 정렬 레일은 보류(docs/LIST-COMMONALIZATION.md).
+    stmt = select(AccessLog).order_by(AccessLog.logged_at.desc())
     if q is not None and q.strip():
-        conditions.append(AccessLog.omnisol_userid.ilike(f"%{q.strip()}%"))
+        stmt = stmt.where(AccessLog.omnisol_userid.ilike(f"%{q.strip()}%"))
     if status in ("success", "failed"):
-        conditions.append(AccessLog.status == status)
+        stmt = stmt.where(AccessLog.status == status)
 
-    count_stmt = select(func.count()).select_from(AccessLog)
-    rows_stmt = select(AccessLog).order_by(AccessLog.logged_at.desc()).limit(limit).offset(offset)
-    for condition in conditions:
-        count_stmt = count_stmt.where(condition)
-        rows_stmt = rows_stmt.where(condition)
-
-    total = (await db.execute(count_stmt)).scalar_one()
-    rows = (await db.execute(rows_stmt)).scalars().all()
+    # count 는 rows 쿼리에서 파생(paginate) — 기존 count/rows 이중 필터 조립 대체.
+    result = await paginate(db, stmt, page)
+    rows = result.items
 
     # displayName / role 을 위해 관련 사용자 일괄 조회.
     user_ids = {r.user_id for r in rows if r.user_id is not None}
@@ -66,4 +62,7 @@ async def list_access_logs(
                 logged_at=r.logged_at,
             )
         )
-    return AccessLogPage(logs=out, total=total)
+    # dual-key: 구 키(logs)와 표준 키(items)에 같은 목록 병기 — FE 전환 후 별도 커밋에서 구 키 제거 예정.
+    return AccessLogPage(
+        logs=out, items=out, total=result.total, limit=result.limit, offset=result.offset
+    )

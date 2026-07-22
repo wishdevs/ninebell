@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select-dropdown';
+import { TableCard, tableRowClass } from '@/components/ui/table-card';
 import { Td, Th } from '@/components/ui/table-cell';
 import type { Role } from '@/lib/auth/permissions';
 import {
@@ -92,181 +93,171 @@ export function MembersTable({
         ) : null}
       </p>
 
-      <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-        <table className="w-full min-w-[1000px] text-left text-sm">
-          <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
-            <tr>
-              <Th className="w-10">
+      <TableCard
+        minWidth={1000}
+        head={
+          <tr>
+            <Th className="w-10">
+              <RowCheckbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                onClick={onToggleSelectAll}
+                label="현재 페이지 전체 선택"
+              />
+            </Th>
+            <Th>이름</Th>
+            <Th>역할</Th>
+            <Th>조직구분</Th>
+            <Th>상태</Th>
+            <Th>이메일 인증</Th>
+            <Th>마지막 활동</Th>
+            <Th>가입일</Th>
+            <th className="px-4 py-3">
+              <span className="sr-only">액션</span>
+            </th>
+          </tr>
+        }
+      >
+        {members.map((member) => {
+          const isSelf = member.id === currentUserId;
+          // 역할 셀렉트는 본인이 아니고 roles:assign 권한이 있을 때만. 그 외는 읽기 전용 배지.
+          const canEditRole = !isSelf && caps.canAssignRole;
+          // 행 액션(정지/삭제)은 본인이 아니고 쓰기/삭제 권한 중 하나라도 있을 때만.
+          const canActOnRow = !isSelf && (caps.canWrite || caps.canDelete);
+          const selected = selectedIds.has(member.id);
+          return (
+            <tr key={member.id} className={cn(tableRowClass, selected && 'bg-accent/5')}>
+              <Td>
                 <RowCheckbox
-                  checked={allSelected}
-                  indeterminate={someSelected}
-                  onClick={onToggleSelectAll}
-                  label="현재 페이지 전체 선택"
+                  checked={selected}
+                  onClick={() => onToggleSelect(member.id)}
+                  label={`${member.name} 선택`}
                 />
-              </Th>
-              <Th>이름</Th>
-              <Th>역할</Th>
-              <Th>조직구분</Th>
-              <Th>상태</Th>
-              <Th>이메일 인증</Th>
-              <Th>마지막 활동</Th>
-              <Th>가입일</Th>
-              <th className="px-4 py-3">
-                <span className="sr-only">액션</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((member) => {
-              const isSelf = member.id === currentUserId;
-              // 역할 셀렉트는 본인이 아니고 roles:assign 권한이 있을 때만. 그 외는 읽기 전용 배지.
-              const canEditRole = !isSelf && caps.canAssignRole;
-              // 행 액션(정지/삭제)은 본인이 아니고 쓰기/삭제 권한 중 하나라도 있을 때만.
-              const canActOnRow = !isSelf && (caps.canWrite || caps.canDelete);
-              const selected = selectedIds.has(member.id);
-              return (
-                <tr
-                  key={member.id}
-                  className={cn(
-                    'border-border-subtle row-hover border-b last:border-0',
-                    selected && 'bg-accent/5',
-                  )}
+              </Td>
+
+              <Td>
+                <button
+                  type="button"
+                  onClick={() => onOpenDetail(member)}
+                  className="group flex items-center gap-3 text-left"
                 >
-                  <Td>
-                    <RowCheckbox
-                      checked={selected}
-                      onClick={() => onToggleSelect(member.id)}
-                      label={`${member.name} 선택`}
-                    />
-                  </Td>
+                  <Avatar userId={member.id} hasAvatar={false} label={member.name} size={36} />
+                  <div className="grid gap-0.5">
+                    <p className="text-foreground group-hover:text-accent font-medium underline-offset-2 group-hover:underline">
+                      {member.name}
+                      {isSelf ? (
+                        <span className="text-foreground-tertiary ml-1.5 text-xs font-normal">
+                          (나)
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="text-muted-foreground font-mono text-xs">{member.email || '—'}</p>
+                  </div>
+                </button>
+              </Td>
 
-                  <Td>
-                    <button
-                      type="button"
-                      onClick={() => onOpenDetail(member)}
-                      className="group flex items-center gap-3 text-left"
-                    >
-                      <Avatar userId={member.id} hasAvatar={false} label={member.name} size={36} />
-                      <div className="grid gap-0.5">
-                        <p className="text-foreground group-hover:text-accent font-medium underline-offset-2 group-hover:underline">
-                          {member.name}
-                          {isSelf ? (
-                            <span className="text-foreground-tertiary ml-1.5 text-xs font-normal">
-                              (나)
-                            </span>
-                          ) : null}
-                        </p>
-                        <p className="text-muted-foreground font-mono text-xs">
-                          {member.email || '—'}
-                        </p>
-                      </div>
-                    </button>
-                  </Td>
+              <Td>
+                {canEditRole ? (
+                  <Select
+                    value={member.role}
+                    onValueChange={(value) => onRoleChange(member, value as Role)}
+                  >
+                    <SelectTrigger aria-label={`${member.name} 역할`} className="w-[7.5rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MEMBER_ROLE_OPTIONS.map((role) => (
+                        <SelectItem key={role} value={role}>
+                          {MEMBER_ROLE_LABEL[role]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <StatusPill
+                    label={MEMBER_ROLE_LABEL[member.role]}
+                    variant="custom"
+                    toneClassName={MEMBER_ROLE_BADGE[member.role]}
+                  />
+                )}
+              </Td>
 
-                  <Td>
-                    {canEditRole ? (
-                      <Select
-                        value={member.role}
-                        onValueChange={(value) => onRoleChange(member, value as Role)}
-                      >
-                        <SelectTrigger aria-label={`${member.name} 역할`} className="w-[7.5rem]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {MEMBER_ROLE_OPTIONS.map((role) => (
-                            <SelectItem key={role} value={role}>
-                              {MEMBER_ROLE_LABEL[role]}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <StatusPill
-                        label={MEMBER_ROLE_LABEL[member.role]}
-                        variant="custom"
-                        toneClassName={MEMBER_ROLE_BADGE[member.role]}
-                      />
-                    )}
-                  </Td>
+              <Td>
+                {caps.canWrite ? (
+                  <Select
+                    value={member.orgUnitId ?? ORG_NONE}
+                    onValueChange={(value) =>
+                      onOrgUnitChange(member, value === ORG_NONE ? null : value)
+                    }
+                  >
+                    <SelectTrigger aria-label={`${member.name} 조직구분`} className="w-[9rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ORG_NONE}>미지정</SelectItem>
+                      {orgTree.map(({ parent, children }) =>
+                        children.length === 0 ? null : (
+                          <SelectGroup key={parent.id}>
+                            <SelectLabel>{parent.label}</SelectLabel>
+                            {children.map((child) => (
+                              <SelectItem key={child.id} value={child.id}>
+                                {child.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ),
+                      )}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <span className="text-muted-foreground text-xs">
+                    {orgUnitLabel(orgUnits, member.orgUnitId)}
+                  </span>
+                )}
+              </Td>
 
-                  <Td>
-                    {caps.canWrite ? (
-                      <Select
-                        value={member.orgUnitId ?? ORG_NONE}
-                        onValueChange={(value) =>
-                          onOrgUnitChange(member, value === ORG_NONE ? null : value)
-                        }
-                      >
-                        <SelectTrigger aria-label={`${member.name} 조직구분`} className="w-[9rem]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={ORG_NONE}>미지정</SelectItem>
-                          {orgTree.map(({ parent, children }) =>
-                            children.length === 0 ? null : (
-                              <SelectGroup key={parent.id}>
-                                <SelectLabel>{parent.label}</SelectLabel>
-                                {children.map((child) => (
-                                  <SelectItem key={child.id} value={child.id}>
-                                    {child.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            ),
-                          )}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span className="text-muted-foreground text-xs">
-                        {orgUnitLabel(orgUnits, member.orgUnitId)}
-                      </span>
-                    )}
-                  </Td>
+              <Td>
+                <StatusPill
+                  label={MEMBER_STATUS_LABEL[member.status]}
+                  variant={MEMBER_STATUS_VARIANT[member.status]}
+                />
+              </Td>
 
-                  <Td>
-                    <StatusPill
-                      label={MEMBER_STATUS_LABEL[member.status]}
-                      variant={MEMBER_STATUS_VARIANT[member.status]}
-                    />
-                  </Td>
+              <Td>
+                {member.emailVerified ? (
+                  <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+                    <RiCheckboxCircleLine size={13} className="text-success" aria-hidden />
+                    인증됨
+                  </span>
+                ) : (
+                  <StatusPill label="미인증" variant="warn" />
+                )}
+              </Td>
 
-                  <Td>
-                    {member.emailVerified ? (
-                      <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                        <RiCheckboxCircleLine size={13} className="text-success" aria-hidden />
-                        인증됨
-                      </span>
-                    ) : (
-                      <StatusPill label="미인증" variant="warn" />
-                    )}
-                  </Td>
+              <Td className="text-muted-foreground text-xs tabular-nums">
+                {formatRelativeKorean(member.lastActiveAt)}
+              </Td>
 
-                  <Td className="text-muted-foreground text-xs tabular-nums">
-                    {formatRelativeKorean(member.lastActiveAt)}
-                  </Td>
+              <Td className="text-muted-foreground text-xs tabular-nums">
+                {formatDate(member.joinedAt)}
+              </Td>
 
-                  <Td className="text-muted-foreground text-xs tabular-nums">
-                    {formatDate(member.joinedAt)}
-                  </Td>
-
-                  <Td className="text-right">
-                    {canActOnRow ? (
-                      <MemberRowActions
-                        member={member}
-                        caps={caps}
-                        onToggleStatus={onToggleStatus}
-                        onRequestRemove={onRequestRemove}
-                      />
-                    ) : (
-                      <span className="text-foreground-tertiary text-xs">—</span>
-                    )}
-                  </Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              <Td className="text-right">
+                {canActOnRow ? (
+                  <MemberRowActions
+                    member={member}
+                    caps={caps}
+                    onToggleStatus={onToggleStatus}
+                    onRequestRemove={onRequestRemove}
+                  />
+                ) : (
+                  <span className="text-foreground-tertiary text-xs">—</span>
+                )}
+              </Td>
+            </tr>
+          );
+        })}
+      </TableCard>
     </div>
   );
 }

@@ -416,6 +416,36 @@ async def test_list_runs_total_reflects_scope_and_filter(client, make_user, auth
 
 
 @pytest.mark.asyncio
+async def test_list_runs_dual_key_items_mirrors_runs(client, make_user, auth_as):
+    """dual-key: 구 키(runs)와 표준 키(items)가 같은 목록 + limit/offset 에코.
+
+    FE 전환 후 별도 커밋에서 runs 키 제거 예정(docs/LIST-COMMONALIZATION.md).
+    """
+    uid = await make_user("dualkey", "user")
+    for i in range(3):
+        await store.create_run(run_id=f"run-dk{i}", agent_id="demo-echo", user_id=uid)
+    auth_as(uid)
+    body = (await client.get("/runs", params={"limit": 2, "offset": 1})).json()
+    assert body["items"] == body["runs"]
+    assert len(body["items"]) == 2
+    assert body["limit"] == 2
+    assert body["offset"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_runs_limit_out_of_range_422(client, make_user, auth_as):
+    """수동 clamp(max(1,min(limit,100))) → PageQuery 422 계약으로 의도된 강화.
+
+    상한 100→200 통일도 의도 결정(docs/LIST-COMMONALIZATION.md) — 200 은 통과, 201 은 422.
+    """
+    uid = await make_user("range", "user")
+    auth_as(uid)
+    assert (await client.get("/runs", params={"limit": 200})).status_code == 200
+    for params in ({"limit": 0}, {"limit": 201}, {"offset": -1}):
+        assert (await client.get("/runs", params=params)).status_code == 422, params
+
+
+@pytest.mark.asyncio
 async def test_list_runs_admin_sees_all_users_own_scoped_otherwise(client, make_user, auth_as):
     u1 = await make_user("nadia", "user")
     u2 = await make_user("omar", "user")

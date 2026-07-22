@@ -11,22 +11,18 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime
-
-from sqlalchemy import DateTime, Float, Integer, String, UniqueConstraint, Uuid, func
+from sqlalchemy import Float, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, TimestampMixin, UuidPkMixin
 
 
-class CardSeedSelection(Base):
+class CardSeedSelection(UuidPkMixin, Base, TimestampMixin):
     __tablename__ = "card_seed_selections"
     __table_args__ = (
         UniqueConstraint("norm_merchant", name="uq_card_seed_merchant"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # 정규화 가맹점명(매칭 키, 지점 단위 유지) + 표본 원문(표시·디버깅).
     norm_merchant: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -39,12 +35,6 @@ class CardSeedSelection(Base):
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     dominance: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     last_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
 
     def __repr__(self) -> str:
         return f"<CardSeedSelection merchant={self.merchant!r} acct={self.acct_name!r} n={self.count}>"

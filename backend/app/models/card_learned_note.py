@@ -26,10 +26,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, UuidPkMixin
 
 
-class CardLearnedNote(Base):
+class CardLearnedNote(UuidPkMixin, Base):
     __tablename__ = "card_learned_notes"
     __table_args__ = (
         UniqueConstraint(
@@ -39,7 +39,6 @@ class CardLearnedNote(Base):
         Index("ix_card_learned_note_merchant", "norm_merchant"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

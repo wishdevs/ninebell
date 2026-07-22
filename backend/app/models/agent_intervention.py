@@ -5,22 +5,20 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, Text, Uuid
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, JSONVariant
+from app.models.base import Base, JSONVariant, UuidPkMixin
 
 if TYPE_CHECKING:
     from app.models.agent import Agent
 
 
-class AgentIntervention(Base):
+class AgentIntervention(UuidPkMixin, Base):
     __tablename__ = "agent_interventions"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("agents.id", ondelete="CASCADE"),

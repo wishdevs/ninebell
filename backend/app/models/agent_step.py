@@ -6,22 +6,20 @@ substeps 는 [{label,status}] 리스트로 JSONB(계약 컬럼 외 추가 — Ag
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Uuid, false
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, JSONVariant
+from app.models.base import Base, JSONVariant, UuidPkMixin
 
 if TYPE_CHECKING:
     from app.models.agent import Agent
 
 
-class AgentStep(Base):
+class AgentStep(UuidPkMixin, Base):
     __tablename__ = "agent_steps"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("agents.id", ondelete="CASCADE"),

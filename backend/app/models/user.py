@@ -9,16 +9,15 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base, TimestampMixin, UuidPkMixin
 
 if TYPE_CHECKING:
     from app.models.role import Role
 
 
-class User(Base, TimestampMixin):
+class User(UuidPkMixin, Base, TimestampMixin):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # 로그인 식별자(더존 userid). 옴니솔 계정은 비밀번호를 절대 저장하지 않는다.
     omnisol_userid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     # 로컬 계정 전용 bcrypt 해시(예: 시스템 관리자 admin). 옴니솔 계정은 null.

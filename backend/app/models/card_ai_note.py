@@ -14,23 +14,21 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, UniqueConstraint, Uuid, func
+from sqlalchemy import DateTime, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, UuidPkMixin
 
 
-class CardAiNote(Base):
+class CardAiNote(UuidPkMixin, Base):
     __tablename__ = "card_ai_notes"
     __table_args__ = (
         UniqueConstraint("norm_merchant", "acct_code", name="uq_card_ai_note_merchant_acct"),
         Index("ix_card_ai_note_merchant", "norm_merchant"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # 정규화 가맹점명(매칭 키, seed/learned 와 동일 정규화) + 표본 원문(표시·디버깅).
     norm_merchant: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str] = mapped_column(String(255), nullable=False)

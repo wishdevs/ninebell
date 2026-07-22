@@ -2,10 +2,9 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
-import { RiArrowLeftSLine, RiErrorWarningLine } from '@remixicon/react';
-import { Spinner } from '@/components/ui/spinner';
-import { EmptyState } from '@/components/ui/empty-state';
+import { RiArrowLeftSLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import { ListStatePanel } from '@/components/ui/list-state';
 import { MetaChip } from '@/components/ui/meta-chip';
 import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
 import { useFavorites } from '@/lib/live/use-favorites';
@@ -60,33 +59,24 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
         ) : null}
       </div>
 
-      {status === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="에이전트 불러오는 중" />
-          에이전트를 불러오는 중…
-        </div>
-      ) : status === 'error' ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="에이전트를 불러오지 못했습니다"
-          description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
-          action={
-            <Button variant="secondary" size="sm" onClick={reload}>
-              다시 시도
-            </Button>
-          }
-        />
-      ) : agents.length === 0 ? (
-        <EmptyState
-          title="그룹을 찾을 수 없습니다"
-          description="이 그룹에 속한 에이전트가 없습니다."
-          action={
+      {/* loading/error/빈 상태 3분기는 ListStatePanel 이 단일 소유. */}
+      <ListStatePanel
+        phase={status === 'success' ? 'ready' : status}
+        error={error}
+        loadingLabel="에이전트를 불러오는 중…"
+        errorTitle="에이전트를 불러오지 못했습니다"
+        onRetry={reload}
+        isEmpty={agents.length === 0}
+        empty={{
+          title: '그룹을 찾을 수 없습니다',
+          description: '이 그룹에 속한 에이전트가 없습니다.',
+          action: (
             <Button asChild variant="secondary" size="sm">
               <Link href="/agents">에이전트 목록으로</Link>
             </Button>
-          }
-        />
-      ) : (
+          ),
+        }}
+      >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {agents.map((agent) => (
             <AgentCard
@@ -99,7 +89,7 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
             />
           ))}
         </div>
-      )}
+      </ListStatePanel>
     </div>
   );
 }

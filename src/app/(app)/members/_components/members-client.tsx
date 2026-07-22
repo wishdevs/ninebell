@@ -1,17 +1,19 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { RiErrorWarningLine, RiFilterOffLine, RiGroupLine } from '@remixicon/react';
+import { RiFilterOffLine, RiGroupLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
-import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ListStatePanel } from '@/components/ui/list-state';
 import { Pagination } from '@/components/ui/pagination';
 import { api, errorMessage } from '@/lib/api/client';
 import { PERMISSIONS, type Role } from '@/lib/auth/permissions';
 import { usePermissions } from '@/hooks/use-permissions';
+import { useListParams } from '@/hooks/use-list-params';
+import type { ListPhase } from '@/hooks/use-paged-query';
 import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { MEMBER_ROLE_LABEL, type MemberStatus, type WorkspaceMember } from '@/lib/data/members';
 import type { OrgUnit } from '@/lib/data/org-units';
@@ -38,7 +40,8 @@ export interface MemberCaps {
  * 멤버 관리 화면의 상태 소유자. `GET /users`로 전역 사용자 목록을 로드하고,
  * 역할 변경/정지·활성/삭제를 낙관적으로 반영하되 실패 시 롤백한다. 모든 변경은
  * 권한(roles:assign·users:write·users:delete)으로 게이팅되며 `user` 롤은 읽기 전용.
- * 검색/역할/조직구분/상태 필터 + 페이징 + 다중 선택 일괄 변경 + 상세 드로워를 더한다.
+ * 검색/역할/조직구분/상태 필터·페이지 파라미터는 useListParams 가 소유(URL 동기화 포함)하고,
+ * 여기에 다중 선택 일괄 변경 + 상세 드로워를 더한다.
  */
 export function MembersClient() {
   const me = useCurrentUser();
@@ -53,14 +56,29 @@ export function MembersClient() {
   // 조직구분 배정 셀렉트용 목록(GET /org-units, 관리자 전용). 실패 시 빈 목록으로 무해히 강등.
   const { data: orgUnitsData } = useApiResource<OrgUnit[]>('/org-units');
   const orgUnits = orgUnitsData ?? [];
+  // 로딩·에러는 users 리소스만 따른다(org-units 는 위처럼 빈 목록 강등 — 결합 로딩 없음).
+  const phase: ListPhase =
+    status === 'loading' ? 'loading' : status === 'error' ? 'error' : 'ready';
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<WorkspaceMember | null>(null);
 
-  const [query, setQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
-  const [orgFilter, setOrgFilter] = useState<OrgFilterValue>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | MemberStatus>('all');
-  const [page, setPage] = useState(1);
+  // 검색·필터·페이지는 공용 레일이 소유(URL 동기화·디바운스·page 1 리셋 내장).
+  // 클라이언트 매칭 화면이라 요청이 아닌 아래 filtered useMemo 에 안정값 search 를 연결한다.
+  const {
+    searchInput,
+    setSearchInput,
+    search,
+    filters,
+    setFilter,
+    page,
+    setPage,
+    isFiltered,
+    reset,
+  } = useListParams<{ role: 'all' | Role; org: OrgFilterValue; status: 'all' | MemberStatus }>({
+    filters: { role: 'all', org: 'all', status: 'all' },
+    // 서버 왕복 없는 클라이언트 매칭 화면 — 디바운스 없이 타이핑 즉시 좁힌다(교체 전 체감 보존).
+    searchDebounceMs: 0,
+  });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
 
@@ -69,25 +87,21 @@ export function MembersClient() {
     if (data) setMembers(data);
   }, [data]);
 
+  // 매칭 필드(name+email)는 화면 소유 — 필터 변경·검색 안정화 시 page 1 리셋은 useListParams 내장.
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = search.trim().toLowerCase();
     return members.filter((m) => {
-      if (roleFilter !== 'all' && m.role !== roleFilter) return false;
-      if (statusFilter !== 'all' && m.status !== statusFilter) return false;
-      if (orgFilter === '__none__') {
+      if (filters.role !== 'all' && m.role !== filters.role) return false;
+      if (filters.status !== 'all' && m.status !== filters.status) return false;
+      if (filters.org === '__none__') {
         if (m.orgUnitId !== null) return false;
-      } else if (orgFilter !== 'all' && m.orgUnitId !== orgFilter) {
+      } else if (filters.org !== 'all' && m.orgUnitId !== filters.org) {
         return false;
       }
       if (!q) return true;
       return `${m.name} ${m.email}`.toLowerCase().includes(q);
     });
-  }, [members, query, roleFilter, orgFilter, statusFilter]);
-
-  // 필터가 바뀌면 1페이지로. 필터 값 자체가 dependency라 필터 변경 시에만 실행된다.
-  useEffect(() => {
-    setPage(1);
-  }, [query, roleFilter, orgFilter, statusFilter]);
+  }, [members, search, filters]);
 
   // 필터·삭제·일괄변경으로 filtered가 줄어도 렌더 시점에 유효 페이지를 파생해 슬라이스한다
   // (setPage를 effect에서 하면 페인트 이후라 stale-high 페이지의 빈 테이블이 한 프레임 깜빡인다).
@@ -95,9 +109,12 @@ export function MembersClient() {
   const effectivePage = Math.min(page, lastPage);
 
   // 파생값과 어긋난 page 상태는 페인트 이후 조용히 맞춘다(렌더는 이미 effectivePage 기준).
+  // 단 데이터 도착 전에는 실행하지 않는다 — 마운트 직후 members=[] 로 lastPage=1 이라
+  // URL 에서 복원한 page 를 1로 지워버린다(새로고침/딥링크 복원 보호).
   useEffect(() => {
+    if (phase !== 'ready') return;
     if (page !== effectivePage) setPage(effectivePage);
-  }, [page, effectivePage]);
+  }, [phase, page, effectivePage, setPage]);
 
   const paged = useMemo(
     () => filtered.slice((effectivePage - 1) * PAGE_SIZE, effectivePage * PAGE_SIZE),
@@ -109,13 +126,6 @@ export function MembersClient() {
   const somePagedSelected = !allPagedSelected && pagedIds.some((id) => selectedIds.has(id));
 
   const detailMember = detailId ? (members.find((m) => m.id === detailId) ?? null) : null;
-
-  function resetFilters() {
-    setQuery('');
-    setRoleFilter('all');
-    setOrgFilter('all');
-    setStatusFilter('all');
-  }
 
   // 현재 페이지 행 기준 전체 선택/해제(다른 페이지에서 이미 선택된 항목은 유지).
   function toggleSelectAll() {
@@ -288,97 +298,88 @@ export function MembersClient() {
     <div className="animate-page-enter flex flex-col gap-6">
       <PageHeader title="멤버" description="조직의 전역 사용자와 역할을 관리합니다." />
 
-      {status === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="멤버 불러오는 중" />
-          멤버 목록을 불러오는 중…
-        </div>
-      ) : status === 'error' ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="멤버를 불러오지 못했습니다"
-          description={errorMessage(error)}
-          action={
-            <Button variant="secondary" size="sm" onClick={reload}>
-              다시 시도
-            </Button>
-          }
+      <ListStatePanel
+        phase={phase}
+        error={error}
+        loadingLabel="멤버 목록을 불러오는 중…"
+        errorTitle="멤버를 불러오지 못했습니다"
+        onRetry={reload}
+        isEmpty={members.length === 0}
+        empty={{
+          icon: <RiGroupLine size={18} aria-hidden />,
+          title: '멤버가 없습니다',
+          description:
+            '아직 등록된 사용자가 없습니다. 옴니솔 계정으로 로그인하면 사용자가 등록됩니다.',
+        }}
+      >
+        <MembersFilterBar
+          query={searchInput}
+          onQueryChange={setSearchInput}
+          roleFilter={filters.role}
+          onRoleFilterChange={(v) => setFilter('role', v)}
+          orgFilter={filters.org}
+          onOrgFilterChange={(v) => setFilter('org', v)}
+          statusFilter={filters.status}
+          onStatusFilterChange={(v) => setFilter('status', v)}
+          orgUnits={orgUnits}
+          isFiltered={isFiltered}
+          onReset={reset}
         />
-      ) : members.length === 0 ? (
-        <EmptyState
-          icon={<RiGroupLine size={18} aria-hidden />}
-          title="멤버가 없습니다"
-          description="아직 등록된 사용자가 없습니다. 옴니솔 계정으로 로그인하면 사용자가 등록됩니다."
-        />
-      ) : (
-        <>
-          <MembersFilterBar
-            query={query}
-            onQueryChange={setQuery}
-            roleFilter={roleFilter}
-            onRoleFilterChange={setRoleFilter}
-            orgFilter={orgFilter}
-            onOrgFilterChange={setOrgFilter}
-            statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
+
+        {selectedIds.size > 0 ? (
+          <MembersBulkBar
+            selectedCount={selectedIds.size}
+            caps={caps}
             orgUnits={orgUnits}
-            onReset={resetFilters}
+            onSetOrgUnit={handleBulkSetOrgUnit}
+            onSetRole={handleBulkSetRole}
+            onSetStatus={handleBulkSetStatus}
+            onClearSelection={() => setSelectedIds(new Set())}
           />
+        ) : null}
 
-          {selectedIds.size > 0 ? (
-            <MembersBulkBar
-              selectedCount={selectedIds.size}
-              caps={caps}
+        {/* 필터 0건은 툴바를 계속 노출해야 해서 ListStatePanel isEmpty(children 전체를 삼킴)가 아닌 인라인 분기. */}
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon={<RiFilterOffLine size={18} aria-hidden />}
+            title="조건에 맞는 멤버가 없습니다"
+            description="검색어나 필터를 바꿔 보세요."
+            action={
+              <Button variant="secondary" size="sm" onClick={reset}>
+                필터 초기화
+              </Button>
+            }
+          />
+        ) : (
+          <>
+            <MembersTable
+              members={paged}
+              totalCount={filtered.length}
+              page={effectivePage}
+              pageSize={PAGE_SIZE}
               orgUnits={orgUnits}
-              onSetOrgUnit={handleBulkSetOrgUnit}
-              onSetRole={handleBulkSetRole}
-              onSetStatus={handleBulkSetStatus}
-              onClearSelection={() => setSelectedIds(new Set())}
+              currentUserId={me.id}
+              caps={caps}
+              selectedIds={selectedIds}
+              allSelected={allPagedSelected}
+              someSelected={somePagedSelected}
+              onToggleSelectAll={toggleSelectAll}
+              onToggleSelect={toggleSelectOne}
+              onOpenDetail={(member) => setDetailId(member.id)}
+              onRoleChange={handleRoleChange}
+              onOrgUnitChange={handleOrgUnitChange}
+              onToggleStatus={handleToggleStatus}
+              onRequestRemove={setPendingRemoval}
             />
-          ) : null}
-
-          {filtered.length === 0 ? (
-            <EmptyState
-              icon={<RiFilterOffLine size={18} aria-hidden />}
-              title="조건에 맞는 멤버가 없습니다"
-              description="검색어나 필터를 바꿔 보세요."
-              action={
-                <Button variant="secondary" size="sm" onClick={resetFilters}>
-                  필터 초기화
-                </Button>
-              }
+            <Pagination
+              page={effectivePage}
+              pageSize={PAGE_SIZE}
+              total={filtered.length}
+              onPageChange={setPage}
             />
-          ) : (
-            <>
-              <MembersTable
-                members={paged}
-                totalCount={filtered.length}
-                page={effectivePage}
-                pageSize={PAGE_SIZE}
-                orgUnits={orgUnits}
-                currentUserId={me.id}
-                caps={caps}
-                selectedIds={selectedIds}
-                allSelected={allPagedSelected}
-                someSelected={somePagedSelected}
-                onToggleSelectAll={toggleSelectAll}
-                onToggleSelect={toggleSelectOne}
-                onOpenDetail={(member) => setDetailId(member.id)}
-                onRoleChange={handleRoleChange}
-                onOrgUnitChange={handleOrgUnitChange}
-                onToggleStatus={handleToggleStatus}
-                onRequestRemove={setPendingRemoval}
-              />
-              <Pagination
-                page={effectivePage}
-                pageSize={PAGE_SIZE}
-                total={filtered.length}
-                onPageChange={setPage}
-              />
-            </>
-          )}
-        </>
-      )}
+          </>
+        )}
+      </ListStatePanel>
 
       <MemberDetailDrawer
         member={detailMember}

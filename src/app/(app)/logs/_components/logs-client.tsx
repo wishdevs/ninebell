@@ -1,25 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import {
-  RiAlertLine,
-  RiArrowDownSLine,
-  RiCloseLine,
-  RiErrorWarningLine,
-  RiHistoryLine,
-  RiLockLine,
-} from '@remixicon/react';
-import { Button } from '@/components/ui/button';
+import { RiAlertLine, RiArrowDownSLine, RiHistoryLine } from '@remixicon/react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
-import { EmptyState } from '@/components/ui/empty-state';
 import { FilterPill } from '@/components/ui/filter-pill';
+import { ListStatePanel, LockedEmptyState } from '@/components/ui/list-state';
+import { ListToolbar } from '@/components/ui/list-toolbar';
 import { Pagination } from '@/components/ui/pagination';
 import { RunStatusBadge } from '@/components/ui/run-status-badge';
 import { SelectItem } from '@/components/ui/select-dropdown';
+import { TableCard, tableRowClass } from '@/components/ui/table-card';
 import { cn } from '@/lib/utils';
-import { api, ApiError, toApiError } from '@/lib/api/client';
+import { api, ApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
+import { useListParams } from '@/hooks/use-list-params';
+import { usePagedQuery, type Page } from '@/hooks/use-paged-query';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { formatDateTime } from '@/lib/data/format';
@@ -37,8 +33,6 @@ import {
 } from '@/lib/live/runs-api';
 
 const PAGE_SIZE = 50;
-
-type Phase = 'loading' | 'ready' | 'error';
 
 /** 워크플로우 id → 사람이 읽는 라벨(없으면 raw id). */
 const WORKFLOW_LABEL: Record<string, string> = {
@@ -70,15 +64,11 @@ interface AgentOption {
  */
 export function LogsClient() {
   const canRead = useCan(PERMISSIONS.LOGS_READ);
-  const [rows, setRows] = useState<RunSummary[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [phase, setPhase] = useState<Phase>('loading');
-  const [error, setError] = useState<ApiError | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | RunStatus>('all');
-  const [agentFilter, setAgentFilter] = useState('all');
+  // 이 화면은 텍스트 검색이 없다 — searchInput 은 쓰지 않는다.
+  const { filters, setFilter, page, setPage, isFiltered, reset } = useListParams({
+    filters: { status: 'all', agent: 'all' },
+  });
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
-  const filtersActive = statusFilter !== 'all' || agentFilter !== 'all';
 
   // 필터 칩용 에이전트 옵션 — 실패해도 상태 필터만 남기고 무해히 강등한다.
   useEffect(() => {
@@ -105,38 +95,27 @@ export function LogsClient() {
     };
   }, [canRead]);
 
-  const loadPage = useCallback(
-    async (target: number) => {
-      setPhase('loading');
-      setError(null);
-      try {
-        const res = await fetchRuns({
-          limit: PAGE_SIZE,
-          offset: (target - 1) * PAGE_SIZE,
-          agentId: agentFilter === 'all' ? undefined : agentFilter,
-          status: statusFilter === 'all' ? undefined : statusFilter,
-        });
-        setRows(res.runs);
-        setTotal(res.total);
-        setPage(target);
-        setPhase('ready');
-      } catch (err: unknown) {
-        setError(toApiError(err));
-        setPhase('error');
-      }
+  // 필터를 클로저에 넣은 fetcher — 정체성이 바뀌면 usePagedQuery 가 재조회한다.
+  // fetchRuns 의 {runs,total} 을 정규형 Page{rows,total} 로 어댑트.
+  const fetchPage = useCallback(
+    async ({ limit, offset }: { limit: number; offset: number }): Promise<Page<RunSummary>> => {
+      const res = await fetchRuns({
+        limit,
+        offset,
+        agentId: filters.agent === 'all' ? undefined : filters.agent,
+        status: filters.status === 'all' ? undefined : filters.status,
+      });
+      return { rows: res.runs, total: res.total };
     },
-    [agentFilter, statusFilter],
+    [filters.agent, filters.status],
   );
 
-  // 최초 로드 + 필터 변경 시 1페이지부터 재조회(loadPage 재생성이 트리거).
-  useEffect(() => {
-    if (canRead) loadPage(1);
-  }, [canRead, loadPage]);
-
-  function resetFilters() {
-    setStatusFilter('all');
-    setAgentFilter('all');
-  }
+  // 권한 없으면 fetcher null — 요청 자체를 하지 않는다(권한 게이트).
+  const { rows, total, phase, error, reload } = usePagedQuery(canRead ? fetchPage : null, {
+    page,
+    pageSize: PAGE_SIZE,
+    setPage, // 스테일 URL page 오버플로 시 마지막 페이지로 클램프
+  });
 
   return (
     <div className="animate-page-enter flex flex-col gap-8">
@@ -147,20 +126,16 @@ export function LogsClient() {
       />
 
       {!canRead ? (
-        <EmptyState
-          icon={<RiLockLine size={18} aria-hidden />}
-          title="접근 권한이 없습니다"
-          description="실행 로깅은 관리자 이상만 열람할 수 있습니다."
-        />
+        <LockedEmptyState description="실행 로깅은 관리자 이상만 열람할 수 있습니다." />
       ) : (
         <>
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <ListToolbar isFiltered={isFiltered} onReset={reset}>
             <FilterPill
               label="상태"
               ariaLabel="상태 필터"
-              value={statusFilter}
-              active={statusFilter !== 'all'}
-              onValueChange={(v) => setStatusFilter(v as 'all' | RunStatus)}
+              value={filters.status}
+              active={filters.status !== 'all'}
+              onValueChange={(v) => setFilter('status', v)}
             >
               <SelectItem value="all">전체</SelectItem>
               {STATUS_FILTER_OPTIONS.map((opt) => (
@@ -173,9 +148,9 @@ export function LogsClient() {
             <FilterPill
               label="에이전트"
               ariaLabel="에이전트 필터"
-              value={agentFilter}
-              active={agentFilter !== 'all'}
-              onValueChange={setAgentFilter}
+              value={filters.agent}
+              active={filters.agent !== 'all'}
+              onValueChange={(v) => setFilter('agent', v)}
             >
               <SelectItem value="all">전체</SelectItem>
               {agentOptions.map((opt) => (
@@ -184,75 +159,48 @@ export function LogsClient() {
                 </SelectItem>
               ))}
             </FilterPill>
+          </ListToolbar>
 
-            {filtersActive ? (
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="text-foreground-tertiary hover:text-foreground-secondary inline-flex h-9 items-center gap-1 rounded-full px-2.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
-              >
-                <RiCloseLine size={14} aria-hidden />
-                초기화
-              </button>
-            ) : null}
-          </div>
-
-          {phase === 'loading' ? (
-            <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-              <Spinner size={18} label="로그 불러오는 중" />
-              실행 내역을 불러오는 중…
-            </div>
-          ) : phase === 'error' && rows.length === 0 ? (
-            <EmptyState
-              icon={<RiErrorWarningLine size={18} aria-hidden />}
-              title="실행 내역을 불러오지 못했습니다"
-              description={
-                error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')
-              }
-              action={
-                <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
-                  다시 시도
-                </Button>
-              }
-            />
-          ) : rows.length === 0 ? (
-            <EmptyState
-              icon={<RiHistoryLine size={18} aria-hidden />}
-              title="실행 내역이 없습니다"
-              description={
-                filtersActive
-                  ? '검색·필터 조건에 맞는 실행 내역이 없습니다.'
-                  : '아직 기록된 에이전트 실행이 없습니다.'
-              }
-            />
-          ) : (
+          <ListStatePanel
+            phase={phase}
+            error={error}
+            loadingLabel="실행 내역을 불러오는 중…"
+            errorTitle="실행 내역을 불러오지 못했습니다"
+            onRetry={reload}
+            isEmpty={rows.length === 0}
+            empty={{
+              icon: <RiHistoryLine size={18} aria-hidden />,
+              title: '실행 내역이 없습니다',
+              description: isFiltered
+                ? '검색·필터 조건에 맞는 실행 내역이 없습니다.'
+                : '아직 기록된 에이전트 실행이 없습니다.',
+            }}
+          >
             <div className="flex flex-col gap-3">
-              <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-                <table className="w-full min-w-[900px] text-left text-sm">
-                  <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
-                    <tr>
-                      <Th className="w-6">
-                        <span className="sr-only">펼치기</span>
-                      </Th>
-                      <Th>에이전트</Th>
-                      <Th>실행자</Th>
-                      <Th>실행시각</Th>
-                      <Th>상태</Th>
-                      <Th>실패 단계</Th>
-                      <Th>결과 요약</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((run) => (
-                      <RunRow key={run.id} run={run} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <TableCard
+                minWidth={900}
+                head={
+                  <tr>
+                    <Th className="w-6">
+                      <span className="sr-only">펼치기</span>
+                    </Th>
+                    <Th>에이전트</Th>
+                    <Th>실행자</Th>
+                    <Th>실행시각</Th>
+                    <Th>상태</Th>
+                    <Th>실패 단계</Th>
+                    <Th>결과 요약</Th>
+                  </tr>
+                }
+              >
+                {rows.map((run) => (
+                  <RunRow key={run.id} run={run} />
+                ))}
+              </TableCard>
 
-              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
+              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
             </div>
-          )}
+          </ListStatePanel>
         </>
       )}
     </div>
@@ -290,7 +238,7 @@ function RunRow({ run }: { run: RunSummary }) {
       <tr
         onClick={() => void toggle()}
         aria-expanded={open}
-        className="border-border-subtle row-hover cursor-pointer border-b last:border-0"
+        className={cn(tableRowClass, 'cursor-pointer')}
       >
         <Td className="text-foreground-tertiary">
           <RiArrowDownSLine

@@ -2,17 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
-  RiArrowLeftSLine,
-  RiCheckLine,
-  RiErrorWarningLine,
-  RiLockLine,
-  RiPencilLine,
-} from '@remixicon/react';
+import { RiArrowLeftSLine, RiCheckLine, RiErrorWarningLine, RiPencilLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LockedEmptyState } from '@/components/ui/list-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
@@ -71,11 +66,7 @@ export function AgentAccessClient() {
       </div>
 
       {!isAdmin ? (
-        <EmptyState
-          icon={<RiLockLine size={18} aria-hidden />}
-          title="접근 권한이 없습니다"
-          description="에이전트 접근 관리는 관리자 이상만 사용할 수 있습니다."
-        />
+        <LockedEmptyState description="에이전트 접근 관리는 관리자 이상만 사용할 수 있습니다." />
       ) : orgs.status !== 'success' || access.status !== 'success' ? (
         <LoadState error={access.error ?? orgs.error} onReload={reloadAll} />
       ) : (

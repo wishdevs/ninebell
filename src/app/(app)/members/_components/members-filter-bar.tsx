@@ -1,8 +1,8 @@
 'use client';
 
-import { RiCloseLine, RiSearchLine } from '@remixicon/react';
 import { FilterPill } from '@/components/ui/filter-pill';
-import { Input } from '@/components/ui/input';
+import { ListToolbar } from '@/components/ui/list-toolbar';
+import { SearchInput } from '@/components/ui/search-input';
 import { SelectGroup, SelectItem, SelectLabel } from '@/components/ui/select-dropdown';
 import type { Role } from '@/lib/auth/permissions';
 import {
@@ -28,14 +28,17 @@ interface MembersFilterBarProps {
   statusFilter: 'all' | MemberStatus;
   onStatusFilterChange: (value: 'all' | MemberStatus) => void;
   orgUnits: readonly OrgUnit[];
+  /** useListParams().isFiltered — 초기화 버튼 노출 여부(버튼 자체는 ListToolbar 소유). */
+  isFiltered: boolean;
   onReset: () => void;
 }
 
 /**
- * 멤버 화면 상단 필터 툴바 — 카드가 아닌 **맨 툴바**(테이블 카드와 형태를 분리) + 검색 입력 +
- * 역할/조직구분/상태 **라벨 칩 드롭다운**. 칩은 rounded-full·라벨 접두·활성 시 accent 틴트로,
- * 테이블 행의 사각 인라인 셀렉트(편집용)와 시각적으로 확실히 구분한다(필터=칩 / 편집=셀). works-client
- * 의 필터 칩 언어를 따른다. 조직구분은 본부▸팀 그룹(멤버는 팀에만 배정 가능이라 본부 자체는 옵션 없음).
+ * 멤버 화면 상단 필터 툴바 — 셸·검색 인풋·초기화 버튼은 공용 레일(ListToolbar+SearchInput)이
+ * 소유하고, 이 파일은 역할/조직구분/상태 **라벨 칩 드롭다운**만 남는다. 칩은 rounded-full·라벨
+ * 접두·활성 시 accent 틴트로, 테이블 행의 사각 인라인 셀렉트(편집용)와 시각적으로 확실히
+ * 구분한다(필터=칩 / 편집=셀). works-client 의 필터 칩 언어를 따른다. 조직구분은 본부▸팀
+ * 그룹(멤버는 팀에만 배정 가능이라 본부 자체는 옵션 없음).
  */
 export function MembersFilterBar({
   query,
@@ -47,28 +50,19 @@ export function MembersFilterBar({
   statusFilter,
   onStatusFilterChange,
   orgUnits,
+  isFiltered,
   onReset,
 }: MembersFilterBarProps) {
   const orgTree = buildOrgUnitTree(orgUnits);
-  const active =
-    query.trim() !== '' || roleFilter !== 'all' || orgFilter !== 'all' || statusFilter !== 'all';
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-      <div className="relative w-full sm:w-72">
-        <RiSearchLine
-          size={16}
-          aria-hidden
-          className="text-foreground-tertiary pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2"
-        />
-        <Input
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="이름 또는 이메일 검색"
-          aria-label="멤버 검색"
-          className="h-9 rounded-full pl-9"
-        />
-      </div>
+    <ListToolbar isFiltered={isFiltered} onReset={onReset}>
+      <SearchInput
+        value={query}
+        onChange={onQueryChange}
+        placeholder="이름 또는 이메일 검색"
+        ariaLabel="멤버 검색"
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <FilterPill
@@ -123,18 +117,7 @@ export function MembersFilterBar({
             </SelectItem>
           ))}
         </FilterPill>
-
-        {active ? (
-          <button
-            type="button"
-            onClick={onReset}
-            className="text-foreground-tertiary hover:text-foreground-secondary inline-flex h-9 items-center gap-1 rounded-full px-2.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
-          >
-            <RiCloseLine size={14} aria-hidden />
-            초기화
-          </button>
-        ) : null}
       </div>
-    </div>
+    </ListToolbar>
   );
 }

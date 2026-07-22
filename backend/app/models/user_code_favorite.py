@@ -23,17 +23,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, JSONVariant
+from app.models.base import Base, JSONVariant, UuidPkMixin
 
 
-class UserCodeFavorite(Base):
+class UserCodeFavorite(UuidPkMixin, Base):
     __tablename__ = "user_code_favorites"
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "code", name="uq_user_code_favorites_user_id"),
         Index("ix_user_code_favorites_user_id_kind", "user_id", "kind"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),

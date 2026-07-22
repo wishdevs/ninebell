@@ -25,17 +25,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, JSONVariant
+from app.models.base import Base, JSONVariant, UuidPkMixin
 
 
-class CardLearnedSelection(Base):
+class CardLearnedSelection(UuidPkMixin, Base):
     __tablename__ = "card_learned_selections"
     __table_args__ = (
         UniqueConstraint("user_id", "norm_merchant", name="uq_card_learned_user_merchant"),
         Index("ix_card_learned_user", "user_id"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

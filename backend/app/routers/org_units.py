@@ -9,21 +9,18 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
-from app.core.deps import DbSession, require_role_min
-from app.core.permissions import ROLE_ADMIN, role_rank
-from app.models import Agent, AgentOrgAccess, OrgUnit, User
+from app.core.deps import DbSession, RequireAdmin
+from app.models import Agent, AgentOrgAccess, OrgUnit
 from app.models.org_unit import COST_TYPES
+from app.services.ordering import reorder_by_client_order
 from app.services.org_apply import _has_own_member_ids
 
 router = APIRouter(tags=["org-units"])
-
-RequireAdmin = Annotated[User, Depends(require_role_min(role_rank(ROLE_ADMIN)))]
 
 # '미지정'(org_unit_id IS NULL 사용자) 을 orgUnitIds 목록에서 표현하는 wire 센티널.
 # 프론트 멤버 화면의 ORG_NONE 과 동일 문자열 — 실 OrgUnit id 와 충돌하지 않는다.
@@ -180,16 +177,7 @@ async def reorder_org_units(body: ReorderIn, db: DbSession, _actor: RequireAdmin
         .scalars()
         .all()
     )
-    by_id = {o.id: o for o in rows}
-    ordered: list[str] = []
-    for oid in body.orderedIds:  # 클라가 준 순서 중 이 형제집합에 실재하는 것만, 중복 제거.
-        if oid in by_id and oid not in ordered:
-            ordered.append(oid)
-    for o in rows:  # 목록에 빠진 나머지는 현재 순서대로 뒤에 붙인다.
-        if o.id not in ordered:
-            ordered.append(o.id)
-    for index, oid in enumerate(ordered):
-        by_id[oid].sort_order = index
+    reorder_by_client_order(rows, body.orderedIds)
     await db.commit()
     return await list_org_units(db, _actor)
 

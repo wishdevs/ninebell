@@ -156,7 +156,9 @@ export interface RunsPage {
  * `GET /runs` — 실행 목록(최신순) + 전체 건수. `agentId` 를 주면 그 워크플로우로 스코프한다.
  * 소유자 스코프는 백엔드가 처리(관리자=전체, 그 외=본인 것).
  *
- * 백엔드는 `{"runs": RunSummary[], "total": number}` envelope 로 반환한다.
+ * 백엔드는 `{"runs": RunSummary[], "total": number}` envelope 로 반환한다. 목록 응답 키
+ * 이원화에 견디도록 `items ?? runs` 관용 리더로 읽는다(반환 형태 {runs,total} 은 유지 —
+ * 소비처 파급 없음).
  */
 export async function fetchRuns(query: RunsQuery = {}): Promise<RunsPage> {
   const qs = new URLSearchParams();
@@ -165,10 +167,10 @@ export async function fetchRuns(query: RunsQuery = {}): Promise<RunsPage> {
   if (query.limit != null) qs.set('limit', String(query.limit));
   if (query.offset != null) qs.set('offset', String(query.offset));
   const suffix = qs.toString();
-  const res = await api.get<{ runs: RunSummary[]; total: number }>(
+  const res = await api.get<{ items?: RunSummary[]; runs?: RunSummary[]; total?: number }>(
     suffix ? `/runs?${suffix}` : '/runs',
   );
-  return { runs: res.runs ?? [], total: res.total ?? 0 };
+  return { runs: res.items ?? res.runs ?? [], total: res.total ?? 0 };
 }
 
 /** 백엔드 저장 로그 한 줄을 {@link RunLogEntry} 로 정규화(문자열/객체 모두 수용). */

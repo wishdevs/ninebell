@@ -1,4 +1,4 @@
-"""GET /logs 페이지네이션 — {logs, total} envelope + limit/offset 검증."""
+"""GET /logs 페이지네이션 — dual-key envelope(logs+items 병기, limit/offset) 검증."""
 
 from __future__ import annotations
 
@@ -53,3 +53,20 @@ async def test_logs_empty_total_zero(client, make_user, auth_as):
     body = r.json()
     assert body["total"] == 0
     assert body["logs"] == []
+
+
+@pytest.mark.asyncio
+async def test_logs_dual_key_items_mirrors_logs(client, make_user, auth_as, sm):
+    """dual-key: 구 키(logs)와 표준 키(items)가 같은 목록 + limit/offset 에코.
+
+    FE 전환 후 별도 커밋에서 logs 키 제거 예정(docs/LIST-COMMONALIZATION.md).
+    """
+    await _seed_logs(sm, 4)
+    uid = await make_user("root", "super_admin")
+    auth_as(uid)
+
+    body = (await client.get("/logs?limit=3&offset=1")).json()
+    assert body["items"] == body["logs"]
+    assert len(body["items"]) == 3
+    assert body["limit"] == 3
+    assert body["offset"] == 1

@@ -473,10 +473,23 @@ async def test_catalog_limit_offset(client, make_user, auth_as, sm):
 
 
 async def test_catalog_empty_syncedat_null(client, make_user, auth_as):
+    # envelope 통일(page_slice) — limit/offset 키 additive 추가(기본 DEFAULT_LIMIT=50/0).
     uid = await make_user("cat-empty", "user")
     auth_as(uid)
     resp = await client.get("/me/catalog?kind=project")
-    assert resp.json() == {"items": [], "total": 0, "syncedAt": None}
+    assert resp.json() == {"items": [], "total": 0, "limit": 50, "offset": 0, "syncedAt": None}
+
+
+async def test_catalog_and_seed_out_of_range_limit_422(client, make_user, auth_as):
+    """수동 clamp(범위 밖 보정) → PageQuery 422 계약으로 의도된 강화(docs/LIST-COMMONALIZATION.md).
+
+    이전엔 limit=0/201 이 1/200 으로 조용히 보정됐지만, 이제 범위 밖은 422 다.
+    """
+    uid = await make_user("cat-422", "user")
+    auth_as(uid)
+    for qs in ("limit=0", "limit=201", "offset=-1"):
+        assert (await client.get(f"/me/catalog?kind=project&{qs}")).status_code == 422, qs
+        assert (await client.get(f"/me/card-learning/seed?{qs}")).status_code == 422, qs
 
 
 # ── 동기화 가드 ──────────────────────────────────────────────────────────────

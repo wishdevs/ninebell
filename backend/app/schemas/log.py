@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.schemas.common import CamelModel
+from app.schemas.common import CamelModel, ListPage
 
 
 class AccessLogOut(CamelModel):
@@ -20,6 +20,10 @@ class AccessLogOut(CamelModel):
     logged_at: datetime | None
 
 
-class AccessLogPage(CamelModel):
+class AccessLogPage(ListPage[AccessLogOut]):
+    """dual-key envelope — 표준 키(items/total/limit/offset)는 ListPage 상속, 구 키(logs)에
+    같은 목록을 병기한다. FE 전환 배포 확인 후 별도 커밋에서 logs 키 제거 예정
+    (docs/LIST-COMMONALIZATION.md).
+    """
+
     logs: list[AccessLogOut]
-    total: int
