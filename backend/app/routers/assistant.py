@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 
 from app.config import Settings, get_settings
 from app.core.deps import CurrentUser
+from app.core.llm_runtime import effective_llm_provider
 from app.llm.base import ChatMessage, LLMProvider
 from app.llm.etribe import ContextLengthExceededError, EtribeProvider
 from app.llm.gemini import GeminiProvider
@@ -94,7 +95,8 @@ ASSISTANT_TOOLS = [
 def build_llm(request: Request, settings: Settings) -> LLMProvider:
     """스트림 제너레이터 안에서 지연 호출된다 — 키 누락은 여기서 RuntimeError 로 표면화."""
     # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — 인증 불필요.
-    if settings.llm_provider == "etribe":
+    # effective_llm_provider: 로컬 dev 런타임 오버라이드(/dev/llm-provider) 우선, 없으면 env.
+    if effective_llm_provider(settings) == "etribe":
         return EtribeProvider(
             request.app.state.http,
             model=settings.etribe_model,

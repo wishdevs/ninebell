@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"
     etribe_base_url: str = "http://192.168.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
     etribe_model: str = "Etribe-LLM"  # env ETRIBE_MODEL
+    # 로컬 전용 LLM 프로바이더 런타임 전환 게이트(/dev/llm-provider 활성 여부). 서버 배포에선
+    # 미설정=off → 라우터가 404 를 반환해 기능 자체가 없는 것처럼 동작한다. env LLM_PROVIDER_TOGGLE.
+    llm_provider_toggle: bool = False
 
     @field_validator("llm_provider")
     @classmethod

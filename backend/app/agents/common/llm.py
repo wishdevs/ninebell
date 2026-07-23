@@ -16,11 +16,16 @@ from typing import Any
 from app.agents.common.etribe import etribe_chat_decide, etribe_generate_text
 from app.agents.common.gemini import gemini_chat_decide, gemini_generate_text
 from app.config import get_settings
+from app.core.llm_runtime import effective_llm_provider
 
 
 def _is_etribe(settings: Any) -> bool:
-    """etribe 프로바이더 여부 — llm_provider 미보유(테스트 더미 settings 등)면 gemini 취급."""
-    return getattr(settings, "llm_provider", "gemini") == "etribe"
+    """etribe 프로바이더 여부 — 런타임 오버라이드 우선(effective_llm_provider).
+
+    오버라이드 미설정이면 기존과 동일: llm_provider 미보유(테스트 더미 settings 등)는
+    gemini 취급.
+    """
+    return effective_llm_provider(settings) == "etribe"
 
 
 def llm_ready(settings: Any) -> bool:

@@ -26,7 +26,18 @@ from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, assistant, auth, logs, me_codes, org_units, runs, skills, users
+from app.routers import (
+    agents,
+    assistant,
+    auth,
+    dev_llm,
+    logs,
+    me_codes,
+    org_units,
+    runs,
+    skills,
+    users,
+)
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -129,6 +140,8 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(me_codes.router)
     app.include_router(skills.router)
+    # 로컬 dev 전용 게이트 라우터 — LLM_PROVIDER_TOGGLE off(기본)면 전 엔드포인트 404.
+    app.include_router(dev_llm.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:

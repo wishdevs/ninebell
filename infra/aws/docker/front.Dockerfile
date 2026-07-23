@@ -6,7 +6,11 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 ARG NEXT_PUBLIC_API_BASE
-ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE \
+# 배포 환경 표식(빌드 타임 인라인) — AWS 테스트 클러스터는 deploy.yml 이 development 주입
+# → devOnly 메뉴·AI 모델 스위처 노출. 미주입(온프렘 등)이면 프로덕션 동작.
+ARG NEXT_PUBLIC_APP_ENV
+ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV \
+    NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE \
     NEXT_TELEMETRY_DISABLED=1
 
 RUN corepack enable
