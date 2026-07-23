@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -543,6 +545,76 @@ async def test_get_run_detail_owner_scoped_with_structured_result(client, make_u
 
     auth_as(other)
     assert (await client.get("/runs/run-d1")).status_code == 404  # 다른 사용자는 404
+
+
+# ── 디버깅 파생 필드(durationMs/logCount) ───────────────────────────────────
+def _mk_run(started_at, finished_at):
+    """DB 세션 없이 _duration_ms 만 검증하는 AgentRun 인스턴스(영속 불필요)."""
+    from app.models.agent_run import AgentRun
+
+    return AgentRun(
+        id="run-dur",
+        agent_id="demo-echo",
+        user_id=uuid.uuid4(),
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+
+def test_duration_ms_both_aware_positive():
+    """started/finished 둘 다 aware — 양수 ms 를 정확히 계산."""
+    from app.routers.runs import _duration_ms
+
+    start = datetime(2026, 7, 23, 9, 0, 0, tzinfo=timezone.utc)
+    assert _duration_ms(_mk_run(start, start + timedelta(milliseconds=1500))) == 1500
+
+
+def test_duration_ms_none_when_not_finished():
+    """finished_at 없음(진행 중·크래시 잔존 런) — None."""
+    from app.routers.runs import _duration_ms
+
+    start = datetime(2026, 7, 23, 9, 0, 0, tzinfo=timezone.utc)
+    assert _duration_ms(_mk_run(start, None)) is None
+    assert _duration_ms(_mk_run(None, start)) is None  # started 없음도 None(대칭)
+
+
+def test_duration_ms_normalizes_naive_aware_mix():
+    """SQLite(테스트 DB)의 naive server_default(started) + aware finished 혼합 —
+    UTC 정규화 후 빼야 TypeError 없이 양수 ms 가 나온다(양방향 모두)."""
+    from app.routers.runs import _duration_ms
+
+    naive_start = datetime(2026, 7, 23, 9, 0, 0)
+    aware_end = datetime(2026, 7, 23, 9, 0, 2, tzinfo=timezone.utc)
+    assert _duration_ms(_mk_run(naive_start, aware_end)) == 2000
+    # 반대 방향(aware started + naive finished)도 동일 정규화.
+    aware_start = datetime(2026, 7, 23, 9, 0, 0, tzinfo=timezone.utc)
+    naive_end = datetime(2026, 7, 23, 9, 0, 3)
+    assert _duration_ms(_mk_run(aware_start, naive_end)) == 3000
+
+
+@pytest.mark.asyncio
+async def test_run_detail_exposes_duration_and_log_count(client, make_user, auth_as):
+    """상세 응답의 durationMs(종료 런=int·진행 런=None)·logCount(logs 길이 일치) 검증."""
+    uid = await make_user("meter", "user")
+    logs = [
+        {"ts": 1, "level": "info", "message": "a"},
+        {"ts": 2, "level": "ok", "message": "b"},
+        {"ts": 3, "level": "error", "message": "c"},
+    ]
+    await store.create_run(run_id="run-meter", agent_id="demo-echo", user_id=uid)
+    await store.set_terminal("run-meter", "succeeded", "ok", logs)
+    # 진행 중 런(finished_at 없음) — durationMs 는 None, 로그는 아직 빈 배열.
+    await store.create_run(run_id="run-meter-live", agent_id="demo-echo", user_id=uid)
+
+    auth_as(uid)
+    d = (await client.get("/runs/run-meter")).json()
+    # SQLite server_default 는 초 단위 절삭이라 정확값 대신 '음수 아님'만 보장(정확 계산은 단위 테스트).
+    assert isinstance(d["durationMs"], int) and d["durationMs"] >= 0
+    assert d["logCount"] == len(logs) == len(d["logs"])
+
+    live = (await client.get("/runs/run-meter-live")).json()
+    assert live["durationMs"] is None
+    assert live["logCount"] == 0
 
 
 # ── 템플릿 CRUD ────────────────────────────────────────────────────────────

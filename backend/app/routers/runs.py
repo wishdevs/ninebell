@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -395,6 +396,21 @@ def _run_summary(r: AgentRun) -> dict:
     }
 
 
+def _duration_ms(r: AgentRun) -> int | None:
+    """총 소요시간(ms) — started/finished 둘 다 있을 때만(진행 중·크래시 잔존 런은 None).
+
+    SQLite(테스트)는 server_default(started_at)가 naive, finished_at 은 aware 로 섞일 수
+    있어 UTC 로 정규화 후 뺀다(운영 PG 는 둘 다 aware)."""
+    start, end = r.started_at, r.finished_at
+    if start is None or end is None:
+        return None
+    if start.tzinfo is None and end.tzinfo is not None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None and start.tzinfo is not None:
+        end = end.replace(tzinfo=timezone.utc)
+    return int((end - start).total_seconds() * 1000)
+
+
 def _run_detail(r: AgentRun) -> dict:
     return {
         **_run_summary(r),
@@ -402,6 +418,10 @@ def _run_detail(r: AgentRun) -> dict:
         "inputs": _run_inputs(r.result),  # 무엇을 입력했는지(selections/messages)
         "steps": _run_steps(r.logs),  # 어느 단계에서 실패했는지(step+status)
         "logs": r.logs or [],
+        # 디버깅 파생 필드(additive — 기존 키 불변): 총 소요시간·저장 로그 수.
+        # logCount 가 세션 상한(2000)에 붙어 있으면 절단됐을 가능성 힌트로도 쓴다.
+        "durationMs": _duration_ms(r),
+        "logCount": len(r.logs or []),
     }
 
 

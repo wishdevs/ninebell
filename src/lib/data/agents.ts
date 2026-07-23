@@ -453,7 +453,8 @@ export const AGENTS: readonly Agent[] = [
   },
   {
     id: 'card-chat',
-    name: '법인카드 승인내역 정리 — 대화형',
+    // 백엔드 시드(agent_fixtures.py)와 이름 동기화 — generateMetadata(탭 제목)가 이 픽스처를 쓴다.
+    name: '법인카드',
     description:
       '법인카드 승인내역을 일괄 조회해 건별로 예산단위·계정·프로젝트·적요를 대화로 채운다(적요 추천). 저장은 확인 후.',
     drive: 'browser',

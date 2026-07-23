@@ -167,6 +167,16 @@ class LiveSession:
     def _accumulate_log(self, ev: dict) -> None:
         # 런 이력에 남길 로그(log/step 프레임만 — 스크린샷 등 무거운 건 제외).
         if len(self._run_logs) >= _MAX_RUN_LOGS:
+            # 상한 도달 시 딱 1회 절단 마커를 남긴다(상한 +1 허용) — 무음 드롭이면
+            # 사후에 로그가 잘렸는지 알 수 없다(디버깅 감사 결함).
+            if len(self._run_logs) == _MAX_RUN_LOGS:
+                self._run_logs.append(
+                    {
+                        "ts": int(time.time() * 1000),
+                        "level": "warn",
+                        "message": f"⚠ 로그 상한({_MAX_RUN_LOGS}줄) 도달 — 이후 로그는 저장에서 생략됩니다",
+                    }
+                )
             return
         if "log" in ev:
             self._run_logs.append(
@@ -185,16 +195,22 @@ class LiveSession:
                 if ev["status"] == "failed"
                 else "info"
             )
-            self._run_logs.append(
-                {
-                    "ts": int(time.time() * 1000),
-                    "level": lvl,
-                    "message": f"{mark} {ev['step']} ({ev['status']})",
-                    # 구조 필드도 함께 남긴다 — 실행 이력 상세가 step/실패지점을 견고하게 파싱.
-                    "step": ev["step"],
-                    "status": ev["status"],
-                }
-            )
+            entry = {
+                "ts": int(time.time() * 1000),
+                "level": lvl,
+                "message": f"{mark} {ev['step']} ({ev['status']})",
+                # 구조 필드도 함께 남긴다 — 실행 이력 상세가 step/실패지점을 견고하게 파싱.
+                "step": ev["step"],
+                "status": ev["status"],
+            }
+            # emit_step 의 단계 소요시간(ms)·진행 카운트(progress)를 있으면 그대로 보존 —
+            # 저장 시점 유실로 '어느 단계가 느려졌나'를 추적할 수 없던 결함 해소.
+            # 기존 소비자(_step_of, FE normalizeLog)는 여분 키를 무시하므로 순수 additive.
+            if ev.get("ms") is not None:
+                entry["ms"] = ev["ms"]
+            if ev.get("progress") is not None:
+                entry["progress"] = ev["progress"]
+            self._run_logs.append(entry)
 
     async def stream(self, cursor: int = 0) -> AsyncIterator[dict]:
         """버퍼[cursor:] 부터 이벤트를 재생하고, 이후 새 이벤트를 Condition 으로 기다린다.

@@ -260,6 +260,55 @@ async def test_cancel_is_idempotent_on_terminal_session():
     assert sess._final_status == "succeeded"
 
 
+# ── _accumulate_log(런 로그 누적) 단위 — 펌프/브라우저 없이 직접 호출 ─────────
+def _log_session(key: str) -> LiveSession:
+    """start() 없이 _accumulate_log 만 직접 호출하는 세션(펌프 태스크 미생성)."""
+    return LiveSession(key, None, lambda: None, _noop_terminal)  # type: ignore[arg-type]
+
+
+def test_accumulate_log_truncates_with_single_marker_then_drops():
+    """상한 초과 입력 시 절단 마커 정확히 1회(길이 MAX+1) + 이후 프레임 드롭."""
+    sess = _log_session("k-trunc")
+    for i in range(S._MAX_RUN_LOGS + 5):
+        sess._accumulate_log({"log": f"line{i}", "level": "info"})
+    # 상한 도달 후 마커 1줄만 추가 — 총 길이는 정확히 MAX+1 에서 고정.
+    assert len(sess._run_logs) == S._MAX_RUN_LOGS + 1
+    markers = [ln for ln in sess._run_logs if "로그 상한" in ln["message"]]
+    assert len(markers) == 1  # 무음 드롭 방지 마커는 딱 1회
+    assert sess._run_logs[-1] is markers[0]  # 마커가 마지막 줄
+    assert markers[0]["level"] == "warn"
+    # 마지막 실 로그는 상한 직전 프레임 — 이후 프레임(line2000~)은 드롭됐다.
+    assert sess._run_logs[S._MAX_RUN_LOGS - 1]["message"] == f"line{S._MAX_RUN_LOGS - 1}"
+    # 드롭 구간에서 추가 호출해도 길이 불변(멱등).
+    sess._accumulate_log({"step": "늦은단계", "status": "done", "ms": 1})
+    assert len(sess._run_logs) == S._MAX_RUN_LOGS + 1
+
+
+def test_accumulate_log_preserves_step_ms_and_progress():
+    """emit_step 의 ms·progress 가 저장 로그 dict 에 그대로 보존된다."""
+    sess = _log_session("k-ms")
+    sess._accumulate_log(
+        {"step": "저장", "status": "done", "ms": 1234, "progress": {"done": 2, "total": 5}}
+    )
+    entry = sess._run_logs[-1]
+    assert entry["step"] == "저장" and entry["status"] == "done"
+    assert entry["ms"] == 1234
+    assert entry["progress"] == {"done": 2, "total": 5}
+    # ms=0(falsy)도 보존 — None 체크라 0 이 유실되지 않는다.
+    sess._accumulate_log({"step": "즉시", "status": "done", "ms": 0})
+    assert sess._run_logs[-1]["ms"] == 0
+
+
+def test_accumulate_log_old_step_frame_omits_ms_progress_keys():
+    """ms/progress 없는 과거 포맷 step 프레임 — 키 자체가 없어야 한다(호환)."""
+    sess = _log_session("k-old")
+    sess._accumulate_log({"step": "옛포맷", "status": "running"})
+    entry = sess._run_logs[-1]
+    assert entry["step"] == "옛포맷" and entry["status"] == "running"
+    assert "ms" not in entry
+    assert "progress" not in entry
+
+
 @pytest.mark.asyncio
 async def test_cancel_session_helper_cancels_and_removes():
     gate = asyncio.Event()

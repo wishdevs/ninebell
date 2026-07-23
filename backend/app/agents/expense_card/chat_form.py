@@ -34,6 +34,7 @@ from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.patterns import emit_shot
 
 from .domain import remark_for, use_item_from_remark
+from app.agents.common import ERR_REASON_MAX
 from app.agents.common.llm import chat_decide, llm_ready
 from .tools import (
     CHAT_TOOLS,
@@ -257,7 +258,7 @@ async def _auto_replay(events: asyncio.Queue, page: Any, template: list[dict]) -
                 action = f"skip: 알 수 없는 도구 '{name}'"
         except Exception as exc:  # noqa: BLE001 — graceful(노드가 죽지 않게)
             logger.warning("auto replay 예외: %s %s=%s", name, field, value, exc_info=True)
-            action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:60]}"
+            action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:ERR_REASON_MAX]}"
         level = "ok" if action.startswith("ok") else "warn"
         if action.startswith("ok"):
             applied.append(f"{field}={value}")
@@ -347,7 +348,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                 status, bmsg = await do_budget(page, use_item, division)
             except Exception as exc:  # noqa: BLE001 — graceful(노드가 죽지 않게)
                 logger.warning("set_expense 예외: %s", use_item, exc_info=True)
-                status, bmsg = "fail", f"예산단위 처리 예외: {str(exc)[:60]}"
+                status, bmsg = "fail", f"예산단위 처리 예외: {str(exc)[:ERR_REASON_MAX]}"
             await _say(("ok: " if status == "ok" else status + ": ") + bmsg, note="action")
             history += f"어시스턴트(set_expense {use_item} {division}): {status} {bmsg}\n"
             if status == "ok":
@@ -362,7 +363,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                     astatus, amsg = await do_account(page)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("계정 자동선택 예외", exc_info=True)
-                    astatus, amsg = "fail", f"계정 예외: {str(exc)[:50]}"
+                    astatus, amsg = "fail", f"계정 예외: {str(exc)[:ERR_REASON_MAX]}"
                 await _say(("ok: " if astatus == "ok" else "warn: ") + amsg, note="action")
                 if astatus == "ok":
                     selections[:] = [s for s in selections if s.get("field") != "계정"]
@@ -535,7 +536,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                         try:
                             res = await page.evaluate(READ_TX_JS)
                         except Exception as exc:  # noqa: BLE001
-                            res = {"n": 0, "rows": [], "err": str(exc)[:60]}
+                            res = {"n": 0, "rows": [], "err": str(exc)[:ERR_REASON_MAX]}
                         raw = res.get("rows") or []
                         n = res.get("n", len(raw))
                         cols = [
@@ -590,7 +591,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                         else:
                             action = f"unknown-tool: {name}"
                     except Exception as exc:  # noqa: BLE001
-                        action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:60]}"
+                        action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:ERR_REASON_MAX]}"
 
                     if action.startswith("ok"):
                         # 성공한 fill 을 구조화 selection 으로 누적. 같은 필드는 최신값으로 갱신.

@@ -45,6 +45,12 @@ export interface RunSummary {
 export interface RunLogEntry {
   message: string;
   level: LiveLogLevel;
+  /** 저장 시각(epoch ms) — 백엔드가 additive 로 부여. 과거 런엔 없으므로 방어 렌더 필수. */
+  ts?: number;
+  /** step 프레임의 구조 필드(단계명). 일반 log 프레임엔 없다. */
+  step?: string;
+  /** step 프레임의 구조 필드(running|done|failed). 일반 log 프레임엔 없다. */
+  status?: string;
 }
 
 /**
@@ -185,7 +191,12 @@ function normalizeLog(raw: unknown): RunLogEntry {
           ? o.log
           : JSON.stringify(o);
     const level = typeof o.level === 'string' ? (o.level as LiveLogLevel) : 'info';
-    return { message, level };
+    const entry: RunLogEntry = { message, level };
+    // 구조 필드는 있으면 보존(additive) — ts(epoch ms)·step·status. 과거 런엔 없다.
+    if (typeof o.ts === 'number' && Number.isFinite(o.ts)) entry.ts = o.ts;
+    if (typeof o.step === 'string') entry.step = o.step;
+    if (typeof o.status === 'string') entry.status = o.status;
+    return entry;
   }
   return { message: String(raw), level: 'info' };
 }

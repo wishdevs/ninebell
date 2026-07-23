@@ -18,6 +18,8 @@ from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.modals import dismiss_notice_popup
 
+from app.agents.common import ERR_REASON_MAX
+
 from . import js
 
 logger = logging.getLogger(__name__)
@@ -274,7 +276,7 @@ async def checked_row_indexes(page: Any) -> dict:
     try:
         return await page.evaluate(js.CHECKED_ROW_INDEXES_JS)
     except Exception as exc:  # noqa: BLE001 — 테스트 스텁/버전차 방어(soft-fail).
-        return {"ok": False, "reason": str(exc)[:140]}
+        return {"ok": False, "reason": str(exc)[:ERR_REASON_MAX]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

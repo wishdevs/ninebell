@@ -20,6 +20,7 @@ import contextlib
 import logging
 import os
 import time
+import traceback
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .screencast import screencast_pump
@@ -196,7 +197,12 @@ async def run_workflow(
                 final = await graph.ainvoke(state)
                 await events.put({"_final": final or {}})
             except Exception:
-                logger.exception("workflow run failed")
+                # run_id 를 함께 남겨 서버 로그 ↔ AgentRun 상관 조회가 가능하게 한다.
+                logger.exception("workflow run failed run_id=%s", run_id)
+                # 예외 스택 꼬리를 런 로그(error)로도 방출 — 서버 로그 없이도 실패 원인을
+                # 몇 주 뒤 재구성할 수 있게 한다. 최종 error 프레임 계약은 불변(log 프레임 추가만).
+                tail = "\n".join(traceback.format_exc().splitlines()[-15:])
+                await events.put({"log": f"예외 스택(마지막 15줄):\n{tail}", "level": "error"})
                 await events.put({"_final": {"error": "실행 중 오류(워크플로우/브라우저)."}})
 
         task = asyncio.create_task(runner())

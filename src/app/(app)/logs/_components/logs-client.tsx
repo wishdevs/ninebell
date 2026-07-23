@@ -1,7 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { RiAlertLine, RiArrowDownSLine, RiHistoryLine } from '@remixicon/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  RiAlertLine,
+  RiArrowDownSLine,
+  RiCheckLine,
+  RiFileCopyLine,
+  RiHistoryLine,
+} from '@remixicon/react';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
 import { FilterPill } from '@/components/ui/filter-pill';
@@ -34,14 +41,15 @@ import {
 
 const PAGE_SIZE = 50;
 
-/** 워크플로우 id → 사람이 읽는 라벨(없으면 raw id). */
-const WORKFLOW_LABEL: Record<string, string> = {
-  'demo-echo': '데모 에코',
-  'expense-card-chat': '법인카드 경비 (대화형)',
-};
-
-function agentLabel(agentId: string): string {
-  return WORKFLOW_LABEL[agentId] ?? agentId;
+/**
+ * 워크플로우 id → 표기 메타. GET /agents 가 단일 라벨 소스다(하드코딩 맵 제거) —
+ * 로드 실패/미등록 워크플로우(demo-echo 등)는 매핑이 없어 원문 id 폴백으로 강등된다.
+ */
+interface AgentMeta {
+  /** 한글 에이전트 명(agents.name). */
+  name: string;
+  /** 소속 그룹명 — null 이면 단독 에이전트. */
+  groupName: string | null;
 }
 
 /** 상태 필터 옵션 — DB에 실제로 저장되는 런 상태만(RunStatusBadge 라벨과 동일 문구). */
@@ -68,9 +76,9 @@ export function LogsClient() {
   const { filters, setFilter, page, setPage, isFiltered, reset } = useListParams({
     filters: { status: 'all', agent: 'all' },
   });
-  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+  const [agentIndex, setAgentIndex] = useState<Record<string, AgentMeta>>({});
 
-  // 필터 칩용 에이전트 옵션 — 실패해도 상태 필터만 남기고 무해히 강등한다.
+  // 행 라벨·필터 옵션 공용 워크플로우 매핑 — 실패해도 상태 필터만 남기고 무해히 강등한다.
   useEffect(() => {
     if (!canRead) return;
     let cancelled = false;
@@ -78,22 +86,37 @@ export function LogsClient() {
       try {
         const agents = await api.get<Agent[]>('/agents');
         if (cancelled) return;
-        const seen = new Set<string>();
-        const options: AgentOption[] = [];
+        const index: Record<string, AgentMeta> = {};
         for (const a of agents) {
-          if (!a.workflowId || seen.has(a.workflowId)) continue;
-          seen.add(a.workflowId);
-          options.push({ value: a.workflowId, label: a.name });
+          if (!a.workflowId || index[a.workflowId]) continue;
+          index[a.workflowId] = { name: a.name, groupName: a.group?.name ?? null };
         }
-        setAgentOptions(options);
+        setAgentIndex(index);
       } catch {
-        setAgentOptions([]);
+        setAgentIndex({});
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [canRead]);
+
+  // 필터 칩용 옵션 — "그룹명 > 한글명"(단독은 이름만), 그룹 순 → 이름 순 정렬.
+  const agentOptions = useMemo<AgentOption[]>(
+    () =>
+      Object.entries(agentIndex)
+        .sort(([, a], [, b]) => {
+          if (!!a.groupName !== !!b.groupName) return a.groupName ? -1 : 1; // 그룹 있는 항목 먼저
+          const byGroup = (a.groupName ?? '').localeCompare(b.groupName ?? '', 'ko');
+          if (byGroup !== 0) return byGroup;
+          return a.name.localeCompare(b.name, 'ko');
+        })
+        .map(([workflowId, meta]) => ({
+          value: workflowId,
+          label: meta.groupName ? `${meta.groupName} > ${meta.name}` : meta.name,
+        })),
+    [agentIndex],
+  );
 
   // 필터를 클로저에 넣은 fetcher — 정체성이 바뀌면 usePagedQuery 가 재조회한다.
   // fetchRuns 의 {runs,total} 을 정규형 Page{rows,total} 로 어댑트.
@@ -194,7 +217,7 @@ export function LogsClient() {
                 }
               >
                 {rows.map((run) => (
-                  <RunRow key={run.id} run={run} />
+                  <RunRow key={run.id} run={run} meta={agentIndex[run.agentId]} />
                 ))}
               </TableCard>
 
@@ -209,7 +232,7 @@ export function LogsClient() {
 
 // ── 행(+ 지연 로드 상세) ─────────────────────────────────────────────
 
-function RunRow({ run }: { run: RunSummary }) {
+function RunRow({ run, meta }: { run: RunSummary; meta?: AgentMeta }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -248,8 +271,18 @@ function RunRow({ run }: { run: RunSummary }) {
           />
         </Td>
         <Td>
-          <span className="text-foreground font-medium">{agentLabel(run.agentId)}</span>
-          <span className="text-muted-foreground block font-mono text-[11px]">{run.agentId}</span>
+          {meta ? (
+            <>
+              <span className="text-foreground font-medium">{meta.name}</span>
+              <span className="text-foreground-secondary block text-[11px]">
+                {meta.groupName ? `${meta.groupName} ` : null}
+                <span className="text-muted-foreground font-mono">{run.agentId}</span>
+              </span>
+            </>
+          ) : (
+            // 매핑 없는 워크플로우(expense-card-chat·demo-echo 등)는 원문 id 한 줄만.
+            <span className="text-foreground font-medium">{run.agentId}</span>
+          )}
         </Td>
         <Td className="text-muted-foreground text-xs">{executor}</Td>
         <Td className="text-muted-foreground text-xs tabular-nums">
@@ -325,7 +358,10 @@ function RunDetailBody({ detail }: { detail: RunDetail }) {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <p className="text-foreground-secondary text-[11px] font-semibold">단계별 로그</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-foreground-secondary text-[11px] font-semibold">단계별 로그</p>
+          <CopyLogsButton detail={detail} />
+        </div>
         <RunLogLines logs={detail.logs} />
       </div>
     </div>
@@ -412,6 +448,95 @@ function renderValue(value: unknown): string {
 
 // ── 단계별 로그 ──────────────────────────────────────────────────────
 
+/** 복사 성공/실패 피드백 유지 시간(ms). */
+const COPY_FEEDBACK_MS = 1500;
+
+/** 로그 줄 시각 "HH:MM:SS" — Asia/Seoul 고정(코드베이스 시간 표기 규칙과 동일). */
+const LOG_TIME_FMT = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+/** 로그 ts(epoch ms) → "HH:MM:SS". 과거 런엔 ts 가 없으므로 없으면 null(방어 렌더). */
+function formatLogTime(ts: number | undefined): string | null {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
+  return LOG_TIME_FMT.format(new Date(ts));
+}
+
+/**
+ * 런 로그 전체를 사람이 읽는 플레인텍스트로 — 상단에 run id·워크플로우·상태·시작/종료,
+ * 이어서 줄마다 [시각] [단계] 레벨 메시지(없는 필드는 생략).
+ */
+function buildLogText(detail: RunDetail): string {
+  const head = [
+    `run id: ${detail.id}`,
+    `워크플로우: ${detail.agentId}`,
+    `상태: ${detail.status}`,
+    `시작: ${detail.startedAt ? formatDateTime(detail.startedAt) : '—'}`,
+    `종료: ${detail.finishedAt ? formatDateTime(detail.finishedAt) : '—'}`,
+  ];
+  const lines = detail.logs.map((log) => {
+    const time = formatLogTime(log.ts);
+    return [
+      time ? `[${time}]` : null,
+      log.step ? `[${log.step}]` : null,
+      LOG_LABEL[log.level] ?? log.level.toUpperCase(),
+      log.message,
+    ]
+      .filter(Boolean)
+      .join(' ');
+  });
+  return [...head, '─'.repeat(24), ...lines].join('\n');
+}
+
+type CopyState = 'idle' | 'copied' | 'failed';
+
+/** 단계별 로그 복사 버튼 — 성공 시 1.5s '복사됨'(아이콘 전환), 실패도 조용히 삼키지 않는다. */
+function CopyLogsButton({ detail }: { detail: RunDetail }) {
+  const [state, setState] = useState<CopyState>('idle');
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  async function copy(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(buildLogText(detail));
+      setState('copied');
+    } catch {
+      // 클립보드 미지원/권한 거부 — 짧은 안내 후 원복.
+      setState('failed');
+    }
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setState('idle'), COPY_FEEDBACK_MS);
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-live="polite"
+      className={cn('h-6 gap-1 px-1.5 text-[11px]', state === 'failed' && 'text-danger')}
+      onClick={() => void copy()}
+    >
+      {state === 'copied' ? (
+        <RiCheckLine size={13} aria-hidden className="text-success" />
+      ) : (
+        <RiFileCopyLine size={13} aria-hidden />
+      )}
+      {state === 'copied' ? '복사됨' : state === 'failed' ? '복사 실패' : '복사'}
+    </Button>
+  );
+}
+
 const LOG_TONE: Record<string, string> = {
   info: 'text-muted-foreground bg-muted',
   ok: 'text-success bg-success/10',
@@ -432,21 +557,30 @@ function RunLogLines({ logs }: { logs: readonly RunLogEntry[] }) {
   }
   return (
     <ul className="border-border bg-surface flex max-h-72 flex-col gap-0.5 overflow-y-auto rounded-[var(--radius-md)] border p-2">
-      {logs.map((log, i) => (
-        <li key={i} className="flex items-start gap-2 px-1 py-0.5">
-          <span
-            className={cn(
-              'mt-0.5 shrink-0 rounded px-1 py-0.5 font-mono text-[9px] font-bold',
-              LOG_TONE[log.level] ?? LOG_TONE.info,
-            )}
-          >
-            {LOG_LABEL[log.level] ?? log.level.toUpperCase()}
-          </span>
-          <p className="text-foreground-secondary min-w-0 flex-1 text-[11px] leading-snug break-words">
-            {log.message}
-          </p>
-        </li>
-      ))}
+      {logs.map((log, i) => {
+        const time = formatLogTime(log.ts);
+        return (
+          <li key={i} className="flex items-start gap-2 px-1 py-0.5">
+            {/* ts 는 BE additive 필드 — 과거 런엔 없으므로 있을 때만 표시(방어 렌더). */}
+            {time ? (
+              <span className="text-foreground-tertiary mt-0.5 shrink-0 font-mono text-[10px] tabular-nums">
+                {time}
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                'mt-0.5 shrink-0 rounded px-1 py-0.5 font-mono text-[9px] font-bold',
+                LOG_TONE[log.level] ?? LOG_TONE.info,
+              )}
+            >
+              {LOG_LABEL[log.level] ?? log.level.toUpperCase()}
+            </span>
+            <p className="text-foreground-secondary min-w-0 flex-1 text-[11px] leading-snug break-words">
+              {log.message}
+            </p>
+          </li>
+        );
+      })}
     </ul>
   );
 }
