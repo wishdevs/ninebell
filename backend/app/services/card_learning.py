@@ -42,6 +42,68 @@ def norm_merchant(name: str | None) -> str:
     return s.lower()
 
 
+# ── 적요 PII 정리 — 차량번호·사람이름 괄호·개인 물품 상세 제거(사용자 확정 2026-07-22) ──────
+# R1 차량번호: '157하5208' 류. 괄호 덩어리는 [^)]* 가 여는 괄호도 삼켜 중첩/미닫힘
+# ("(임원실 159호4288 (팰리세이드)") 케이스까지 한 번에 제거된다.
+# 가운데 글자는 **실제 번호판 한글 명시 목록** — [가-힣] 범위는 '만'(10만5000)·'년'(2022년1234)
+# 을 포함해 금액/연도를 오검출하므로 금지(적대 리뷰 2026-07-22 확정).
+_PLATE_KO = "[가나다라마거너더러머고노도로모구누두루무버서어저보소오조부수우주바사아자하허호배]"
+_PLATE_RE = re.compile(rf"\d{{2,3}}{_PLATE_KO}\d{{4}}")
+_PLATE_PAREN_RE = re.compile(rf"\([^)]*\d{{2,3}}{_PLATE_KO}\d{{4}}[^)]*\)?")
+# R2 사람이름 괄호: (이대훈)·(장일환,손용선)·(장일환 외 2명) 류 — 콤마/·// 나열 + '외 N명' 꼬리까지
+# 잡는다. (법인카드)/(판매) 등 관용 괄호는 negative lookahead 로 보존(_TRIP_NAME_RE 와 같은
+# 관용어 방식, 목록은 사용자 확정 10종). ⚠ '(본부 직원 전체 6명)' 같은 콤마 없는 공백 나열은
+# 매치되지 않아야 한다(보존 — 테스트 감시).
+_NAME_PAREN_RE = re.compile(
+    r"\((?!법인|신용|불공|판매|제품|제조|판관|기타|공통|해외)"
+    r"[가-힣]{2,4}(?:\s*[,·/]\s*[가-힣]{2,4})*(?:\s*외\s*\d+\s*명)?\)"
+)
+# R3 개인 물품 상세: '소모품 구입 (라센트라 크리넥스)' → '소모품 구입' 절단.
+# 관용 괄호는 lookahead 로 게이트 — '소모품 구입 (법인카드)-판매' 는 원문 보존(적대 리뷰 확정).
+_SUPPLY_PREFIX_RE = re.compile(r"^(소모품 ?구입)\s*\((?!법인|신용|불공|판매|제품|제조|판관|기타|공통|해외)")
+
+
+def sanitize_note(note: str | None) -> str | None:
+    """적요의 개인정보 잔재(차량번호·사람이름 괄호·개인 물품 상세) 제거 — 멱등.
+
+    규칙 출처: 2026-07-22 사용자 지시 — DB 전수 실측 기반 확정(card_seed_notes 차량번호 203건·
+    이름 13건·소모품 괄호 2건, learned/ai 0건이나 3테이블 모두 방어 적용). 규칙:
+      R1 차량번호 — 괄호 덩어리 통째 + 괄호 밖 맨몸 제거, 적용된 행에 한해 '차랑유류비' 오탈자 정정.
+      R2 사람이름 괄호 — (이대훈) 류 제거, (법인카드)/(판매) 등 관용 괄호는 보존
+         (strip_division/apply_cost_suffix 가 의존하므로 회귀 금지).
+      R3 '소모품 구입 (…)' — 개인 물품 상세를 떼고 '소모품 구입'으로 절단.
+    후처리: 연속 공백 1개·양끝 공백·고아 괄호/따옴표 잔해 정리, 빈 결과는 None
+    (NULL — 추천 사다리의 note.isnot(None) 필터가 자연 제외). 정리본에 재적용해도 불변(멱등).
+    ⚠ 원본 동기화: alembic **0023_resanitize_card_note_pii** 가 이 규칙의 최신 복제본이다 —
+    규칙 변경 시 양쪽(여기 + 0023) 동기화. 0022 는 구규칙으로 이미 적용된 역사라 수정하지 않는다
+    (패리티 감시 대상은 0023, tests/test_card_note_sanitize.py).
+    """
+    if note is None:
+        return None
+    s = str(note)
+    # R1 — 차량번호: 괄호 덩어리 → 괄호 밖 맨몸 순으로 제거.
+    r1 = _PLATE_PAREN_RE.sub(" ", s)
+    r1 = _PLATE_RE.sub(" ", r1)
+    if r1 != s:
+        r1 = r1.replace("차랑유류비", "차량유류비")  # 오탈자 정정 — R1 적용된 행에 한해.
+    s = r1
+    # R2 — 사람이름 괄호 제거(관용 괄호는 lookahead 로 보존).
+    s = _NAME_PAREN_RE.sub(" ", s)
+    # R3 — '소모품 구입 (…)' 개인 물품 상세 절단.
+    m = _SUPPLY_PREFIX_RE.match(s.strip())
+    if m:
+        s = m.group(1)
+    # 후처리 — 빈 괄호쌍·고아 괄호·연속 공백·양끝 고아 따옴표 정리.
+    s = re.sub(r"\(\s*\)", " ", s)
+    s = re.sub(r"\s*\(+\s*$", "", s)  # 끝에 남은 여는 괄호 고아
+    s = re.sub(r"^\s*\)+\s*", "", s)  # 앞에 남은 닫는 괄호 고아
+    s = re.sub(r"\s+", " ", s).strip()
+    for q in ('"', "'"):
+        if s.count(q) == 1 and (s.startswith(q) or s.endswith(q)):
+            s = s.strip(q).strip()
+    return s or None
+
+
 # ── 적요 정규화 — 사람이름 제외 + 판매/제조 구분 동적화(사용자 확정 2026-07-20) ─────────────
 # 접속자 소속 비용구분 → 적요 끝에 붙일 구분 접미사. 판관비=판매, 제조원가=제조.
 COST_TYPE_SUFFIX: dict[str, str] = {"판관비": "판매", "제조원가": "제조"}
@@ -198,7 +260,8 @@ async def record_account_notes(owner: str | None, entries: list[dict]) -> int:
                         )
                     )
                 ).scalar_one_or_none()
-                note = (e.get("note") or "").strip() or None
+                # 기록 경로 정리 — 확정 적요에 남은 PII(차량번호·이름 괄호)를 들어올 때 걷어낸다.
+                note = sanitize_note(e.get("note"))
                 acct_name = (e.get("acct_name") or "").strip() or None
                 if row is None:
                     s.add(
@@ -372,6 +435,10 @@ async def _ai_note_store(
     동시 요청이 같은 조합을 생성하면 유니크 경쟁이 날 수 있는데, 그건 캐시 실패로 보고 무시한다
     (다음 조회 때 둘 중 하나가 이미 있으므로 정상). 캐시 쓰기 실패가 응답을 막지 않게 한다.
     """
+    # 기록 경로 정리 — 생성 적요에 PII 가 섞여도 캐시에 들어가지 않게(재오염 방지).
+    clean = sanitize_note(note)
+    if not clean:
+        return  # 정리 후 빈 적요 — note 는 NOT NULL 캐시라 저장 자체를 건너뛴다(다음에 재생성).
     try:
         async with get_sessionmaker()() as s:
             s.add(
@@ -380,13 +447,18 @@ async def _ai_note_store(
                     merchant=merchant,
                     acct_code=acct,
                     acct_name=acct_name,
-                    note=note,
+                    note=clean,
                     model=model,
                 )
             )
             await s.commit()
     except Exception:  # noqa: BLE001 — 유니크 경쟁/DB 오류 → 캐시 실패는 무시.
         logger.debug("ai note cache store skipped (merchant=%r acct=%r)", merchant, acct)
+
+
+# suggest_note 의 tier 별 방어 규율: 각 tier 후보를 sanitize_note 로 정리해 **truthy 일 때만**
+# 그 tier 로 반환하고, 정리 결과가 빈값(순수 PII)이면 다음 tier 로 폴스루한다
+# (is_person_name_note skip 과 동일 패턴 — 미정리 서버에서도 사다리가 죽지 않는다).
 
 
 async def suggest_note(
@@ -437,7 +509,10 @@ async def suggest_note(
             )
             # 사람이름 적요는 건너뛰고 다음 티어(깨끗한 적요)로 폴백한다.
             if learned_note and learned_note.strip() and not is_person_name_note(learned_note):
-                return {"note": apply_cost_suffix(learned_note, cost_type), "source": "learned"}
+                # 정리 결과가 빈값(순수 PII)이면 반환하지 않고 다음 tier 로 폴스루.
+                clean = sanitize_note(apply_cost_suffix(learned_note, cost_type))
+                if clean:
+                    return {"note": clean, "source": "learned"}
         # 2) seed — (norm, acct) 전사 가맹점×계정 관례.
         if norm:
             seed_note = (
@@ -455,26 +530,32 @@ async def suggest_note(
                 .first()
             )
             if seed_note and seed_note.strip() and not is_person_name_note(seed_note):
-                return {"note": apply_cost_suffix(seed_note, cost_type), "source": "seed"}
+                clean = sanitize_note(apply_cost_suffix(seed_note, cost_type))
+                if clean:
+                    return {"note": clean, "source": "seed"}
         # 3) AI — learned/seed 에 (가맹점×계정) 실이력이 없는 조합. 계정 이름으로 계정 맞춤 적요를
         #    생성한다(캐시 우선, 전사 공유). allow_ai(엔드포인트만 opt-in) + 계정 이름 있을 때만.
         acct_nm = (acct_name or "").strip()
         if allow_ai and norm and acct_nm:
             cached = await _ai_note_cached(session, norm, acct)
             if cached:
-                return {"note": cached, "source": "ai"}
+                clean = sanitize_note(cached)
+                if clean:
+                    return {"note": clean, "source": "ai"}
             gen = await _ai_note_generate(merchant, acct_nm)
             if gen is not None:
                 gen_note, gen_model = gen
-                await _ai_note_store(
-                    norm=norm,
-                    merchant=merchant,
-                    acct=acct,
-                    acct_name=acct_nm,
-                    note=gen_note,
-                    model=gen_model,
-                )
-                return {"note": gen_note, "source": "ai"}
+                clean = sanitize_note(gen_note)
+                if clean:  # 생성분이 순수 PII 면 캐시도 반환도 없이 다음 tier 로.
+                    await _ai_note_store(
+                        norm=norm,
+                        merchant=merchant,
+                        acct=acct,
+                        acct_name=acct_nm,
+                        note=gen_note,
+                        model=gen_model,
+                    )
+                    return {"note": clean, "source": "ai"}
         # 4) category — 그 계정의 최빈 적요(count 합 최대). 사람이름 적요는 건너뛰고 상위 후보 중 첫
         #    깨끗한 것을 쓴다(쿼리타임 집계, 별도 테이블 없음).
         total = func.sum(CardSeedNote.count)
@@ -493,13 +574,17 @@ async def suggest_note(
         )
         for cat_note in cat_rows:
             if cat_note and cat_note.strip() and not is_person_name_note(cat_note):
-                return {"note": apply_cost_suffix(cat_note, cost_type), "source": "category"}
+                clean = sanitize_note(apply_cost_suffix(cat_note, cost_type))
+                if clean:
+                    return {"note": clean, "source": "category"}
 
     # 5) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
     from app.agents.card_collect.nodes._shared import recommend_note
 
     h = recommend_note(merchant, amount=None)
     if h and h.strip():
-        return {"note": h.strip(), "source": "heuristic"}
-    # 6) 아무것도 없음.
+        clean = sanitize_note(h.strip())
+        if clean:
+            return {"note": clean, "source": "heuristic"}
+    # 6) 아무것도 없음 — 사다리 전체 미발견일 때만 None 반환(유일한 None exit).
     return {"note": None, "source": None}

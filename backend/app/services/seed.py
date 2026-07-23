@@ -37,6 +37,7 @@ from app.models import (
     User,
 )
 from app.services.agent_fixtures import AGENT_FIXTURES, AGENT_GROUP_FIXTURES
+from app.services.card_learning import sanitize_note
 from app.services.org_apply import _erp_id, _existing_path, _norm
 
 # 조직구분 시드 — ERP 조직도를 **전체 깊이**로 미러링한 기본 구조(본부>그룹>팀). org_apply 임포트와
@@ -493,7 +494,8 @@ async def seed_card_seed_notes(db: AsyncSession, force: bool = False) -> None:
                 merchant=r["merchant"],
                 acct_code=r["acct_code"],
                 acct_name=r.get("acct_name"),
-                note=r.get("note"),
+                # 기록 경로 정리 — 시드 gz 에 남은 PII(차량번호·이름 괄호)가 재적재로 재오염되지 않게.
+                note=sanitize_note(r.get("note")),
                 count=r.get("count", 1),
                 dominance=r.get("dominance", 1.0),
                 last_year=r.get("last_year"),
