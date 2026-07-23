@@ -36,7 +36,10 @@ async def ensure_logged_in(
         raise
     # 로그인 직후 뜨는 '공지' 레이어 팝업(전 화면 차단)을 먼저 닫는다 — 이후 어떤 조작(아바타
     # 클릭·프로필 읽기·메뉴 진입)보다 반드시 먼저. 전 에이전트 공통(2026-07-21). 없으면 no-op.
-    await dismiss_notice_popup(page)
+    # 관찰창 4s: 팝업은 로그인 ~1.5s 뒤 비동기 렌더 — 느린 세션이 2s 를 넘겨 통째로 놓치면
+    # '메뉴 이동 후에야 JIT 방어가 닫는' 이중 처리가 된다(2026-07-23 사용자 관찰). 팝업이
+    # 있으면 조기 반환이라 추가 비용은 공지 없는 날에만 발생한다.
+    await dismiss_notice_popup(page, appear_cap_ms=4_000)
     profile = await read_profile(page) if read_profile_after else None
     await emit_shot(emit, page)
     await emit_step(emit, "login", "done", int((time.monotonic() - t0) * 1000))

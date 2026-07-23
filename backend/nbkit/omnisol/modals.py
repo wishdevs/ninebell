@@ -51,7 +51,9 @@ async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
     return seen
 
 
-async def dismiss_notice_popup(page: Any, *, appear_cap_ms: int = 2_000, interval: int = 300) -> bool:
+async def dismiss_notice_popup(
+    page: Any, *, appear_cap_ms: int = 2_000, interval: int = 300, close_cap_ms: int = 4_000
+) -> bool:
     """로그인 직후 뜨는 '공지' 레이어 팝업을 '하루동안 보지 않기' 체크 후 '닫기'로 닫는다.
 
     전 에이전트 공통(2026-07-21 프로브 실측): 이 팝업은 로그인 직후 ~1.5s 뒤 렌더되며 Kendo
@@ -61,7 +63,15 @@ async def dismiss_notice_popup(page: Any, *, appear_cap_ms: int = 2_000, interva
 
     고유 앵커 #close-today-chk 로만 판정(``dismiss_blocking_modals`` 는 '확인/예' 확정 전용이라
     '닫기' 버튼을 못 눌러 이 팝업을 못 닫는다). 팝업이 없으면(오늘 이미 닫힘/공지 없음) no-op.
-    자체 방어(evaluate 실패 등은 삼켜 로그인 자체를 막지 않는다). 반환 True=닫음 / False=없음.
+    자체 방어(evaluate 실패 등은 삼켜 로그인 자체를 막지 않는다).
+
+    **검증된 닫기(2026-07-23)**: 종전에는 체크·닫기 클릭을 쏘고 끝이라(발사 후 미검증) 진입
+    애니메이션 중 좌표가 어긋나 닫기가 빗나가면 팝업이 남은 채 다음 단계로 넘어갔고 — 사용자
+    관찰: "첫 화면에서 체크만 되고, 메뉴 이동 후에야 (JIT 방어가) 닫는" 이중 처리. 영속
+    (localStorage)도 닫기까지 완료돼야 기록되므로 첫 처리 미완이면 재출현한다. 이제
+    ① 체크는 클릭 후 checked 실측으로 확정(빗나감 재시도), ② 닫기는 클릭 직전 좌표 재평가 +
+    팝업 소멸 폴 검증(미소멸 시 재클릭, 상한 close_cap_ms)으로 **첫 화면에서 확정 완료**한다.
+    반환 True=닫힘 검증 완료 / False=팝업 없음 또는 닫기 실패(후속 JIT 방어가 재시도).
     """
     boxes = None
     waited = 0
@@ -78,14 +88,25 @@ async def dismiss_notice_popup(page: Any, *, appear_cap_ms: int = 2_000, interva
     if not boxes:
         return False
     try:
-        if not boxes.get("checked"):  # '하루동안 보지 않기' 체크(이미 체크면 스킵)
+        # ── 1) '하루동안 보지 않기' 체크 확정 — 클릭 후 재평가로 checked 실측(최대 3회) ──
+        for _ in range(3):
+            if boxes.get("checked"):
+                break
             await page.mouse.click(boxes["checkbox"]["x"], boxes["checkbox"]["y"])
             await page.wait_for_timeout(200)
-        # 체크 후 레이아웃 안정 뒤 '닫기' 좌표 재평가(없으면 기존값).
-        again = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
-        close = (again or boxes)["close"]
-        await page.mouse.click(close["x"], close["y"])
-        await page.wait_for_timeout(400)
+            boxes = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
+            if not boxes:
+                return True  # 팝업이 사라짐(이미 닫힘) — 목적 달성.
+        # ── 2) 닫기 — 클릭 직전 좌표(재평가분) 사용 + 소멸 폴 검증, 미소멸 시 재클릭 ──
+        waited = 0
+        while True:
+            await page.mouse.click(boxes["close"]["x"], boxes["close"]["y"])
+            await page.wait_for_timeout(400)
+            waited += 400
+            boxes = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
+            if not boxes:
+                return True  # 닫힘 검증 완료 — localStorage 영속까지 확정.
+            if waited >= close_cap_ms:
+                return False  # 상한 — 후속 JIT 방어가 재시도한다(무한 대기 금지).
     except Exception:  # noqa: BLE001 — 닫기 실패해도 로그인 자체는 진행.
         return False
-    return True

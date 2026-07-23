@@ -39,9 +39,11 @@ class _Page:
         return None
 
 
-async def test_present_checks_today_then_closes():
-    boxes = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": False}
-    page = _Page([boxes, None])  # 1회차 표시 → (재평가 시) 사라짐.
+async def test_present_checks_today_then_closes_verified():
+    unchecked = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": False}
+    checked = {**unchecked, "checked": True}
+    # 표시(미체크) → 체크 클릭 후 재평가(체크 확인) → 닫기 클릭 후 재평가(소멸 = 닫힘 검증).
+    page = _Page([unchecked, checked, None])
     assert await dismiss_notice_popup(page) is True
     assert page.mouse.clicks == [(40, 50), (60, 50)]  # '하루동안 보지 않기' → '닫기'
 
@@ -55,9 +57,35 @@ async def test_absent_is_noop_single_check():
 
 async def test_already_checked_only_closes():
     boxes = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": True}
-    page = _Page([boxes, boxes])
+    page = _Page([boxes, None])  # 체크 스킵 → 닫기 → 소멸 검증.
     assert await dismiss_notice_popup(page) is True
     assert page.mouse.clicks == [(60, 50)]  # 체크 스킵, 닫기만
+
+
+async def test_close_miss_retries_until_gone():
+    """닫기 클릭이 빗나가 팝업이 남으면(발사 후 미검증 결함 재현) 좌표 재평가 후 재클릭한다."""
+    checked = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": True}
+    moved = {**checked, "close": {"x": 62, "y": 52}}  # 애니메이션으로 좌표 이동 상황.
+    page = _Page([checked, moved, None])  # 1차 닫기 후에도 잔존 → 재평가 좌표로 2차 → 소멸.
+    assert await dismiss_notice_popup(page) is True
+    assert page.mouse.clicks == [(60, 50), (62, 52)]  # 2차 클릭은 재평가된 좌표.
+
+
+async def test_close_never_disappears_gives_up_at_cap():
+    """닫기 상한(close_cap_ms) 소진 시 False — 무한 대기 금지, 후속 JIT 방어에 위임."""
+    checked = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": True}
+    page = _Page([checked] * 10)
+    assert await dismiss_notice_popup(page, close_cap_ms=800) is False
+    assert page.mouse.clicks == [(60, 50), (60, 50)]  # 400ms×2 = 상한 도달.
+
+
+async def test_checkbox_miss_retries_then_closes():
+    """체크 클릭이 빗나가면 checked 실측으로 감지해 재클릭 후 닫기까지 완료한다."""
+    unchecked = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": False}
+    checked = {**unchecked, "checked": True}
+    page = _Page([unchecked, unchecked, checked, None])  # 1차 체크 빗나감 → 2차 성공 → 닫기.
+    assert await dismiss_notice_popup(page) is True
+    assert page.mouse.clicks == [(40, 50), (40, 50), (60, 50)]
 
 
 async def test_evaluate_error_is_swallowed():

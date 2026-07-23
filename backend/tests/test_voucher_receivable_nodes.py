@@ -824,14 +824,18 @@ class _NoticeThenPickerFakePage:
     def __init__(self) -> None:
         self.clicks: list[tuple[int, int]] = []
         self.mouse = _OrderedMouse(self)  # type: ignore[arg-type]
-        self._notice_shown = True  # _open_picker 의 첫 확인엔 팝업이 떠 있다.
 
     async def evaluate(self, js_src, arg=None):
         if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
-            if self._notice_shown:
-                self._notice_shown = False  # 한 번 닫으면 사라짐.
-                return {"checkbox": {"x": 400, "y": 500}, "close": {"x": 500, "y": 500}, "checked": False}
-            return None
+            # 실물 시맨틱: '닫기'(500,500) 실클릭 후에만 소멸, 체크(400,500) 클릭은 checked 반영
+            # — dismiss_notice_popup 의 '검증된 닫기'(클릭 후 재평가) 계약과 정합(2026-07-23).
+            if (500, 500) in self.clicks:
+                return None
+            return {
+                "checkbox": {"x": 400, "y": 500},
+                "close": {"x": 500, "y": 500},
+                "checked": (400, 500) in self.clicks,
+            }
         if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
             return {"x": 10, "y": 10}
         if js_src == vjs.POPUP_GRID_READY_JS:
