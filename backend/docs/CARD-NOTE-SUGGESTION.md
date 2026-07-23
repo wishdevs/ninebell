@@ -15,11 +15,11 @@
 
 | 맥락 | 언제 | AI | 사다리 |
 |---|---|---|---|
-| **① 초기 자동 프리필** | 카드 수집 시 배치로 자동 채움 | ❌ | learned → seed → category → heuristic |
+| **① 초기 자동 프리필** | 카드 수집 시 배치로 자동 채움 | △ 저신뢰 seed 조합만 | learned → seed → (**AI**) → category → heuristic |
 | **② 실시간 재추천** | 사람이 개입 화면에서 **예산단위를 바꿀 때** | ✅ | learned → seed → **AI** → category → heuristic |
 
-- ① 은 `card_collect` 노드(`collect.py`)가 배치로 태운다. **`allow_ai=False`** — 배치는 결정적 tier만(빠르고 저비용).
-- ② 는 프론트 `LiveGridCard` onChange → `GET /me/note-suggest`(**`allow_ai=True`**). 사람이 트리거하는 경로만 AI opt-in.
+- ① 은 `card_collect` 노드(`collect.py`)가 배치로 태운다. **`ai_on_ambiguous_seed=True`** — 기본은 결정적 tier만 쓰되, seed 적요가 그 조합 안에서 갈리는(dominance 미달) 행에만 AI 를 태운다.
+- ② 는 프론트 `LiveGridCard` onChange → `GET /me/note-suggest`(**`allow_ai=True`**). 사람이 트리거하는 경로는 미학습 조합까지 AI opt-in.
 
 ---
 
@@ -30,16 +30,25 @@
 | # | source | 뜻 | 매칭 키 | 저장소 |
 |---|---|---|---|---|
 | 1 | **learned** | 과거 **내가** 이 가맹점×계정에 확정한 적요 | (user_id, 가맹점, 계정) | `card_learned_notes` (개인) |
-| 2 | **seed** | 3년치 **전사** 카드실적의 이 가맹점×계정 관례 | (가맹점, 계정) | `card_seed_notes` (전사) |
-| 3 | **ai** | 위 둘 다 없는 **미학습 조합**을 (계정이름+가맹점)으로 Gemini 생성 | (가맹점, 계정) | `card_ai_notes` 캐시 (전사공유) |
+| 2 | **seed** | 3년치 **전사** 카드실적의 이 가맹점×계정 관례 (**dominance ≥ 0.5** 일 때만 확정) | (가맹점, 계정) | `card_seed_notes` (전사) |
+| 3 | **ai** | 위로 **확정 못 한 조합**(미학습 · 저신뢰 seed)을 (계정이름+가맹점)으로 Gemini 생성 | (가맹점, 계정) | `card_ai_notes` 캐시 (전사공유) |
 | 4 | **category** | 그 **계정**의 전사 최빈 적요 (가맹점 무관) | (계정) | `card_seed_notes` GROUP BY |
 | 5 | **heuristic** | 가맹점명 **키워드** 매칭 | (가맹점명) | `nodes/_shared.recommend_note` |
 | 6 | **null** | 아무것도 못 찾음 | — | — |
 
-**핵심:** AI는 3번 자리뿐이고, learned/seed(실이력)가 있으면 거기서 끊겨 **AI를 안 탄다.**
+**핵심:** AI는 3번 자리뿐이고, learned/seed로 **확정된** 값이 있으면 거기서 끊겨 **AI를 안 탄다.**
+
+### seed dominance 게이트 (`SEED_NOTE_MIN_DOMINANCE = 0.5`)
+`dominance` = 그 (가맹점×계정) 조합에서 최빈 적요의 최근성 가중 비율. 과반 미만이면 그 조합은 실제 적요가
+여러 갈래라는 뜻이라 최빈 하나를 확정하지 않고 AI tier로 넘긴다.
+
+> 실측(2026-07-23): 아고다는 `여비교통비-해외출장` 한 계정에 항공·숙박이 섞이는데 최빈이 '해외출장 교통비'라,
+> 115,000원 숙박 결제에도 '해외출장 교통비'가 박혔다. 계정 추천은 맞았으므로 사람이 예산단위를 바꿀 일이 없어
+> ② 실시간 재추천도 트리거되지 않았다 — ①에서 끊어야 하는 케이스.
 
 ### AI tier 세부 (source `ai`)
-- **게이트:** `allow_ai=True` **그리고** 계정 이름(`acct_name`)이 있을 때만 발화. 엔드포인트만 opt-in.
+- **게이트:** 계정 이름(`acct_name`)이 있고, `allow_ai=True`(엔드포인트 — 미학습 조합 포함) 또는
+  `ai_on_ambiguous_seed=True`(배치 — 저신뢰 seed 조합만)일 때 발화.
 - **캐시 우선:** `card_ai_notes`에 (가맹점×계정)이 있으면 LLM 재호출 없이 즉시 반환.
 - **생성:** 없으면 Gemini(`gemini-3.5-flash`, `thinking_budget=0`)로 계정 맞춤 적요 1줄 생성 → 캐시 저장(전사 공유).
 - **폴백:** 키 없음/타임아웃/오류/빈 응답이면 조용히 category·heuristic으로 폴백(응답을 죽이지 않음).

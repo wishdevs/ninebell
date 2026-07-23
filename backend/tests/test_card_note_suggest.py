@@ -257,6 +257,76 @@ async def test_suggest_note_seed_beats_ai(sm, monkeypatch):
     assert res == {"note": "전사관례", "source": "seed"}
 
 
+# ── 저신뢰(dominance 미달) seed → AI 폴스루 ──────────────────────────────────
+async def _add_seed(sm, merchant: str, acct: str, note: str, dominance: float) -> None:
+    async with sm() as s:
+        s.add(CardSeedNote(
+            norm_merchant=card_learning.norm_merchant(merchant), merchant=merchant,
+            acct_code=acct, note=note, count=20, dominance=dominance,
+        ))
+        await s.commit()
+
+
+async def test_ambiguous_seed_falls_through_to_ai(sm, monkeypatch):
+    """아고다 회귀 — 한 계정에 항공·숙박이 섞여 dominance 가 낮으면 최빈 seed 를 확정하지 않는다."""
+    async def fake_gen(merchant: str, acct_name: str):
+        return "해외출장 경비(법인카드)", "test-model"
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", fake_gen)
+    await _add_seed(sm, "아고다상점", "AMB1", "해외출장 교통비(법인카드)", 0.31)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="아고다상점", acct_code="AMB1",
+            acct_name="여비교통비-해외출장", ai_on_ambiguous_seed=True,
+        )
+    assert res == {"note": "해외출장 경비(법인카드)", "source": "ai"}
+
+
+async def test_dominant_seed_still_wins_without_ai(sm, monkeypatch):
+    """dominance 가 임계 이상이면 종전대로 seed 확정 — AI 는 호출되지 않는다."""
+    async def boom(*a, **k):
+        raise AssertionError("지배적 seed 인데 AI 가 호출됨")
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", boom)
+    await _add_seed(sm, "단일용도상점", "DOM1", "주차료(법인카드)", card_learning.SEED_NOTE_MIN_DOMINANCE)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="단일용도상점", acct_code="DOM1",
+            acct_name="여비교통비-국내출장", ai_on_ambiguous_seed=True,
+        )
+    assert res == {"note": "주차료(법인카드)", "source": "seed"}
+
+
+async def test_ambiguous_seed_without_optin_skips_ai(sm, monkeypatch):
+    """opt-in 없으면(기본 배치 아님) 저신뢰 seed 도 AI 를 안 태우고 category·heuristic 로 폴백."""
+    async def boom(*a, **k):
+        raise AssertionError("opt-in 없는데 AI 가 호출됨")
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", boom)
+    await _add_seed(sm, "옵트인없음상점", "AMB2", "해외출장 교통비(법인카드)", 0.2)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="옵트인없음상점", acct_code="AMB2",
+            acct_name="여비교통비-해외출장",
+        )
+    assert res["source"] != "ai"
+
+
+async def test_ambiguous_seed_ai_failure_falls_back(sm, monkeypatch):
+    """AI 생성이 실패해도 런을 죽이지 않고 category·heuristic 로 내려간다."""
+    async def none_gen(*a, **k):
+        return None
+
+    monkeypatch.setattr(card_learning, "_ai_note_generate", none_gen)
+    await _add_seed(sm, "에이아이실패상점", "AMB3", "해외출장 교통비(법인카드)", 0.2)
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="에이아이실패상점", acct_code="AMB3",
+            acct_name="여비교통비-해외출장", ai_on_ambiguous_seed=True,
+        )
+    assert res["source"] in {"category", "heuristic"} and res["note"]
+
+
 async def test_note_suggest_endpoint_ai_with_acct_name(client, make_user, auth_as, monkeypatch):
     """GET /me/note-suggest?...&acctName → 미학습 조합은 AI 생성(source 'ai')."""
     async def fake_gen(merchant: str, acct_name: str):

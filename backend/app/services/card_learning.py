@@ -33,6 +33,12 @@ logger = logging.getLogger("app.services.card_learning")
 # 결정적 적용(Tier 1) 판정: 같은 가맹점을 이 횟수 이상 동일 확정했으면 AI 없이 그대로 프리필.
 LEARNED_APPLY_MIN_COUNT = 3
 
+# seed 적요(CardSeedNote)를 확정으로 채택할 최소 dominance(= 그 가맹점×계정 조합에서 최빈 적요의
+# 최근성 가중 비율). 미만이면 그 조합은 실제 적요가 여러 갈래라는 뜻이라 최빈 하나를 확정하지 않고
+# AI tier 로 넘긴다 — 실측(2026-07-23): 아고다는 '여비교통비-해외출장' 하나에 항공·숙박이 섞이는데
+# 최빈이 '해외출장 교통비'라 숙박 결제에도 교통비가 박혔다. 과반(0.5)을 확정의 하한으로 둔다.
+SEED_NOTE_MIN_DOMINANCE = 0.5
+
 
 def norm_merchant(name: str | None) -> str:
     """가맹점명 매칭 키 — 공백·괄호표기·부호를 흡수해 '네이버파이낸셜㈜'↔'네이버파이낸셜(주)' 등을 묶는다."""
@@ -371,7 +377,10 @@ _AI_NOTE_SYSTEM = (
     "1) 지금 고른 예산계정의 용도를 반드시 반영한다(가맹점의 과거 통계가 아니라 이 계정이 기준).\n"
     "2) 회사 관례 표기 '{용도}(법인카드)' 형태를 따른다.\n"
     "3) 25자 이내. 따옴표·설명·부연·줄바꿈 없이 적요 문구만 출력한다.\n"
-    "4) 가맹점 성격이 계정과 자연스럽게 맞으면 녹이되, 억지로 넣지 않는다."
+    "4) 가맹점 성격이 계정과 자연스럽게 맞으면 녹이되, 억지로 넣지 않는다.\n"
+    "5) 지출 성격을 좁히는 것은 근거가 있을 때만 한다. 같은 가맹점·계정에서 여러 성격이 가능하면"
+    "(예: 여행 예약 사이트는 항공권일 수도 숙박일 수도 있다) 하나로 단정하지 말고 계정 수준의"
+    " 포괄 표현을 쓴다. 틀린 구체 표현보다 맞는 포괄 표현이 낫다."
 )
 
 
@@ -469,6 +478,7 @@ async def suggest_note(
     acct_code: str | None,
     acct_name: str | None = None,
     allow_ai: bool = False,
+    ai_on_ambiguous_seed: bool = False,
     cost_type: str | None = None,
 ) -> dict:
     """(가맹점 × 계정) → 적요 리졸버 — learned>seed>[AI]>category>heuristic 사다리(첫 히트 반환).
@@ -479,11 +489,17 @@ async def suggest_note(
     Gemini 생성 후 캐시) → 그 계정의 최빈 적요(CardSeedNote 를 acct_code 로 GROUP BY) 순으로
     매칭하고, 못 찾으면 가맹점명 키워드 휴리스틱으로 폴백. 계정 없으면 계정 tier 를 스킵하고 휴리스틱만.
 
-    AI tier 는 learned/seed 에 (가맹점×계정) 실이력이 **없는** 조합에서만 돈다 — 통계로 못 메우는
-    "네이버파이낸셜 + 회의비" 같은 미학습 계정 조합에 계정 이름(acct_name)으로 적요를 생성한다.
-    allow_ai 는 사람이 트리거하는 엔드포인트(GET /me/note-suggest)만 opt-in 하고, 배치(collect
-    초기 프리필)는 기본 False 라 결정적 tier 만 태워 빠르고 저비용이다. AI 실패/키없음이면 조용히
-    category·heuristic 로 폴백한다. 세션은 호출부(라우터 DbSession / 노드 자체 세션)가 주입한다.
+    AI tier 는 learned/seed 로 **확정할 수 없는** 조합에서만 돈다 — (a) 통계로 못 메우는
+    "네이버파이낸셜 + 회의비" 같은 미학습 계정 조합, (b) seed 는 있지만 그 조합 안에서 적요가
+    갈리는(dominance < SEED_NOTE_MIN_DOMINANCE) 저신뢰 조합. 계정 이름(acct_name)으로 계정 맞춤
+    적요를 생성한다.
+
+    AI opt-in 은 둘로 나뉜다. allow_ai=True 는 사람이 트리거하는 엔드포인트(GET /me/note-suggest)
+    가 쓰고 (a)·(b) 모두 AI 를 태운다. ai_on_ambiguous_seed=True 는 배치(collect 초기 프리필)가
+    쓰고 **(b) 저신뢰 seed 조합에만** AI 를 태운다 — 미학습 조합까지 배치에서 생성하면 카드 런마다
+    LLM 호출이 늘어나므로, 배치는 '결정적으로 틀린 값이 박히는' 경우만 산다(캐시는 전사 공유라
+    같은 조합의 재호출 비용은 0). AI 실패/키없음이면 조용히 category·heuristic 로 폴백한다.
+    세션은 호출부(라우터 DbSession / 노드 자체 세션)가 주입한다.
     """
     norm = norm_merchant(merchant)
     acct = (acct_code or "").strip()
@@ -513,30 +529,36 @@ async def suggest_note(
                 clean = sanitize_note(apply_cost_suffix(learned_note, cost_type))
                 if clean:
                     return {"note": clean, "source": "learned"}
-        # 2) seed — (norm, acct) 전사 가맹점×계정 관례.
+        # 2) seed — (norm, acct) 전사 가맹점×계정 관례. 단 그 조합 안에서 적요가 갈리면
+        #    (dominance < SEED_NOTE_MIN_DOMINANCE) 최빈 하나를 확정으로 쓰지 않고 흘려보낸다.
+        ambiguous_seed = False
         if norm:
-            seed_note = (
-                (
-                    await session.execute(
-                        select(CardSeedNote.note)
-                        .where(
-                            CardSeedNote.norm_merchant == norm,
-                            CardSeedNote.acct_code == acct,
-                        )
-                        .limit(1)
+            seed_row = (
+                await session.execute(
+                    select(CardSeedNote.note, CardSeedNote.dominance)
+                    .where(
+                        CardSeedNote.norm_merchant == norm,
+                        CardSeedNote.acct_code == acct,
                     )
+                    .limit(1)
                 )
-                .scalars()
-                .first()
-            )
+            ).first()
+            seed_note = seed_row[0] if seed_row else None
+            seed_dom = float(seed_row[1] or 0.0) if seed_row else 0.0
             if seed_note and seed_note.strip() and not is_person_name_note(seed_note):
-                clean = sanitize_note(apply_cost_suffix(seed_note, cost_type))
-                if clean:
-                    return {"note": clean, "source": "seed"}
-        # 3) AI — learned/seed 에 (가맹점×계정) 실이력이 없는 조합. 계정 이름으로 계정 맞춤 적요를
-        #    생성한다(캐시 우선, 전사 공유). allow_ai(엔드포인트만 opt-in) + 계정 이름 있을 때만.
+                if seed_dom < SEED_NOTE_MIN_DOMINANCE:
+                    # 같은 가맹점×계정인데 실제 적요가 여러 갈래(항공·숙박이 섞이는 예약 사이트 등).
+                    # 최빈값을 확정하면 틀린 구체 표현이 박히므로 AI tier 로 넘긴다.
+                    ambiguous_seed = True
+                else:
+                    clean = sanitize_note(apply_cost_suffix(seed_note, cost_type))
+                    if clean:
+                        return {"note": clean, "source": "seed"}
+        # 3) AI — learned/seed 에 (가맹점×계정) 실이력이 없거나(미학습), 있어도 적요가 갈려
+        #    확정할 수 없는(ambiguous_seed) 조합. 계정 이름으로 계정 맞춤 적요를 생성한다
+        #    (캐시 우선, 전사 공유). 엔드포인트는 allow_ai, 배치는 ai_on_ambiguous_seed 로 opt-in.
         acct_nm = (acct_name or "").strip()
-        if allow_ai and norm and acct_nm:
+        if (allow_ai or (ai_on_ambiguous_seed and ambiguous_seed)) and norm and acct_nm:
             cached = await _ai_note_cached(session, norm, acct)
             if cached:
                 clean = sanitize_note(cached)

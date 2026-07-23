@@ -205,12 +205,16 @@ def make_collect_rows_node(timeout_s: int | None = None):
         # 초기 적요도 계정 인지되게 만든다(엔드포인트 /me/note-suggest 와 같은 리졸버 — 배치
         # 최초 추천·실시간 재추천 일관). 계정 없는 행은 위 가맹점-키 경로를 그대로 유지(회귀 방어).
         # noteSource 배지는 리졸버 source(learned/seed/category/heuristic)를 그대로 반영한다.
-        acct_by_key: dict[int, tuple[str, str]] = {}
+        acct_by_key: dict[int, tuple[str, str, str]] = {}
         for idx, r in enumerate(rows_list):
             bu = (preselect.get(idx + 1) or {}).get("budgetUnit") or {}
             acct_code = (bu.get("bgacctCd") or "").strip()
             if acct_code:
-                acct_by_key[r.get("i", idx)] = (r.get("TRAN_NM") or "", acct_code)
+                acct_by_key[r.get("i", idx)] = (
+                    r.get("TRAN_NM") or "",
+                    acct_code,
+                    (bu.get("bgacctNm") or "").strip(),
+                )
         if acct_by_key:  # 계정이 하나라도 있을 때만 세션을 연다(계정 없는 런은 DB 접근 없음).
             try:
                 async with get_sessionmaker()() as s:
@@ -218,9 +222,17 @@ def make_collect_rows_node(timeout_s: int | None = None):
                         key = r.get("i", idx)
                         if key not in acct_by_key:
                             continue
-                        merchant, acct_code = acct_by_key[key]
+                        merchant, acct_code, acct_nm = acct_by_key[key]
+                        # ai_on_ambiguous_seed — 그 가맹점×계정의 seed 적요가 여러 갈래일 때만
+                        # (dominance 미달) AI 로 계정 맞춤 적요를 만든다. 미학습 조합은 배치에서
+                        # 생성하지 않고 결정적 tier 를 그대로 탄다(카드 런당 LLM 호출 억제).
                         res = await card_learning.suggest_note(
-                            s, user_id=state.get("owner"), merchant=merchant, acct_code=acct_code
+                            s,
+                            user_id=state.get("owner"),
+                            merchant=merchant,
+                            acct_code=acct_code,
+                            acct_name=acct_nm,
+                            ai_on_ambiguous_seed=True,
                         )
                         note = (res.get("note") or "").strip()
                         if note:
