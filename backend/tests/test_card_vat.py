@@ -23,6 +23,8 @@ def test_nondeductible_by_account_various_prefixes():
     assert classify_vat("과세", "(제)복리후생비-업무") == NONDEDUCTIBLE
     assert classify_vat("과세", "(판)여비교통비-해외출장") == NONDEDUCTIBLE
     assert classify_vat("과세", "차량유지비-유류") == NONDEDUCTIBLE
+    assert classify_vat("과세", "(판)차량유지비-관리") == NONDEDUCTIBLE
+    assert classify_vat("과세", "기부금") == NONDEDUCTIBLE
     assert classify_vat("과세", "(판)접대비-국내") == NONDEDUCTIBLE
     assert classify_vat("과세", "접대비") == NONDEDUCTIBLE
     # 접대비 계열은 어순·형태 무관 부분일치 — 해외접대비/국내접대비도 불공.
