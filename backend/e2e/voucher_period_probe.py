@@ -41,6 +41,17 @@ from nbkit.patterns.login_flow import ensure_logged_in  # noqa: E402
 from nbkit.patterns.menu_navigate_flow import navigate_schema  # noqa: E402
 from nbkit.patterns.user_type_flow import ensure_user_type  # noqa: E402
 
+# 자격증명은 환경변수 우선, 없으면 backend/.env 에서 읽는다(비밀번호를 명령줄·셸 히스토리에
+# 남기지 않기 위함 — .env 는 gitignore 대상이라 커밋되지 않는다).
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(errors="ignore").splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
+
 USERID = os.environ.get("E2E_USERID") or ""
 PASSWORD = os.environ.get("E2E_PASSWORD") or ""
 HEADLESS = os.environ.get("E2E_HEADLESS", "1") != "0"
