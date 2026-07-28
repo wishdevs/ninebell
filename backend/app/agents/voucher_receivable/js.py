@@ -157,6 +157,33 @@ SET_PERIOD_THIS_MONTH_JS = (
     ".data('dewsControl').setMonth(); return true; } catch (e) { return false; } }"
 )
 
+# 회계일 periodpicker 를 임의 기간(YYYYMMDD~YYYYMMDD)으로 세팅 — 실행 전 폼이 당월이 아닌
+# 기간(예: 7/1~7/5)을 지정했을 때만 쓴다. setMonth() 는 '월 단위'라 부분 기간을 표현할 수 없어
+# 시작/종료 input 을 직접 세팅한다(미지급금 법인카드 #PERIOD_DT_C 와 동일한 dews 규약).
+# ⚠ 호출부(steps.set_period)가 readback 으로 반영을 확인한다 — 조용한 실패 금지.
+SET_PERIOD_RANGE_JS = r"""({ start, end }) => {
+  try {
+    const si = document.querySelector('#s_period_startinput');
+    const ei = document.querySelector('#s_period_endinput');
+    if (!si || !ei) return false;
+    for (const [inp, val] of [[si, start], [ei, end]]) {
+      inp.value = val;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return true;
+  } catch (e) { return false; }
+}"""
+
+# 회계일 시작/종료 입력값 읽기(숫자만) — 세팅 반영 확인용. 반환 {start, end} 또는 null(구조 미발견).
+PERIOD_VALUE_JS = r"""() => {
+  const si = document.querySelector('#s_period_startinput');
+  const ei = document.querySelector('#s_period_endinput');
+  if (!si || !ei) return null;
+  const d = v => String(v == null ? '' : v).replace(/\D/g, '');
+  return { start: d(si.value), end: d(ei.value) };
+}"""
+
 # 작성자 multicodepicker 기본선택을 비우는 앱 API(clear).
 CLEAR_WRITER_JS = (
     "() => { try { window.jQuery(document.querySelector('#s_wrt_emp_no'))"

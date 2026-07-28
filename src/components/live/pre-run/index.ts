@@ -15,6 +15,7 @@ import { GyeongjoPreRunForm } from './gyeongjo-pre-run-form';
 import { HakjagumPreRunForm } from './hakjagum-pre-run-form';
 import { OverseasPreRunForm } from './overseas-pre-run-form';
 import { TripPreRunForm } from './trip-pre-run-form';
+import { VoucherPreRunForm } from './voucher-pre-run-form';
 
 export interface PreRunFormProps {
   agent: Agent;
@@ -30,4 +31,8 @@ export const PRE_RUN_FORMS: Record<string, ComponentType<PreRunFormProps>> = {
   'trip-overseas': OverseasPreRunForm,
   'gyeongjo-grant': GyeongjoPreRunForm,
   'hakjagum-grant': HakjagumPreRunForm,
+  // 회계전표 3종 — 조회기간(회계일)만 받는 공용 폼. 기본값 이번 달 1일~말일.
+  'voucher-receivable': VoucherPreRunForm,
+  'voucher-payable': VoucherPreRunForm,
+  'voucher-card': VoucherPreRunForm,
 };

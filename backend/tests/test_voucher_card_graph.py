@@ -70,8 +70,10 @@ def test_recursion_limit_configured():
 def test_state_declares_card_keys():
     keys = get_type_hints(VoucherCardState)
     # 카드 고유 신규 키 + 공유 상속 키.
-    assert {"payment_map", "payment_map_count", "accounting_ym"} <= set(keys)
+    assert {"payment_map", "payment_map_count"} <= set(keys)
     assert {"max_rows", "master_rowcount", "processed", "page", "events"} <= set(keys)
+    # 회계일 기간은 공유 State(3종 공통) 상속 — 카드도 그대로 쓴다.
+    assert {"period_from", "period_to"} <= set(keys)
 
 
 # ── 공유 백본 무영향(하위호환) ─────────────────────────────────────────────────

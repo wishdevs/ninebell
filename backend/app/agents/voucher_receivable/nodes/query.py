@@ -20,8 +20,8 @@ def _ms(t0: float) -> int:
 
 
 def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
-    """조회 조건 세팅 — 패널 확장 → 작성부서 전체 → 회계일 당월 → 작성자 비움 → 전표상태 미결
-    → 전자결재상태 저장 → 전표유형(docu_types). 전표유형만 에이전트별로 다르다(매출/내수구매)."""
+    """조회 조건 세팅 — 패널 확장 → 작성부서 전체 → 회계일(폼 지정 기간, 기본 당월) → 작성자 비움
+    → 전표상태 미결 → 전자결재상태 저장 → 전표유형(docu_types). 전표유형만 에이전트별로 다르다."""
 
     async def set_query(state: dict) -> dict:
         if state.get("error"):
@@ -47,9 +47,13 @@ def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
             return await fail("작성부서", r.get("reason"))
         await emit_log(events, f"작성부서 = 전체({r.get('n')}건).", "info")
 
-        r = await steps.set_period_this_month(page)
+        # 회계일 — 실행 전 폼이 고른 기간(period_from~period_to). 미지정이면 당월(종전 동작).
+        r = await steps.set_period(page, state.get("period_from"), state.get("period_to"))
         if not r.get("ok"):
             return await fail("회계일", r.get("reason"))
+        if r.get("warn"):
+            await emit_log(events, f"조회조건 '회계일' {r['warn']}", "warn")
+        await emit_log(events, f"회계일 = {r.get('display') or '당월(1일~말일)'}.", "info")
 
         r = await steps.clear_writer(page)
         if not r.get("ok"):
