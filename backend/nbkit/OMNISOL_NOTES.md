@@ -205,21 +205,29 @@ DropDownList 는 원본 `<select>` 를 `display:none` 으로 숨기고 위젯을
 | | 공지 팝업 | 시스템 팝업 |
 |---|---|---|
 | 정체 | 같은 페이지의 `.k-window` 레이어 | `window.open` 으로 뜬 **별도 Page** |
-| 처리 | `dismiss_notice_popup`(체크+닫기 실클릭) | ①`block_notice_popups`(원천 차단) ②`PopupWatcher`(폴백 `close()`) |
+| 처리 | `dismiss_notice_popup`(체크+닫기 실클릭) | ①`install_notice_autoclose`(상시 즉시 닫기) ②`PopupWatcher`(로그인 구간 폴백) |
 | 단일소스 | `nbkit/omnisol/modals.py` | `nbkit/browser/popups.py` |
 
-### 공지 시스템 팝업은 **아예 열지 않는다**(2026-07-28, 사용자 요청)
-`block_notice_popups(context)` 가 `window.open` 을 가로채 **공지 URL 이면 창을 열지 않고** 무해한
-스텁을 돌려준다(`app/live/runner.py` 가 컨텍스트 생성 직후 1회 설치). 뜬 뒤 닫는 종전 경로는
-창이 잠깐 보이고, 화면 전환마다 반복되고, 닫기가 빗나가면 남았다 — 차단은 그 셋을 한 번에 없앤다.
+### 공지 시스템 팝업은 **도착 즉시 닫아 무시한다**(2026-07-28, 사용자 요청)
+`install_notice_autoclose(context)` 가 컨텍스트에 **상시** `page` 리스너를 걸어, 도착한 창이
+공지로 확정되면 곧바로 닫는다(`app/live/runner.py` 가 컨텍스트 생성 직후 1회 설치).
 
-- **차단 대상은 공지 마커뿐**: `art_seq_no=` / `callComp=UFAP…`.
-- ⚠⚠ **결제창(EAP)은 반드시 통과** — `approkey` / `docID` / `callComp=UBAP…` / `MicroModuleCode=eap`.
-  같은 호스트·같은 경로라 마커로만 갈린다. 막으면 결재 순회가 통째로 불가능해진다.
-- **fail-open**: 판정 실패·예외·url 없는 `open()` 은 전부 원래 `window.open` 으로 통과시킨다.
-  못 막은 공지는 아래 `PopupWatcher` 가 닫아주므로(무해), 위험이 비대칭인 쪽으로 넘어진다.
-- 차단이 걸리면 '하루동안 열지 않기' 클릭은 일어나지 않는다(창 자체가 없으므로) — 억제 클릭은
-  폴백 경로 전용으로 남는다.
+⚠ **폐기한 접근 — `window.open` 후킹은 동작하지 않는다.** 처음엔 공지 URL 이면 창을 열지 않게
+`window.open` 을 가로챘으나 실화면에서 공지창이 그대로 떴다. 추적 결과(`e2e/notice_open_trace.py`):
+- 공지창의 **opener 는 ERP 메인 페이지가 맞다**(그 페이지가 연 것),
+- 그런데 **모든 프레임에서 `window.open` 호출이 0건**이다 → form target 등 다른 경로로 열린다.
+
+즉 "어떻게 여는지"에 기대면 안 된다. 열린 창을 즉시 닫는 축이 메커니즘과 무관하게 동작한다
+(헤드리스에선 사람 눈에 보이지 않으므로 이것이 곧 '무시'다).
+
+- **닫는 기준은 공지 마커**: `art_seq_no=` / `callComp=UFAP…`. 상시 동작이라 호스트 기준을 쓰면
+  안 된다(결제창이 같은 호스트).
+- ⚠⚠ **결제창(EAP)은 절대 닫지 않는다** — `approkey` / `docID` / `callComp=UBAP…` /
+  `MicroModuleCode=eap`. 판정 전에 `is_approval_window` 로 한 번 더 막는다.
+- **fail-safe**: 공지로 확정되지 않으면 닫지 않는다. 못 닫은 공지는 무해하지만, 업무 창을 닫으면
+  결재가 불가능해진다.
+- 실화면 검증: `e2e/notice_block_verify.py` — 대조군(미설치)엔 공지창이 살아남고, 실험군엔
+  남지 않음(2026-07-28 실측 ✅).
 
 ### 규율(폴백 `PopupWatcher`)
 - **감시는 로그인 구간에서만.** 결제(결재)창(EAP)도 다른 호스트의 시스템 팝업이라, 상시 자동

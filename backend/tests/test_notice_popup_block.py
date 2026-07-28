@@ -1,55 +1,46 @@
-"""공지 팝업 **원천 차단**(window.open 가로채기) — 설치 경로 + 차단 판정 규칙.
+"""공지 시스템 팝업 **상시 무시**(도착 즉시 닫기) — 설치 경로 + 닫기 판정 규칙.
 
 핵심 계약:
-  1) 공지 URL(art_seq_no= / callComp=UFAP…)로 window.open 하면 **창이 열리지 않고** 스텁이 온다.
-  2) 결제창(EAP: approkey/docID/callComp=UBAP…)은 **반드시 통과** — 막으면 결재 자체가 불가능.
-  3) 판정 불가(빈 url·예외)는 통과(fail-open) — 못 막은 공지는 감시자 폴백이 닫는다.
+  1) 공지창(art_seq_no= / callComp=UFAP…)은 도착 즉시 닫힌다.
+  2) 결제창(EAP: approkey/docID/callComp=UBAP…)은 **절대 닫지 않는다** — 닫으면 결재 불가.
+  3) 판정 불가(빈 url·about:blank·평범한 ERP 창)는 **닫지 않는다**(fail-safe).
 
-JS 자체는 브라우저 없이 못 돌리므로, 스크립트의 판정부와 동치인 파이썬 포트로 규칙을 고정하고
-(마커 목록은 모듈 단일 소스를 그대로 읽는다), 설치 경로는 스텁 컨텍스트로 검증한다.
+⚠ 이 핸들러는 PopupWatcher 와 달리 **구간 제한이 없다**(런 내내). 그래서 판정 기준이 호스트가
+  아니라 공지 마커여야 한다 — 이 테스트가 그 경계를 고정한다.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 
 from nbkit.browser import popups
 
-# (asyncio_mode = auto — async 테스트에 별도 마크 불필요.)
+
+class _Page:
+    """닫힘 여부만 추적하는 최소 Page 스텁."""
+
+    def __init__(self, url: str, *, closed: bool = False) -> None:
+        self.url = url
+        self._closed = closed
+        self.close_calls = 0
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self._closed = True
 
 
-# ── 설치 경로 ─────────────────────────────────────────────────────────────────
 class _Ctx:
-    def __init__(self, fail: bool = False) -> None:
-        self.scripts: list[str] = []
-        self._fail = fail
+    def __init__(self) -> None:
+        self.handlers: list = []
 
-    async def add_init_script(self, src: str) -> None:
-        if self._fail:
-            raise RuntimeError("컨텍스트가 이미 닫힘")
-        self.scripts.append(src)
-
-
-async def test_block_installs_init_script():
-    ctx = _Ctx()
-    assert await popups.block_notice_popups(ctx) is True
-    assert len(ctx.scripts) == 1
-    assert "window.open" in ctx.scripts[0]
-
-
-async def test_block_install_failure_is_swallowed():
-    """설치 실패해도 런을 깨지 않는다 — 감시자(PopupWatcher) 폴백이 남는다."""
-    assert await popups.block_notice_popups(_Ctx(fail=True)) is False
-
-
-# ── 차단 판정 규칙(스크립트 판정부와 동치) ────────────────────────────────────
-def _blocked(url) -> bool:
-    """NOTICE_OPEN_BLOCK_JS 의 판정부와 같은 규칙 — 공지 마커가 있으면 차단."""
-    try:
-        u = ("" if url is None else str(url)).lower()
-    except Exception:  # noqa: BLE001 — JS 의 try/catch 와 동일하게 통과.
-        return False
-    return any(m in u for m in popups._NOTICE_MARKERS)
+    def on(self, event: str, fn) -> None:
+        assert event == "page"
+        self.handlers.append(fn)
 
 
 NOTICE_URL = (
@@ -62,32 +53,67 @@ APPROVAL_URL = (
 )
 
 
-def test_notice_url_is_blocked():
-    assert _blocked(NOTICE_URL) is True
+async def _nap(_seconds: float) -> None:
+    return None
 
 
-def test_approval_url_passes_through():
-    """⚠ 회귀 금지 — 결제창을 막으면 결재 순회가 통째로 불가능해진다."""
-    assert _blocked(APPROVAL_URL) is False
-    # 차단 스크립트가 결제 마커를 아예 갖고 있지 않은지도 함께 고정한다.
-    for marker in popups._APPROVAL_MARKERS:
-        assert marker not in popups.NOTICE_OPEN_BLOCK_JS.lower()
+# ── 닫기 판정 ─────────────────────────────────────────────────────────────────
+async def test_notice_window_is_closed():
+    page = _Page(NOTICE_URL)
+    assert await popups._close_if_notice(page, _nap) == NOTICE_URL
+    assert page.close_calls == 1
+
+
+async def test_approval_window_is_never_closed():
+    """⚠ 회귀 금지 — 결제창을 닫으면 결재 순회가 통째로 불가능해진다."""
+    page = _Page(APPROVAL_URL)
+    assert await popups._close_if_notice(page, _nap) is None
+    assert page.close_calls == 0
 
 
 @pytest.mark.parametrize(
     "url",
-    ["", None, "https://erp.ninebell.co.kr/", "about:blank"],
+    ["https://erp.ninebell.co.kr/", "https://www.ninebell.co.kr/default/00/01.php", ""],
 )
-def test_unknown_urls_pass_through(url):
-    """판정 불가·평범한 URL 은 통과(fail-open) — 못 막은 공지는 감시자가 닫는다."""
-    assert _blocked(url) is False
+async def test_non_notice_windows_are_left_alone(url):
+    """공지로 확정되지 않은 창은 건드리지 않는다(fail-safe) — 업무 창 보호가 우선."""
+    page = _Page(url)
+    assert await popups._close_if_notice(page, _nap) is None
+    assert page.close_calls == 0
 
 
-def test_block_script_is_idempotent_and_fail_open():
-    """중복 설치 가드와 native 폴백이 스크립트에 들어 있는지 고정."""
-    src = popups.NOTICE_OPEN_BLOCK_JS
-    assert "__nbkitNoticeBlocked" in src  # 이중 래핑 방지
-    assert "native.apply(window, arguments)" in src  # 비공지는 원래 open 으로
-    # 스텁 반환(호출부가 focus()/close() 를 만져도 TypeError 로 ERP 를 깨뜨리지 않는다).
-    for member in ("close:", "focus:", "postMessage:"):
-        assert member in src
+async def test_already_closed_page_is_noop():
+    page = _Page(NOTICE_URL, closed=True)
+    assert await popups._close_if_notice(page, _nap) is None
+    assert page.close_calls == 0
+
+
+# ── 설치 경로 ─────────────────────────────────────────────────────────────────
+def test_install_registers_page_listener():
+    ctx = _Ctx()
+    closed = popups.install_notice_autoclose(ctx)
+    assert len(ctx.handlers) == 1
+    assert closed == []
+
+
+def test_install_failure_is_swallowed():
+    class _Bad:
+        def on(self, *_a, **_k):
+            raise RuntimeError("컨텍스트가 이미 닫힘")
+
+    assert popups.install_notice_autoclose(_Bad()) == []
+
+
+async def test_handler_closes_arriving_notice_window():
+    """등록된 핸들러가 도착한 공지창을 실제로 닫고, 닫힌 URL 을 누적한다."""
+    ctx = _Ctx()
+    closed = popups.install_notice_autoclose(ctx)
+    notice, approval = _Page(NOTICE_URL), _Page(APPROVAL_URL)
+    for handler in ctx.handlers:
+        handler(notice)
+        handler(approval)
+    await asyncio.sleep(0)  # 예약된 태스크 소진.
+    await asyncio.sleep(0)
+    assert notice.close_calls == 1
+    assert approval.close_calls == 0
+    assert closed == [NOTICE_URL]

@@ -55,63 +55,72 @@ def is_notice_window(url: str | None) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 공지 팝업 **원천 차단** — 뜬 뒤 닫는 게 아니라 아예 열리지 않게 한다.
+# 공지 팝업 **상시 무시** — 도착하는 즉시 닫는다(열리는 방식과 무관).
 # ══════════════════════════════════════════════════════════════════════════════
-# 종전 경로(감시 → 닫기)는 창이 잠깐 떴다 사라지고, 화면 전환마다 반복되며, 닫기가 빗나가면
-# 남는다. window.open 을 가로채 **공지 URL 이면 창을 열지 않고** 무해한 스텁을 돌려주면 그
-# 전부가 사라진다(사용자 요청 2026-07-28: "해당 팝업이면 화면에 표시하지 않고 무시").
+# ⚠ 실측으로 폐기한 접근(2026-07-28): `window.open` 을 가로채 공지 URL 이면 창을 안 여는 방식을
+#   먼저 시도했으나 **동작하지 않았다**. 실화면 추적(e2e/notice_open_trace.py) 결과 —
+#     · 공지창의 opener 는 ERP 메인 페이지가 맞다(그 페이지가 연 것),
+#     · 그런데 모든 프레임에서 `window.open` 호출은 **0건**이다(form target 등 다른 경로).
+#   즉 open 후킹으로는 잡을 수 없다. 그래서 "어떻게 열리는지"에 의존하지 않고 **열린 창을
+#   즉시 닫는** 축으로 바꿨다. 헤드리스에선 사람 눈에 보이지 않으므로 이것이 곧 '무시'다.
 #
-# ⚠⚠ 안전 규율 — **차단은 공지 마커에만, 판정 실패는 통과(fail-open)** ⚠⚠
-#   결제창(EAP)도 같은 호스트의 window.open 이다. 그래서 이 스크립트는 "공지로 확정된 것만
-#   막고 나머지는 전부 원래 window.open 으로 넘긴다". 어떤 예외가 나도 native 로 폴백한다 —
-#   막지 못해 공지가 뜨는 것은 기존 감시자가 뒤에서 닫아주지만(무해), 업무 창을 잘못 막으면
-#   결재가 통째로 불가능해진다. 위험이 비대칭이므로 항상 통과 쪽으로 넘어진다.
-#
-# url 없이 open() 한 뒤 location 을 채우는 호출은 시점상 판정할 수 없다 → 통과시키고 기존
-# PopupWatcher/close_foreign_pages 폴백이 처리한다(이중 방어 유지).
-NOTICE_OPEN_BLOCK_JS = r"""() => {
-  try {
-    if (window.__nbkitNoticeBlocked) return;
-    window.__nbkitNoticeBlocked = true;
-    var NOTICE = ['art_seq_no=', 'callcomp=ufap'];
-    var native = window.open;
-    window.open = function (url) {
-      try {
-        var u = String(url == null ? '' : url).toLowerCase();
-        for (var i = 0; i < NOTICE.length; i++) {
-          if (u.indexOf(NOTICE[i]) !== -1) {
-            // 공지 팝업 — 창을 열지 않는다. 호출부가 반환값을 만져도(w.focus()/w.close())
-            // TypeError 로 ERP 스크립트를 깨뜨리지 않도록 스텁을 돌려준다.
-            return {
-              closed: true,
-              close: function () {},
-              focus: function () {},
-              blur: function () {},
-              postMessage: function () {},
-              location: { href: String(url == null ? '' : url) },
-              document: null,
-            };
-          }
-        }
-      } catch (e) { /* 판정 실패 → 아래 native 로 통과(업무 창 보호 우선) */ }
-      return native.apply(window, arguments);
-    };
-  } catch (e) { /* 설치 실패해도 페이지는 정상 동작해야 한다 */ }
-}"""
+# ⚠⚠ 안전 규율 — 닫는 대상은 **공지로 확정된 창만** ⚠⚠
+#   PopupWatcher 의 '외부 호스트면 닫기'와 달리 이 핸들러는 상시(구간 제한 없음)라, 판정 기준이
+#   호스트가 아니라 **공지 마커**여야 한다. 결제창(EAP)은 같은 호스트이지만 마커가 달라 대상이
+#   아니며, 판정 전에 `is_approval_window` 로 한 번 더 막는다. 판정 불가는 **닫지 않는다**
+#   (fail-safe — 못 닫은 공지는 무해하지만, 업무 창을 닫으면 결재가 불가능해진다).
+_NOTICE_CLOSE_SETTLE_CAP_MS = 3_000
+_NOTICE_CLOSE_INTERVAL_MS = 100
 
 
-async def block_notice_popups(context: Any) -> bool:
-    """컨텍스트의 모든 페이지에 공지 팝업 차단 스크립트를 설치한다(문서 로드 전 실행).
-
-    ``new_context()`` 직후 한 번 호출하면 이후 열리는 모든 페이지·프레임에 적용된다.
-    결제창은 마커가 달라 통과하며, 설치 실패는 삼킨다(감시자 폴백이 남아 있다). 반환 성공 여부.
-    """
+async def _close_if_notice(page: Any, nap: Any) -> str | None:
+    """새로 열린 창의 URL 이 정해지면 **공지창일 때만** 닫는다. 닫았으면 그 URL 을 돌려준다."""
     try:
-        await context.add_init_script(NOTICE_OPEN_BLOCK_JS)
-        return True
-    except Exception:  # noqa: BLE001 — best-effort(폴백은 PopupWatcher).
-        logger.debug("공지 팝업 차단 스크립트 설치 실패(감시자 폴백)", exc_info=True)
-        return False
+        url = await _settled_url(page, nap)
+        if not url or is_approval_window(url) or not is_notice_window(url):
+            return None
+        if page.is_closed():
+            return None
+        await page.close()
+        logger.info("공지 팝업을 무시(즉시 닫음) — %s", url)
+        return url
+    except Exception:  # noqa: BLE001 — 이미 닫힘/유실은 무해.
+        logger.debug("공지 팝업 즉시 닫기 실패(무시)", exc_info=True)
+        return None
+
+
+def install_notice_autoclose(context: Any) -> list[str]:
+    """컨텍스트에 **상시** 공지창 자동닫기를 건다 — 도착 즉시 닫는다(구간 제한 없음).
+
+    ``new_context()`` 직후 한 번 호출한다. 공지 마커를 가진 창만 대상이라 결제창(EAP)·업무 창은
+    영향이 없고, 그래서 PopupWatcher 와 달리 로그인 구간에 가둘 필요가 없다 — 공지는 화면 전환
+    때마다 다시 뜨므로 런 내내 유효해야 한다.
+
+    반환 리스트에 닫힌 URL 이 누적된다(호출부가 로그/보고에 쓴다).
+    """
+    closed: list[str] = []
+
+    def _on_page(page: Any) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # 실행 중 루프 없음(동기 스텁) — 무시.
+            return
+
+        async def _run() -> None:
+            url = await _close_if_notice(page, asyncio.sleep)
+            if url:
+                closed.append(url)
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            logger.debug("공지창 자동닫기 예약 실패(무시)", exc_info=True)
+
+    try:
+        context.on("page", _on_page)
+    except Exception:  # noqa: BLE001 — 스텁 컨텍스트 등(best-effort).
+        logger.debug("공지창 자동닫기 리스너 등록 실패(무시)", exc_info=True)
+    return closed
 
 
 async def _suppress_notice(page: Any) -> bool:

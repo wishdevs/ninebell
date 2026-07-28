@@ -125,38 +125,39 @@ READ_JS = r"""(sel) => {
   const digits = v => String(v == null ? '' : v).replace(/\D/g, '');
   const el = document.querySelector(sel);
   if (!el) return { found: false };
-  const inputs = [...el.querySelectorAll('input')].filter(i => digits(i.value).length >= 6);
+  const inputs = [...el.querySelectorAll('input')];
   const view = inputs.map(i => digits(i.value));
+  const raw = inputs.map(i => i.value);
   let model = null;
   try {
     const ctrl = window.jQuery ? window.jQuery(el).data('dewsControl') : null;
     if (ctrl) {
-      for (const k of ['getValue', 'value', 'getPeriod', 'getDate']) {
+      // 실측 API(프로브 1차): getStartDate/getEndDate(Date) + getStartText/getEndText(표시문자열).
+      const pick = {};
+      for (const k of ['getStartDate', 'getEndDate', 'getStartText', 'getEndText']) {
         if (typeof ctrl[k] === 'function') {
-          try { model = JSON.parse(JSON.stringify(ctrl[k]() ?? null)); break; } catch (e) {}
+          try {
+            const v = ctrl[k]();
+            pick[k] = (v && typeof v.getFullYear === 'function')
+              ? (v.getFullYear() + String(v.getMonth() + 1).padStart(2, '0') + String(v.getDate()).padStart(2, '0'))
+              : String(v == null ? '' : v);
+          } catch (e) { pick[k] = '(호출 실패) ' + String(e); }
         }
       }
-      if (model == null) {
-        const pick = {};
-        ['startDate','endDate','start','end','from','to','_value','value'].forEach(k => {
-          try { const v = ctrl[k]; if (typeof v !== 'function' && v != null)
-            pick[k] = JSON.parse(JSON.stringify(v)); } catch (e) {}
-        });
-        if (Object.keys(pick).length) model = pick;
-      }
+      model = pick;
     }
   } catch (e) { model = '(읽기 실패) ' + String(e); }
-  return { found: true, view, model };
+  return { found: true, view, raw, model };
 }"""
 
 
 # ── 3) 후보 전략들 — 하나씩 적용해보고 모델이 움직이는지 본다 ─────────────────
-# 현재 코드(raw input + input/change 이벤트). (b) 가설이면 view 만 바뀌고 model 은 그대로다.
+# (대조군) 현재 구현 — raw input 에 'yyyyMMdd' 를 쓴다. 표시 형식은 'yyyy-MM-dd' 라 불일치.
 STRAT_RAW_JS = r"""({ sel, start, end }) => {
   const idBase = sel.replace(/^#/, '');
   const si = document.getElementById(idBase + '_startinput');
   const ei = document.getElementById(idBase + '_endinput');
-  if (!si || !ei) return { ok: false, reason: 'guessed-ids-not-found' };
+  if (!si || !ei) return { ok: false, reason: 'ids-not-found' };
   for (const [inp, val] of [[si, start], [ei, end]]) {
     inp.value = val;
     inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -165,14 +166,14 @@ STRAT_RAW_JS = r"""({ sel, start, end }) => {
   return { ok: true };
 }"""
 
-# 하위 input 을 순서로 잡고(id 규약에 의존하지 않음) 키보드 대신 값+change+blur 를 준다.
-STRAT_ORDINAL_JS = r"""({ sel, start, end }) => {
-  const el = document.querySelector(sel);
-  if (!el) return { ok: false, reason: 'no-field' };
-  const inputs = [...el.querySelectorAll('input')];
-  if (inputs.length < 2) return { ok: false, reason: 'inputs<2:' + inputs.length };
-  const [si, ei] = inputs;
-  for (const [inp, val] of [[si, start], [ei, end]]) {
+# raw input 이되 **표시 형식(yyyy-MM-dd)** 으로 — 형식만 맞추면 위젯이 파싱하는지 확인.
+STRAT_RAW_DASHED_JS = r"""({ sel, start, end }) => {
+  const dash = s => s.slice(0,4) + '-' + s.slice(4,6) + '-' + s.slice(6,8);
+  const idBase = sel.replace(/^#/, '');
+  const si = document.getElementById(idBase + '_startinput');
+  const ei = document.getElementById(idBase + '_endinput');
+  if (!si || !ei) return { ok: false, reason: 'ids-not-found' };
+  for (const [inp, val] of [[si, dash(start)], [ei, dash(end)]]) {
     inp.focus();
     inp.value = val;
     inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -182,43 +183,29 @@ STRAT_ORDINAL_JS = r"""({ sel, start, end }) => {
   return { ok: true };
 }"""
 
-# kendo DatePicker 위젯이면 value(Date) + trigger('change') 가 정석 경로.
-STRAT_KENDO_JS = r"""({ sel, start, end }) => {
+# 실측 API — setPeriod(start, end). 인자 형태(문자열 yyyyMMdd / Date)를 순서대로 시도.
+STRAT_SETPERIOD_JS = r"""({ sel, start, end }) => {
   const $ = window.jQuery;
-  if (!$) return { ok: false, reason: 'no-jquery' };
-  const el = document.querySelector(sel);
-  if (!el) return { ok: false, reason: 'no-field' };
+  const ctrl = $ ? $(document.querySelector(sel)).data('dewsControl') : null;
+  if (!ctrl || typeof ctrl.setPeriod !== 'function') return { ok: false, reason: 'no-setPeriod' };
   const toDate = s => new Date(+s.slice(0,4), +s.slice(4,6) - 1, +s.slice(6,8));
-  const inputs = [...el.querySelectorAll('input')];
-  let n = 0;
-  inputs.forEach((i, idx) => {
-    const w = $(i).data('kendoDatePicker') || $(i).data('kendoDateInput');
-    if (w && typeof w.value === 'function') {
-      w.value(toDate(idx === 0 ? start : end));
-      try { w.trigger('change'); } catch (e) {}
-      n++;
-    }
-  });
-  return n ? { ok: true, widgets: n } : { ok: false, reason: 'no-kendo-datepicker' };
+  try { ctrl.setPeriod(start, end); return { ok: true, form: 'string' }; } catch (e) {}
+  try { ctrl.setPeriod(toDate(start), toDate(end)); return { ok: true, form: 'Date' }; } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
 }"""
 
-# dews 컨트롤이 기간 세터를 갖고 있으면 그게 최선 — 이름 후보를 순서대로 시도한다.
-STRAT_CTRL_JS = r"""({ sel, start, end }) => {
+# 실측 API — setStartDate / setEndDate 개별 세터.
+STRAT_SETSTARTEND_JS = r"""({ sel, start, end }) => {
   const $ = window.jQuery;
-  if (!$) return { ok: false, reason: 'no-jquery' };
-  const ctrl = $(document.querySelector(sel)).data('dewsControl');
-  if (!ctrl) return { ok: false, reason: 'no-dewsControl' };
-  const toDate = s => new Date(+s.slice(0,4), +s.slice(4,6) - 1, +s.slice(6,8));
-  const tried = [];
-  for (const name of ['setPeriod', 'setRange', 'setValue', 'setDate', 'value']) {
-    if (typeof ctrl[name] !== 'function') continue;
-    for (const args of [[start, end], [toDate(start), toDate(end)],
-                        [{ start: start, end: end }], [{ from: start, to: end }]]) {
-      try { ctrl[name].apply(ctrl, args); tried.push({ name: name, args: args.length, ok: true }); }
-      catch (e) { tried.push({ name: name, args: args.length, ok: false, err: String(e) }); }
-    }
+  const ctrl = $ ? $(document.querySelector(sel)).data('dewsControl') : null;
+  if (!ctrl || typeof ctrl.setStartDate !== 'function' || typeof ctrl.setEndDate !== 'function') {
+    return { ok: false, reason: 'no-setStartDate/setEndDate' };
   }
-  return tried.length ? { ok: true, tried: tried } : { ok: false, reason: 'no-setter-candidates' };
+  const toDate = s => new Date(+s.slice(0,4), +s.slice(4,6) - 1, +s.slice(6,8));
+  try { ctrl.setStartDate(start); ctrl.setEndDate(end); return { ok: true, form: 'string' }; } catch (e) {}
+  try { ctrl.setStartDate(toDate(start)); ctrl.setEndDate(toDate(end)); return { ok: true, form: 'Date' }; }
+  catch (e) { return { ok: false, reason: String(e) }; }
 }"""
 
 # 원상복구 — 당월로 되돌린다(프로브가 화면 상태를 남기지 않게).
@@ -228,10 +215,10 @@ RESTORE_JS = r"""(sel) => {
 }"""
 
 STRATEGIES = [
-    ("raw_input(현재 구현)", STRAT_RAW_JS),
-    ("ordinal_input+blur", STRAT_ORDINAL_JS),
-    ("kendo_datepicker.value()", STRAT_KENDO_JS),
-    ("dewsControl setter 후보", STRAT_CTRL_JS),
+    ("raw_input yyyyMMdd(현재 구현)", STRAT_RAW_JS),
+    ("raw_input yyyy-MM-dd", STRAT_RAW_DASHED_JS),
+    ("ctrl.setPeriod", STRAT_SETPERIOD_JS),
+    ("ctrl.setStartDate+setEndDate", STRAT_SETSTARTEND_JS),
 ]
 
 
@@ -251,10 +238,13 @@ async def _probe_field(page, sel: str, label: str) -> dict:
             view = after.get("view") or []
             trial["view_matches"] = view[:2] == [TARGET_START, TARGET_END]
             # 모델이 목표 기간을 담고 있는가 — 문자열로 눌러 담아 날짜/문자 표현 차이를 흡수.
-            blob = json.dumps(after.get("model"), ensure_ascii=False, default=str)
-            trial["model_mentions_target"] = (TARGET_START[-4:] in blob) or (
-                f"{TARGET_START[:4]}-{TARGET_START[4:6]}-{TARGET_START[6:]}" in blob
+            model = after.get("model") or {}
+            got = (
+                str(model.get("getStartDate") or ""),
+                str(model.get("getEndDate") or ""),
             )
+            trial["model"] = model
+            trial["model_matches"] = got == (TARGET_START, TARGET_END)
         except Exception as exc:  # noqa: BLE001 — 전략 실패는 기록하고 다음으로.
             trial["error"] = str(exc)
         finally:
@@ -263,6 +253,53 @@ async def _probe_field(page, sel: str, label: str) -> dict:
         trials.append(trial)
     res["trials"] = trials
     return res
+
+
+async def _probe_reset_by_later_fields(page, sel: str) -> dict:
+    """회계일 세팅 후 **나머지 조회조건을 실제 순서대로** 적용하며 매 단계 회계일을 재확인한다.
+
+    set_query 는 회계일을 두 번째로 세팅하고 그 뒤 작성자·전표상태·전자결재상태·전표유형을
+    건드린다. 그중 하나가 change 핸들러/폼 리로드로 회계일을 당월로 되돌리면, 세팅은 성공으로
+    보이는데 조회는 당월로 나간다 — 사용자 증상과 정확히 일치한다. 어느 단계인지 특정한다.
+    """
+    from app.agents.voucher_receivable import steps as vr
+
+    out: dict = {"target": [TARGET_START, TARGET_END], "timeline": []}
+
+    async def snap(label: str) -> None:
+        r = await page.evaluate(READ_JS, sel)
+        model = r.get("model") or {}
+        got = (str(model.get("getStartDate") or ""), str(model.get("getEndDate") or ""))
+        out["timeline"].append({
+            "after": label,
+            "model": list(got),
+            "holds": got == (TARGET_START, TARGET_END),
+        })
+
+    # 회계일을 먼저(현재 구현과 동일 경로) 세팅.
+    await page.evaluate(STRAT_RAW_JS, {"sel": sel, "start": TARGET_START, "end": TARGET_END})
+    await page.wait_for_timeout(400)
+    await snap("회계일 세팅 직후")
+
+    for label, fn in [
+        ("작성자 비움", vr.clear_writer),
+        ("전표상태 미결", vr.set_docu_status),
+        ("전자결재상태 저장", vr.set_gwaprvlst),
+    ]:
+        try:
+            await fn(page)
+        except Exception as exc:  # noqa: BLE001 — 진단이므로 실패해도 계속.
+            out["timeline"].append({"after": label, "error": str(exc)[:200]})
+        await page.wait_for_timeout(400)
+        await snap(label)
+
+    try:
+        await vr.set_docu_types(page, vr.DOCU_TYPES_RECEIVABLE)
+    except Exception as exc:  # noqa: BLE001
+        out["timeline"].append({"after": "전표유형", "error": str(exc)[:200]})
+    await page.wait_for_timeout(600)
+    await snap("전표유형(팝업)")
+    return out
 
 
 async def main() -> int:
@@ -290,6 +327,7 @@ async def main() -> int:
             await vr_steps.expand_condition_panel(page)
             await page.wait_for_timeout(500)
             report["voucher_screen"] = await _probe_field(page, "#s_period", "전표조회승인")
+            report["reset_diag"] = await _probe_reset_by_later_fields(page, "#s_period")
             await page.screenshot(path=str(ARTIFACTS / "voucher_period_probe_01_voucher.png"))
 
             # 결의서조회승인(카드 수집 화면) — 같은 축을 별도 탭에서 확인.
@@ -312,9 +350,16 @@ async def main() -> int:
         print(f"  입력 개수: {len(scr['dump'].get('inputs') or [])} / dewsControl: {scr['dump'].get('has_dewsControl')}")
         for t in scr["trials"]:
             print(
-                f"  - {t['strategy']}: view={t.get('view_matches')} model={t.get('model_mentions_target')}"
+                f"  - {t['strategy']:28s}: view={t.get('view_matches')} model={t.get('model_matches')}"
                 + (f" err={t['error']}" if t.get("error") else "")
             )
+    diag = report.get("reset_diag")
+    if diag:
+        print("\n[되돌림 진단] 회계일 세팅 후 나머지 조회조건을 순서대로 적용")
+        for t in diag["timeline"]:
+            mark = "유지" if t.get("holds") else "★되돌려짐"
+            print(f"  after {t['after']:20s} model={t.get('model')} {mark}"
+                  + (f" err={t['error']}" if t.get("error") else ""))
     return 0
 
 
