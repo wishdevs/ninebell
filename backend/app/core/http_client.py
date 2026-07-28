@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from app.core.redact import body_preview
+from app.core.redact import body_preview, safe_url
 
 logger = logging.getLogger("app.http.out")
 
@@ -50,7 +50,7 @@ async def _on_response(response: httpx.Response) -> None:
         _level_for(response.status_code),
         "%s %s → %d (%.0fms) body=%s",
         request.method,
-        request.url,
+        safe_url(request.url),  # ?key=... 류 쿼리 비밀값 마스킹.
         response.status_code,
         elapsed,
         body_preview(raw),

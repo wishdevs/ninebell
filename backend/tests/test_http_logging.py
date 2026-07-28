@@ -20,7 +20,7 @@ from starlette.routing import Route
 from app.agents.common import prompt_capture
 from app.core.http_client import new_async_client
 from app.core.logging_setup import configure_logging
-from app.core.redact import MASK, body_preview, redact_value
+from app.core.redact import MASK, body_preview, redact_value, safe_url
 from app.core.request_log import HttpRequestLogMiddleware
 
 
@@ -54,6 +54,21 @@ def test_body_preview_truncates_long_body():
 
     assert len(preview) < 200
     assert "자)" in preview  # …(+N자) 꼬리
+
+
+def test_safe_url_masks_query_secrets():
+    """헤더 인증이 기본이지만 base_url 은 env 로 바뀐다 — 쿼리 비밀값은 방어적으로 가린다."""
+    out = safe_url("https://api.example/v1/models/x:generate?key=AIzaSECRET&alt=sse")
+
+    assert "AIzaSECRET" not in out
+    assert MASK in out
+    assert "alt=sse" in out  # 무해한 파라미터는 보존.
+
+
+def test_safe_url_without_query_is_unchanged():
+    url = "http://172.20.50.2:30001/v1/chat/completions"
+
+    assert safe_url(url) == url
 
 
 def test_body_preview_empty_body():
@@ -205,6 +220,23 @@ def test_llm_wire_logs_full_request_and_response(caplog):
     assert "request" in req and "지시문" in req and "카드내역" in req
     assert "response" in res and "candidates" in res
     assert f"seq={seq}" in req and f"seq={seq}" in res
+
+
+def test_llm_wire_masks_credentials_in_url_and_body(caplog):
+    """전문 보존이 목적이라도 자격증명은 가린다 — 정상 바디 필드와는 겹치지 않는다."""
+    caplog.set_level(logging.INFO, logger="app.llm.wire")
+
+    prompt_capture.capture_request(
+        "gemini",
+        "https://api.example/v1/models/x:generate?key=AIzaSECRET",
+        {"system_instruction": "지시문", "max_tokens": 4096, "api_key": "sk-LEAK"},
+    )
+
+    line = [r for r in caplog.records if r.name == "app.llm.wire"][-1].getMessage()
+    assert "AIzaSECRET" not in line
+    assert "sk-LEAK" not in line
+    assert "지시문" in line  # 프롬프트는 보존.
+    assert "4096" in line  # max_tokens 는 'token' 과 정확일치가 아니라 살아남는다.
 
 
 def test_llm_wire_elides_gemini_screenshot(caplog):

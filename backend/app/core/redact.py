@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 # 값을 통째로 가릴 키(소문자 비교). 부분일치가 아니라 정확일치 — 'passwordHint' 같은 무해한
 # 필드까지 가려 디버깅을 방해하지 않으려는 의도.
@@ -37,6 +38,10 @@ SENSITIVE_KEYS = frozenset(
     }
 )
 
+# URL 쿼리스트링 전용 추가 키. 'key'(Google API 의 ?key=)·서명값은 쿼리에서는 거의 항상
+# 비밀이지만 JSON 본문에서는 평범한 필드명이라, 본문 마스킹에는 쓰지 않고 URL 에만 적용한다.
+SENSITIVE_QUERY_KEYS = SENSITIVE_KEYS | {"key", "auth", "sig", "signature", "sas"}
+
 MASK = "***"
 # 본문 미리보기 상한(자). 카탈로그 업로드 같은 대용량이 로그를 채우지 않게 한다.
 MAX_BODY_CHARS = 4_096
@@ -52,6 +57,25 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, list):
         return [redact_value(v) for v in value]
     return value
+
+
+def safe_url(url: Any) -> str:
+    """URL 쿼리스트링의 비밀값을 마스킹한 문자열.
+
+    현재 프로바이더는 인증을 헤더로 보내지만(gemini x-goog-api-key, etribe Authorization),
+    base_url 은 env 로 바뀔 수 있고 Google API 는 `?key=` 방식도 지원한다. 로깅 유틸은 모든
+    아웃바운드 호출이 지나는 길목이라 방어적으로 가린다.
+    """
+    text = str(url or "")
+    base, sep, query = text.partition("?")
+    if not sep or not query:
+        return text
+    masked = [
+        (k, MASK if k.lower() in SENSITIVE_QUERY_KEYS else v)
+        for k, v in parse_qsl(query, keep_blank_values=True)
+    ]
+    # safe="*" — 마스크가 %2A%2A%2A 로 인코딩돼 읽기 어려워지는 것을 막는다.
+    return f"{base}?{urlencode(masked, safe='*')}" if masked else text
 
 
 def _truncate(text: str, max_chars: int) -> str:

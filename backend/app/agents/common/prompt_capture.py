@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.core.redact import redact_value, safe_url
 
 logger = logging.getLogger(__name__)
 # 와이어 전문 전용 로거 — 운영에서 레벨/라우팅을 따로 조절할 수 있게 이름을 분리한다.
@@ -83,8 +84,13 @@ def _wire(kind: str, seq: int, provider: str, url: str, payload: Any) -> None:
     response 는 같은 seq 로 짝지어지므로 동시 호출이 섞여도 매칭된다.
     """
     try:
-        body = json.dumps(_elide_images(payload), ensure_ascii=False)
-        wire_logger.info("%s seq=%d provider=%s url=%s %s", kind, seq, provider, url, body)
+        # 프롬프트/응답 텍스트는 전문 보존이 목적이라 절단하지 않는다. 다만 URL 쿼리의 비밀값과
+        # 바디에 섞여 들어올 수 있는 자격증명 키(api_key·authorization 등)는 가린다 — 두 프로바이더의
+        # 정상 바디 필드(system_instruction·contents·messages·tools·max_tokens)와는 겹치지 않는다.
+        body = json.dumps(redact_value(_elide_images(payload)), ensure_ascii=False)
+        wire_logger.info(
+            "%s seq=%d provider=%s url=%s %s", kind, seq, provider, safe_url(url), body
+        )
     except Exception:  # noqa: BLE001 — 로깅 실패가 LLM 호출을 막아선 안 된다.
         logger.debug("LLM 와이어 로깅 실패(무시)", exc_info=True)
 
