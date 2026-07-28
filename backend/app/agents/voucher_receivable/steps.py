@@ -19,6 +19,7 @@ from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
+from app.agents.common.voucher_period import is_current_month_range
 
 from . import js
 
@@ -268,6 +269,31 @@ async def set_period_this_month(page: Any) -> dict:
     )
     values = chk.actual.get("values") if isinstance(chk.actual, dict) else None
     return _verdict(chk, display=values)
+
+
+async def set_period(page: Any, start: str | None = None, end: str | None = None) -> dict:
+    """회계일 = 지정 기간(YYYYMMDD) — 실행 전 폼이 고른 조회기간을 반영한다.
+
+    기간 미지정이거나 **정확히 당월 1일~말일**이면 프로브로 검증된 setMonth() 경로를 그대로 쓴다
+    (기본값 실행이 새 경로로 새지 않게). 그 외(월 부분 기간·과거월 등)만 시작/종료 input 직접
+    세팅 후 **readback 으로 반영을 확인**한다 — 회계일이 틀리면 결재 대상 자체가 어긋나므로
+    불일치는 하드 실패, 위젯 구조를 못 읽는 경우만 warn 으로 통과시킨다.
+    """
+    if not start or not end or is_current_month_range(start, end):
+        return await set_period_this_month(page)
+
+    ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})
+    if not ok:
+        return {"ok": False, "reason": "회계일 기간 입력 실패(시작/종료 input 미발견)."}
+    values = await page.evaluate(js.PERIOD_VALUE_JS)
+    if not isinstance(values, dict):
+        return {"ok": True, "warn": "반영 확인 불가(회계일 입력 구조를 읽지 못함).", "display": None}
+    if values.get("start") != start or values.get("end") != end:
+        return {
+            "ok": False,
+            "reason": f"회계일 기간 반영 불일치 — 기대 {start}~{end}, 실제 {values}.",
+        }
+    return {"ok": True, "display": f"{start}~{end}"}
 
 
 async def clear_writer(page: Any) -> dict:

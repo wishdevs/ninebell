@@ -73,8 +73,8 @@ def _patch_collect_ok(monkeypatch, *, mapping=None, tab_back=True, calls=None):
         calls.append("writer")
         return True
 
-    async def _period(page, ym):
-        calls.append(("period", ym))
+    async def _period(page, start, end):
+        calls.append(("period", start, end))
         return True
 
     async def _gubun(page):
@@ -121,24 +121,31 @@ async def test_collect_success_builds_payment_map(monkeypatch):
     calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1", "RN2": "GW2"})
     node = make_collect_payments_node()
     out = await node(
-        {"events": _q(), "page": _StubPage(), "master_rowcount": 4, "accounting_ym": None}
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 4, "period_from": None}
     )
     assert out["payment_map"] == {"RN1": "GW1", "RN2": "GW2"}
     assert out["payment_map_count"] == 2
     assert_keys_declared(VoucherCardState, out)
     # 순서: 탭 열기 → 부서 → 결의자 → 회계일 → 결의구분 → 조회 → 읽기 → 탭복귀.
     assert calls == [
-        "open_tab", "dept", "writer", ("period", None), "gubun", "run", "read", "back",
+        "open_tab", "dept", "writer", ("period", None, None), "gubun", "run", "read", "back",
     ]
 
 
-async def test_collect_passes_accounting_ym_to_period(monkeypatch):
+async def test_collect_passes_period_range_to_period(monkeypatch):
+    """실행 전 폼이 고른 기간이 결의서조회승인 회계일로 그대로 전달된다(월 부분 기간 포함)."""
     calls = _patch_collect_ok(monkeypatch)
     node = make_collect_payments_node()
     await node(
-        {"events": _q(), "page": _StubPage(), "master_rowcount": 1, "accounting_ym": "202607"}
+        {
+            "events": _q(),
+            "page": _StubPage(),
+            "master_rowcount": 1,
+            "period_from": "20260701",
+            "period_to": "20260705",
+        }
     )
-    assert ("period", "202607") in calls
+    assert ("period", "20260701", "20260705") in calls
 
 
 async def test_collect_tab_back_failure_errors(monkeypatch):
@@ -647,14 +654,20 @@ async def test_collect_warns_but_proceeds_on_auxiliary_condition_failures(monkey
     async def _false(page):
         return False
 
-    async def _false_period(page, ym):
+    async def _false_period(page, start, end):
         return False
 
     monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _false)
     monkeypatch.setattr(cp_mod.steps, "set_collect_period", _false_period)
     q = _q()
     out = await make_collect_payments_node()(
-        {"events": q, "page": _StubPage(), "master_rowcount": 3, "accounting_ym": "202607"}
+        {
+            "events": q,
+            "page": _StubPage(),
+            "master_rowcount": 3,
+            "period_from": "20260701",
+            "period_to": "20260705",
+        }
     )
     assert out["payment_map"] == {"RN1": "GW1"} and "error" not in out
     logs = _logs(_drain(q))

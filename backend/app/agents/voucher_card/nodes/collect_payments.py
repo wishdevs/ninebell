@@ -66,8 +66,8 @@ def make_collect_payments_node():
             }
         if not await steps.clear_collect_writer(page):
             await emit_log(events, "결의자 비움 미확인(로그인 계정으로 좁혀질 수 있음).", "warn")
-        if not await steps.set_collect_period(page, state.get("accounting_ym")):
-            await emit_log(events, "회계일 override 미확인(폼 기본값=당월으로 진행).", "warn")
+        if not await steps.set_collect_period(page, state.get("period_from"), state.get("period_to")):
+            await emit_log(events, "회계일 기간 미확인(화면 기본값=당월으로 진행).", "warn")
         if not await steps.set_collect_gubun_card(page):
             await emit_step(events, "collect_payments", "failed")
             return {

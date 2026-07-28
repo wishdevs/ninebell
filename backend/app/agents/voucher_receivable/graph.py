@@ -50,6 +50,8 @@ class VoucherReceivableState(BaseAgentState, total=False):
     """
 
     max_rows: int | None  # validate_params 산출 — 처리 최대 행 수(None=전체)
+    period_from: str | None  # validate_params 산출 — 회계일 조회 시작일 YYYYMMDD(None=당월)
+    period_to: str | None  # validate_params 산출 — 회계일 조회 종료일 YYYYMMDD(None=당월)
     master_rowcount: int  # run_query 산출 — 조회 결과 마스터 그리드 행 수
     processed: int  # loop_approvals — 가상 상신 처리 건수
     processed_docu_nos: list[str]  # 가상 상신한 전표번호(DOCU_NO) 목록
