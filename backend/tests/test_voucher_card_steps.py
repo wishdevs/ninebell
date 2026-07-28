@@ -1,7 +1,7 @@
 """voucher-card 스텝 프리미티브 — 프로브 이식 로직의 순수 단위 검증(브라우저 없이).
 
 - read_payment_map: ABDOCU_NO·GWDOCU_NO 둘 다 있는 행만 맵에 담는다 / 그리드 미로딩 우아한 실패.
-- set_collect_period: None=미조작(당월 폼 기본) / YYYYMM=그 월 1일~말일 range 세팅.
+- set_collect_period: None·당월=미조작(폼 기본) / 그 외 기간(월 일부 포함)=range 세팅.
 - run_collect_query: 가시 조회버튼 좌표 클릭.
 - Phase C: fill_refdoc_docno(키보드 클리어+타이핑·readback 재시도) / move_refdoc_down(폴백 좌표)
   / click_refdoc_confirm / select_refdoc_row / close_refdoc_dialog.
@@ -64,22 +64,33 @@ async def test_read_payment_map_grid_not_ready_graceful():
 # ── set_collect_period ────────────────────────────────────────────────────────
 async def test_set_collect_period_none_is_noop_true():
     page = _FakePage({})  # SET_PERIOD_RANGE_JS 를 호출하지 않아야 한다.
-    ok = await csteps.set_collect_period(page, None)
+    ok = await csteps.set_collect_period(page, None, None)
     assert ok is True
     assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args  # 미조작(폼 기본값 당월).
 
 
-async def test_set_collect_period_override_sets_month_range():
+async def test_set_collect_period_current_month_is_noop_true():
+    """기본값(이번 달 전체)은 프로브 확정 경로 유지 — 화면 기본값을 건드리지 않는다."""
+    from app.agents.common.voucher_period import current_month_range
+
+    start, end = current_month_range()
+    page = _FakePage({})
+    assert await csteps.set_collect_period(page, start, end) is True
+    assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args
+
+
+async def test_set_collect_period_range_sets_inputs():
     page = _FakePage({cjs.SET_PERIOD_RANGE_JS: True})
-    ok = await csteps.set_collect_period(page, "202602")  # 2026-02(윤년 아님 → 28일)
+    ok = await csteps.set_collect_period(page, "20260201", "20260228")
     assert ok is True
     assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": "20260201", "end": "20260228"}
 
 
-async def test_set_collect_period_override_leap_february():
+async def test_set_collect_period_partial_month_range():
+    """월 일부 기간(7/1~7/5)도 그대로 전달된다 — 월 단위로 반올림하지 않는다."""
     page = _FakePage({cjs.SET_PERIOD_RANGE_JS: True})
-    await csteps.set_collect_period(page, "202402")  # 2024-02(윤년 → 29일)
-    assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": "20240201", "end": "20240229"}
+    await csteps.set_collect_period(page, "20260701", "20260705")
+    assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": "20260701", "end": "20260705"}
 
 
 # ── run_collect_query ─────────────────────────────────────────────────────────

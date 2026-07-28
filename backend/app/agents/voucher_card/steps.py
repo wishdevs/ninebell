@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import calendar
 import logging
 from typing import Any
 
@@ -21,6 +20,7 @@ from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.modals import dismiss_blocking_modals, dismiss_notice_popup
 
+from app.agents.common.voucher_period import is_current_month_range
 from app.agents.voucher_receivable import js as vr_js
 from app.agents.voucher_receivable import steps as vr_steps
 
@@ -80,19 +80,18 @@ async def clear_collect_writer(page: Any) -> bool:
     return bool(ok)
 
 
-async def set_collect_period(page: Any, accounting_ym: str | None = None) -> bool:
-    """회계일 세팅 — accounting_ym(YYYYMM) override 시 그 월의 1일~말일로, None 이면 미조작
-    (폼 기본값=당월, 프로브 확정 경로). best-effort(실패해도 폼 기본값으로 진행). 반환 bool.
+async def set_collect_period(page: Any, start: str | None = None, end: str | None = None) -> bool:
+    """결의서조회승인 회계일 세팅 — 실행 전 폼이 고른 기간(YYYYMMDD)을 반영한다.
+
+    기간 미지정이거나 **당월 1일~말일**이면 미조작(화면 기본값=당월, 프로브 확정 경로).
+    그 외(월 부분 기간·과거월)만 시작/종료 input 을 세팅한다. best-effort(실패해도 화면
+    기본값으로 진행) — 반환 bool 은 호출부가 warn 로그에만 쓴다.
 
     ⚠ 프로브 확정 조회는 이 필드를 건드리지 않았다(폼 기본 당월으로 카드 결과 정상 수집).
-      override 경로(특정월)는 미검증이므로 실패해도 조용히 폼 기본값에 맡긴다.
+      기간 지정 경로는 미검증이므로 실패해도 조용히 화면 기본값에 맡긴다.
     """
-    if not accounting_ym:
-        return True  # 폼 기본값(당월) 유지 — 프로브 확정 경로.
-    y, m = int(accounting_ym[:4]), int(accounting_ym[4:6])
-    last = calendar.monthrange(y, m)[1]
-    start = f"{y:04d}{m:02d}01"
-    end = f"{y:04d}{m:02d}{last:02d}"
+    if not start or not end or is_current_month_range(start, end):
+        return True  # 화면 기본값(당월) 유지 — 프로브 확정 경로.
     ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})
     await page.wait_for_timeout(300)
     return bool(ok)

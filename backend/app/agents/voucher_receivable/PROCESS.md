@@ -45,8 +45,11 @@
 - **D2 조회 조건(고정)** — ✅ 2026-07-20 프로브. 8필드 셀렉터·세팅방식:
   - 회계단위: codepicker `#s_pc_cd`. 기본값 **"(주)나인벨"** 이미 선택 → **변경 불필요**. ✅
   - 작성부서 **전체**: multicodepicker `#s_wdept_cd` 돋보기→팝업 RealGrid `checkAll()`→적용(46건). ✅
-  - 회계일 **당월**: periodpicker `#s_period`, 앱 API **`dewsControl.setMonth()`**(이번달 1일~말일 자동).
-    ⚠ `YYYYMMDD` 타이핑 아님(GLDDOC00300 규칙과 다름). ✅
+  - 회계일 **실행 전 폼 지정 기간**(기본 = 당월 1일~말일): periodpicker `#s_period`.
+    - 기간 미지정·**당월 전체**: 앱 API **`dewsControl.setMonth()`**(이번달 1일~말일 자동).
+      ⚠ `YYYYMMDD` 타이핑 아님(GLDDOC00300 규칙과 다름). ✅ 프로브 확정 경로.
+    - 그 외(월 일부 기간 예 7/1~7/5·과거월): `#s_period_startinput`/`_endinput` 직접 세팅 후
+      **readback 확인**(불일치는 하드 실패). ❓ 실화면 미검증 — 카드 `#PERIOD_DT_C` 규약을 따름.
   - 작성자 **비움**: multicodepicker `#s_wrt_emp_no`, 앱 API **`dewsControl.clear()`**로 기본선택 제거. ✅
   - 역분개여부 **전체**: native kendo `select#s_revjrnz_yn` 기본값(value="") = 전체 → **변경 불필요**. ✅
   - 전표상태 **미결**: native kendo `select#s_docu_st_cd`, 기존 `KENDO_SET_DROPDOWN_BY_TEXT_JS`

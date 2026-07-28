@@ -3,7 +3,7 @@
 공유 백본(voucher_receivable.build_voucher_graph: 전표조회승인 조회+결재)을 그대로 재사용하고
 카드 고유 확장 3가지를 훅으로 얹는다:
   - 전표유형=일반(SYSDEF_CD=11)로 공유 set_query 재사용(대상=결의구분=카드·ABDOCU_NO 있는 행).
-  - validate: 회계일 override 파싱(공유 max_rows + accounting_ym).
+  - validate: 회계일 기간 파싱(공유 max_rows + period_from~period_to).
   - pre_loop_node = collect_payments: 결의서조회승인 다중탭 → 결의구분=카드 일괄 조회 →
     ABDOCU_NO→GWDOCU_NO 맵 수집(state.payment_map).
   - on_popup = reference_doc: 결제창 안 참조문서 선택(문서번호=이 행 GWDOCU_NO). 확인·상신
@@ -33,7 +33,6 @@ class VoucherCardState(VoucherReceivableState, total=False):
     ⚠ 노드 반환 키는 전부 여기(또는 상속)에 선언돼야 다음 노드로 전달된다(LangGraph silent drop).
     """
 
-    accounting_ym: str | None  # validate 산출 — 회계일 override(None=당월)
     payment_map: dict[str, str]  # collect_payments — ABDOCU_NO→GWDOCU_NO(결재번호) 맵
     payment_map_count: int  # 수집 매핑 건수(진단)
 

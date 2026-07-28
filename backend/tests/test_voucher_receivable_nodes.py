@@ -47,14 +47,43 @@ def _logs(frames: list[dict]) -> list[str]:
 async def test_validate_default_all_declares_keys():
     node = make_validate_params_node()
     out = await node({"events": _q(), "params": {}})
-    assert out == {"max_rows": None}  # 전체(사용자 결정 2026-07-21)
+    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월).
+    assert out == {"max_rows": None, "period_from": None, "period_to": None}
     assert_keys_declared(VoucherReceivableState, out)
 
 
 async def test_validate_explicit_max_rows():
     node = make_validate_params_node()
     out = await node({"events": _q(), "params": {"max_rows": 4}})
-    assert out == {"max_rows": 4}  # 게이트 없음 — 명시값 그대로
+    assert out["max_rows"] == 4  # 게이트 없음 — 명시값 그대로
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_period_range_passthrough():
+    """실행 전 폼의 기간(월 부분 기간 포함)이 YYYYMMDD 로 정규화돼 state 로 넘어간다."""
+    node = make_validate_params_node()
+    out = await node(
+        {"events": _q(), "params": {"voucher": {"period_from": "2026-07-01", "period_to": "2026-07-05"}}}
+    )
+    assert out["period_from"] == "20260701"
+    assert out["period_to"] == "20260705"
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_half_period_errors():
+    """시작일만 주면 거부 — 반쪽 기간으로 의도와 다른 범위를 결재하는 사고 방지."""
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {"voucher": {"period_from": "2026-07-01"}}})
+    assert "함께 지정" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_reversed_period_errors():
+    node = make_validate_params_node()
+    out = await node(
+        {"events": _q(), "params": {"voucher": {"period_from": "2026-07-31", "period_to": "2026-07-01"}}}
+    )
+    assert "늦을 수 없" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
 
 

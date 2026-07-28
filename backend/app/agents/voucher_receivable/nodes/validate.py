@@ -12,7 +12,7 @@ from ..params import parse_voucher_params
 
 
 def make_validate_params_node():
-    """실행 전 폼 params 검증 → max_rows(None=전체, 브라우저 불필요)."""
+    """실행 전 폼 params 검증 → {max_rows(None=전체), 회계일 기간(None=당월)}. 브라우저 불필요."""
 
     async def validate_params(state: dict) -> dict:
         if state.get("error"):
@@ -26,8 +26,16 @@ def make_validate_params_node():
             return {"error": str(exc)}
 
         scope = "전체(조회된 전 건)" if p.max_rows is None else f"최대 {p.max_rows}건"
-        await emit_log(events, f"실행 파라미터 확인 — {scope} 순회(실제 상신 없음).", "ok")
+        await emit_log(
+            events,
+            f"실행 파라미터 확인 — 회계일 {p.period_label} · {scope} 순회(실제 상신 없음).",
+            "ok",
+        )
         await emit_step(events, "validate_params", "done")
-        return {"max_rows": p.max_rows}
+        return {
+            "max_rows": p.max_rows,
+            "period_from": p.period_from,
+            "period_to": p.period_to,
+        }
 
     return validate_params

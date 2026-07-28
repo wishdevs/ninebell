@@ -49,7 +49,8 @@ def make_collect_payments_node():
         if not await steps.set_collect_dept_all(page):
             await emit_log(events, "결의부서 전체선택 실패(폼 기본값으로 진행).", "warn")
         await steps.clear_collect_writer(page)
-        await steps.set_collect_period(page, state.get("accounting_ym"))
+        if not await steps.set_collect_period(page, state.get("period_from"), state.get("period_to")):
+            await emit_log(events, "결의서조회승인 회계일 기간 설정 실패(폼 기본값으로 진행).", "warn")
         if not await steps.set_collect_gubun_card(page):
             await emit_log(events, "결의구분=카드 설정 실패(폼 기본값으로 진행).", "warn")
 

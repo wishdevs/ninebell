@@ -575,7 +575,7 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
         {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
         {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
         {"key": "menu_nav", "label": "전표조회승인 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "총계정원장 > 전표관리 > 전표조회승인(GLDDOC00700) 진입"},
-        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 당월·전표상태 미결·전자결재상태 저장·전표유형 국내/해외매출"},
+        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 국내/해외매출"},
         {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고"},
         {"key": "loop_approvals", "label": "결재창 순회(가상 상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "대상 전표를 건별로 결제창까지 열어 '가상 상신' 로그만 남기고 닫음(상신·보관 미클릭, 실제 상신 없음)"},
     ],
@@ -592,7 +592,7 @@ _VOUCHER_PAYABLE_FIXTURE: dict = {
     "name": "외상매입금",
     "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 건별로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
     "steps": [
-        {**s, "detail": "작성부서 전체·회계일 당월·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
+        {**s, "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
         if s["key"] == "set_query"
         else s
         for s in _VOUCHER_RECEIVABLE_FIXTURE["steps"]
@@ -661,11 +661,11 @@ _VOUCHER_CARD_FIXTURE: dict = {
     "last_run_at": None,
     "flow_graph": VOUCHER_CARD_FLOW,
     "steps": [
-        {"key": "validate_params", "label": "실행 파라미터 확인", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "처리 건수(기본 전체)·회계일(기본 당월)을 확인"},
+        {"key": "validate_params", "label": "실행 파라미터 확인", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "처리 건수(기본 전체)·회계일 조회기간(기본 당월 1일~말일)을 확인"},
         {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
         {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
         {"key": "menu_nav", "label": "전표조회승인 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "총계정원장 > 전표관리 > 전표조회승인(GLDDOC00700) 진입"},
-        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 당월·전표상태 미결·전자결재상태 저장·전표유형 일반"},
+        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 일반"},
         {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고(대상=결의구분 카드·결의서번호 있는 행)"},
         {"key": "collect_payments", "label": "결재번호 수집", "skill": "grid-read", "status": "pending", "phase": "수집", "detail": "결의서조회승인(다중탭)에서 결의구분=카드 일괄 조회 → ABDOCU_NO→GWDOCU_NO(결재번호) 맵 수집 → 전표조회승인 탭 복귀"},
         {"key": "loop_approvals", "label": "결재창 순회(참조문서·가상 상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "대상 전표를 건별로 결제창까지 열어 참조문서(문서번호=결재번호)를 선택(선택+아래버튼)하고 '가상 상신' 로그만 남기고 닫음(참조문서 확인·상신 미클릭, 실제 상신 없음)"},
