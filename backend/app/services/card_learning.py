@@ -14,11 +14,11 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.http_client import new_async_client
 from app.db import get_sessionmaker
 from app.models import (
     CardAiNote,
@@ -420,7 +420,7 @@ async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | 
     user = f"예산계정: {acct_name.strip()}\n가맹점: {merchant.strip()}\n적요:"
     try:
         # 사고 ON 은 지연이 늘 수 있어 타임아웃 15→30s(실패 시 결정적 폴백은 기존 계약 그대로).
-        async with httpx.AsyncClient(timeout=30.0) as http:
+        async with new_async_client(timeout=30.0) as http:
             raw = await generate_text(
                 http,
                 system=_AI_NOTE_SYSTEM,
