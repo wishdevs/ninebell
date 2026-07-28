@@ -19,7 +19,6 @@ from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
-from app.agents.common.voucher_period import is_current_month_range
 
 from . import js
 
@@ -274,12 +273,16 @@ async def set_period_this_month(page: Any) -> dict:
 async def set_period(page: Any, start: str | None = None, end: str | None = None) -> dict:
     """회계일 = 지정 기간(YYYYMMDD) — 실행 전 폼이 고른 조회기간을 반영한다.
 
-    기간 미지정이거나 **정확히 당월 1일~말일**이면 프로브로 검증된 setMonth() 경로를 그대로 쓴다
-    (기본값 실행이 새 경로로 새지 않게). 그 외(월 부분 기간·과거월 등)만 시작/종료 input 직접
-    세팅 후 **readback 으로 반영을 확인**한다 — 회계일이 틀리면 결재 대상 자체가 어긋나므로
-    불일치는 하드 실패, 위젯 구조를 못 읽는 경우만 warn 으로 통과시킨다.
+    기간이 주어지면 **당월이든 아니든 항상 그 기간을 세팅**한다. 미지정일 때만 setMonth()
+    (폼 없이 실행하던 구 경로). 회계일이 틀리면 결재 대상 자체가 어긋나므로 세팅 후 readback
+    으로 반영을 확인한다 — 불일치는 하드 실패, 위젯 구조를 못 읽는 경우만 warn 으로 통과.
+
+    ⚠ 종전에는 '당월 1일~말일이면 setMonth() 로 단락'했는데 그게 결함이었다(2026-07-28 실측):
+      화면 기본값은 **1일~오늘**이지 1일~말일이 아니고, 결의서조회승인 쪽은 단락 시 아예
+      건드리지 않아 두 화면이 서로 다른 기간으로 조회됐다. 임의 기간 세팅이 두 화면 모두
+      확실히 반영됨을 프로브로 확인했으므로(e2e/voucher_period_probe.py) 단락을 제거한다.
     """
-    if not start or not end or is_current_month_range(start, end):
+    if not start or not end:
         return await set_period_this_month(page)
 
     ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})

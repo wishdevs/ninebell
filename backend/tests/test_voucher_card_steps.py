@@ -142,14 +142,21 @@ async def test_set_collect_period_none_is_noop_true():
     assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args  # 미조작(폼 기본값 당월).
 
 
-async def test_set_collect_period_current_month_is_noop_true():
-    """기본값(이번 달 전체)은 프로브 확정 경로 유지 — 화면 기본값을 건드리지 않는다."""
+async def test_set_collect_period_current_month_is_still_applied():
+    """⚠ 회귀 금지 — 당월이어도 **반드시 세팅**한다.
+
+    이 화면 기본값은 1일~오늘이라, '당월이면 미조작'으로 단락하면 폼에서 이번 달 전체를 골라도
+    말일까지 조회되지 않고 전표조회승인(1일~말일)과 기간이 어긋난다(2026-07-28 사용자 지적).
+    """
     from app.agents.common.voucher_period import current_month_range
 
     start, end = current_month_range()
-    page = _FakePage({})
+    page = _FakePage({
+        cjs.SET_PERIOD_RANGE_JS: True,
+        js_lib.PERIOD_VALUE_JS: {"found": True, "values": [start, end], "now": start[:6]},
+    })
     assert await csteps.set_collect_period(page, start, end) is True
-    assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args
+    assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": start, "end": end}
 
 
 async def test_set_collect_period_range_sets_inputs():

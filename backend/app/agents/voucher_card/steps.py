@@ -21,7 +21,6 @@ from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.omnisol.modals import dismiss_blocking_modals, dismiss_notice_popup
 
-from app.agents.common.voucher_period import is_current_month_range
 from app.agents.voucher_receivable import js as vr_js
 from app.agents.voucher_receivable import steps as vr_steps
 
@@ -161,15 +160,16 @@ async def clear_collect_writer(page: Any) -> bool:
 async def set_collect_period(page: Any, start: str | None = None, end: str | None = None) -> bool:
     """결의서조회승인 회계일 세팅 — 실행 전 폼이 고른 기간(YYYYMMDD)을 반영한다.
 
-    기간 미지정이거나 **당월 1일~말일**이면 미조작(화면 기본값=당월, 프로브 확정 경로).
-    그 외(월 부분 기간·과거월)만 시작/종료 input 을 세팅한다. best-effort(실패해도 화면
-    기본값으로 진행) — 반환 bool 은 호출부가 warn 로그에만 쓴다.
+    기간이 주어지면 **당월이든 아니든 항상 세팅**한다. 미지정일 때만 미조작(화면 기본값).
+    best-effort(실패해도 화면 기본값으로 진행) — 반환 bool 은 호출부가 warn 로그에만 쓴다.
 
-    ⚠ 프로브 확정 조회는 이 필드를 건드리지 않았다(폼 기본 당월으로 카드 결과 정상 수집).
-      기간 지정 경로는 미검증이므로 실패해도 조용히 화면 기본값에 맡긴다.
+    ⚠ 종전에는 '당월이면 미조작'으로 단락했는데 그게 결함이었다(2026-07-28 실측·사용자 지적):
+      이 화면 기본값은 **1일~오늘**(예 07-01~07-28)이라 폼에서 이번 달 전체(1일~말일)를 골라도
+      말일까지가 조회되지 않았고, 전표조회승인(setMonth 로 1일~말일)과 **기간이 어긋났다**.
+      미지급금 법인카드는 두 화면을 함께 쓰므로 같은 기간이어야 한다.
     """
-    if not start or not end or is_current_month_range(start, end):
-        return True  # 화면 기본값(당월) 유지 — 프로브 확정 경로.
+    if not start or not end:
+        return True  # 기간 미지정 — 화면 기본값 유지(폼 없이 실행하던 구 경로).
     ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})
     if not ok:
         return False
