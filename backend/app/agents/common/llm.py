@@ -59,8 +59,12 @@ async def chat_decide(
     """
     s = settings if settings is not None else get_settings()
     if _is_etribe(s):
+        # 텍스트 전용 ETRIBE 서버(etribe_multimodal=False — 예: GLM-5.2)는 이미지 첨부가
+        # 400 이라 디스패처에서 차단한다. 기본 True(속성 미보유 더미 settings 포함) — 현행
+        # ETRIBE-VLM(멀티모달 실측 OK)은 스크린샷을 그대로 통과시킨다.
+        shot = shot_b64 if getattr(s, "etribe_multimodal", True) else None
         return await etribe_chat_decide(
-            http, s.etribe_model, s.etribe_base_url, system, history, context, shot_b64, tools
+            http, s.etribe_model, s.etribe_base_url, system, history, context, shot, tools
         )
     return await gemini_chat_decide(
         http,

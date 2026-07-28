@@ -37,35 +37,49 @@ def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
             await emit_log(events, msg, "error")
             return {"error": msg}
 
+        async def warn_if_unverified(field: str, r: dict) -> None:
+            """스텝이 '확인 불가'(리더로 값을 못 읽음)로 통과했으면 그 사실을 로그에 남긴다 —
+            반영 실패는 하드 실패로 걸리지만, 확인 불가는 조용히 지나가면 안 된다."""
+            if r.get("warn"):
+                await emit_log(events, f"조회조건 '{field}' {r['warn']}", "warn")
+
         # 공지 팝업은 공유 로그인 플로우(ensure_logged_in)가 로그인 직후 닫고, 각 피커 클릭 직전
         # (_open_picker)에도 just-in-time 재확인한다 — 여기선 별도 처리 불필요.
         # 전표유형이 optional-area 라 패널을 먼저 펼친다(없으면 no-op).
         await steps.expand_condition_panel(page)
 
+        # 각 필드는 스텝 안에서 **세팅 → 반영 확인**까지 끝낸 뒤 ok 를 돌려준다
+        # (확인 커널: 즉시 1회 + 점증 대기 3회 재시도). 여기서는 결과만 분기한다.
         r = await steps.set_dept_all(page)
         if not r.get("ok"):
             return await fail("작성부서", r.get("reason"))
-        await emit_log(events, f"작성부서 = 전체({r.get('n')}건).", "info")
+        await warn_if_unverified("작성부서", r)
+        await emit_log(events, f"작성부서 = 전체({r.get('n')}건) — 반영 확인 ✅ {r.get('display')}", "info")
 
         r = await steps.set_period_this_month(page)
         if not r.get("ok"):
             return await fail("회계일", r.get("reason"))
+        await warn_if_unverified("회계일", r)
 
         r = await steps.clear_writer(page)
         if not r.get("ok"):
             return await fail("작성자", r.get("reason"))
+        await warn_if_unverified("작성자", r)
 
         r = await steps.set_docu_status(page)
         if not r.get("ok"):
             return await fail("전표상태", r.get("reason"))
+        await warn_if_unverified("전표상태", r)
 
         r = await steps.set_gwaprvlst(page)
         if not r.get("ok"):
             return await fail("전자결재상태", r.get("reason"))
+        await warn_if_unverified("전자결재상태", r)
 
         r = await steps.set_docu_types(page, docu_types)
         if not r.get("ok"):
             return await fail("전표유형", r.get("reason"))
+        await warn_if_unverified("전표유형", r)
 
         await emit_log(
             events,

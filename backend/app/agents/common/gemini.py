@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from app.agents.common.prompt_capture import capture_request, capture_response
+
 logger = logging.getLogger("app.agents.common.gemini")
 
 # 재시도 대상 상태코드(일시 오류). 404 는 '빈 바디'일 때만 일시로 보고 재시도한다
@@ -67,6 +69,7 @@ async def gemini_chat_decide(
     }
     url = f"{base}/models/{model}:generateContent"
     headers = {"x-goog-api-key": key, "content-type": "application/json"}
+    cap_seq = capture_request("gemini", url, body)  # 전체 프롬프트 캡처(env 게이트, best-effort)
 
     last_exc: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -92,7 +95,9 @@ async def gemini_chat_decide(
                 continue
             raise
         # 성공 — functionCall 파싱.
-        cand = (r.json().get("candidates") or [{}])[0]
+        data = r.json()
+        capture_response("gemini", url, cap_seq, data)  # LLM 응답 캡처(요청과 seq 로 짝).
+        cand = (data.get("candidates") or [{}])[0]
         for p in (cand.get("content") or {}).get("parts") or []:
             fc = p.get("functionCall")
             if fc:
@@ -135,6 +140,7 @@ async def gemini_generate_text(
     }
     url = f"{base}/models/{model}:generateContent"
     headers = {"x-goog-api-key": key, "content-type": "application/json"}
+    cap_seq = capture_request("gemini", url, body)  # 전체 프롬프트 캡처(env 게이트, best-effort)
 
     last_exc: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -160,7 +166,9 @@ async def gemini_generate_text(
                 await asyncio.sleep(_backoff_s(attempt))
                 continue
             raise
-        cand = (r.json().get("candidates") or [{}])[0]
+        data = r.json()
+        capture_response("gemini", url, cap_seq, data)  # LLM 응답 캡처(요청과 seq 로 짝).
+        cand = (data.get("candidates") or [{}])[0]
         text = "".join(
             p.get("text") or ""
             for p in (cand.get("content") or {}).get("parts") or []

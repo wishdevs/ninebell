@@ -16,6 +16,7 @@ from app.core.deps import DbSession, get_current_user, get_db, get_role_by_code
 from app.main import app as fastapi_app
 from app.models import Base, User
 from app.services.seed import seed_all
+from nbkit.omnisol import verify
 
 
 @pytest_asyncio.fixture
@@ -135,3 +136,18 @@ def auth_as(sm):
         fastapi_app.dependency_overrides[get_current_user] = _dep
 
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _no_realtime_verify_backoff(monkeypatch):
+    """확인 커널(nbkit.omnisol.verify)의 재시도 대기를 단위 테스트에서 무효화한다.
+
+    커널의 기본 대기는 **실시간**(delay_scale 무관)이라, 실패 경로를 태우는 테스트가
+    회차당 수 초씩 잡아먹는다. 대기 규율 자체는 sleep= 을 직접 주입하는 커널 전용
+    테스트(test_verify_kernel.py)에서 검증하므로, 여기서는 no-op 으로 갈아끼운다.
+    """
+
+    async def _instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(verify, "DEFAULT_SLEEP", _instant)

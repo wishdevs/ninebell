@@ -15,7 +15,7 @@ import logging
 from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
-from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
@@ -37,6 +37,14 @@ DOCU_TYPES_PAYABLE = ("내수구매",)
 DOCU_TYPE_TARGETS = DOCU_TYPES_RECEIVABLE  # set_docu_types 기본값(하위호환)
 DOCU_ST_SELECT = "#s_docu_st_cd"  # native kendo dropdownlist
 DOCU_ST_TARGET = "미결"
+WRITER_LABEL = "작성자"
+PERIOD_FIELD = "#s_period"  # 회계일 periodpicker 컨테이너(반영 확인 리더용)
+
+# 작성부서 팝업 그리드 데이터(부서 목록) 로드 폴링 — 그리드 컨트롤 부착(_grid) 후에도 46건
+# 데이터 fetch 가 늦으면 checkAll 이 0건을 체크한다(2026-07-24 '전체선택 안 됨' 실측).
+_DEPT_LOAD_TRIES = 8
+_DEPT_LOAD_INTERVAL_MS = 500
+_DEPT_APPLY_SETTLE_MS = 300  # checkAll 체크 반영 대기(적용 전).
 
 # 결제창 렌더 완료 폴링 상한(SSO 리다이렉트+SPA 마운트 1~12s 편차 — 고정대기 금지, 조건폴링).
 CHILD_READY_CAP_MS = 25_000
@@ -44,6 +52,34 @@ CHILD_READY_INTERVAL_MS = 1_000
 # 결과 조회 rowcount 안정 폴링(그리드 로딩 대기).
 QUERY_POLL_TRIES = 30
 QUERY_POLL_INTERVAL_MS = 400
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 확인(verify) 규율 — 값을 세팅한 스텝은 **반영을 확인**하고서야 ok 를 돌려준다.
+#   불일치(확인은 됐는데 값이 다름) = 하드 실패(잘못된 조건으로 결재 대상 오인 차단).
+#   확인 불가(필드/위젯을 못 읽음) = 경고 후 진행(리더 오탐이 플로우를 끊지 않게 — D7 규율과 동일).
+# 재시도는 nbkit.omnisol.verify 커널이 담당(즉시 1회 + 점증 대기 3회, 실시간 대기).
+# ══════════════════════════════════════════════════════════════════════════════
+def _verdict(res: verify.Confirmed, **ok_extra: Any) -> dict:
+    """확인 결과를 스텝 반환 dict 로 — 불일치는 실패, 확인 불가는 warn 을 얹은 성공."""
+    if res:
+        return {"ok": True, **ok_extra}
+    if res.unknown:
+        return {"ok": True, "warn": res.reason, **ok_extra}
+    return {"ok": False, "reason": res.reason}
+
+
+def _unreadable_display(v: Any) -> bool:
+    """FIELD_DISPLAY_JS 가 null = 라벨/피커를 못 찾음(값이 틀린 게 아니라 확인 불가)."""
+    return v is None
+
+
+def _period_is_current_month(v: Any) -> bool:
+    """PERIOD_VALUE_JS 결과가 **브라우저 기준 당월** 범위인지(시작·종료 모두)."""
+    if not (isinstance(v, dict) and v.get("found")):
+        return False
+    yms = v.get("ym") or []
+    return bool(yms) and all(y == v.get("now") for y in yms)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -105,6 +141,14 @@ async def _open_picker(
     ``dismiss_notice_popup`` 을 대기 없이(appear_cap_ms=0) 한 번 더 확인해 방어한다.
     """
     await dismiss_notice_popup(page, appear_cap_ms=0)
+    # ⚠ 스테일 팝업 오독 방지(2026-07-24 실측): 앞 피커 팝업이 안 닫힌 채면 돋보기 클릭이 그
+    #   팝업 뒤라 먹혀 새 팝업이 안 뜨는데도, 최상단(=잔여 팝업) 그리드가 ready 라 "열림"으로
+    #   오판했다. 클릭 전 개수를 기록하고, 개수가 실제로 늘고(=새 팝업) 그 그리드가 붙어야만
+    #   성공으로 본다. 상한 내 미충족이면 False(호출부가 명확 실패 처리 → 잘못된 팝업 조작 차단).
+    try:
+        before = await page.evaluate(js.POPUP_COUNT_JS)
+    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+        before = 0
     rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
     if not rect:
         return False
@@ -113,76 +157,160 @@ async def _open_picker(
     waited = 0
     while waited < ready_cap_ms:
         try:
+            opened = await page.evaluate(js.POPUP_COUNT_JS) > before
             ready = await page.evaluate(js.POPUP_GRID_READY_JS)
         except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
             return True
-        if ready:
-            break
+        if opened and ready:
+            return True
         await page.wait_for_timeout(ready_interval_ms)
         waited += ready_interval_ms
-    return True
+    # 타임아웃: 새 팝업이 떴으면(개수 증가) 그리드 부착만 느린 것 — 기존 하드닝(2026-07-21)대로
+    # 진행을 허용한다(호출부 JS 가 grid-not-ready 를 우아하게 반환하는 최종 방어선이 있다).
+    # 새 팝업이 안 떴으면(스테일 잔여 팝업/열기 실패) False 로 명확히 실패시킨다.
+    try:
+        return await page.evaluate(js.POPUP_COUNT_JS) > before
+    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+        return True
 
 
-async def _apply_popup(page: Any) -> bool:
-    """최상단 팝업의 '적용' 버튼을 실클릭(팝업은 적용 후 자동 닫힘)."""
+async def _apply_popup(
+    page: Any, *, close_cap_ms: int = 8_000, interval_ms: int = 300, reclick_after_ms: int = 1_500
+) -> bool:
+    """최상단 팝업의 '적용' 버튼을 실클릭하고 **팝업이 실제로 닫힐 때까지 검증**한다.
+
+    ⚠ 근본원인(2026-07-24 실측, 외상매출금 라이브): 고정 1200ms 대기만 하고 닫힘을 검증하지
+      않으면, 느린 세션에서 부서 팝업(46개 checkAll)이 남은 채 다음 스텝(회계일·작성자·전표상태
+      = 앱 API 직접 호출이라 팝업 무관)을 통과하고, 전자결재상태 피커가 그 잔여 부서 팝업을 읽어
+      '저장'을 못 찾는다({ok:True, idxs:[], n:46}). 열려있던 팝업 개수가 줄어드는지 폴링해
+      닫힘을 확정한다. checkAll 로 레이아웃이 밀려 첫 클릭이 빗나갔을 수 있어, 절반쯤 지나도 안
+      닫혔으면 '적용'을 **팝업이 아직 열려있을 때만** 한 번 더(좌표 재취득) 클릭한다.
+    """
+    try:
+        before = await page.evaluate(js.POPUP_COUNT_JS)
+    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+        before = None
     apply_rect = await page.evaluate(js.POPUP_APPLY_BTN_JS)
     if not apply_rect:
         return False
     await mouse_click(page, apply_rect["x"], apply_rect["y"])
-    await page.wait_for_timeout(1_200)
-    return True
+    if before is None:  # 개수 조회 불가(스텁) — 기존 고정대기 동작 유지(best-effort).
+        await page.wait_for_timeout(1_200)
+        return True
+    reclicked = False
+    waited = 0
+    while waited < close_cap_ms:
+        await page.wait_for_timeout(interval_ms)
+        waited += interval_ms
+        if await page.evaluate(js.POPUP_COUNT_JS) < before:
+            return True  # 팝업 개수 감소 = 실제 닫힘 확정.
+        # 안 닫혔으면 첫 클릭이 빗나간 것일 수 있다(checkAll 로 레이아웃 이동). 팝업이 아직
+        # 열린 지금 '적용' 좌표를 새로 읽어(최신 위치) 한 번 더 클릭한다(닫힌 뒤 오클릭 방지 1회만).
+        # 재시도는 그리드가 재로딩돼 체크가 지워지기 전에 빠르게 — reclick_after_ms(기본 1.5s).
+        if not reclicked and waited >= reclick_after_ms:
+            reclicked = True
+            r = await page.evaluate(js.POPUP_APPLY_BTN_JS)
+            if r:
+                await mouse_click(page, r["x"], r["y"])
+    return False
 
 
 async def set_dept_all(page: Any) -> dict:
-    """작성부서 = 전체선택 — 돋보기 → 팝업 checkAll() → 적용. 반환 {ok, n?, display?}."""
+    """작성부서 = 전체선택 — 돋보기 → 목록 로드 대기 → checkAll → 적용 → 표시값 검증.
+
+    ⚠ '전체선택 안 됨' 방지(2026-07-24 실측):
+      (1) 팝업 그리드 컨트롤이 붙어도(_grid) 부서 목록(46건) fetch 가 늦으면 checkAll 이 0건을
+          체크한다 → checkAll 이 n>0 을 낼 때까지 폴링(빈 그리드 커밋 방지).
+      (2) checkAll 직후 곧장 적용하면 체크 반영 전 커밋될 수 있어 짧게 settle 후 적용.
+      (3) 적용 후 표시값이 비면 전체선택 미반영 — 잘못된 부서 필터로 조회하면 결재 대상이
+          어긋나므로 **명확히 실패**시킨다(조용히 잘못된 조회로 진행하지 않는다).
+    반환 {ok, n?, display?}.
+    """
     if not await _open_picker(page, DEPT_LABEL):
-        return {"ok": False, "reason": "작성부서 돋보기 버튼을 찾지 못했습니다."}
-    res = await page.evaluate(js.POPUP_CHECK_ALL_JS)
+        return {"ok": False, "reason": "작성부서 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
+    # (1) 부서 목록 로드 대기 — checkAll 이 실제로 행을 체크(n>0)할 때까지 폴링.
+    res: Any = None
+    for _ in range(_DEPT_LOAD_TRIES):
+        res = await page.evaluate(js.POPUP_CHECK_ALL_JS)
+        if isinstance(res, dict) and res.get("ok") and (res.get("n") or 0) > 0:
+            break
+        await page.wait_for_timeout(_DEPT_LOAD_INTERVAL_MS)
     if not (isinstance(res, dict) and res.get("ok")):
-        return {"ok": False, "reason": "작성부서 팝업 전체선택(checkAll) 실패."}
+        return {"ok": False, "reason": f"작성부서 팝업 전체선택(checkAll) 실패: {res}"}
+    if (res.get("n") or 0) <= 0:
+        return {"ok": False, "reason": "작성부서 목록이 로드되지 않아 전체선택이 0건입니다(그리드 데이터 대기 실패)."}
+    # (2) checkAll 반영 settle 후 적용.
+    await page.wait_for_timeout(_DEPT_APPLY_SETTLE_MS)
     if not await _apply_popup(page):
-        return {"ok": False, "reason": "작성부서 팝업 '적용' 버튼을 찾지 못했습니다."}
-    display = await page.evaluate(js.FIELD_DISPLAY_JS, DEPT_LABEL)
-    return {"ok": True, "n": res.get("n"), "display": display}
+        return {"ok": False, "reason": "작성부서 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
+    # (3) 전체선택 반영 검증 — 표시값이 비면 실패(잘못된 부서 필터 조회 차단).
+    #     확인 커널로 위임: 적용 직후 즉시 1회 확인하고, 반영이 늦으면 점증 대기로 3회 재확인한다.
+    chk = await verify.confirm_display(page, DEPT_LABEL, unknown_when=_unreadable_display)
+    return _verdict(chk, n=res.get("n"), display=chk.actual)
 
 
 async def set_period_this_month(page: Any) -> dict:
-    """회계일 = 당월(1일~말일) — dews periodpicker 앱 API setMonth(). ⚠ YYYYMMDD 타이핑 아님."""
+    """회계일 = 당월(1일~말일) — dews periodpicker 앱 API setMonth() 후 **반영 확인**.
+
+    ⚠ YYYYMMDD 타이핑 아님. setMonth() 는 예외 없이 반환해도 위젯이 값을 안 붙이는 경우가
+    있어(폼 리로드 레이스), 시작·종료 입력값의 연월이 **브라우저 기준 당월**인지 재확인한다.
+    """
     ok = await page.evaluate(js.SET_PERIOD_THIS_MONTH_JS)
     if not ok:
         return {"ok": False, "reason": "회계일 periodpicker setMonth() 호출 실패."}
-    return {"ok": True}
+    chk = await verify.confirm(
+        lambda: page.evaluate(js_lib.PERIOD_VALUE_JS, PERIOD_FIELD),
+        _period_is_current_month,
+        timing=verify.INSTANT,
+        what="회계일(당월)",
+        expected="당월 1일~말일",
+        unknown_when=lambda v: not (isinstance(v, dict) and v.get("found")),
+    )
+    values = chk.actual.get("values") if isinstance(chk.actual, dict) else None
+    return _verdict(chk, display=values)
 
 
 async def clear_writer(page: Any) -> dict:
-    """작성자 = 비움 — dews multicodepicker 앱 API clear()(기본선택 제거)."""
+    """작성자 = 비움 — dews multicodepicker clear() 후 **표시값이 실제로 비었는지 확인**."""
     ok = await page.evaluate(js.CLEAR_WRITER_JS)
     if not ok:
         return {"ok": False, "reason": "작성자 multicodepicker clear() 호출 실패."}
-    return {"ok": True}
+    chk = await verify.confirm_display_empty(page, WRITER_LABEL, timing=verify.INSTANT)
+    return _verdict(chk)
 
 
 async def set_docu_status(page: Any, text: str = DOCU_ST_TARGET) -> dict:
-    """전표상태 = 미결 — native kendo dropdownlist(KENDO_SET_DROPDOWN_BY_TEXT_JS 재사용)."""
-    r = await page.evaluate(
-        js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS, {"selector": DOCU_ST_SELECT, "text": text}
-    )
+    """전표상태 = 미결 — kendo dropdownlist 세팅 후 **현재 선택 텍스트 재확인**.
+
+    ⚠ 세팅 JS 의 {ok:true} 는 "옵션을 찾아 값을 넣었다"까지다 — change 핸들러/폼 리로드가 값을
+    되돌리는 경우가 있어 실제 선택값을 확인한다. 되돌려지는 성격이라 재시도 때 **재세팅**한다.
+    """
+    payload = {"selector": DOCU_ST_SELECT, "text": text}
+    r = await page.evaluate(js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS, payload)
     if not (isinstance(r, dict) and r.get("ok")):
         return {"ok": False, "reason": f"전표상태 '{text}' 설정 실패: {r}"}
-    await page.wait_for_timeout(500)
-    return {"ok": True}
+    chk = await verify.confirm_select(
+        page,
+        DOCU_ST_SELECT,
+        text,
+        reapply=lambda: page.evaluate(js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS, payload),
+        unknown_when=lambda v: not (isinstance(v, dict) and v.get("ok")),
+    )
+    return _verdict(chk)
 
 
 async def set_gwaprvlst(page: Any, target: str = GWAPRVLST_TARGET) -> dict:
     """전자결재상태 = 저장 — MultiCodePicker 팝업 RealGrid checkRow(SYSDEF_NM==target) → 적용."""
     if not await _open_picker(page, GWAPRVLST_LABEL):
-        return {"ok": False, "reason": "전자결재상태 돋보기 버튼을 찾지 못했습니다."}
+        return {"ok": False, "reason": "전자결재상태 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
     res = await page.evaluate(js.POPUP_CHECK_ROWS_JS, [[target], "SYSDEF_NM"])
     if not (isinstance(res, dict) and res.get("ok") and res.get("idxs")):
         return {"ok": False, "reason": f"전자결재상태 '{target}' 행을 팝업에서 찾지 못했습니다: {res}"}
     if not await _apply_popup(page):
-        return {"ok": False, "reason": "전자결재상태 팝업 '적용' 버튼을 찾지 못했습니다."}
-    return {"ok": True, "checked": res.get("idxs")}
+        return {"ok": False, "reason": "전자결재상태 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
+    # 팝업 안 checkRow 성공은 '팝업 내부 상태'일 뿐 — 적용이 **폼에 붙었는지**까지 확인한다.
+    chk = await verify.confirm_display(page, GWAPRVLST_LABEL, unknown_when=_unreadable_display)
+    return _verdict(chk, checked=res.get("idxs"), display=chk.actual)
 
 
 async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS) -> dict:
@@ -200,7 +328,7 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
     if not await ensure_field_visible(page, DOCU_TYPE_LABEL):
         return {"ok": False, "reason": "전표유형 필드가 어떤 확장 토글로도 보이지 않았습니다."}
     if not await _open_picker(page, DOCU_TYPE_LABEL):
-        return {"ok": False, "reason": "전표유형 돋보기 버튼을 찾지 못했습니다(패널 확장 확인)."}
+        return {"ok": False, "reason": "전표유형 팝업을 열지 못했습니다(돋보기 미발견/팝업 미표시 — 패널 확장 확인)."}
     # ⚠ 실측(2026-07-21 읽기전용 진단, e2e/voucher_receivable_docu_type_diag.py): 이 팝업의
     # 실제 RealGrid 필드는 전자결재상태 팝업과 동일한 범용 코드테이블 스키마
     # SYSDEF_CD/SYSDEF_NM 이다 — 'DOCU_NM'/'DOCU_CD' 필드는 이 팝업엔 없다(2026-07-20 프로브
@@ -210,8 +338,11 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
     if not (isinstance(res, dict) and res.get("ok") and checked and len(checked) == len(targets)):
         return {"ok": False, "reason": f"전표유형 {list(targets)} 전부를 팝업에서 찾지 못했습니다: {res}"}
     if not await _apply_popup(page):
-        return {"ok": False, "reason": "전표유형 팝업 '적용' 버튼을 찾지 못했습니다."}
-    return {"ok": True, "checked": checked}
+        return {"ok": False, "reason": "전표유형 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
+    # 폼 반영 확인 — 표시 형식(이름/코드/건수)이 세션마다 달라 정확일치는 요구하지 않고
+    # '비어있지 않음'을 근거로 삼는다(어느 대상을 체크했는지는 위 checkRow 가 이미 확정).
+    chk = await verify.confirm_display(page, DOCU_TYPE_LABEL, unknown_when=_unreadable_display)
+    return _verdict(chk, checked=checked, display=chk.actual)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -252,6 +383,45 @@ async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
         return await page.evaluate(js.READ_ROW_ABDOCU_NO_JS, idx)
     except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
         return None
+
+
+async def read_detail_count(page: Any, idx: int, docu_no: str | None = None) -> dict:
+    """마스터 idx 행의 **하위(계정정보) 그리드 건수**를 읽는다. 반환 {ok, count, verified, reason?}.
+
+    행을 setCurrent 하면 디테일이 서버에서 재조회된다(실측 2026-07-27, 138행 전수 프로브:
+    행별 갱신 확인 · 평균 372ms/행 · 전수 52초). 읽기 전용이며 체크 상태를 건드리지 않는다
+    (결재 대상 선택은 배치 실행 단계에서 따로 한다).
+
+    ⚠ 스테일 판정(핵심): 디테일이 아직 **이전 행의 것**이어도 건수만 보면 구분되지 않는다
+      (실측 분포상 대부분 전표가 3라인). 디테일 행이 자신의 ``DOCU_NO`` 를 갖고 있으므로,
+      그 값이 대상 전표번호와 같아질 때까지 확인하고서야 건수를 채택한다(확인 커널, ASYNC).
+      대상 전표번호를 모르면(docu_no=None) 소유 확인을 못 하므로 ``verified=False`` 로 돌려
+      호출부가 그 행을 **단독 그룹**으로 빼게 한다(모르면 안전한 쪽).
+    """
+    await page.evaluate(js_lib.SET_CURRENT_BY_INDEX_JS, {"index": 0, "itemIndex": idx})
+
+    async def read() -> Any:
+        return await page.evaluate(js.DETAIL_COUNT_JS)
+
+    def owned(v: Any) -> bool:
+        if not (isinstance(v, dict) and v.get("ok")):
+            return False
+        return bool(docu_no) and str(v.get("docu_no") or "").strip() == str(docu_no).strip()
+
+    chk = await verify.confirm(
+        read,
+        owned,
+        timing=verify.ASYNC,
+        what=f"{idx + 1}행 하위 건수(전표 {docu_no})",
+        expected=docu_no,
+        settle=lambda: wait_loading_overlay_gone(page),
+        unknown_when=lambda v: not (isinstance(v, dict) and v.get("ok")) or not docu_no,
+    )
+    n = chk.actual.get("n") if isinstance(chk.actual, dict) else None
+    if chk:
+        return {"ok": True, "count": int(n or 0), "verified": True}
+    # 소유 확인 실패 — 건수를 그 행의 것으로 단정하지 않는다(-1 = 미상 → 단독 처리).
+    return {"ok": True, "count": -1, "verified": False, "reason": chk.reason}
 
 
 async def uncheck_all_rows(page: Any) -> bool:

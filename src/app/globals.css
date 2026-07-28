@@ -365,20 +365,7 @@ samp {
   color: transparent;
   animation: ai-gradient 2.2s linear infinite;
 }
-@keyframes ai-sparkle {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.82) rotate(12deg);
-  }
-}
-.animate-ai-sparkle {
-  animation: ai-sparkle 1.5s ease-in-out infinite;
-}
+/* (ai-sparkle 키프레임은 ThinkingOrb 도입 2026-07-23 으로 제거 — RiSparkling2Fill 대체) */
 
 /* ==========================================================================
    Aurora — barely-visible drift used as auth hero ambience.

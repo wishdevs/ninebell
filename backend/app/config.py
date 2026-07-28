@@ -54,11 +54,24 @@ class Settings(BaseSettings):
     # LLM 프로바이더 선택 — 'gemini'(기본: GitHub/AWS 배포) | 'etribe'(온프렘 GitLab 배포, 사내
     # Etribe-LLM OpenAI 호환 서버 — 회계 데이터·ERP 스크린샷이 사외로 나가지 않는다). env LLM_PROVIDER.
     llm_provider: str = "gemini"
-    etribe_base_url: str = "http://192.168.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
-    etribe_model: str = "Etribe-LLM"  # env ETRIBE_MODEL
+    # 2026-07-23 사용자 최종 지정: GLM-5.2 서버 172.20.50.2:30001, 모델 id "ETRIBE-LLM"
+    # (/v1/models 실측, 대문자 주의), max_model_len 262144. base 에 /v1 을 붙이지 않는다
+    # (클라이언트가 /v1/chat/completions 를 붙임). 실측: 채팅·네이티브 툴콜(tool_choice=
+    # required)·thinking 기본 ON(reasoning 채널) OK. **텍스트 전용**("not a multimodal
+    # model" 400) → etribe_multimodal=False 로 디스패처가 스크린샷 첨부를 차단한다.
+    # 대안 서버: 192.168.50.2:8030 ETRIBE-VLM(멀티모달 OK·네이티브 툴콜 불가 — JSON 폴백
+    # 필요, 컨텍스트 32K) — 전환 시 ETRIBE_BASE_URL/MODEL/MULTIMODAL=true 만 바꾸면 된다.
+    etribe_base_url: str = "http://172.20.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
+    etribe_model: str = "ETRIBE-LLM"  # env ETRIBE_MODEL
+    etribe_multimodal: bool = False  # env ETRIBE_MULTIMODAL — GLM-5.2 텍스트 전용(이미지 400)
     # 로컬 전용 LLM 프로바이더 런타임 전환 게이트(/dev/llm-provider 활성 여부). 서버 배포에선
     # 미설정=off → 라우터가 404 를 반환해 기능 자체가 없는 것처럼 동작한다. env LLM_PROVIDER_TOGGLE.
     llm_provider_toggle: bool = False
+    # LLM 전체 프롬프트 캡처(디버깅 전용, 기본 OFF). 켜면 프로바이더가 실제 전송하는 와이어
+    # 요청 바디 전체(system·user·context·tools)를 JSONL 로 append 한다 — 민감정보 포함이라
+    # 수집 후 파일을 정리하고 커밋하지 않는다. env LLM_PROMPT_CAPTURE / LLM_PROMPT_CAPTURE_PATH.
+    llm_prompt_capture: bool = False
+    llm_prompt_capture_path: str = "prompt-capture.jsonl"
 
     @field_validator("llm_provider")
     @classmethod

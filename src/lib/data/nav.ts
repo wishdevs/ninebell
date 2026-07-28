@@ -22,7 +22,8 @@ export type NavIconKey =
   | 'logging'
   | 'org'
   | 'budget'
-  | 'learning';
+  | 'learning'
+  | 'changelog';
 
 export interface NavItem {
   href: string;
@@ -55,6 +56,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
       // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+      // 릴리스 단위 변경 기록. 읽기는 전 사용자(백엔드가 미공개 draft 를 걸러냄),
+      // 추가/수정/삭제는 관리자 — 게이트 없이 노출하고 화면 안에서 편집 UI 만 가린다.
+      { href: '/changelog', label: '변경사항', icon: 'changelog' },
     ],
   },
   // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
@@ -79,6 +83,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' },
       // 개입 학습(가맹점→선택)·전사 기초자료 열람 — dev·운영 모두 노출(전 로그인 사용자).
       { href: '/dev/card-learning', label: '개입 학습(디버그)', icon: 'learning' },
+      // 가맹점 분류 사전(키워드→업종/계정) 조회·관리 — 조회는 전원, 추가/수정/삭제는 관리자.
+      { href: '/dev/merchant-dict', label: '가맹점 사전', icon: 'learning' },
       // 공용 스킬 카탈로그 + 사용 에이전트 역인덱스 — 개발 환경에서만 노출.
       { href: '/skills', label: '스킬', icon: 'works', devOnly: true },
     ],

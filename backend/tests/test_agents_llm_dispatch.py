@@ -4,6 +4,9 @@
 - 분기: settings.llm_provider 로 gemini_*/etribe_* 선택(미보유/기타 값이면 gemini 기본)
 - etribe_chat_decide: tool_calls arguments(JSON 문자열)→dict 파싱 + 요청 바디(무사고 모드·
   tool_choice=required·이미지 data URI) 검증
+- JSON 폴백: 400 "--tool-call-parser" → response_format json_object 재요청(도구 목록 system
+  포함·tools 미포함), content 방어 파싱(펜스/잡텍스트/깨진 JSON), base 별 캐시 직행
+- 멀티모달 게이트: settings.etribe_multimodal=False 면 디스패처가 shot 을 None 으로 차단
 - etribe_generate_text: message.content 만 반환(reasoning_content 무시)
 - 재시도: gemini 와 동일 시맨틱(5xx 후 성공) — backoff 는 gemini 상수 monkeypatch 로 0
 """
@@ -62,6 +65,12 @@ def _tool_resp(name: str, arguments: Any) -> dict:
             }
         ]
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_json_fallback_cache(monkeypatch):
+    """폴백 base 캐시는 모듈 레벨(프로세스 수명) — 테스트 간 오염 방지로 매번 비운다."""
+    monkeypatch.setattr(ET, "_JSON_FALLBACK_BASES", set())
 
 
 def _settings(provider: str | None) -> SimpleNamespace:
@@ -179,6 +188,47 @@ async def test_dispatch_generate_text_selects_provider(monkeypatch):
     assert seen["etribe"] == {"model": "Etribe-LLM", "max": 128}
 
 
+async def test_dispatch_multimodal_gate_blocks_shot_when_disabled(monkeypatch):
+    # 텍스트 전용 ETRIBE 서버(etribe_multimodal=False) — 이미지 400 방지를 위해 shot 차단.
+    seen: dict[str, Any] = {}
+
+    async def fake_e(http, model, base, system, history, context, shot, tools):
+        seen["shot"] = shot
+        return None, {}
+
+    monkeypatch.setattr(LLM, "etribe_chat_decide", fake_e)
+    s = _settings("etribe")
+    s.etribe_multimodal = False
+    await LLM.chat_decide(
+        object(), system="s", history="h", context={}, shot_b64="QUJD", tools=[], settings=s
+    )
+    assert seen["shot"] is None
+
+
+async def test_dispatch_multimodal_gate_passes_shot_when_enabled(monkeypatch):
+    seen: dict[str, Any] = {}
+
+    async def fake_e(http, model, base, system, history, context, shot, tools):
+        seen["shot"] = shot
+        return None, {}
+
+    monkeypatch.setattr(LLM, "etribe_chat_decide", fake_e)
+    s = _settings("etribe")
+    s.etribe_multimodal = True
+    await LLM.chat_decide(
+        object(), system="s", history="h", context={}, shot_b64="QUJD", tools=[], settings=s
+    )
+    assert seen["shot"] == "QUJD"
+
+    # 속성 미보유 더미 settings(기존 테스트 관례) → 기본 True 취급으로 통과.
+    del seen["shot"]
+    await LLM.chat_decide(
+        object(), system="s", history="h", context={}, shot_b64="QUJD", tools=[],
+        settings=_settings("etribe"),
+    )
+    assert seen["shot"] == "QUJD"
+
+
 def test_llm_ready_and_model_name():
     assert LLM.llm_ready(_settings("etribe")) is True  # etribe 는 무인증 — 키 불필요.
     assert LLM.llm_ready(_settings("gemini")) is True
@@ -203,8 +253,10 @@ async def test_etribe_chat_decide_parses_tool_call_and_builds_body():
     assert http.urls == ["http://etribe.test/v1/chat/completions"]
     body = http.bodies[0]
     assert body["model"] == "Etribe-LLM"
-    assert body["chat_template_kwargs"] == {"thinking_mode": "disabled"}  # 무사고 모드.
-    assert body["tool_choice"] == "required"  # gemini ANY 동치(강제 툴콜).
+    # thinking 서버 기본 ON 유지(2026-07-23 사용자 지시) — 무사고 플래그를 보내지 않는다.
+    assert "chat_template_kwargs" not in body
+    assert body["tool_choice"] == "auto"  # GLM padding 회피(required→4096토큰 패딩, 2026-07-23).
+    assert body["parallel_tool_calls"] is False  # 중복 tool_call emit 방지.
     assert body["tools"][0]["function"]["name"] == "submit"
     assert body["messages"][0] == {"role": "system", "content": "sys"}
     # 스크린샷 → content 배열 + jpeg data URI.
@@ -244,6 +296,92 @@ async def test_etribe_chat_decide_bad_arguments_json_returns_empty_args():
     assert args == {}  # 파싱 실패 → 빈 args(호출부 계약 유지: dict 보장).
 
 
+# ── JSON 모드 폴백(네이티브 툴콜 미지원 서버) ─────────────────────────────────
+_PARSER_400 = (
+    '{"object":"error","message":"\\"auto\\" tool choice requires --tool-call-parser '
+    'to be set","type":"BadRequestError","code":400}'
+)
+
+
+def _json_resp(content: str) -> dict:
+    return {"choices": [{"message": {"content": content, "reasoning": "사고(무시)"}}]}
+
+
+async def test_etribe_fallback_triggers_on_parser_400_and_rebuilds_request():
+    http = FakeHttp(
+        [
+            _resp(400, text=_PARSER_400),
+            _resp(200, _json_resp('{"tool": "submit", "args": {"a": 1}}')),
+        ]
+    )
+    decls = [{"name": "submit", "description": "제출 도구", "parameters": {"type": "object"}}]
+    name, args = await ET.etribe_chat_decide(
+        http, "Etribe-VLM", "http://etribe.test", "sys", "hist", {}, None, decls
+    )
+    assert (name, args) == ("submit", {"a": 1})
+    assert http.calls == 2  # 1차 네이티브 400 → 2차 JSON 폴백.
+
+    first, second = http.bodies
+    assert first["tool_choice"] == "auto"  # 1차 네이티브 경로(GLM padding 회피).
+    # 2차: tools/tool_choice 없이 response_format json_object + system 에 도구 목록.
+    assert "tools" not in second and "tool_choice" not in second
+    assert second["response_format"] == {"type": "json_object"}
+    sys_msg = second["messages"][0]["content"]
+    assert sys_msg.startswith("sys")  # 원 system 유지 + 도구 목록/지시 덧붙임.
+    assert '"submit"' in sys_msg and "제출 도구" in sys_msg
+    assert '{"tool": "<도구명>", "args": {...}}' in sys_msg
+    assert second["messages"][1]["content"] == first["messages"][1]["content"]  # user 동일.
+
+
+async def test_etribe_fallback_cache_skips_native_roundtrip():
+    # 1회차에서 폴백 발동 → 캐시 기록.
+    http1 = FakeHttp(
+        [_resp(400, text=_PARSER_400), _resp(200, _json_resp('{"tool": "ask", "args": {}}'))]
+    )
+    await ET.etribe_chat_decide(http1, "m", "http://etribe.test", "s", "h", {}, None, [{"name": "ask"}])
+    assert "http://etribe.test" in ET._JSON_FALLBACK_BASES
+
+    # 2회차: 같은 base 는 400 왕복 없이 JSON 폴백 직행(요청 1회).
+    http2 = FakeHttp([_resp(200, _json_resp('{"tool": "ask", "args": {"q": "x"}}'))])
+    name, args = await ET.etribe_chat_decide(
+        http2, "m", "http://etribe.test", "s", "h", {}, None, [{"name": "ask"}]
+    )
+    assert (name, args) == ("ask", {"q": "x"})
+    assert http2.calls == 1
+    assert http2.bodies[0]["response_format"] == {"type": "json_object"}
+
+
+async def test_etribe_400_without_parser_marker_still_raises():
+    # 폴백은 tool-call-parser 문구가 있는 400 에만 발동 — 다른 400 은 기존대로 raise.
+    http = FakeHttp([_resp(400, text='{"message": "bad request"}')])
+    with pytest.raises(httpx.HTTPStatusError):
+        await ET.etribe_chat_decide(http, "m", "http://b", "s", "h", {}, None, [{"name": "ask"}])
+    assert ET._JSON_FALLBACK_BASES == set()
+
+
+def test_parse_tool_json_strips_code_fence_and_junk():
+    tools = [{"name": "ask"}]
+    # 코드펜스 포함.
+    assert ET._parse_tool_json('```json\n{"tool": "ask", "args": {"x": 1}}\n```', tools) == (
+        "ask",
+        {"x": 1},
+    )
+    # 앞뒤 잡텍스트 — 첫 여는 중괄호부터 raw_decode(뒤 잔여 허용).
+    assert ET._parse_tool_json(
+        '알겠습니다. {"tool": "ask", "args": {}} 위와 같이 호출합니다.', tools
+    ) == ("ask", {})
+
+
+def test_parse_tool_json_invalid_inputs_return_none():
+    tools = [{"name": "ask"}]
+    assert ET._parse_tool_json('{"tool": broken', tools) == (None, {})  # 깨진 JSON.
+    assert ET._parse_tool_json("도구 없이 텍스트만", tools) == (None, {})  # 중괄호 없음.
+    assert ET._parse_tool_json('{"tool": "nope", "args": {}}', tools) == (None, {})  # 미존재 도구.
+    assert ET._parse_tool_json('{"args": {}}', tools) == (None, {})  # tool 키 없음.
+    # args 가 dict 아님 → 빈 args 로 방어(호출부 dict 계약).
+    assert ET._parse_tool_json('{"tool": "ask", "args": [1]}', tools) == ("ask", {})
+
+
 # ── etribe_generate_text ──────────────────────────────────────────────────────
 async def test_etribe_generate_text_returns_content_ignores_reasoning():
     payload = {
@@ -257,8 +395,10 @@ async def test_etribe_generate_text_returns_content_ignores_reasoning():
     )
     assert out == "야근식대(법인카드)"  # reasoning_content 무시 + 앞뒤 공백 정리.
     body = http.bodies[0]
-    assert body["max_tokens"] == 128
-    assert body["chat_template_kwargs"] == {"thinking_mode": "disabled"}
+    # thinking ON: 사고 토큰이 completion 예산을 공유 → 요청치 + 사고 헤드룸(1024).
+    assert body["max_tokens"] == 128 + ET._THINKING_HEADROOM_TOKENS
+    # 무사고 플래그를 보내지 않는다(서버 기본 ON — 2026-07-23 사용자 지시).
+    assert "chat_template_kwargs" not in body
 
 
 async def test_etribe_generate_text_empty_content_returns_none():

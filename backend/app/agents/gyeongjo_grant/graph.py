@@ -21,12 +21,12 @@ from app.agents.common.nodes import (
     make_add_row_node,
     make_login_node,
     make_menu_nav_node,
-    make_set_gubun_node,
     make_user_type_node,
 )
 from app.agents.common.state import BaseAgentState
 
 from .nodes import (
+    make_confirmed_set_gubun_node,
     make_fill_rows_node,
     make_save_doc_node,
     make_set_acct_date_node,
@@ -52,6 +52,7 @@ class GyeongjoGrantState(BaseAgentState, total=False):
     cost_type: str  # 비용구분(판관비/제조원가) — 예산계정 (판)/(제) 접두 결정
     filled: int  # 반영 완료 행 수(단건이라 0 또는 1)
     fill_failures: list[dict]  # [{row, field, reason}] — 실패 진단
+    fill_warnings: list[str]  # 반영을 **확인하지 못한** 필드명(값이 틀린 게 아니라 확인 불가)
     # 저장 거부 → 재입력 재시도(방식 1: menu_nav 재진입으로 문서 새로 만들기).
     retry_save: bool
     save_retries: int
@@ -66,7 +67,9 @@ def build_gyeongjo_grant_graph():
     g.add_node("login", make_login_node())
     g.add_node("user_type", make_user_type_node("회계"))
     g.add_node("menu_nav", make_menu_nav_node())
-    g.add_node("set_gubun", make_set_gubun_node(GYEONGJO_GUBUN_LABEL))
+    # 결의구분은 세팅 후 **선택 텍스트 재확인**까지 한 노드 안에서 끝낸다(nodes/gubun.py) —
+    # 세터 성공만 믿고 넘어가면 다른 문서 종류를 채우게 된다.
+    g.add_node("set_gubun", make_confirmed_set_gubun_node(GYEONGJO_GUBUN_LABEL))
     g.add_node("add_row", make_add_row_node())
     # 신규(본문 채움·저장)
     g.add_node("set_acct_date", make_set_acct_date_node())

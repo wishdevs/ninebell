@@ -7,6 +7,7 @@ card_collect 에서 승격(2026-07-05) — 모든 옴니솔 에이전트 공용.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from nbkit.omnisol import js_lib
@@ -74,17 +75,20 @@ async def dismiss_notice_popup(
     반환 True=닫힘 검증 완료 / False=팝업 없음 또는 닫기 실패(후속 JIT 방어가 재시도).
     """
     boxes = None
-    waited = 0
+    # ⚠ 상한 판정은 time.monotonic 실시간이다 — page.wait_for_timeout 은 _ScaledPage 가
+    # delay_scale 로 축소하므로, 명목 카운터(waited += interval)로 세면 card-collect(0.15)에서
+    # 관찰창 2.5s 가 실 ~375ms 로 붕괴해 ~1.5s 뒤 비동기 렌더되는 공지를 놓친다(codepicker.py
+    # _wait_picker_rows_stable 의 2026-07-04 회귀와 동일 함정). 폴 간격만 스케일되게 둔다.
+    t0 = time.monotonic()
     # appear_cap_ms=0 이면 대기 없이 1회만 확인(just-in-time 재확인용 — 피커 클릭 직전 등).
     while True:
         try:
             boxes = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
         except Exception:  # noqa: BLE001 — best-effort, 로그인 진행 우선.
             return False
-        if boxes or waited >= appear_cap_ms:
+        if boxes or (time.monotonic() - t0) * 1_000 >= appear_cap_ms:
             break
         await page.wait_for_timeout(interval)
-        waited += interval
     if not boxes:
         return False
     try:
@@ -98,15 +102,15 @@ async def dismiss_notice_popup(
             if not boxes:
                 return True  # 팝업이 사라짐(이미 닫힘) — 목적 달성.
         # ── 2) 닫기 — 클릭 직전 좌표(재평가분) 사용 + 소멸 폴 검증, 미소멸 시 재클릭 ──
-        waited = 0
+        # 상한도 monotonic 실시간(닫힘 애니메이션은 서버/브라우저 실시간이라 스케일 무관).
+        t_close = time.monotonic()
         while True:
             await page.mouse.click(boxes["close"]["x"], boxes["close"]["y"])
             await page.wait_for_timeout(400)
-            waited += 400
             boxes = await page.evaluate(js_lib.NOTICE_POPUP_BOXES_JS)
             if not boxes:
                 return True  # 닫힘 검증 완료 — localStorage 영속까지 확정.
-            if waited >= close_cap_ms:
+            if (time.monotonic() - t_close) * 1_000 >= close_cap_ms:
                 return False  # 상한 — 후속 JIT 방어가 재시도한다(무한 대기 금지).
     except Exception:  # noqa: BLE001 — 닫기 실패해도 로그인 자체는 진행.
         return False

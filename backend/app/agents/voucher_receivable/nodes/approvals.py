@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import time
 
+from app.config import get_settings
 from app.live.events import emit_log, emit_step
+from nbkit.browser.popups import close_foreign_pages
 from nbkit.patterns import emit_shot
 
 from .. import steps
@@ -67,14 +69,91 @@ def make_loop_approvals_node(on_popup=None):
                 "result": "처리 완료 — 대상 전표가 없어 결재를 진행하지 않았습니다.",
             }
 
-        process_count = rowcount if max_rows is None else min(int(max_rows), rowcount)
-        # 처리 범위를 명시적으로 노출(전체/부분·건수) — 조용한 상한 방지.
-        scope = "전체" if max_rows is None or int(max_rows) >= rowcount else f"{process_count}/{rowcount}"
-        await emit_log(events, f"대상 {rowcount}건 중 {scope} 순회 시작(각 건 결제창 열기→가상 상신→닫기).", "info")
-        # 워크플로우 노드에 진행 카운트 노출(0/N 부터) — 각 건 완료 시 갱신.
-        await emit_step(events, "loop_approvals", "running", progress={"done": 0, "total": process_count})
+        # ── 처리 대상 선별(순회 **전에** 확정) ────────────────────────────────────
+        # 카드(on_popup): 결의서번호(ABDOCU_NO)가 결재번호 맵에 있는 행만 결제 대상이다. 결의서번호가
+        # 없거나(직접 전표=전표입력/지급내역전표처리) 카드 결의서로 수집되지 않은 행은 참조문서
+        # 대상이 아니라 **결제창을 열지 않는다**(사용자 확인 2026-07-21).
+        # ⚠ 표시 방식 정정(사용자 리포트 2026-07-27): 종전에는 전체 행을 순회하며 대상이 아닌 행마다
+        #   '건너뜀' 로그를 찍고 진행률 분모도 조회 건수(예: 19)로 잡았다 — 실제로 처리할 4건이
+        #   묻혀 "무엇을 하고 있는지" 보이지 않았다. 이제 **먼저 선별**해 분모를 처리 대상 건수로
+        #   잡고(4/4), 제외분은 요약 한 줄로만 남긴다.
+        payment_map = state.get("payment_map") or {}
+        targets: list[tuple[int, str | None, str | None]] = []  # (행 인덱스, DOCU_NO, GWDOCU_NO)
+        skipped_no_ab: list[str] = []  # 결의서번호 자체가 없는 행(직접 전표)
+        skipped_unmapped: list[str] = []  # 결의서번호는 있으나 결재번호 맵에 없는 행
+        for idx in range(rowcount):
+            key = await steps.read_row_key(page, idx)
+            if on_popup is None:
+                targets.append((idx, key, None))
+                continue
+            abdocu_no = await steps.read_row_abdocu_no(page, idx)
+            # 공백 정규화 후 매칭 — 그리드 표기값에 앞뒤 공백이 섞이면 정확일치 lookup 이 조용히
+            # 실패한다(맵 키도 read_payment_map 에서 strip 해 양쪽을 맞춘다).
+            ab_key = str(abdocu_no).strip() if abdocu_no else ""
+            gw = payment_map.get(ab_key) if ab_key else None
+            if gw is None:
+                (skipped_no_ab if not ab_key else skipped_unmapped).append(key or "(번호미상)")
+                continue
+            targets.append((idx, key, gw))
+
+        # max_rows 는 **처리 대상** 기준으로 자른다(제외분이 상한을 잡아먹지 않게).
+        if max_rows is not None:
+            targets = targets[: max(0, int(max_rows))]
+        process_count = len(targets)
+        skipped = len(skipped_no_ab) + len(skipped_unmapped)
+
+        if on_popup is not None:
+            # 커버리지(결의서번호 보유 행 중 맵에 있는 비율)를 명시한다 — 0% 면 수집 조건이
+            # 어긋난 것이지 '대상이 없는' 것이 아니다(2026-07-27: 결의부서가 좁혀져 맵 4건·
+            # 커버 0건이던 사고를 로그만 보고 판별할 수 있게 한다).
+            with_ab_n = process_count + len(skipped_unmapped)
+            await emit_log(
+                events,
+                f"조회 {rowcount}건 중 결의서번호 보유 {with_ab_n}건 → 결재 대상 {process_count}건"
+                f"(결재번호 맵 {len(payment_map)}건, 매칭 {process_count}/{with_ab_n}).",
+                "info" if process_count else "warn",
+            )
+            if with_ab_n and not process_count:
+                await emit_log(
+                    events,
+                    "⚠ 결의서번호가 있는 행이 있는데 결재번호 맵과 하나도 매칭되지 않았습니다 — "
+                    "결의서조회승인 수집 조건(결의부서 전체·결의자 비움·회계일)이 대상과 어긋났을 "
+                    "가능성이 큽니다.",
+                    "warn",
+                )
+            if skipped:
+                # 제외 사유는 두 종류를 구분해 **한 줄 요약**으로만(행별 나열은 화면을 덮는다).
+                parts = []
+                if skipped_no_ab:
+                    parts.append(f"결의서번호 없음(직접 전표) {len(skipped_no_ab)}건")
+                if skipped_unmapped:
+                    sample = ", ".join(skipped_unmapped[:3])
+                    more = "…" if len(skipped_unmapped) > 3 else ""
+                    parts.append(
+                        f"결재번호 맵에 없음 {len(skipped_unmapped)}건(전표 {sample}{more})"
+                    )
+                await emit_log(events, f"결재 대상 제외 {skipped}건 — {' · '.join(parts)}.", "info")
+        else:
+            scope = "전체" if max_rows is None or int(max_rows) >= rowcount else f"{process_count}/{rowcount}"
+            await emit_log(
+                events, f"대상 {rowcount}건 중 {scope} 순회 시작(각 건 결제창 열기→가상 상신→닫기).", "info"
+            )
+
         processed_docu_nos: list[str] = []
-        skipped = 0
+        if process_count <= 0:
+            await emit_log(events, "결재를 진행할 대상이 없습니다 — 정상 완료.", "info")
+            await emit_step(events, "loop_approvals", "done", _ms(t0))
+            return {
+                "processed": 0,
+                "processed_docu_nos": [],
+                "result": (
+                    f"처리 완료 — 조회 {rowcount}건 중 결재 대상이 없어 진행하지 않았습니다"
+                    f"(제외 {skipped}건)."
+                ),
+            }
+
+        # 워크플로우 노드에 진행 카운트 노출(0/N 부터) — 분모는 **처리 대상 건수**다.
+        await emit_step(events, "loop_approvals", "running", progress={"done": 0, "total": process_count})
 
         async def fail(idx: int, reason) -> dict:
             await emit_step(events, "loop_approvals", "failed")
@@ -82,38 +161,12 @@ def make_loop_approvals_node(on_popup=None):
             await emit_log(events, msg, "error")
             return {"error": msg, "processed": len(processed_docu_nos), "processed_docu_nos": processed_docu_nos}
 
-        for idx in range(process_count):
-            key = await steps.read_row_key(page, idx)
+        for seq, (idx, key, gwdocu_no) in enumerate(targets, start=1):
             key_label = key or "(번호미상)"
-
-            # 카드(on_popup): 결의서번호(ABDOCU_NO)가 있는 '카드 결의서' 행만 처리한다. 결의서번호가
-            # 없거나(직접 전표=전표입력/지급내역전표처리) 카드 결의서로 수집되지 않은(payment_map
-            # 미존재) 행은 참조문서 대상이 아니므로 **결제창을 열지 않고 건너뛴다**(사용자 확인
-            # 2026-07-21). 외상매출/매입(on_popup=None)은 이 필터 없이 전체 처리(기존과 동일).
-            gwdocu_no = None
-            if on_popup is not None:
-                abdocu_no = await steps.read_row_abdocu_no(page, idx)
-                payment_map = state.get("payment_map") or {}
-                gwdocu_no = payment_map.get(abdocu_no) if abdocu_no else None
-                if gwdocu_no is None:
-                    skipped += 1
-                    await emit_log(
-                        events,
-                        f"[{idx + 1}/{process_count}] 결의서번호 없음 — 결재 대상 아님, 건너뜀(전표 {key_label}).",
-                        "info",
-                    )
-                    await emit_step(
-                        events,
-                        "loop_approvals",
-                        "running",
-                        progress={"done": idx + 1, "total": process_count},
-                    )
-                    continue
-
-            # 진행 상황 노출 — 몇 건 중 몇 번째를 여는지(사용자 가시성).
+            # 진행 상황 노출 — 처리 대상 기준 몇 번째인지(제외분은 분모에 넣지 않는다).
             await emit_log(
                 events,
-                f"[{idx + 1}/{process_count}] 전표 {key_label} 결제창 확인 중… "
+                f"[{seq}/{process_count}] 전표 {key_label} 결제창 확인 중… "
                 f"(완료 {len(processed_docu_nos)}/{process_count})",
                 "action",
             )
@@ -142,6 +195,12 @@ def make_loop_approvals_node(on_popup=None):
                 )
 
             # 결재 버튼 → 별도 팝업 Page(EAP) 캡처.
+            # 결제창을 열기 **직전** 남은 외부 창(공지·홈페이지)을 정리한다 — 화면을 덮은
+            # 채 결재 버튼을 누르면 클릭이 가로채인다. ⚠ 이 시점엔 결제창이 아직 없으므로
+            # 업무 창을 닫을 위험이 없다(결제창은 아래에서 연다).
+            for url in await close_foreign_pages(page, get_settings().erp_base):
+                await emit_log(events, f"결재 전 외부 창을 닫았습니다 — {url}", "info")
+
             child = await steps.open_approval(page)
             if child is None:
                 return await fail(idx, "결재창(별도 팝업 Page)이 열리지 않았습니다.")
@@ -164,7 +223,8 @@ def make_loop_approvals_node(on_popup=None):
                     mismatch = child_docu[0]
                     await emit_log(
                         events,
-                        f"⚠ D7 정합성 오류: {idx + 1}번째 행 예상 전표 {key_label} 이지만 "
+                        f"⚠ D7 정합성 오류: [{seq}/{process_count}] {idx + 1}번째 행 예상 전표 "
+                        f"{key_label} 이지만 "
                         f"결제창은 {mismatch} 을 표시합니다.",
                         "error",
                     )
@@ -196,7 +256,7 @@ def make_loop_approvals_node(on_popup=None):
                     processed_docu_nos.append(key_label)
                     await emit_log(
                         events,
-                        f"[{idx + 1}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
+                        f"[{seq}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
                         f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
                         "ok",
                     )
@@ -224,11 +284,11 @@ def make_loop_approvals_node(on_popup=None):
             await emit_shot(events.put, page)
 
         summary = ", ".join(processed_docu_nos)
-        skip_txt = f", {skipped}건 건너뜀(결의서번호 없음)" if skipped else ""
+        skip_txt = f"(결재 대상 제외 {skipped}건)" if skipped else ""
         await emit_log(
             events,
-            f"결재창 확인 완료 — 대상 {rowcount}건 중 {len(processed_docu_nos)}건 가상 상신"
-            f"(실제 상신 없음){skip_txt}. 전표: {summary}",
+            f"결재창 확인 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 가상 상신"
+            f"(실제 상신 없음). 조회 {rowcount}건 {skip_txt}. 전표: {summary}",
             "ok",
         )
         await emit_step(events, "loop_approvals", "done", _ms(t0))
@@ -236,8 +296,9 @@ def make_loop_approvals_node(on_popup=None):
             "processed": len(processed_docu_nos),
             "processed_docu_nos": processed_docu_nos,
             "result": (
-                f"처리 완료 — {len(processed_docu_nos)}건 결제창 확인(가상 상신, 실제 상신 없음)"
-                f"{skip_txt}. 전표: {summary}. 실제 상신은 옴니솔에서 직접 진행하세요."
+                f"처리 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 결제창 확인"
+                f"(가상 상신, 실제 상신 없음). 조회 {rowcount}건 {skip_txt}. 전표: {summary}. "
+                "실제 상신은 옴니솔에서 직접 진행하세요."
             ),
         }
 

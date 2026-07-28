@@ -30,6 +30,7 @@ from app.routers import (
     agents,
     assistant,
     auth,
+    changelog,
     dev_llm,
     logs,
     me_codes,
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(me_codes.router)
     app.include_router(skills.router)
+    app.include_router(changelog.router)
     # 로컬 dev 전용 게이트 라우터 — LLM_PROVIDER_TOGGLE off(기본)면 전 엔드포인트 404.
     app.include_router(dev_llm.router)
 

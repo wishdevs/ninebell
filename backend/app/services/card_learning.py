@@ -112,11 +112,15 @@ def sanitize_note(note: str | None) -> str | None:
 
 # ── 적요 정규화 — 사람이름 제외 + 판매/제조 구분 동적화(사용자 확정 2026-07-20) ─────────────
 # 접속자 소속 비용구분 → 적요 끝에 붙일 구분 접미사. 판관비=판매, 제조원가=제조.
+# 2026-07-23 사용자 재확정으로 접미사 재부착이 폐지되어 미사용 — 과거 규칙 기록용으로만 남긴다
+# (판관비→판매 / 제조원가→제조 매핑, apply_cost_suffix 의 변천 docstring 참조).
 COST_TYPE_SUFFIX: dict[str, str] = {"판관비": "판매", "제조원가": "제조"}
 
 # 원본 적요에 붙어 있던 판/제 구분(제거 대상) — 끝의 대시(-판매/-제품/-제조/-판관) 또는 괄호((판매)/…).
 # '제품'은 제조원가 쪽 원본 표기. 끝 1개만 떼어 base 로 되돌린다.
 _TRAILING_DIVISION_RE = re.compile(r"\s*(?:-\s*(?:판매|제품|제조|판관)|\((?:판매|제품|제조|판관)\))\s*$")
+# 예산계정명 앞 (판)/(제)/(공통) 접두 — category tier 가 계정명을 적요로 쓸 때 표시용으로 벗긴다.
+_ACCT_PREFIX_RE = re.compile(r"^\s*[(（](?:판|제|공통)[)）]\s*")
 # 사람이름 적요(추천 금지): (A) 콤마로 이어진 2인 이상 이름 나열이 앞에, (B) '출장' 적요 괄호 안 이름.
 # '(법인카드)'·'(불공)' 등 관용 괄호는 negative lookahead 로 제외해 오검출(직원 야근식대 등)을 막는다.
 _NAME_LIST_RE = re.compile(r"^[가-힣]{2,4}(?:\s*,\s*[가-힣]{2,4})+")
@@ -143,18 +147,18 @@ def strip_division(note: str) -> tuple[str, bool]:
 
 
 def apply_cost_suffix(note: str | None, cost_type: str | None) -> str | None:
-    """추천/표시용 적요 정규화 — 판/제 구분을 떼고, **원래 구분이 있던 적요만** 접속자 비용구분
-    (판관비→판매 / 제조원가→제조)으로 재부착. 구분이 원래 없던 적요는 그대로. cost_type 미상이면 base."""
+    """추천/표시용 적요 정규화 — 판/제 구분 접미사를 **항상 떼고 재부착하지 않는다**.
+
+    변천: 2026-07-20 확정은 '떼고 접속자 비용구분으로 동적 재부착'이었으나, 2026-07-23
+    사용자 재확정으로 **완전 미부착**(예: '해외출장 숙박비(법인카드)' — '-판매' 없음)으로
+    변경. cost_type 파라미터는 호출부(플럼빙: me_codes org_unit 해석 → suggest_note)와의
+    시그니처 호환을 위해 유지하되 더 이상 사용하지 않는다. ⚠ 예산계정의 판/제 분기
+    (bgacct_name_for_cost_type)는 별개 규칙 — 이 변경과 무관하게 유지.
+    """
     if note is None:
         return None
-    base, had = strip_division(note)
-    if not base:
-        return None
-    if had:
-        suffix = COST_TYPE_SUFFIX.get((cost_type or "").strip())
-        if suffix:
-            return f"{base}-{suffix}"
-    return base
+    base, _had = strip_division(note)
+    return base or None
 
 
 def _uuid(owner: str | None) -> uuid.UUID | None:
@@ -415,14 +419,17 @@ async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | 
     model = llm_model_name(settings)  # 캐시(CardAiNote.model) 기록용 — 활성 프로바이더 모델명.
     user = f"예산계정: {acct_name.strip()}\n가맹점: {merchant.strip()}\n적요:"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as http:
+        # 사고 ON 은 지연이 늘 수 있어 타임아웃 15→30s(실패 시 결정적 폴백은 기존 계약 그대로).
+        async with httpx.AsyncClient(timeout=30.0) as http:
             raw = await generate_text(
                 http,
                 system=_AI_NOTE_SYSTEM,
                 user=user,
                 temperature=0.2,
-                max_output_tokens=128,
-                thinking_budget=0,  # 적요 생성엔 사고 불필요 — 사고 토큰이 출력을 잠식하지 않게 끈다.
+                # thinking ON(2026-07-23 사용자 지시 — 적요도 사고 허용). 출력 자체는 1줄이지만
+                # 사고 토큰이 같은 출력 예산을 공유하므로 헤드룸 포함(잠식 → 빈 응답 방지).
+                # thinking_budget 미전달 = gemini 모델 기본(dynamic) 사고. etribe 는 자체 헤드룸 추가.
+                max_output_tokens=128 + 1_024,
                 settings=settings,
             )
     except Exception:  # noqa: BLE001 — LLM 실패가 추천을 죽여선 안 된다(폴백 존재).
@@ -578,27 +585,15 @@ async def suggest_note(
                         model=gen_model,
                     )
                     return {"note": clean, "source": "ai"}
-        # 4) category — 그 계정의 최빈 적요(count 합 최대). 사람이름 적요는 건너뛰고 상위 후보 중 첫
-        #    깨끗한 것을 쓴다(쿼리타임 집계, 별도 테이블 없음).
-        total = func.sum(CardSeedNote.count)
-        cat_rows = (
-            (
-                await session.execute(
-                    select(CardSeedNote.note)
-                    .where(CardSeedNote.acct_code == acct, CardSeedNote.note.isnot(None))
-                    .group_by(CardSeedNote.note)
-                    .order_by(total.desc(), CardSeedNote.note.asc())
-                    .limit(5)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for cat_note in cat_rows:
-            if cat_note and cat_note.strip() and not is_person_name_note(cat_note):
-                clean = sanitize_note(apply_cost_suffix(cat_note, cost_type))
-                if clean:
-                    return {"note": clean, "source": "category"}
+        # 4) category — 계정만으로 채우는 적요는 **계정명 그대로**를 일반 적요로 쓴다(사용자 확정
+        #    2026-07-24). 특정 과거 적요(count 최빈이라도 "세차비"·"양면테이프"처럼 특정 서비스·품목)를
+        #    같은 계정의 무관한 거래에 붙이지 않는다 — 계정명은 그 계정의 어떤 거래에도 일반적이다.
+        #    (판)/(제)/(공통) 접두는 표시용으로 벗긴다. acct_name 이 있을 때만(없으면 heuristic 폴백).
+        if acct_name:
+            display = _ACCT_PREFIX_RE.sub("", acct_name).strip()
+            clean = sanitize_note(display)
+            if clean:
+                return {"note": clean, "source": "category"}
 
     # 5) heuristic — 가맹점명 키워드 휴리스틱(계정 무관 폴백). 지연 import 로 순환참조 회피.
     from app.agents.card_collect.nodes._shared import recommend_note

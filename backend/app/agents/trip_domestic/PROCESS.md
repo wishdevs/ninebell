@@ -306,3 +306,35 @@ card 의 코드피커는 **카드팝업(`CARD_WIN`) 스코프 하드코딩**(`pi
     steps set_invoice_date). 전체 pytest **399 passed**·프론트 tsc/build PASS.
   - ⏳ **미검증(라이브 ERP 필요)**: START_DT compact setValue 실동작 + 저장값 반영은 Omnisol 상대로
     `trip_smoke_cycle` 10회 실저장→검증→삭제로 확인 필요(현재는 스텁 단위 테스트까지).
+- v10 (2026-07-27): **확인(verify) 커널 확산 — "세팅/클릭 성공"을 "반영됐다"로 쓰지 않는다**
+  (`nbkit.omnisol.verify` + js_lib §C 리더, OMNISOL_NOTES §10). 코드 수정 + 브라우저 없는 단위 테스트까지.
+  - **팝업 생명주기를 개수(POPUP_COUNT_JS)로 판정**: `_open_detail_cell_picker`(오픈=개수 증가·재시도 전
+    잔존 팝업 닫기) / `_select_and_apply`(닫힘=개수 감소) / `_fail_close`·`lookup_partner_code`·
+    `dump_partners`(닫힘 확인). 기존 `PICKER_ROWCOUNT_JS`(최상단 비-법인카드 k-window) 판정은 앞 피커가
+    안 닫혔을 때 **스테일 팝업을 ready 로 오독**했다(voucher 부서팝업 46행 사고와 동종 구조).
+  - **`_select_and_apply` 재클릭(reapply)**: 튕겨나간 '적용'은 기다려도 안 붙는다 — 재시도마다 '적용'을
+    다시 누른다. 셀 재독은 `js_lib.GRID_CELL_VALUE_JS`(Date/콤마 정규화) 로 통일. 셀을 못 읽으면
+    하드 실패가 아니라 warn 후 진행(리더 오탐 안전판).
+  - **`set_row_note` 반영 대조 추가**(검증 전무였음, 4개 에이전트 공유 스텝) — 형제 세터와 동일 규율.
+  - **`fill_budget_fixed`/`fill_project` 재검색 안전판**(기존 재시도 0회) — 검색 정착 전 읽기가
+    필터 전 전량을 잡아 '다중매칭'·오선택이 되던 자리를 `_search_and_pick` 공용화로 해결.
+  - **`register_counter_partner` 실검증**: 성공 근거를 대리 신호(빈 행 +1) → **부가선택 값**
+    (`js.COUNTER_VALS_JS`, 정의만 있고 미사용이던 리더) 로 교체. 팝업 오픈의 매직 임계(rowcount>50) 제거.
+  - **`type_amount`**: 숫자 에디터 준비를 고정 500ms 1회 읽기 → 커널 재시도(+에디터 재오픈), 예산현황
+    모달은 클릭마다 닫힘 확인 + **끝까지 남으면 하드 실패**(잔존 k-window = 피커 오독·F7 삼킴 원인).
+  - **`delete_blank_row` F6 사전 게이트**(파괴적 액션): `js_lib.GRID_CURRENT_ROW_JS` 로 현재 행이 의도한
+    빈 행일 때만 삭제한다. **확인 불가여도 진행하지 않고 스킵**(표준 실패정책의 의도된 예외 — 빈 행이
+    남는 것은 되돌릴 수 있고 데이터 행 삭제는 되돌릴 수 없다). 사후 확인은 행수 -1 **+ 데이터 행 보존**.
+  - **`save.py`**: ① F7 **직전 열린 팝업 0 사전 조건**(잔존 팝업이 F7 을 삼키는 팬텀 저장 차단 — blur
+    코드가 전제하던 위험인데 검증이 없었다), ② 재조회 지속 확인을 `verify.confirm_grid_rows(HEAVY)` 로
+    (기존 `wait_for_timeout` 12s 관찰창이 delay_scale 0.4 에서 4.8s 로 줄어 **정상 저장을 팬텀으로
+    오판**할 여지가 있었다 — 커널 대기는 실시간이라 배율에 안 깎인다). 저장 게이트(F7 클릭)는 무수정.
+  - `fill_rows` 노드가 스텝의 `warn`(확인 불가)을 `emit_log(..., "warn")` 으로 노출 — 성공을 단정하지 않는다.
+  - 테스트: `test_trip_domestic_steps.py`(스테일 팝업 오픈 거부·적용 재클릭·확인불가 warn·적요 대조 3케이스·
+    빈행삭제 게이트 4케이스·상대계정 실검증·금액 모달/에디터 재시도·예산 재검색) +
+    `test_trip_domestic_nodes.py`(F7 사전 팝업 중단·팬텀 재조회·판정 보류·warn 로그 노출). trip-domestic 4파일
+    **128 passed**, 형제(gyeongjo/hakjagum/trip_overseas) 89 passed 회귀 0.
+  - ⏳ **미해결(보고만)**: `graph.py:66 set_gubun`(결의구분 '출장(국내·자차)')은 세팅 JS 의 `{ok}` 만 보고
+    **선택값을 재확인하지 않는다**. 되돌려지면 잘못된 문서유형으로 저장되는 최고위험 지점이나, 구현체가
+    공용 `app/agents/common/nodes.py:110` 이라 이번 범위(담당 경로) 밖 — 카드·경조금·학자금·해외출장이
+    같은 노드를 쓰므로 공용 단계에서 `verify.confirm_select` 로 일괄 적용해야 한다.

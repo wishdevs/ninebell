@@ -1416,3 +1416,58 @@ def test_enforce_project_cost_keeps_specific_project():
 def test_enforce_project_cost_noop_without_cost_project():
     je = {"code": "500|500", "name": "제조원가", "wbsNo": "500", "wbsNm": "제조원가"}
     assert prefill._enforce_project_cost(je, "(판)", None) is je
+
+
+# ── 확인 불가(warn) 노출 — 노드가 "미확인"을 로그로 드러내는가 ────────────────────
+# 스텝이 warn 을 달아 돌려줘도 노드가 삼키면 사용자는 '완료'만 보고 미확인 사실을 모른다.
+async def test_select_all_cards_node_surfaces_unverified_warning(monkeypatch):
+    """select_all_cards 의 warn(확인 불가)이 warn 레벨 로그로 노출돼야 한다."""
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    async def _warned(page, owner_name=None):
+        return {"ok": True, "n": 4, "checked": 4, "by": "all", "verified": False,
+                "warn": "카드번호 표시값 확인 불가"}
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(steps, "select_all_cards", _warned)
+    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_select_all_cards_node()({"events": events, "page": object(), "userid": None})
+    assert out == {}  # 하드 실패가 아니다(경고 후 진행)
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    logs = [f for f in frames if isinstance(f.get("log"), str)]
+    assert any(f.get("level") == "warn" and "표시값 확인 불가" in f["log"] for f in logs)
+
+
+async def test_apply_group_fields_fails_when_note_reverted_by_picker(monkeypatch):
+    """피커 적용이 적요를 되돌렸는데 복구 못 하면 일괄적용 전에 중단해야 한다(cascade 규율)."""
+    applied: list[list[int]] = []
+
+    async def _note(page, row, text):
+        return {"ok": True, "after": text}
+
+    async def _bg(page, combo):
+        return {"ok": True, "code": "2006", "name": "본사", "verified": True}
+
+    async def _verify_notes(page, rows, text):
+        return {"ok": False, "reason": "3행 적요 생존 확인 실패(기대 '회식' / 실제 '')"}
+
+    async def _apply(page, rows):
+        applied.append(list(rows))
+        return {"ok": True}
+
+    monkeypatch.setattr(steps, "set_note", _note)
+    monkeypatch.setattr(steps, "fill_budget_codepicker", _bg)
+    monkeypatch.setattr(steps, "verify_notes", _verify_notes)
+    monkeypatch.setattr(steps, "apply_rows", _apply)
+
+    ok, detail = await batch._apply_group_fields(
+        object(), asyncio.Queue(), [0, 1, 2],
+        {"예산단위": "본사", "프로젝트": "", "적요": "회식"},
+    )
+    assert ok is False and "되돌려졌" in detail
+    assert applied == []  # 일괄적용을 실행하지 않았다

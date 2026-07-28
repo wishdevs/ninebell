@@ -60,3 +60,26 @@ def test_is_nondeductible_account():
     assert is_nondeductible_account("(판)복리후생비-석식") is False
     assert is_nondeductible_account("") is False
     assert is_nondeductible_account(None) is False
+
+
+# ── 가맹점 기반 결정적 불공(통행료·우체국, 사용자 규칙 2026-07-23) ─────────────────────────
+def test_nondeductible_by_merchant_keyword_deterministic():
+    from app.agents.card_collect.vat import is_nondeductible_merchant
+
+    # 과세 계정·과세 VAT_TP 여도 가맹점이 통행료/우체국이면 불공(AI 없이 결정적).
+    assert classify_vat("과세", "(판)소모품비", merchant="서울중앙우체국") == NONDEDUCTIBLE
+    assert classify_vat("과세", "(판)여비교통비-시내", merchant="한국도로공사 통행료") == NONDEDUCTIBLE
+    assert classify_vat("과세", "(판)소모품비", merchant="하이패스충전") == NONDEDUCTIBLE
+    # 일반 가맹점은 그대로 과세.
+    assert classify_vat("과세", "(판)소모품비", merchant="스타벅스") == TAXABLE
+    assert is_nondeductible_merchant("○○톨게이트") is True
+    assert is_nondeductible_merchant("쿠팡") is False
+    assert is_nondeductible_merchant(None) is False
+
+
+def test_account_rule_beats_merchant_and_ai():
+    # 규칙1(계정 불공)이 최우선 — 계정이 불공이면 가맹점·AI 무관하게 불공.
+    assert (
+        classify_vat("과세", "(판)여비교통비-해외출장", ai_vat="과세", merchant="스타벅스")
+        == NONDEDUCTIBLE
+    )

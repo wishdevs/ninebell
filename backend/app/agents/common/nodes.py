@@ -20,7 +20,8 @@ from typing import Any
 from app.agents.common import doc_steps
 from app.config import get_settings
 from nbkit.browser.actions import js_click
-from nbkit.omnisol import js_lib, selectors
+from nbkit.browser.popups import close_foreign_pages
+from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, MenuSchema
 from nbkit.patterns import emit_log, emit_shot, emit_step
 from nbkit.patterns.login_flow import ensure_logged_in
@@ -30,6 +31,17 @@ from nbkit.patterns.user_type_flow import ensure_user_type
 
 def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
+
+
+async def _warn_if_unverified(emit, step: str, r: dict) -> None:
+    """스텝이 '확인 불가'로 돌려준 경고를 런 로그에 노출한다(성공을 단정하지 않기 위해).
+
+    스텝 반환 컨벤션: {"ok": bool, "reason"?: 하드 실패 사유, "warn"?: 확인 불가 사유}.
+    ok=True + warn 은 "진행은 했지만 반영을 확인하지 못했다" — 로그에 남겨야 사후에
+    '완료로 보이는데 값이 안 붙은' 사고를 되짚을 수 있다(§10 실패 정책).
+    """
+    if r.get("warn"):
+        await emit_log(emit, f"{step} {r['warn']}", "warn")
 
 
 def make_login_node():
@@ -58,6 +70,11 @@ def make_user_type_node(target_type: str):
             return {}
         emit = state["events"].put
         try:
+            # 로그인 이후에 뜬 외부 창(회사 홈페이지 시스템 팝업) just-in-time 정리 —
+            # 로그인 구간 감시(PopupWatcher)를 지나 도착하는 사례 방어. 아바타 클릭이 그 창에
+            # 포커스를 뺏긴 채 진행되지 않게 **패널 조작 전에** 치운다.
+            # ⚠ 결재 순회 단계에서는 호출 금지(결제창=EAP 도 다른 호스트 창).
+            await close_foreign_pages(state["page"], get_settings().erp_base)
             await ensure_user_type(state["page"], target_type, emit=emit)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"사용자유형 전환 실패: {exc}"}
@@ -80,6 +97,13 @@ def make_menu_nav_node(schema: MenuSchema = EXPENSE_CARD):
         base = get_settings().erp_base
         try:
             await navigate_schema(state["page"], schema, base, emit=emit)
+            # 메뉴 진입 뒤에도 공지/홈페이지 창이 뜰 수 있다(실측 2026-07-27: 로그인 완료
+            # +252ms 에 더존 공지창 uc.ninebell.co.kr 이 별도 창으로 출현 — 로그인 감시 구간이
+            # 끝난 뒤라 아무도 닫지 않았다). 화면을 덮은 채 다음 조작이 진행되지 않게 정리한다.
+            # ⚠ 결재 순회 전 단계에서만 호출한다(결제창=EAP 도 다른 호스트의 창이다).
+            closed = await close_foreign_pages(state["page"], base)
+            for url in closed:
+                await emit_log(emit, f"메뉴 진입 후 뜬 외부 창을 닫았습니다 — {url}", "info")
         except Exception as exc:  # noqa: BLE001
             return {"error": f"메뉴 진입 실패: {exc}"}
         return {}
@@ -88,7 +112,14 @@ def make_menu_nav_node(schema: MenuSchema = EXPENSE_CARD):
 
 
 def make_set_gubun_node(gubun_text: str):
-    """결의구분 Kendo dropdownlist(selectors.GUBUN_SELECT)를 gubun_text('카드')로 설정."""
+    """결의구분 Kendo dropdownlist(selectors.GUBUN_SELECT)를 gubun_text('카드')로 설정·**확인**.
+
+    ⚠ KENDO_SET_DROPDOWN_BY_TEXT_JS 의 {ok:true} 는 "옵션을 찾아 위젯에 값을 넣고 change 를
+    쐈다"까지다. 결의구분은 change 핸들러가 화면(입력 폼·그리드 컬럼)을 통째로 재구성하는
+    연쇄 필드라, 그 재구성 과정에서 값이 되돌아가면 **다른 문서 종류의 화면에** 행을 추가하고
+    증빙·금액을 채우는 조용한 실패가 된다(저장 직전까지 아무도 모른다).
+    결의구분은 이 문서가 무엇인지를 정의하는 값이므로 불일치는 **하드 실패**로 끊는다(§10).
+    """
 
     async def set_gubun(state: dict) -> dict:
         if state.get("error"):
@@ -109,8 +140,29 @@ def make_set_gubun_node(gubun_text: str):
         if not r.get("ok"):
             await emit_step(emit, "set_gubun", "failed")
             return {"error": f"결의구분을 '{gubun_text}'로 설정하지 못했습니다."}
+        # 화면 재구성(연쇄) 정착 대기 — 여기는 **확인으로 대체할 리더가 없는 자리**라 기존
+        # 고정 대기를 유지한다. 확인은 정착 **후에** 읽어야 '되돌려진 값'을 잡는다(정착 전
+        # 스냅샷은 세팅 직후라 언제나 통과해 확인이 무의미해진다).
         await page.wait_for_timeout(1_500)
-        await emit_log(emit, f"결의구분 = {gubun_text}", "info")
+        res = await verify.confirm_select(
+            page,
+            selectors.GUBUN_SELECT,
+            gubun_text,
+            # ⚠ reapply(재세팅) 는 일부러 주지 않는다 — 재세팅 직후의 read 는 change 핸들러가
+            # 값을 되돌리기 **전** 스냅샷일 수 있어, 잡으려던 되돌림을 오히려 통과시킨다.
+            # 정착 대기는 이미 위에서 했으므로 재시도는 '다시 읽기'만으로 충분하다.
+            # 리더가 select 자체를 못 읽으면(위젯 구조 차이) '값이 다름'이 아니라 확인 불가 —
+            # 오탐이 멀쩡한 플로우를 끊지 않게 warn 후 진행(D7 규율).
+            unknown_when=lambda v: not (isinstance(v, dict) and v.get("ok")),
+        )
+        if res.mismatch:
+            await emit_step(emit, "set_gubun", "failed")
+            return {"error": f"결의구분 '{gubun_text}' 반영 확인 실패 — {res.reason}"}
+        if not res:  # 여기까지 왔으면 unknown(확인 불가) — 진행하되 미확인임을 반드시 남긴다.
+            await emit_log(emit, f"결의구분 {res.reason}", "warn")
+        # 확인이 안 된 경우 로그도 '완료'로 단정하지 않는다(로그만 보고 반영됐다고 믿지 않게).
+        suffix = "" if res else " (반영 미확인)"
+        await emit_log(emit, f"결의구분 = {gubun_text}{suffix}", "info")
         await emit_shot(emit, page)
         await emit_step(emit, "set_gubun", "done", _ms(t0))
         return {}
@@ -175,6 +227,8 @@ def make_open_evdn_node():
             if isinstance(shown, dict) and "idx" in shown
             else ""
         )
+        # 스테일 팝업 의심(이미 열려 있던 팝업)은 성공을 막지 않되 반드시 로그로 드러낸다.
+        await _warn_if_unverified(emit, "증빙유형 팝업", r)
         await emit_log(emit, f"증빙 돋보기 → 증빙유형 팝업 오픈{target}.", "ok")
         await emit_shot(emit, page)
         await emit_step(emit, "open_evdn", "done", _ms(t0))
@@ -203,6 +257,9 @@ def make_select_evdn_node(code: str = "01"):
         if not r.get("ok"):
             await emit_step(emit, "select_evdn", "failed")
             return {"error": r.get("reason") or f"증빙유형 코드 {code} 적용 실패"}
+        # 셀 반영은 확인됐지만 팝업 닫힘을 확인 못 한 경우 — 다음 행이 스테일 팝업을 잡는
+        # 사고의 **원인 지점**이라 여기서 경고를 남긴다(결과만 보고 원인을 되짚지 않게).
+        await _warn_if_unverified(emit, "증빙유형 적용 후", r)
         await emit_log(
             emit,
             f"증빙유형 '{r.get('name')}'(코드 {r.get('code')}) 자동선택·적용 완료 — "

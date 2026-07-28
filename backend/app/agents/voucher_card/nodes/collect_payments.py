@@ -43,17 +43,41 @@ def make_collect_payments_node():
             return {"payment_map": {}, "payment_map_count": 0}
 
         await emit_log(events, "결의서조회승인 탭을 열어 결재번호를 수집합니다…", "action")
-        await steps.open_collect_tab(page)
+        # 화면 도착 확인(하드) — 탭이 안 열렸는데 전표조회승인 화면을 결의서 화면으로 착각하고
+        # 조작하면 조회조건이 엉뚱한 폼에 들어간다.
+        opened = await steps.open_collect_tab(page)
+        if not opened.get("ok"):
+            await emit_step(events, "collect_payments", "failed")
+            return {"error": opened.get("reason") or "결의서조회승인 탭을 열지 못했습니다."}
 
-        # 조회폼 세팅(전부 best-effort — 실패해도 폼 기본값으로 조회 진행).
+        # 조회폼 세팅 — 각 스텝이 '세팅 → 반영 확인'까지 끝낸 뒤 결과를 돌려준다.
+        # 결의부서/결의자/회계일은 결과 범위만 넓히는 보조 조건이라 실패해도 진행(warn)하지만,
+        # **결의구분=카드는 수집 대상 자체를 정의**하므로 확인 실패 시 조회하지 않고 중단한다
+        # (틀린 결의구분으로 수집된 맵은 loop_approvals 가 전건을 '맵에 없음'으로 건너뛴다).
+        # ⚠ 결의부서는 '보조 조건'이 아니라 **수집 대상을 정의**한다(2026-07-27 라이브 규명):
+        #   전체선택이 안 되면 로그인 부서(예: 회계팀)로 좁혀져, 전표조회승인 대상 행들의
+        #   결의서번호와 하나도 겹치지 않는 맵이 만들어지고(실측: 맵 4건·커버 0건) 전 행이
+        #   '맵에 없음'으로 건너뛰어진다 = 아무것도 처리하지 못한다. 그래서 하드 실패다.
         if not await steps.set_collect_dept_all(page):
-            await emit_log(events, "결의부서 전체선택 실패(폼 기본값으로 진행).", "warn")
-        await steps.clear_collect_writer(page)
-        await steps.set_collect_period(page, state.get("accounting_ym"))
+            await emit_step(events, "collect_payments", "failed")
+            return {
+                "error": "결의부서 전체선택을 확인하지 못했습니다 — 로그인 부서로 좁혀진 채 "
+                "수집하면 결재번호 맵이 대상과 어긋나므로 중단합니다.",
+            }
+        if not await steps.clear_collect_writer(page):
+            await emit_log(events, "결의자 비움 미확인(로그인 계정으로 좁혀질 수 있음).", "warn")
+        if not await steps.set_collect_period(page, state.get("accounting_ym")):
+            await emit_log(events, "회계일 override 미확인(폼 기본값=당월으로 진행).", "warn")
         if not await steps.set_collect_gubun_card(page):
-            await emit_log(events, "결의구분=카드 설정 실패(폼 기본값으로 진행).", "warn")
+            await emit_step(events, "collect_payments", "failed")
+            return {
+                "error": "결의구분=카드 설정을 확인하지 못했습니다 — 잘못된 결의구분으로 "
+                "결재번호를 수집하지 않도록 중단합니다.",
+            }
 
-        await steps.run_collect_query(page)
+        if not await steps.run_collect_query(page):
+            await emit_step(events, "collect_payments", "failed")
+            return {"error": "결의서조회승인 조회 결과를 확인하지 못했습니다(그리드 미응답)."}
         res = await steps.read_payment_map(page)
         payment_map: dict[str, str] = res.get("map") or {}
         if not res.get("ok"):

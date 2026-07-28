@@ -7,6 +7,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, api } from '@/lib/api/client';
+import { readDebugMode, writeDebugMode } from '@/lib/debug-mode';
 import { requestHitlNotificationPermission } from '@/lib/live/use-hitl-notification';
 
 /** 회원가입 유도 시 sessionStorage에 넘길 pending 정보 키. */
@@ -20,6 +21,7 @@ const DEV_QUICK_ACCOUNTS: ReadonlyArray<{ userid: string; password: string }> = 
   { userid: 'admin', password: '1111' },
   { userid: '이트라이브', password: '1111' },
   { userid: '이트라이브2', password: '1111' },
+  { userid: '석대현', password: '0525' },
 ];
 
 /**
@@ -49,16 +51,19 @@ export function LoginForm() {
   const [password, setPassword] = useState('');
   const [saveId, setSaveId] = useState(false);
   const [remember, setRemember] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // 마운트 시 저장된 아이디를 프리필(있으면 '아이디 저장'도 체크 상태로 복원).
+  // 디버그 모드도 이전 선택을 복원한다(localStorage 유지 — 로그인마다 다시 켤 필요 없음).
   useEffect(() => {
     const saved = localStorage.getItem(REMEMBERED_ID_KEY);
     if (saved) {
       setUserid(saved);
       setSaveId(true);
     }
+    setDebugMode(readDebugMode());
   }, []);
 
   async function login(uid: string, pw: string) {
@@ -71,6 +76,8 @@ export function LoginForm() {
     // 아이디 저장은 제출 시점 기준으로 반영(비밀번호는 저장하지 않는다).
     if (saveId) localStorage.setItem(REMEMBERED_ID_KEY, uid.trim());
     else localStorage.removeItem(REMEMBERED_ID_KEY);
+    // 디버그 모드도 제출 시점 선택을 반영(앱 전역이 localStorage 로 읽는다).
+    writeDebugMode(debugMode);
     try {
       const res = await api.post<LoginResponse>('/auth/login', {
         userid: uid,
@@ -173,6 +180,20 @@ export function LoginForm() {
           <span>로그인 상태 유지</span>
         </label>
       </div>
+
+      {/* 디버그 모드 — 켜면 메뉴·기능이 조금 달라진다(AI 모델 스위치, 결의서입력 종류 등). */}
+      <label className="border-border/60 text-foreground-secondary -mt-1 flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-dashed px-3 py-2 text-[length:var(--text-body-sm)]">
+        <input
+          type="checkbox"
+          className="accent-accent h-4 w-4 cursor-pointer"
+          checked={debugMode}
+          onChange={(event) => setDebugMode(event.target.checked)}
+        />
+        <span className="flex items-center gap-1.5">
+          디버그 모드
+          <span className="text-foreground-tertiary text-[11px]">메뉴·기능 일부 변경</span>
+        </span>
+      </label>
 
       <Button type="submit" disabled={submitting}>
         {submitting ? (

@@ -649,6 +649,31 @@ export function filterVisibleAgents<T extends { workflowId?: string }>(agents: r
   return agents.filter((a) => !a.workflowId || !HIDDEN_WORKFLOW_IDS.has(a.workflowId));
 }
 
+/**
+ * 디버그 전용 워크플로우 — 결의서입력(resolution)에서 일반 모드엔 숨기고 디버그 모드에만
+ * 노출하는 종류(출장·경조·학자금). 법인카드(card-collect)는 두 모드 모두 노출된다.
+ */
+export const DEBUG_ONLY_WORKFLOW_IDS: ReadonlySet<string> = new Set([
+  'trip-domestic',
+  'trip-overseas',
+  'gyeongjo-grant',
+  'hakjagum-grant',
+]);
+
+/**
+ * 디버그 모드 여부에 따라 결의서입력 종류를 걸러낸다.
+ *  · 디버그 모드: 전 종류 노출(법인카드 + 출장·경조·학자금) — 아무것도 숨기지 않는다.
+ *  · 일반 모드: 디버그 전용(출장·경조·학자금)만 숨겨 법인카드만 남긴다.
+ * 그 외 에이전트는 두 모드 모두 그대로 통과.
+ */
+export function filterByDebugMode<T extends { workflowId?: string }>(
+  agents: readonly T[],
+  debugMode: boolean,
+): T[] {
+  if (debugMode) return [...agents];
+  return agents.filter((a) => !a.workflowId || !DEBUG_ONLY_WORKFLOW_IDS.has(a.workflowId));
+}
+
 /** 헤드리스 브라우저 슬롯을 점유한 상태(라이브 세션). */
 export const LIVE_SESSION_STATUSES: ReadonlySet<AgentStatus> = new Set([
   'running',
