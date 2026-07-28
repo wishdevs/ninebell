@@ -59,14 +59,28 @@ class _LogPage:
         monkeypatch.setattr("nbkit.omnisol.modals.time.monotonic", lambda: self.clock_ms / 1_000)
 
 
-async def test_menu_nav_queries_notice_after_arrival(monkeypatch):
-    """메뉴 진입 성공(그리드 로드 확인) 직후 NOTICE JS 가 조회된다(전 에이전트 공통 한 곳)."""
+async def test_menu_nav_watches_notice_in_background_after_arrival(monkeypatch):
+    """메뉴 진입 성공 직후 공지 재출현 방어가 **배경으로** 시작된다.
+
+    ⚠ 계약 변경(2026-07-28): 종전에는 도착 직후 관찰창 2.5s 를 **차단형으로** 기다렸고, 실측상
+    재출현이 없는 경우가 대부분이라 매 실행 ~2.8s 를 헛대기했다. 이제 예약만 하고 즉시 반환하며
+    (진입이 그만큼 빨라진다), 팝업이 뜨면 배경 감시가 닫는다. 클릭 직전 JIT 방어는 그대로다.
+    """
+    import asyncio
+
     log: list[str] = []
     page = _LogPage(log)
     page.install_clock(monkeypatch)
     await navigate_menu(page, "/IM/TEST", "http://erp", label="테스트")
-    assert "notice_js" in log  # 도착 후 재출현 방어가 실제로 돈다.
-    assert log.index("menu_check") < log.index("notice_js")  # 도착 확인 → 방어 순서.
+    # 반환 시점에는 아직 공지 조회가 일어나지 않았어야 한다(= 기다리지 않았다).
+    assert "notice_js" not in log
+    # 배경 태스크를 소진시키면 그때 방어가 돈다.
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if "notice_js" in log:
+            break
+    assert "notice_js" in log
+    assert log.index("menu_check") < log.index("notice_js")
 
 
 async def test_switch_user_type_dismisses_before_and_after_switch(monkeypatch):
