@@ -54,6 +54,66 @@ def is_notice_window(url: str | None) -> bool:
     return any(m in u for m in _NOTICE_MARKERS)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 공지 팝업 **원천 차단** — 뜬 뒤 닫는 게 아니라 아예 열리지 않게 한다.
+# ══════════════════════════════════════════════════════════════════════════════
+# 종전 경로(감시 → 닫기)는 창이 잠깐 떴다 사라지고, 화면 전환마다 반복되며, 닫기가 빗나가면
+# 남는다. window.open 을 가로채 **공지 URL 이면 창을 열지 않고** 무해한 스텁을 돌려주면 그
+# 전부가 사라진다(사용자 요청 2026-07-28: "해당 팝업이면 화면에 표시하지 않고 무시").
+#
+# ⚠⚠ 안전 규율 — **차단은 공지 마커에만, 판정 실패는 통과(fail-open)** ⚠⚠
+#   결제창(EAP)도 같은 호스트의 window.open 이다. 그래서 이 스크립트는 "공지로 확정된 것만
+#   막고 나머지는 전부 원래 window.open 으로 넘긴다". 어떤 예외가 나도 native 로 폴백한다 —
+#   막지 못해 공지가 뜨는 것은 기존 감시자가 뒤에서 닫아주지만(무해), 업무 창을 잘못 막으면
+#   결재가 통째로 불가능해진다. 위험이 비대칭이므로 항상 통과 쪽으로 넘어진다.
+#
+# url 없이 open() 한 뒤 location 을 채우는 호출은 시점상 판정할 수 없다 → 통과시키고 기존
+# PopupWatcher/close_foreign_pages 폴백이 처리한다(이중 방어 유지).
+NOTICE_OPEN_BLOCK_JS = r"""() => {
+  try {
+    if (window.__nbkitNoticeBlocked) return;
+    window.__nbkitNoticeBlocked = true;
+    var NOTICE = ['art_seq_no=', 'callcomp=ufap'];
+    var native = window.open;
+    window.open = function (url) {
+      try {
+        var u = String(url == null ? '' : url).toLowerCase();
+        for (var i = 0; i < NOTICE.length; i++) {
+          if (u.indexOf(NOTICE[i]) !== -1) {
+            // 공지 팝업 — 창을 열지 않는다. 호출부가 반환값을 만져도(w.focus()/w.close())
+            // TypeError 로 ERP 스크립트를 깨뜨리지 않도록 스텁을 돌려준다.
+            return {
+              closed: true,
+              close: function () {},
+              focus: function () {},
+              blur: function () {},
+              postMessage: function () {},
+              location: { href: String(url == null ? '' : url) },
+              document: null,
+            };
+          }
+        }
+      } catch (e) { /* 판정 실패 → 아래 native 로 통과(업무 창 보호 우선) */ }
+      return native.apply(window, arguments);
+    };
+  } catch (e) { /* 설치 실패해도 페이지는 정상 동작해야 한다 */ }
+}"""
+
+
+async def block_notice_popups(context: Any) -> bool:
+    """컨텍스트의 모든 페이지에 공지 팝업 차단 스크립트를 설치한다(문서 로드 전 실행).
+
+    ``new_context()`` 직후 한 번 호출하면 이후 열리는 모든 페이지·프레임에 적용된다.
+    결제창은 마커가 달라 통과하며, 설치 실패는 삼킨다(감시자 폴백이 남아 있다). 반환 성공 여부.
+    """
+    try:
+        await context.add_init_script(NOTICE_OPEN_BLOCK_JS)
+        return True
+    except Exception:  # noqa: BLE001 — best-effort(폴백은 PopupWatcher).
+        logger.debug("공지 팝업 차단 스크립트 설치 실패(감시자 폴백)", exc_info=True)
+        return False
+
+
 async def _suppress_notice(page: Any) -> bool:
     """공지창의 '하루동안 열지 않기'를 눌러 **재출현을 막는다**(실패해도 무해).
 

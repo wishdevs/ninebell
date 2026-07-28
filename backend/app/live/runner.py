@@ -23,6 +23,8 @@ import time
 import traceback
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from nbkit.browser.popups import block_notice_popups
+
 from .screencast import screencast_pump
 
 logger = logging.getLogger(__name__)
@@ -176,6 +178,13 @@ async def run_workflow(
                 page = None
 
         raw_page = page  # storage_state 저장은 원본 page.context 로(프록시 우회).
+        # 공지 팝업 원천 차단 — 뜬 뒤 닫는 대신 window.open 단계에서 무시한다(웜/콜드 양 경로
+        # 공통, 로그인 goto 전에 설치돼야 첫 화면부터 적용된다). 결제창은 마커가 달라 통과하며,
+        # 실패해도 기존 PopupWatcher 폴백이 남는다.
+        if raw_page is not None:
+            ctx = getattr(raw_page, "context", None)
+            if ctx is not None:
+                await block_notice_popups(ctx)
         # 대기 배율 프록시. env(CARD_DELAY_SCALE) 우선, 없으면 per-run delay_scale(card-collect=0.15).
         page = _maybe_scale_page(page, delay_scale)
 
