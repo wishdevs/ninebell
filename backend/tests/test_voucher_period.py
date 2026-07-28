@@ -127,11 +127,16 @@ async def test_set_period_unset_uses_month_path():
     assert [c[0] for c in page.calls] == ["month"]
 
 
-async def test_set_period_current_month_uses_month_path():
+async def test_set_period_current_month_is_still_applied_as_range():
+    """⚠ 회귀 금지 — 당월이어도 setMonth() 로 단락하지 않고 **지정 기간을 그대로** 세팅한다.
+
+    화면 기본값이 1일~오늘이라, 단락하면 두 화면(전표조회승인/결의서조회승인)의 기간이
+    어긋난다(2026-07-28 실측). 기간이 아예 없을 때만 setMonth() 를 쓴다.
+    """
     start, end = current_month_range()
-    page = _StubPage()
+    page = _StubPage(values={"start": start, "end": end})
     assert (await steps.set_period(page, start, end))["ok"]
-    assert [c[0] for c in page.calls] == ["month"]
+    assert [c[0] for c in page.calls] == ["range", "read"]
 
 
 async def test_set_period_partial_range_sets_inputs_and_verifies():
