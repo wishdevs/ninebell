@@ -7,12 +7,16 @@ card_collect 에서 승격(2026-07-05) — 모든 옴니솔 에이전트 공용.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from typing import Any
 
 from nbkit.omnisol import js_lib
 
-__all__ = ["dismiss_blocking_modals", "dismiss_notice_popup"]
+__all__ = ["dismiss_blocking_modals", "dismiss_notice_popup", "watch_notice_popup"]
+
+logger = logging.getLogger(__name__)
 
 
 async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
@@ -114,3 +118,42 @@ async def dismiss_notice_popup(
                 return False  # 상한 — 후속 JIT 방어가 재시도한다(무한 대기 금지).
     except Exception:  # noqa: BLE001 — 닫기 실패해도 로그인 자체는 진행.
         return False
+
+
+def watch_notice_popup(page: Any, *, appear_cap_ms: int = 4_000) -> Any:
+    """공지 팝업을 **배경에서** 기다렸다 닫는다 — 진입 흐름을 멈추지 않는다.
+
+    ``dismiss_notice_popup`` 과 같은 일을 하되 **await 하지 않는다**. 반환한 task 는 호출부가
+    보관했다가(선택) 나중에 취소하거나 결과를 회수할 수 있다.
+
+    ⚠ 왜 필요한가(2026-07-28 실측): 공지 팝업은 로그인 완료 **1.6초 뒤**에 뜨고, 화면 전환
+    뒤에는 (적어도 이 계정·이 화면에선) 다시 뜨지 않는다. 그런데 진입 경로가 두 곳에서
+    차단형으로 기다렸다 —
+      · 로그인 직후 관찰창 4s → 실측 2.4~3.3s 소요(팝업을 실제로 잡음)
+      · 메뉴 도착 후 관찰창 2.5s → 실측 2.8s 소요, 그런데 **팝업이 안 떠서 전부 헛대기**
+    합쳐 진입 11.8s 중 5s 이상이 '팝업을 기다리는 시간'이었다. 배경으로 돌리면 팝업은 여전히
+    뜨는 즉시 닫히고, 그 사이 프로필 읽기·사용자유형 전환·메뉴 진입이 진행된다.
+
+    ⚠ 안전: 클릭을 가로채는 레이스 방어는 그대로다 — 실제 클릭 직전의 JIT 확인
+    (``dismiss_notice_popup(page, appear_cap_ms=0)``, 피커/탭 열기 직전)은 **차단형으로 유지**
+    한다. 이 배경 감시는 그 앞단의 '미리 치워두기'를 비동기화할 뿐이다.
+
+    이벤트 루프가 없으면(동기 스텁 등) None 을 돌려주고 아무것도 하지 않는다.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+    async def _run() -> None:
+        try:
+            closed = await dismiss_notice_popup(page, appear_cap_ms=appear_cap_ms)
+            if closed:
+                logger.info("공지 팝업을 배경에서 닫았습니다.")
+        except Exception:  # noqa: BLE001 — 배경 작업 실패가 본 흐름을 깨선 안 된다.
+            logger.debug("공지 팝업 배경 감시 실패(무시)", exc_info=True)
+
+    try:
+        return asyncio.create_task(_run())
+    except RuntimeError:
+        return None
