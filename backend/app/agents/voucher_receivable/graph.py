@@ -29,7 +29,10 @@ from app.agents.common.state import BaseAgentState
 from nbkit.omnisol.menu_schemas import VOUCHER_RECEIVABLE
 
 from . import steps  # 전표유형 상수(DOCU_TYPES_RECEIVABLE/PAYABLE)
+from .batching import DETAIL_BATCH_LIMIT
 from .nodes import (
+    make_batch_approvals_node,
+    make_count_details_node,
     make_loop_approvals_node,
     make_run_query_node,
     make_set_query_node,
@@ -52,6 +55,9 @@ class VoucherReceivableState(BaseAgentState, total=False):
     master_rowcount: int  # run_query 산출 — 조회 결과 마스터 그리드 행 수
     processed: int  # loop_approvals — 가상 상신 처리 건수
     processed_docu_nos: list[str]  # 가상 상신한 전표번호(DOCU_NO) 목록
+    # ── 배치 결재 모드(batch_limit 지정 시에만 채워진다 — 매입/카드는 미사용) ──────
+    detail_counts: dict  # count_details — 전표번호 → 하위(계정정보) 건수(-1=미상)
+    approval_plan: list  # count_details — 결재 순서대로의 그룹 목록(단독 먼저 → 묶음)
 
 
 def build_voucher_graph(
@@ -61,6 +67,7 @@ def build_voucher_graph(
     validate_node=None,
     pre_loop_node=None,
     on_popup=None,
+    batch_limit=None,
 ):
     """전표조회승인 조회+결재 체인을 컴파일해 반환(stateless·재사용).
 
@@ -74,6 +81,12 @@ def build_voucher_graph(
       pre_loop_node  run_query 와 loop_approvals **사이**에 삽입할 노드(카드=collect_payments,
                      결의서조회승인 다중탭에서 ABDOCU_NO→GWDOCU_NO 맵 수집). None=미삽입.
       on_popup       loop_approvals 결제창 훅(카드=참조문서 선택). None=미호출.
+      batch_limit    **배치 결재 모드**(외상매출금 전용, 사용자 요구 2026-07-27). 지정하면
+                     run_query 뒤에 count_details 노드를 넣어 전표별 하위(계정정보) 건수를
+                     파악하고, 하위 단독 batch_limit 이상은 단독으로 먼저, 나머지는 합계가
+                     batch_limit 미만이 되도록 묶어 **한 번에** 결재창을 연다(실측: 다중 체크
+                     후 결재 1회 → 자식창 1개에 대상 전부 표시).
+                     None(기본)=건별 순회(매입/카드 기존 동작 그대로).
     """
     g = StateGraph(state_cls)
     # 진입 앞단: validate_params(브라우저 앞) → 공유 프리미티브(login/user_type/menu_nav).
@@ -84,7 +97,11 @@ def build_voucher_graph(
     # 신규(조회 조건·조회·결재 순회) — set_query 만 전표유형 파라미터를 받는다.
     g.add_node("set_query", make_set_query_node(docu_types))
     g.add_node("run_query", make_run_query_node())
-    g.add_node("loop_approvals", make_loop_approvals_node(on_popup=on_popup))
+    # 배치 모드는 결재 노드 자체가 다르다(그룹 단위 체크·1회 결재). 건별 모드는 기존 그대로.
+    g.add_node(
+        "loop_approvals",
+        make_batch_approvals_node() if batch_limit else make_loop_approvals_node(on_popup=on_popup),
+    )
 
     edges = [
         ("validate_params", "login"),
@@ -93,7 +110,12 @@ def build_voucher_graph(
         ("menu_nav", "set_query"),
         ("set_query", "run_query"),
     ]
-    if pre_loop_node is not None:
+    if batch_limit:
+        # run_query → count_details → loop_approvals(배치). ⚠ 카드(pre_loop_node)와는 배타 —
+        # 카드는 결제창마다 행별 참조문서를 다루므로 묶음 결재와 양립하지 않는다.
+        g.add_node("count_details", make_count_details_node(batch_limit))
+        edges += [("run_query", "count_details"), ("count_details", "loop_approvals")]
+    elif pre_loop_node is not None:
         # run_query → collect_payments → loop_approvals(카드) — 매출/매입은 직결(아래 else).
         g.add_node("collect_payments", pre_loop_node)
         edges += [("run_query", "collect_payments"), ("collect_payments", "loop_approvals")]
@@ -109,8 +131,11 @@ def build_voucher_graph(
 
 
 def build_voucher_receivable_graph():
-    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출."""
-    return build_voucher_graph(steps.DOCU_TYPES_RECEIVABLE)
+    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출 + **배치 결재**.
+
+    ⚠ 배치 결재는 매출금만(사용자 요구 2026-07-27) — 매입금은 기존 건별 순회를 유지한다.
+    """
+    return build_voucher_graph(steps.DOCU_TYPES_RECEIVABLE, batch_limit=DETAIL_BATCH_LIMIT)
 
 
 def build_voucher_payable_graph():

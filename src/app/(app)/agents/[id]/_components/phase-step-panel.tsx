@@ -6,10 +6,10 @@ import {
   RiCheckLine,
   RiCloseLine,
   RiLoader4Line,
-  RiSparkling2Fill,
   RiUserLine,
 } from '@remixicon/react';
 import { Spinner } from '@/components/ui/spinner';
+import { ThinkingOrb } from '@/components/ui/thinking-orb';
 import type { WorkflowStep } from '@/lib/data/agents';
 import { formatEta } from '@/lib/data/format';
 import type { LiveRunStatus, LiveStepProgress, LiveStepState } from '@/lib/live/types';
@@ -400,11 +400,9 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
                   /* AI 작업 중 특별 표시 — 반짝임 + 흐르는 그라데이션 텍스트. 화면 변화가
                      없는 긴 AI 콜 구간이 멈춰 보이지 않게 눈에 띄는 신호를 준다. */
                   <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <RiSparkling2Fill
-                      size={14}
-                      aria-hidden
-                      className="animate-ai-sparkle text-accent shrink-0"
-                    />
+                    <span aria-hidden className="shrink-0 leading-none">
+                      <ThinkingOrb state="composing" size={20} speed={1.5} />
+                    </span>
                     <span className="ai-working-text truncate">
                       {currentStep.label} — AI가 계산하는 중…
                     </span>

@@ -315,3 +315,237 @@ async def test_fill_rows_requires_self_name(monkeypatch):
     out = await node(_fill_state(userid=""))
     assert "본인 이름" in out["error"]
     assert calls == []  # 본인 이름 없으면 어떤 detail 스텝도 호출하지 않는다.
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 확인(verify) 커널 계약 — "세팅했다"가 아니라 "반영됐다"를 근거로만 성공을 돌려준다.
+#   실물 시맨틱: setValue 는 ERP 핸들러가 되돌리면 **호출은 성공(ok:true)인데 셀은 옛 값**이고,
+#   코드피커 '적용'은 이름(BG_NM)만 비슷한 다른 행이 붙을 수 있다. 페이크는 이 두 가지를
+#   그대로 재현한다(값을 안 붙이지만 setter 는 ok 를 돌려준다).
+# ══════════════════════════════════════════════════════════════════════════════
+import re  # noqa: E402 — 확인 커널 테스트 블록 전용(위 블록의 import 순서를 건드리지 않음).
+
+from nbkit.omnisol import js_lib  # noqa: E402
+
+from app.agents.hakjagum_grant import steps as hj_steps  # noqa: E402
+from app.agents.hakjagum_grant.nodes.gubun import make_confirmed_set_gubun_node  # noqa: E402
+from app.agents.trip_domestic import js as trip_js  # noqa: E402
+from app.agents.trip_domestic import steps as trip_steps  # noqa: E402
+
+
+class _GridPage:
+    """detail RealGrid(index 1) 스텁 — setValue/셀 재독의 실물 시맨틱을 흉내낸다.
+
+    frozen: 그 필드는 setValue 를 **삼킨다**(ERP 핸들러 되돌림 재현). 그래도 SET_DETAIL_CELL_JS 는
+            ok:true 를 돌려준다 — 이게 국내출장 원본 스텝이 못 잡던 조용한 실패다.
+    readable=False: 리더가 그리드를 못 잡는 상황(세션·버전차) — ok:false = **확인 불가**.
+    """
+
+    def __init__(self, cells: dict | None = None, *, frozen: tuple = (), readable: bool = True):
+        self.cells: dict = dict(cells or {})
+        self.frozen = frozen
+        self.readable = readable
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src is js_lib.GRID_CELL_VALUE_JS:
+            if not self.readable:
+                return {"ok": False, "reason": "detail 그리드 없음"}
+            field = arg["field"]
+            raw = str(self.cells.get(field, ""))
+            return {
+                "ok": True,
+                "row": 0,
+                "rows": 1,
+                "raw": {field: raw},
+                "compact": {field: re.sub(r"\D", "", raw)},
+                "display": {field: raw},
+            }
+        if js_src is trip_js.SET_DETAIL_CELL_JS:
+            field, value = arg["field"], arg["value"]
+            if field not in self.frozen:
+                self.cells[field] = value
+            # ⚠ 되돌려진 경우에도 setter 는 성공을 돌려준다(after = 현재 셀 값).
+            return {"ok": True, "row": 0, "after": str(self.cells.get(field, "")), "display": ""}
+        if js_src is js_lib.PICKER_READ_MULTI_JS:
+            return {
+                "options": [
+                    {
+                        "i": 0,
+                        "BG_CD": "2005",
+                        "BG_NM": "회계팀",
+                        "BIZPLAN_NM": "운영비",
+                        "BGACCT_NM": "(판)복리후생비-기타",
+                    }
+                ]
+            }
+        return {"ok": True}
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def _apply_writes(**cells):
+    """피커 '적용'이 detail 셀에 쓰는 것을 흉내내는 _select_and_apply 스텁."""
+
+    async def _f(page, row_index, label, verify_field, expect_value):
+        page.cells.update(cells)
+        return {"ok": True}
+
+    return _f
+
+
+def _patch_budget_picker(monkeypatch, apply_fn):
+    """피커 열기/검색·선택은 국내출장 단일소스라 스텁 — 여기서 보는 건 **적용 후 확인**뿐이다."""
+
+    async def _open_ok(*a, **k):
+        return {"ok": True}
+
+    async def _search_and_pick(page, keyword, fields, pick, **k):
+        read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [fields, 0])
+        return pick(read.get("options") or [])
+
+    monkeypatch.setattr(trip_steps, "_open_detail_cell_picker", _open_ok)
+    monkeypatch.setattr(trip_steps, "_search_and_pick", _search_and_pick)
+    monkeypatch.setattr(trip_steps, "_select_and_apply", apply_fn)
+
+
+# ── 적요(NOTE_DC): 세팅 + 셀 재독(확인은 국내출장 단일소스 스텝에 있다) ──────────
+# 이 패키지는 그 스텝을 재수출만 하므로 여기서는 **재수출이 확인을 잃지 않았는지**를 계약으로 건다
+# (적요는 단건 전표의 내용 그 자체라, 확인을 잃으면 빈 적요가 그대로 저장된다).
+@pytest.mark.asyncio
+async def test_set_row_note_ok_when_cell_reflects():
+    page = _GridPage()
+    r = await hj_steps.set_row_note(page, "학자금-홍길동")
+    assert r["ok"] is True and "warn" not in r
+    assert page.cells["NOTE_DC"] == "학자금-홍길동"
+
+
+@pytest.mark.asyncio
+async def test_set_row_note_hard_fails_when_cell_not_reflected():
+    # ERP 핸들러가 적요를 되돌린 상황 — setter 는 ok 지만 셀은 빈 값이다.
+    page = _GridPage(frozen=("NOTE_DC",))
+    r = await hj_steps.set_row_note(page, "학자금-홍길동")
+    assert r["ok"] is False
+    assert "적요" in r["reason"]
+
+
+@pytest.mark.asyncio
+async def test_set_row_note_warns_when_cell_unreadable():
+    # 리더가 그리드를 못 잡음 = 확인 불가 → 하드 실패가 아니라 warn 후 진행.
+    page = _GridPage(readable=False)
+    r = await hj_steps.set_row_note(page, "학자금-홍길동")
+    assert r["ok"] is True
+    assert "확인 불가" in r["warn"]
+
+
+# ── 예산단위: 적용 후 BG_CD 완전일치 확인 ────────────────────────────────────
+@pytest.mark.asyncio
+async def test_fill_budget_ok_when_bg_cd_reflects(monkeypatch):
+    page = _GridPage()
+    _patch_budget_picker(monkeypatch, _apply_writes(BG_NM="회계팀", BG_CD="2005"))
+    r = await hj_steps.fill_budget_fixed(page, "회계팀", "판관비")
+    assert r["ok"] is True and r["code"] == "2005" and "warn" not in r
+
+
+@pytest.mark.asyncio
+async def test_fill_budget_hard_fails_when_other_budget_applied(monkeypatch):
+    # 이름만 서로 포함되는 다른 예산단위(회계팀2/BG_CD 2099)가 붙은 상황 — BG_NM 상호포함
+    # 판정은 통과시키지만 BG_CD 완전일치가 잡아낸다.
+    page = _GridPage()
+    _patch_budget_picker(monkeypatch, _apply_writes(BG_NM="회계팀2", BG_CD="2099"))
+    r = await hj_steps.fill_budget_fixed(page, "회계팀", "판관비")
+    assert r["ok"] is False
+    assert "BG_CD" in r["reason"]
+
+
+@pytest.mark.asyncio
+async def test_fill_budget_warns_when_cell_unreadable(monkeypatch):
+    page = _GridPage(readable=False)
+    _patch_budget_picker(monkeypatch, _apply_writes(BG_NM="회계팀", BG_CD="2005"))
+    r = await hj_steps.fill_budget_fixed(page, "회계팀", "판관비")
+    assert r["ok"] is True and "확인 불가" in r["warn"]
+    assert r["code"] == "2005"  # 확인 불가여도 선택 자체의 결과는 그대로 돌려준다.
+
+
+# ── 결의구분: 세팅 후 선택 텍스트 재확인(문서 종류 = 대상 정의 → 하드) ────────────
+class _GubunPage:
+    """결의구분 native select 스텁 — revert 면 change 핸들러가 값을 되돌린다(실물 함정)."""
+
+    def __init__(self, *, revert: bool = False, readable: bool = True):
+        self.selected = "일반"
+        self.revert = revert
+        self.readable = readable
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src is js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS:
+            if not self.revert:  # 되돌림이면 세터는 ok 인데 선택값은 그대로다.
+                self.selected = arg["text"]
+            return {"ok": True}
+        if js_src is js_lib.SELECTED_TEXT_JS:
+            if not self.readable:
+                return {"ok": False, "reason": "no-select"}
+            return {"ok": True, "text": self.selected, "value": "56"}
+        return True  # select 로드 폴링('(s) => !!document.querySelector(s)')
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def _drain(q: asyncio.Queue) -> list[dict]:
+    out = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out
+
+
+@pytest.mark.asyncio
+async def test_set_gubun_node_ok_when_selection_confirmed():
+    events = asyncio.Queue()
+    node = make_confirmed_set_gubun_node(HAKJAGUM_GUBUN_LABEL)
+    out = await node({"events": events, "page": _GubunPage()})
+    assert "error" not in out
+    assert not [e for e in _drain(events) if e.get("level") == "warn"]
+
+
+@pytest.mark.asyncio
+async def test_set_gubun_node_hard_fails_when_reverted():
+    events = asyncio.Queue()
+    node = make_confirmed_set_gubun_node(HAKJAGUM_GUBUN_LABEL)
+    out = await node({"events": events, "page": _GubunPage(revert=True)})
+    assert "결의구분" in out["error"]
+    assert [e for e in _drain(events) if e.get("status") == "failed"]
+
+
+@pytest.mark.asyncio
+async def test_set_gubun_node_warns_when_select_unreadable():
+    events = asyncio.Queue()
+    node = make_confirmed_set_gubun_node(HAKJAGUM_GUBUN_LABEL)
+    out = await node({"events": events, "page": _GubunPage(readable=False)})
+    assert "error" not in out  # 확인 불가는 플로우를 끊지 않는다.
+    warns = [e for e in _drain(events) if e.get("level") == "warn"]
+    assert warns and "결의구분" in warns[0]["log"]
+
+
+# ── fill_rows: 확인 불가(warn)를 삼키지 않는다 ───────────────────────────────
+@pytest.mark.asyncio
+async def test_fill_rows_surfaces_unverified_fields(monkeypatch):
+    calls: list = []
+    notes: list = []
+    _patch_fill_all_ok(monkeypatch, calls, notes)
+
+    async def _note_unverified(page, text):
+        calls.append("set_row_note")
+        notes.append(text)
+        return {"ok": True, "warn": "적요(NOTE_DC) 확인 불가(기대 '학자금-홍길동' / 실제 None…)"}
+
+    monkeypatch.setattr(fill.steps, "set_row_note", _note_unverified)
+    node = make_fill_rows_node()
+    state = _fill_state()
+    out = await node(state)
+    assert out["filled"] == 1
+    assert out["fill_warnings"] == ["적요"]
+    assert_keys_declared(HakjagumGrantState, out)
+    logs = [e for e in _drain(state["events"]) if "log" in e]
+    # 미확인이 있으면 완료라고 단정하지 않는다 — 마무리 로그가 warn 이고 미확인 필드를 명시한다.
+    final = logs[-1]
+    assert final["level"] == "warn" and "미확인" in final["log"] and "완료" not in final["log"]

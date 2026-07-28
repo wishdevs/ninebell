@@ -48,7 +48,12 @@ def make_set_acct_date_node():
         if not r.get("ok"):
             await emit_step(events, "set_acct_date", "failed")
             return {"error": f"회계일 설정 실패({dashed}): {r.get('reason')}"}
-        await emit_log(events, f"회계일 = {dashed} (증빙일).", "info")
+        # 확인 불가(그리드 셀 readback 실패)는 하드 실패로 막지 않되 **조용히 넘기지도 않는다** —
+        # 회계일은 저장될 데이터 자체라, 반영을 못 본 채 진행했다는 사실이 로그에 남아야 한다.
+        if r.get("warn"):
+            await emit_log(events, f"회계일 {r['warn']}", "warn")
+        verified = "" if r.get("verified", True) else " (반영 미확인)"
+        await emit_log(events, f"회계일 = {dashed} (증빙일).{verified}", "info")
         await emit_step(events, "set_acct_date", "done", _ms(t0))
         return {}
 
@@ -88,6 +93,15 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": 1, "field": field, "reason": reason}]}
 
+        # 스텝이 '확인 불가'(리더로 셀을 못 읽음)로 통과했으면 그 사실을 반드시 노출한다 —
+        # 반영 실패는 하드 실패로 걸리지만, 확인 불가가 조용히 지나가면 아래 완료 로그가 거짓이 된다.
+        warns: list[str] = []
+
+        async def note_warn(field: str, r: dict) -> None:
+            if r.get("warn"):
+                warns.append(field)
+                await emit_log(events, f"'{field}' {r['warn']}", "warn")
+
         row = plan_rows[0]  # 단건.
         amount = int(row.get("amount") or 0)
         await emit_log(events, f"학자금 입력 시작 — 공급가액 {amount:,}원.", "info")
@@ -112,6 +126,7 @@ def make_fill_rows_node():
         bu = await steps.fill_budget_fixed(page, department, cost_type)
         if not bu.get("ok"):
             return await fail("예산단위", bu.get("reason"))
+        await note_warn("예산단위", bu)
         # 5) 프로젝트.
         pj = await steps.fill_project(page, row.get("project") or {})
         if not pj.get("ok"):
@@ -125,6 +140,7 @@ def make_fill_rows_node():
         nt = await steps.set_row_note(page, note)
         if not nt.get("ok"):
             return await fail("적요", nt.get("reason"))
+        await note_warn("적요", nt)
         # (상대계정거래처는 미사용 — 경조금 동형 가정(검증:❓). trip 의 register_counter_partner +
         #  그로 인해 딸려오는 빈 행 삭제(delete_blank_row) 스텝 미사용. 다른 피커는 빈 행을 만들지 않는다.)
 
@@ -137,9 +153,20 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": 0, "field": "마스터합계", "reason": mt.get("reason")}]}
 
-        await emit_log(events, f"학자금 반영 완료 — 적요 '{note}' · 공급가액 {amount:,}원.", "ok")
+        # 확인되지 않은 필드가 하나라도 있으면 '완료'라고 단정하지 않는다(어느 필드가 미확인인지 명시).
+        if warns:
+            await emit_log(
+                events,
+                f"학자금 반영 — 적요 '{note}' · 공급가액 {amount:,}원. "
+                f"⚠ 반영 미확인: {', '.join(warns)}(저장 후 값 확인 필요).",
+                "warn",
+            )
+        else:
+            await emit_log(
+                events, f"학자금 반영 완료 — 적요 '{note}' · 공급가액 {amount:,}원.", "ok"
+            )
         await emit_shot(events.put, page)
         await emit_step(events, "fill_rows", "done", _ms(t0))
-        return {"filled": 1, "fill_failures": []}
+        return {"filled": 1, "fill_failures": [], "fill_warnings": warns}
 
     return fill_rows

@@ -817,6 +817,11 @@ class _GridReadyFakePage:
             return None  # 공지 모달 없음.
         if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
             return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_COUNT_JS:
+            # 팝업 생명주기 모델: 돋보기(10,10) 클릭=열림, 적용(20,20) 클릭=닫힘.
+            opened = (10, 10) in self.clicks
+            closed = (20, 20) in self.clicks
+            return 1 if (opened and not closed) else 0
         if js_src == vjs.POPUP_GRID_READY_JS:
             self.grid_ready_polls += 1
             return self._is_ready

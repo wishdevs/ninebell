@@ -62,8 +62,12 @@ MENU_CHECK_JS = """() => {
 }"""
 
 # ── 프로필(이름·부서·사용자유형) best-effort 추출 ──────────────────────────────
+# 아바타 JS 폴백 클릭 — 실클릭 실패 시에만. 앵커(a.user-pic) 우선, 그다음 기본 아바타 이미지,
+# 마지막으로 헤더 이미지. ⚠ src 기반 단독 탐색은 프로필 사진 업로드 계정에서 실패한다
+# (2026-07-27 실측: `/download/image/<uuid>`) — selectors.AVATAR 주석 참조.
 AVATAR_CLICK_JS = (
-    "() => { const a = document.querySelector('img[src*=profile_circle]') "
+    "() => { const a = document.querySelector('a.user-pic') "
+    "|| document.querySelector('img[src*=profile_circle]') "
     "|| [...document.querySelectorAll('header img, img[alt]')].pop(); if (a) a.click(); }"
 )
 
@@ -626,4 +630,279 @@ NOTICE_POPUP_BOXES_JS = r"""() => {
   const center = (el) => { const r = el.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; };
   return { checkbox: center(chk), close: center(btn), checked: !!chk.checked };
+}"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [C] 확인(검증) 리더 — "선택 → 확인 → 다음" 공용 read 상수.
+#     nbkit.omnisol.verify 의 confirm_* 헬퍼가 사용한다. **읽기 전용**(부작용 없음) —
+#     클릭·세팅을 하는 상수는 이 섹션에 두지 않는다.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# native/kendo 드롭다운의 **현재 선택값** 읽기. arg = selector. 반환 {ok, text, value} | {ok:false}.
+# ⚠ KENDO_SET_DROPDOWN_BY_TEXT_JS 는 "옵션을 찾아 value 를 넣었다"까지만 보증한다 — 위젯이
+#   change 핸들러에서 값을 되돌리거나(연쇄 필드 리셋) 서버 리로드로 초기화되는 경우가 있어,
+#   세팅 후 이 리더로 **실제 선택 텍스트**를 재확인해야 '선택됨'이 확정된다.
+SELECTED_TEXT_JS = r"""(selector) => {
+  const sel = document.querySelector(selector);
+  if (!sel) return { ok: false, reason: 'no-select' };
+  const w = window.jQuery ? window.jQuery(sel).data('kendoDropDownList') : null;
+  const opt = sel.options[sel.selectedIndex];
+  const text = w && typeof w.text === 'function' ? w.text() : (opt ? opt.text : null);
+  return {
+    ok: true,
+    text: String(text == null ? '' : text).replace(/\s+/g, ' ').trim(),
+    value: sel.value,
+  };
+}"""
+
+# 조회조건 필드(멀티코드피커/코드피커)의 **표시값** 읽기 — 피커 팝업 '적용'이 폼에 실제로
+# 반영됐는지 확인하는 단일 근거. arg = label(예 '작성부서'). 반환 문자열 또는 null.
+# ⚠ 팝업 안에서 checkRow 가 성공해도(=팝업 내부 상태) 적용이 폼에 안 붙는 사례가 있어,
+#   팝업류 선택은 이 표시값까지 봐야 확인이 끝난다.
+FIELD_DISPLAY_JS = r"""(label) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const lbl = [...document.querySelectorAll('label')].find(e => c(e.innerText) === label);
+  if (!lbl) return null;
+  const li = lbl.closest('li');
+  if (!li) return null;
+  const inp = li.querySelector('.dews-multicodepicker-text, .dews-codepicker-text');
+  return inp ? inp.value : null;
+}"""
+
+# 현재 화면에 떠 있는(visible) k-window 팝업 개수. 반환 int.
+# ⚠ 팝업 생명주기 검증용(2026-07-24 실측): 조회조건 피커(부서·전자결재상태·전표유형)들은 전부
+#   '최상단 k-window'를 대상으로 조작한다(POPUP_CHECK_ROWS/APPLY 등). 앞 피커의 '적용' 후
+#   팝업이 실제로 닫혔는지 검증하지 않으면(고정대기만) 느린 세션에서 부서 팝업(46개)이 남고,
+#   다음 피커(전자결재상태) 돋보기 클릭이 그 팝업 뒤라 먹혀 새 팝업이 안 뜨는데도 최상단(=부서)
+#   그리드가 ready 라 오판 → 46행 부서 팝업을 읽어 '저장' 못 찾는 오류가 났다. 열기=개수 증가,
+#   닫기=개수 감소를 검증해 스테일 팝업 오독을 차단한다.
+POPUP_COUNT_JS = r"""() => {
+  return [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null).length;
+}"""
+
+# 화면에 지정 텍스트가 **보이는지** — 화면/탭 전환·다이얼로그 렌더 확인용. arg = text.
+# 반환 bool. 리프 요소(자식 없는 노드)만 훑어 상위 컨테이너의 통짜 innerText 오탐을 피한다.
+VISIBLE_TEXT_JS = r"""(text) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const needle = c(text);
+  if (!needle) return false;
+  for (const el of document.querySelectorAll('*')) {
+    if (el.children.length > 0) continue;
+    if (el.offsetParent === null) continue;
+    if (c(el.innerText || el.textContent || '').includes(needle)) return true;
+  }
+  return false;
+}"""
+
+# 기간(periodpicker) 필드의 **현재 값** 읽기 — 회계일 세팅(setMonth/range) 반영 확인용.
+# arg = 컨테이너 selector('#s_period' | '#PERIOD_DT_C'). 위젯 내부 input 을 먼저 보고, 없으면
+# `<id>_startinput`/`<id>_endinput`(더존 관례 id)로 폴백한다. 반환
+#   {found:true, values:[...], ym:['YYYYMM', ...], now:'YYYYMM'} | {found:false, reason, now}.
+# ⚠ 기준월(now)은 **브라우저 시각**으로 계산한다 — 서버(파이썬) 시각과 타임존이 다를 때
+#   월말/월초에 오탐이 나지 않게. found:false 는 '값이 틀림'이 아니라 '확인 불가'로 다룬다.
+PERIOD_VALUE_JS = r"""(selector) => {
+  const d = new Date();
+  const now = String(d.getFullYear()) + String(d.getMonth() + 1).padStart(2, '0');
+  const digits = v => String(v == null ? '' : v).replace(/\D/g, '');
+  let inputs = [];
+  const el = document.querySelector(selector);
+  if (el) inputs = [...el.querySelectorAll('input')];
+  if (!inputs.length) {
+    const id = selector.replace(/^#/, '');
+    inputs = [document.getElementById(id + '_startinput'), document.getElementById(id + '_endinput')]
+      .filter(Boolean);
+  }
+  inputs = inputs.filter(i => digits(i.value).length >= 6);
+  if (!inputs.length) return { found: false, reason: el ? 'no-input' : 'no-field', now };
+  const values = inputs.map(i => i.value);
+  return { found: true, values, ym: values.map(v => digits(v).slice(0, 6)), now };
+}"""
+
+# 지정 컨트롤이 **현재 화면에 보이는지** — 화면/탭 전환 도착 확인용(다중 메뉴 탭에서 특히 중요:
+# 다른 탭의 DOM 은 남아 있으므로 존재(querySelector)만으로는 '그 화면에 있다'가 성립하지 않는다).
+# arg = selector. 반환 bool.
+VISIBLE_ELEMENT_JS = r"""(selector) => {
+  const el = document.querySelector(selector);
+  return !!(el && el.offsetParent !== null);
+}"""
+
+# 조회조건 라벨이 **현재 화면에 클릭 가능한 크기로 렌더**돼 있는지. arg = label. 반환 bool.
+# 두 가지 용도가 같은 판정을 쓴다:
+#   (1) optional-area 접힘 감지(전표유형이 다른 필드 조작 중 재접히는 레이스 — 접힌 버튼은
+#       rect 0×0 이라 좌표만 보면 "찾음"으로 오판한다).
+#   (2) **화면·탭 도착 확인** — 다중 메뉴 탭에서 비활성 탭의 라벨은 렌더되지 않는다.
+# ⚠ 도착 확인에 **native select 를 앵커로 쓰지 말 것**(2026-07-27 라이브 실패): kendo
+#   DropDownList 는 원본 <select> 를 display:none 으로 숨기고 위젯을 대신 그린다 — 올바른
+#   화면에 도착해도 select 는 영원히 '안 보임'이라 VISIBLE_ELEMENT_JS 가 항상 false 다.
+#   (세팅은 jQuery 위젯 API 라 숨은 select 에서도 정상 동작한다 — 가시성 앵커로만 부적합.)
+#   화면 앵커는 이 라벨 리더나 실제 버튼(예: 결재 버튼 rect)처럼 **눈에 보이는 것**으로 잡는다.
+FIELD_LABEL_VISIBLE_JS = r"""(label) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const lbl = [...document.querySelectorAll('label')].find(e => c(e.innerText) === label);
+  if (!lbl) return false;
+  const li = lbl.closest('li');
+  if (!li) return false;
+  const btns = [...li.querySelectorAll('.dews-multicodepicker-button')];
+  const btn = btns[1] || btns[0];
+  if (!btn) return false;
+  const r = btn.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && btn.offsetParent !== null;
+}"""
+
+# ── 팝업·모달 안 필드의 표시값/입력값 읽기(스코프 격리) ─────────────────────────
+# arg = {win?, scope?, selector?, label?}. 반환 문자열(빈 문자열 = 읽었는데 비어있음) |
+# null(스코프·필드 미발견 = **확인 불가** → `unknown_when=lambda v: v is None` 로 warn 후 진행).
+#
+# 왜 FIELD_DISPLAY_JS 로 안 되나(이 리더의 존재 이유):
+#   (1) FIELD_DISPLAY_JS 는 **document 전역**에서 innerText 가 정확히 일치하는 첫 <label> 을
+#       잡는다 — 팝업/모달 뒤에 결의서입력 본화면이 살아 있고 '프로젝트'·'예산단위' 같은 동명
+#       라벨이 거기에도 있으면 **배경 화면의 엉뚱한 필드**를 읽는다.
+#   (2) FIELD_DISPLAY_JS 는 label→closest('li')→.dews-(multi)codepicker-text 라는 **조회조건
+#       li 마크업**을 전제한다. 법인카드 팝업의 피커는 `#{field}-wrapper`(picker_btn_js 참조),
+#       결의서입력 카드상세 모달의 피커는 label/span/div/th + button.dews-codepicker-button
+#       구조라 li 전제가 성립하지 않아 null(=영영 확인 불가)이 나온다.
+#   (3) §C 에는 **임의 input 의 value 를 읽는 리더가 없었다**(SELECTED_TEXT_JS=select 전용,
+#       PERIOD_VALUE_JS=periodpicker 전용, VISIBLE_TEXT_JS=innerText 라 input value 를 못 읽음).
+#
+# 인자 규약:
+#   win     : k-window **제목 정규식 문자열**(예 '법인카드'). 주면 그 제목의 최상단 visible
+#             팝업이 루트. 없으면 null(= 그 팝업 자체가 없음 → 확인 불가).
+#             생략하면 '최상단 visible .k-window, 하나도 없으면 document'.
+#   scope   : 루트 **안에서** 찾을 컨테이너 셀렉터(예 '#bg_cd-wrapper', '#pjt_cd-wrapper').
+#             ⚠ 루트 안에 없으면 document 로 폴백하지 **않는다**(폴백하면 (1)의 배경-오독이
+#             그대로 재발한다) — null 을 돌려 '확인 불가'로 다룬다.
+#   selector: 스코프 안에서 값을 읽을 요소(세터가 반환한 input id 등). 최우선.
+#   label   : selector 가 없을 때. 스코프 안에서 텍스트가 정확히 일치하는 **리프** 요소를 찾아
+#             ①같은 li 안의 codepicker-text/input → ②같은 행(top 차 <22px) 오른쪽 최근접 input
+#             순으로 해석한다(모달은 li 마크업이 없을 수 있어 ②가 필요하다).
+#   (셋 다 없으면) 스코프 안 첫 .dews-(multi)codepicker-text.
+# ⚠ 라벨 매칭은 **자식 없는 리프 요소**만 본다 — innerText 가 라벨과 같아지는 상위 컨테이너
+#   div/th 를 잡아 엉뚱한 좌표로 근접 탐색하는 오탐을 막는다(VISIBLE_TEXT_JS 와 같은 규율).
+# 용도: 코드피커 '적용'이 **폼에 실제로 붙었는지**의 단일 근거 + 일반 input(적요·카드번호·
+#   승인일) value readback. verify.confirm(read=..., ok=...) 범용 커널과 조합해 쓴다.
+SCOPED_FIELD_VALUE_JS = r"""({ win, scope, selector, label }) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const vis = el => !!(el && el.offsetParent !== null);
+  // 1) 루트 — 배경 화면(결의서입력 본화면)과 격리한다.
+  let root = document;
+  const wins = [...document.querySelectorAll('.k-window')].filter(vis);
+  if (win) {
+    let re; try { re = new RegExp(win); } catch (e) { return null; }
+    const hit = wins.filter(w => re.test(c((w.querySelector('.k-window-title')||{}).innerText)));
+    if (!hit.length) return null;
+    root = hit[hit.length - 1];
+  } else if (wins.length) {
+    root = wins[wins.length - 1];
+  }
+  // 2) 스코프 컨테이너(루트 안에서만 — document 폴백 없음).
+  let box = root;
+  if (scope) {
+    box = root.querySelector(scope);
+    if (!box) return null;
+  }
+  // 3) 대상 요소.
+  let el = null;
+  if (selector) {
+    el = box.querySelector(selector);
+  } else if (label) {
+    const want = c(label);
+    const lb = [...box.querySelectorAll('label,span,div,th,td')]
+      .find(e => e.children.length === 0 && c(e.innerText || e.textContent || '') === want);
+    if (!lb) return null;
+    const li = lb.closest('li');
+    if (li) el = li.querySelector('.dews-multicodepicker-text, .dews-codepicker-text, input, textarea');
+    if (!el) {
+      const lr = lb.getBoundingClientRect();
+      let bd = 1e9;
+      for (const i of box.querySelectorAll('input, textarea')) {
+        if (!vis(i)) continue;
+        const r = i.getBoundingClientRect();
+        if (Math.abs(r.top - lr.top) >= 22) continue;
+        if (r.left <= lr.left) continue;
+        const dx = r.left - lr.left;
+        if (dx < bd) { bd = dx; el = i; }
+      }
+    }
+  } else {
+    el = box.querySelector('.dews-multicodepicker-text, .dews-codepicker-text');
+  }
+  if (!el) return null;
+  // 4) 값 — 래퍼를 받았으면 그 안의 input/textarea 로 내려간다.
+  if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') {
+    el = el.querySelector('input, textarea') || el;
+  }
+  if (el.value === undefined) return c(el.innerText || el.textContent || '');
+  return String(el.value == null ? '' : el.value);
+}"""
+
+# ── RealGrid **현재(선택) 행** 읽기 ────────────────────────────────────────────
+# arg = grid index. 반환 {ok:true, current:int, itemIndex, dataRow, rows:int} |
+# {ok:false, reason}. current = itemIndex 우선(없으면 dataRow, 둘 다 없으면 -1).
+# ⚠ RealGrid 는 **캔버스**라 DOM 으로 선택행을 볼 수 없다 — §C 의 다른 리더로는 대체 불가다
+#   (ROWCOUNT_BY_INDEX_JS 는 행수만, VISIBLE_* 는 DOM 가시성만, SET_CURRENT_BY_INDEX_JS 는
+#   세팅 전용).
+# 용도(핵심): **파괴적 액션(F6 삭제) 사전 안전판**. 빈 행 선택은 좌표 추정 클릭
+#   (에이전트 로컬 DETAIL_ROW_CLICK_JS: r.y + 34 + idx*32 + 16)에 의존하는데, 스크롤·행높이·
+#   헤더높이가 달라지면 클릭이 빗나가 현재 행이 **데이터 행**이 된다. 그 상태의 삭제는 되돌릴
+#   수 없으므로, 삭제 버튼을 누르기 **전에** current == 의도한 인덱스를 확인하고 아니면 중단한다.
+# ⚠ itemIndex(화면 정렬·필터 기준)와 dataRow(데이터 기준)는 정렬/필터가 걸리면 어긋난다.
+#   좌표 클릭으로 고른 행을 검증하는 자리이므로 **화면 기준인 itemIndex** 를 우선한다.
+# ⚠ ok:false(그리드 미접근)는 '행이 틀림'이 아니라 **확인 불가**다 — 다만 이 리더는 파괴적
+#   액션의 게이트이므로, 확인 불가면 진행이 아니라 **삭제를 건너뛰는(보수적) 쪽**으로 다룬다.
+GRID_CURRENT_ROW_JS = r"""(index) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[index]).data('dewsControl')._grid;
+    const rows = g.getDataSource().getRowCount();
+    const cur = g.getCurrent() || {};
+    const num = v => (typeof v === 'number' && v >= 0) ? v : null;
+    const itemIndex = num(cur.itemIndex);
+    const dataRow = num(cur.dataRow);
+    const current = itemIndex != null ? itemIndex : (dataRow != null ? dataRow : -1);
+    return { ok: true, current, itemIndex, dataRow, rows };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
+# ── RealGrid **셀 값** 읽기(마스터/디테일 공용) ────────────────────────────────
+# arg = {index, field?|fields?, row?}. row 생략 = **마지막 행**(결의서입력 계열은 방금 추가한
+# 행을 검증하는 자리가 대부분). 반환
+#   {ok:true, row, rows, raw:{f:str}, compact:{f:숫자만}, display:{f:라벨|null}} |
+#   {ok:false, reason, rows?}.
+# ⚠ **날짜 셀의 getValue 는 Date 객체를 반환한다** — String() 하면 'Tue Jul 07 2026 …'(월이
+#   영문·타임존 오프셋 포함)이라 숫자만 뽑는 검증이 오판한다(계산서일 '반영 불일치' 오류의
+#   원인, 2026-07-07 실측). 그래서 compact 는 Date 를 **브라우저 로컬 Y/M/D** 로 직접
+#   'YYYYMMDD' 화하고, 문자열·숫자면 숫자만 추린다. 금액 검증도 compact 를 쓰면
+#   콤마·통화기호가 자동으로 떨어진다.
+# ⚠ display 는 getDisplayValuesOfRow(row) 의 해당 필드 — 코드값 컬럼(예 VAT_TP='1')의
+#   **라벨**('과세')을 확인할 때만 쓴다. 그리드/버전에 따라 없을 수 있어 실패는 null 로 삼킨다.
+# 용도: set_row_note(NOTE_DC)·_select_and_apply(BG_NM/PJT_NM/PARTNER_NM)·set_master_total
+#   (DETAIL_SUM_AMT)·set_acct_date(ACTG_DT)·계산서일(START_DT)·금액(SPPRC_AMT2) 등 결의서입력
+#   계열 확인의 단일 리더. 에이전트 로컬 READ_DETAIL_CELL_JS / READ_DETAIL_DATE_JS 를 각
+#   패키지가 복제하던 것을 대체한다(§10: 리더는 에이전트 로컬 js.py 가 아니라 §C 에 둔다).
+GRID_CELL_VALUE_JS = r"""({ index, field, fields, row }) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[index]).data('dewsControl')._grid;
+    const n = g.getDataSource().getRowCount();
+    if (n < 1) return { ok: false, reason: '행 없음', rows: 0 };
+    const r = (typeof row === 'number') ? row : n - 1;
+    if (r < 0 || r >= n) return { ok: false, reason: '행 인덱스 범위 밖(' + r + '/' + n + ')', rows: n };
+    const names = (fields && fields.length) ? fields : (field ? [field] : []);
+    if (!names.length) return { ok: false, reason: 'field 미지정', rows: n };
+    let dv = {};
+    try { dv = g.getDisplayValuesOfRow(r) || {}; } catch (e) { dv = {}; }
+    const raw = {}, compact = {}, display = {};
+    for (const f of names) {
+      const v = g.getValue(r, f);
+      if (v instanceof Date && !isNaN(v.getTime())) {
+        const p = x => ('0' + x).slice(-2);
+        raw[f] = v.toString();
+        compact[f] = '' + v.getFullYear() + p(v.getMonth() + 1) + p(v.getDate());
+      } else {
+        raw[f] = String(v == null ? '' : v);
+        compact[f] = raw[f].replace(/\D/g, '');
+      }
+      display[f] = (dv[f] == null) ? null : String(dv[f]);
+    }
+    return { ok: true, row: r, rows: n, raw, compact, display };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
 }"""

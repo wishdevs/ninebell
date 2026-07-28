@@ -6,7 +6,8 @@ import { RiArrowLeftSLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { ListStatePanel } from '@/components/ui/list-state';
 import { MetaChip } from '@/components/ui/meta-chip';
-import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode, filterVisibleAgents } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
@@ -21,13 +22,16 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
   const fav = useFavorites('agent');
   const { loadIds } = fav;
+  const debugMode = useDebugMode();
 
   useEffect(() => {
     void loadIds();
   }, [loadIds]);
 
-  // 숨김 대상(해외출장·경조금 등) 제외 후 그룹 필터(UI 전용).
-  const agents = filterVisibleAgents(data ?? []).filter((a) => a.group?.id === groupId);
+  // 숨김 대상 제외 + 디버그 모드별 종류 필터 후 그룹 필터(UI 전용).
+  const agents = filterByDebugMode(filterVisibleAgents(data ?? []), debugMode).filter(
+    (a) => a.group?.id === groupId,
+  );
   const group = agents[0]?.group ?? null;
 
   return (

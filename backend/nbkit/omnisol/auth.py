@@ -20,6 +20,7 @@ from nbkit.browser.actions import mouse_click, safe_evaluate
 from nbkit.browser.detection import is_authenticated, selector_present
 from nbkit.omnisol import js_lib, selectors
 from nbkit.omnisol.errors import AuthError, UserTypeError
+from nbkit.omnisol.modals import dismiss_notice_popup
 
 logger = logging.getLogger("nbkit.omnisol.auth")
 
@@ -128,6 +129,12 @@ async def switch_user_type(page: Any, target: str, *, attempts: int = 2) -> None
         return
 
     for attempt in range(1, attempts + 1):
+        # 공지팝업 재출현 방어(사용자 실측 2026-07-23: 회계/인사 선택 화면에서 또 뜸) —
+        # 서버 정책상 하루동안 보지 않기·닫기(로그인 직후)에도 화면 전환/리로드 후 재출현한다.
+        # 공지는 화면 로드 ~1.5s 뒤 비동기 렌더라 JIT(0ms)로는 못 잡고, 직전 화면 로드에서
+        # 늦게 뜬 공지를 패널 조작(드롭다운→옵션→변경적용) 직전 관찰창 2s 로 흡수한다.
+        # 웜 경로(이미 target)는 위에서 조기 반환하므로 이 대기는 전환 실행 경로에만 생긴다.
+        await dismiss_notice_popup(page, appear_cap_ms=2_000)
         if attempt > 1:
             logger.info("사용자유형 전환 재시도 (%s/%s)…", attempt, attempts)
             await open_user_panel(page)
@@ -137,6 +144,10 @@ async def switch_user_type(page: Any, target: str, *, attempts: int = 2) -> None
         await page.wait_for_timeout(2_500)
         await waits.wait_networkidle(page, timeout_ms=12_000)
         await page.wait_for_timeout(1_500)
+        # 공지팝업 재출현 방어(사용자 실측 2026-07-23): 변경적용 reload 마다 공지가 다시
+        # 내려온다. reload 후 ~1.5s 비동기 렌더라 settle 지점에서 관찰창 2.5s 로 흡수해야
+        # 재확인 패널 열기(아바타 클릭)가 백드롭(.k-overlay)에 막히지 않는다.
+        await dismiss_notice_popup(page, appear_cap_ms=2_500)
         # 재확인: 패널 다시 열어 실제로 바뀌었는지.
         await open_user_panel(page)
         cur2 = await read_current_user_type(page)

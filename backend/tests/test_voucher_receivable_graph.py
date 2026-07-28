@@ -23,6 +23,7 @@ from app.live.registry import get_spec, get_workflow, list_workflows
 from app.services.agent_fixtures import AGENT_FIXTURES
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, VOUCHER_RECEIVABLE
 
+# 매입금(건별 순회) 기준 노드 집합 — 공유 백본.
 _EXPECTED_NODES = {
     "validate_params",
     "login",
@@ -32,6 +33,8 @@ _EXPECTED_NODES = {
     "run_query",
     "loop_approvals",
 }
+# 매출금은 배치 결재라 하위 건수 파악 노드가 하나 더 붙는다(사용자 요구 2026-07-27).
+_EXPECTED_NODES_BATCH = _EXPECTED_NODES | {"count_details"}
 
 
 def _graph_nodes(g) -> set[str]:
@@ -41,7 +44,7 @@ def _graph_nodes(g) -> set[str]:
 # ── 그래프 ────────────────────────────────────────────────────────────────────
 def test_graph_compiles_with_expected_nodes_and_entry():
     g = build_voucher_receivable_graph()
-    assert _graph_nodes(g) == _EXPECTED_NODES
+    assert _graph_nodes(g) == _EXPECTED_NODES_BATCH
     starts = [e.target for e in g.get_graph().edges if e.source == "__start__"]
     assert starts == ["validate_params"]
 
@@ -159,13 +162,13 @@ def test_fixture_promoted_to_real_workflow():
 def test_fixture_step_keys_match_graph_nodes():
     fx = _voucher_fixture()
     step_keys = {s["key"] for s in fx["steps"]}
-    assert step_keys == _EXPECTED_NODES
+    assert step_keys == _EXPECTED_NODES_BATCH
 
 
 def test_fixture_phases_cover_steps_in_order():
     fx = _voucher_fixture()
     phases = [s["phase"] for s in fx["steps"]]
-    assert phases == ["접속", "접속", "접속", "접속", "조회", "조회", "결재"]
+    assert phases == ["접속", "접속", "접속", "접속", "조회", "조회", "조회", "결재"]
 
 
 def test_other_voucher_dummies_still_present():

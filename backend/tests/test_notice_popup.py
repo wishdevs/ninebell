@@ -23,12 +23,18 @@ class _Mouse:
 
 
 class _Page:
-    """NOTICE_POPUP_BOXES_JS 호출마다 seq 를 순서대로 돌려주는 스텁."""
+    """NOTICE_POPUP_BOXES_JS 호출마다 seq 를 순서대로 돌려주는 스텁.
+
+    wait_for_timeout 은 가짜 실시간 시계(clock_ms)를 요청 ms 만큼 진행시킨다 — dismiss 의
+    상한 판정이 time.monotonic 실시간이라(delay_scale 무관), 테스트도 실시간 경과를 시뮬레이션
+    해야 상한 소진 경로를 검증할 수 있다. modals.time.monotonic 를 이 시계로 monkeypatch.
+    """
 
     def __init__(self, boxes_seq) -> None:
         self._seq = list(boxes_seq)
         self.mouse = _Mouse()
         self.evals = 0
+        self.clock_ms = 0.0
 
     async def evaluate(self, js_src, arg=None):
         assert js_src == js_lib.NOTICE_POPUP_BOXES_JS
@@ -36,7 +42,10 @@ class _Page:
         return self._seq.pop(0) if self._seq else None
 
     async def wait_for_timeout(self, ms):
-        return None
+        self.clock_ms += ms  # 가짜 실시간 진행(스케일 무관 — 스텁은 delay_scale 미적용).
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr("nbkit.omnisol.modals.time.monotonic", lambda: self.clock_ms / 1_000)
 
 
 async def test_present_checks_today_then_closes_verified():
@@ -71,10 +80,14 @@ async def test_close_miss_retries_until_gone():
     assert page.mouse.clicks == [(60, 50), (62, 52)]  # 2차 클릭은 재평가된 좌표.
 
 
-async def test_close_never_disappears_gives_up_at_cap():
-    """닫기 상한(close_cap_ms) 소진 시 False — 무한 대기 금지, 후속 JIT 방어에 위임."""
+async def test_close_never_disappears_gives_up_at_cap(monkeypatch):
+    """닫기 상한(close_cap_ms) 소진 시 False — 무한 대기 금지, 후속 JIT 방어에 위임.
+
+    상한은 monotonic 실시간이라 가짜 시계로 경과를 시뮬레이션한다(닫기 폴 400ms 씩 진행).
+    """
     checked = {"checkbox": {"x": 40, "y": 50}, "close": {"x": 60, "y": 50}, "checked": True}
-    page = _Page([checked] * 10)
+    page = _Page([checked] * 10)  # 절대 안 사라짐.
+    page.install_clock(monkeypatch)
     assert await dismiss_notice_popup(page, close_cap_ms=800) is False
     assert page.mouse.clicks == [(60, 50), (60, 50)]  # 400ms×2 = 상한 도달.
 

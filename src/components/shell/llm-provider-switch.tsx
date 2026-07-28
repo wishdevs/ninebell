@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api/client';
+import { useDebugMode } from '@/lib/debug-mode';
 import { IS_DEV_ENV } from '@/lib/env';
 import { cn } from '@/lib/utils';
 
@@ -23,11 +24,16 @@ interface LlmProviderInfo {
 export function LlmProviderSwitch() {
   const [info, setInfo] = useState<LlmProviderInfo | null>(null);
   const [pending, setPending] = useState(false);
+  // 디버그 모드에서만 노출(로그인 스위치). 프로덕션 빌드 게이트(IS_DEV_ENV)와 이중.
+  const debugMode = useDebugMode();
 
   useEffect(() => {
-    // 이중 게이트: 프로덕션 빌드에서는 요청 자체를 보내지 않는다.
+    // 이중 게이트: 프로덕션 빌드거나 디버그 모드 off 면 요청 자체를 보내지 않는다.
     // 개발 환경(로컬 dev·AWS 테스트 빌드)에서만 조회 — 프로덕션(온프렘)은 fetch 자체 생략.
-    if (!IS_DEV_ENV) return;
+    if (!IS_DEV_ENV || !debugMode) {
+      setInfo(null); // 디버그 모드를 끄면 즉시 숨긴다.
+      return;
+    }
     let cancelled = false;
     api
       .get<LlmProviderInfo>('/dev/llm-provider')
@@ -41,7 +47,7 @@ export function LlmProviderSwitch() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [debugMode]);
 
   if (!info) return null;
 

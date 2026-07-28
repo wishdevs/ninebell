@@ -51,19 +51,34 @@ async def test_suggest_note_seed_when_no_learned(sm, make_user):
     assert res == {"note": "전사관례적요", "source": "seed"}
 
 
-async def test_suggest_note_category_cold_start_most_common(sm):
-    """처음 보는 가맹점이라도 그 계정의 최빈 적요(count 합 최대)를 category 로 추천."""
+async def test_suggest_note_category_uses_account_name(sm):
+    """계정만으로 채우는 적요는 **계정명 그대로**(일반 적요) — 특정 과거 적요("세차비") 금지.
+
+    사용자 확정 2026-07-24: 계정 최빈 적요가 특정 서비스/품목이면 무관한 거래에 붙으므로,
+    계정명(어떤 거래에도 일반적)을 쓴다. (판)/(제) 접두는 벗긴다.
+    """
     async with sm() as s:
-        # 계정 CAT1: '식대'(5+3=8) vs '회식비'(6) → '식대' 최빈.
-        s.add(CardSeedNote(norm_merchant="가게A", merchant="가게A", acct_code="CAT1", note="식대", count=5))
-        s.add(CardSeedNote(norm_merchant="가게B", merchant="가게B", acct_code="CAT1", note="식대", count=3))
-        s.add(CardSeedNote(norm_merchant="가게C", merchant="가게C", acct_code="CAT1", note="회식비", count=6))
+        # 계정에 특정 과거 적요('세차비')가 최빈이어도 무시하고 계정명을 쓴다.
+        s.add(CardSeedNote(norm_merchant="세차집", merchant="세차집", acct_code="CAT1", note="세차비", count=99))
         await s.commit()
     async with sm() as s:
         res = await card_learning.suggest_note(
-            s, user_id=None, merchant="첫방문가맹점XYZ", acct_code="CAT1"
+            s, user_id=None, merchant="첫방문가맹점XYZ", acct_code="CAT1", acct_name="(판)차량유지비-관리"
         )
-    assert res == {"note": "식대", "source": "category"}
+    assert res == {"note": "차량유지비-관리", "source": "category"}  # 접두 제거된 계정명.
+
+
+async def test_suggest_note_category_needs_acct_name_else_heuristic(sm):
+    """acct_name 이 없으면 계정명 적요를 만들 수 없어 heuristic(가맹점 키워드)로 폴백."""
+    async with sm() as s:
+        s.add(CardSeedNote(norm_merchant="세차집", merchant="세차집", acct_code="CATH", note="세차비", count=9))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="김밥천국", acct_code="CATH"  # acct_name 미전달.
+        )
+    assert res["source"] == "heuristic"
+
 
 
 async def test_suggest_note_heuristic_when_account_has_no_data(sm):
@@ -206,7 +221,8 @@ async def test_suggest_note_ai_gated_by_allow_ai(sm, monkeypatch):
             s, user_id=None, merchant="김밥천국", acct_code="NOSEED_ZZZ",
             acct_name="회의비", allow_ai=False,
         )
-    assert res == {"note": "식대(법인카드)", "source": "heuristic"}
+    # AI 미호출(게이트) 후 category tier 가 계정명("회의비")을 일반 적요로 반환(2026-07-24).
+    assert res == {"note": "회의비", "source": "category"}
 
 
 async def test_suggest_note_ai_needs_acct_name(sm, monkeypatch):
@@ -234,7 +250,8 @@ async def test_suggest_note_ai_failure_falls_through(sm, monkeypatch):
             s, user_id=None, merchant="김밥천국", acct_code="NOSEED_ZZZ",
             acct_name="회의비", allow_ai=True,
         )
-    assert res == {"note": "식대(법인카드)", "source": "heuristic"}
+    # AI 실패 후 category tier 가 계정명("회의비")을 반환(heuristic 아님 — acct_name 있으므로).
+    assert res == {"note": "회의비", "source": "category"}
 
 
 async def test_suggest_note_seed_beats_ai(sm, monkeypatch):

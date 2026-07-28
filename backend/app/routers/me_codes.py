@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import nullcontext
 from typing import Literal
 
@@ -23,7 +24,7 @@ import app.db as appdb
 # 옴니솔 비밀번호 조회의 단일 소스는 core.creds — 모듈 전역 별칭(_omnisol_password)은 테스트
 # 주입 앵커(test_me_codes.py 가 monkeypatch). trigger_sync 가 호출 시점에 이 전역을 읽는다.
 from app.core.creds import omnisol_password as _omnisol_password
-from app.core.deps import CurrentUser, DbSession
+from app.core.deps import CurrentUser, DbSession, RequireAdmin
 from app.core.listing import PageQuery, page_slice, paginate
 from app.core.permissions import ROLE_ADMIN, role_rank
 from app.models import (
@@ -31,6 +32,7 @@ from app.models import (
     CardSeedNote,
     CardSeedSelection,
     ErpCodeCatalog,
+    MerchantDictRule,
     UserCodeFavorite,
 )
 from app.services import card_learning
@@ -196,6 +198,127 @@ async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
 
 
 # ── 개입 학습(디버그 조회) ───────────────────────────────────────────────────────
+def _merchant_rule_dict(r: MerchantDictRule) -> dict:
+    return {
+        "id": str(r.id),
+        "keywords": [k.strip() for k in (r.keywords or "").split(",") if k.strip()],
+        "category": r.category,
+        "acct": r.acct,
+        "strong": r.strong,
+        "source": r.source,
+        "sortOrder": r.sort_order,
+        "enabled": r.enabled,
+    }
+
+
+class MerchantRuleIn(BaseModel):
+    keywords: list[str] = Field(min_length=1)
+    category: str = Field(min_length=1, max_length=120)
+    acct: str | None = Field(default=None, max_length=120)
+    strong: bool = False
+    source: str = Field(default="큐레이션", max_length=40)
+    sort_order: int = Field(default=0, alias="sortOrder")
+    enabled: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
+def _clean_keywords(kws: list[str]) -> str:
+    cleaned = [k.strip().lower() for k in kws if k and k.strip()]
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="키워드를 하나 이상 입력하세요.")
+    if any("," in k for k in cleaned):
+        raise HTTPException(status_code=422, detail="키워드에 콤마(,)는 쓸 수 없습니다.")
+    return ",".join(cleaned)
+
+
+@router.get("/merchant-dict")
+async def list_merchant_dict(_user: CurrentUser, db: DbSession) -> dict:
+    """가맹점 분류 사전(하이브리드) 규칙 목록 — 미등록 가맹점을 카드 표기명 키워드로 인식.
+
+    개발 디버그·관리용. sort_order 오름차순(매칭 우선순위)으로 반환한다.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(MerchantDictRule).order_by(
+                    MerchantDictRule.sort_order, MerchantDictRule.category
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {"items": [_merchant_rule_dict(r) for r in rows], "total": len(rows)}
+
+
+@router.post("/merchant-dict", status_code=status.HTTP_201_CREATED)
+async def create_merchant_rule(body: MerchantRuleIn, _admin: RequireAdmin, db: DbSession) -> dict:
+    """가맹점 사전 규칙 추가(관리자). 저장 후 매칭 캐시를 무효화한다."""
+    rule = MerchantDictRule(
+        keywords=_clean_keywords(body.keywords),
+        category=body.category.strip(),
+        acct=(body.acct or "").strip() or None,
+        strong=body.strong,
+        source=body.source.strip() or "큐레이션",
+        sort_order=body.sort_order,
+        enabled=body.enabled,
+    )
+    db.add(rule)
+    await db.commit()
+    await db.refresh(rule)
+    _invalidate_merchant_cache()
+    return _merchant_rule_dict(rule)
+
+
+@router.patch("/merchant-dict/{rule_id}")
+async def update_merchant_rule(
+    rule_id: str, body: MerchantRuleIn, _admin: RequireAdmin, db: DbSession
+) -> dict:
+    """가맹점 사전 규칙 수정(관리자). 저장 후 매칭 캐시를 무효화한다."""
+    rule = await _get_merchant_rule_or_404(db, rule_id)
+    rule.keywords = _clean_keywords(body.keywords)
+    rule.category = body.category.strip()
+    rule.acct = (body.acct or "").strip() or None
+    rule.strong = body.strong
+    rule.source = body.source.strip() or "큐레이션"
+    rule.sort_order = body.sort_order
+    rule.enabled = body.enabled
+    await db.commit()
+    await db.refresh(rule)
+    _invalidate_merchant_cache()
+    return _merchant_rule_dict(rule)
+
+
+@router.delete("/merchant-dict/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_merchant_rule(rule_id: str, _admin: RequireAdmin, db: DbSession) -> Response:
+    """가맹점 사전 규칙 삭제(관리자). 삭제 후 매칭 캐시를 무효화한다."""
+    rule = await _get_merchant_rule_or_404(db, rule_id)
+    await db.delete(rule)
+    await db.commit()
+    _invalidate_merchant_cache()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _get_merchant_rule_or_404(db: object, rule_id: str) -> MerchantDictRule:
+    try:
+        rid = uuid.UUID(rule_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="규칙을 찾을 수 없습니다.")
+    rule = (
+        await db.execute(select(MerchantDictRule).where(MerchantDictRule.id == rid))
+    ).scalar_one_or_none()
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="규칙을 찾을 수 없습니다.")
+    return rule
+
+
+def _invalidate_merchant_cache() -> None:
+    from app.agents.card_collect.merchant_dict import invalidate_cache
+
+    invalidate_cache()
+
+
 @router.get("/card-learning")
 async def list_card_learning(user: CurrentUser, db: DbSession) -> dict:
     """현재 사용자의 카드 개입 학습(가맹점→확정 선택) 목록 — 개발 디버그용(빈도·최근순).

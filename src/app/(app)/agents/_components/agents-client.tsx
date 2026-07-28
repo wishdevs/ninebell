@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { ListStatePanel } from '@/components/ui/list-state';
-import { type Agent, filterVisibleAgents } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode, filterVisibleAgents } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
@@ -52,8 +53,9 @@ export function AgentsClient() {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
   const fav = useFavorites('agent');
   const { loadIds } = fav;
-  // 해외출장·경조금 등 숨김 대상은 목록에서 제외(UI 전용 — 백엔드·실행은 그대로).
-  const visible = filterVisibleAgents(data ?? []);
+  const debugMode = useDebugMode();
+  // 숨김 대상 제외(UI 전용) + 디버그 모드별 결의서입력 종류 필터(법인카드 vs 출장·경조·학자금).
+  const visible = filterByDebugMode(filterVisibleAgents(data ?? []), debugMode);
 
   // 마운트 시 내 즐겨찾기(kind=agent)를 불러와 ★ 상태를 채운다.
   useEffect(() => {

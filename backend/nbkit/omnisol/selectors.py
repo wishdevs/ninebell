@@ -18,7 +18,15 @@ LOGIN_PASSWORD = "#password"
 LOGIN_SUBMIT = "button[type=submit]"
 
 # ── 사용자 패널 / 아바타 ───────────────────────────────────────────────────────
-AVATAR = "img[src*=profile_circle]"
+# 헤더 우상단 아바타 = `<a class="user-pic"><img …></a>`.
+# ⚠ 이미지 src 로 잡지 말 것(2026-07-27 라이브 장애): 기본 아바타 계정은
+#   `/images/profile_circle.png` 지만 **프로필 사진을 올린 계정은 `/download/image/<uuid>`** 라
+#   `img[src*=profile_circle]` 가 아예 매칭되지 않는다 → 아바타 클릭 4s 타임아웃 → 패널 미개방
+#   → "사용자 유형 선택기를 찾을 수 없습니다"로 사용자유형 전환이 실패했다(계정 '석대현').
+#   앵커 클래스는 두 계정 모두 동일해 사진 유무와 무관하다.
+# ⚠ `a.user-pic` 로 태그를 고정하는 이유: 열린 패널 안에도 `div.user-pic`(48×48 프로필 사진)이
+#   있어 태그를 안 박으면 패널 내부 요소를 클릭해 패널이 토글로 닫힐 수 있다.
+AVATAR = "a.user-pic"
 
 # 로그인 직후 공지 레이어 팝업(전 화면 차단) — 고유 앵커. dismiss_notice_popup 참조.
 NOTICE_CHECKBOX_TODAY = "#close-today-chk"  # '하루동안 보지 않기'

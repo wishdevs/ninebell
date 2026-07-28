@@ -17,6 +17,7 @@ from app.agents.trip_domestic.nodes import fill, save
 from app.agents.trip_domestic.nodes.fill import make_fill_rows_node, make_set_acct_date_node
 from app.agents.trip_domestic.nodes.save import make_save_doc_node
 from app.agents.trip_domestic.nodes.validate import make_validate_params_node
+from nbkit.omnisol import js_lib
 from tests.support.state_contract import assert_keys_declared
 
 pytestmark = pytest.mark.asyncio
@@ -263,9 +264,24 @@ async def test_fill_rows_requires_self_name(monkeypatch):
 
 # ── save_doc ──────────────────────────────────────────────────────────────────
 class _SavePage:
-    """save_doc 는 F7 전 blur JS 를 page.evaluate 로 실행한다 — 최소 스텁."""
+    """save_doc 의 evaluate 를 JS 식별로 디스패치하는 가짜 page.
+
+    실물 시맨틱 두 가지를 그대로 들고 있다:
+      - `POPUP_COUNT_JS` = F7 직전 열린 k-window 수(잔존 팝업은 F7 을 삼켜 팬텀 저장을 만든다).
+      - `ROWCOUNT_BY_INDEX_JS`(index 0) = 저장 후 재조회한 마스터 그리드 건수(0 = 팬텀 저장,
+        -1 = 그리드를 못 읽음 → 판정 보류).
+    blur JS 등 나머지는 True.
+    """
+
+    def __init__(self, *, popups: int = 0, rowcount: int = 1) -> None:
+        self._popups = popups
+        self._rowcount = rowcount
 
     async def evaluate(self, js_src, arg=None):
+        if js_src is js_lib.POPUP_COUNT_JS:
+            return self._popups
+        if js_src is js_lib.ROWCOUNT_BY_INDEX_JS:
+            return self._rowcount
         return True
 
     async def wait_for_timeout(self, ms):
@@ -334,3 +350,73 @@ async def test_save_doc_short_circuits_on_prior_error():
     node = make_save_doc_node()
     out = await node({"events": _q(), "page": object(), "error": "채움 실패"})
     assert "저장하지 않음" in out["result"] and out["retry_save"] is False
+
+
+# ── save_doc: F7 사전 조건(잔존 팝업 0) + 재조회 지속 확인 ────────────────────
+async def test_save_doc_aborts_when_popup_left_open(monkeypatch):
+    """F7 직전에 팝업이 남아 있으면 저장을 **시도조차 하지 않는다**(팬텀 저장 차단)."""
+    called: list = []
+
+    async def _save(page, confirm):
+        called.append(True)
+        return {"ok": True, "modals_seen": []}
+
+    monkeypatch.setattr(save.card_steps, "save_document", _save)
+    node = make_save_doc_node()
+    out = await node({"events": _q(), "page": _SavePage(popups=1), "filled": 1})
+    assert called == []  # 저장 게이트를 건드리지 않았다.
+    assert "열린 팝업" in out["error"] and out["retry_save"] is False
+    assert_keys_declared(TripDomesticState, out)
+
+
+async def test_save_doc_phantom_when_requery_returns_zero(monkeypatch):
+    async def _ok(page, confirm):
+        return {"ok": True, "modals_seen": []}
+
+    monkeypatch.setattr(save.card_steps, "save_document", _ok)
+    node = make_save_doc_node()
+    out = await node({"events": _q(), "page": _SavePage(rowcount=0), "filled": 1})
+    assert "팬텀 저장" in out["error"] and out["retry_save"] is False
+    assert_keys_declared(TripDomesticState, out)
+
+
+async def test_save_doc_requery_unreadable_holds_judgment(monkeypatch):
+    """rowcount 를 못 읽으면(-1) '0건'이 아니라 판정 보류 — 저장 성공을 뒤집지 않는다."""
+
+    async def _ok(page, confirm):
+        return {"ok": True, "modals_seen": []}
+
+    monkeypatch.setattr(save.card_steps, "save_document", _ok)
+    node = make_save_doc_node()
+    out = await node({"events": _q(), "page": _SavePage(rowcount=-1), "filled": 1})
+    assert "입력·저장" in out["result"] and "error" not in out
+    assert_keys_declared(TripDomesticState, out)
+
+
+async def test_fill_rows_surfaces_step_warn_as_log(monkeypatch):
+    """스텝이 '확인 불가'로 통과시킨 자리(warn)는 실패로 올리지 않되 **로그에 드러난다**."""
+    calls: list = []
+    _patch_all_ok(monkeypatch, calls)
+
+    async def _note_unverified(*a, **k):
+        calls.append("set_row_note")
+        return {"ok": True, "warn": "적요(NOTE_DC) 확인 불가(기대 '통행료(현금)' / 실제 None)"}
+
+    monkeypatch.setattr(fill.steps, "set_row_note", _note_unverified)
+    events = _q()
+    node = make_fill_rows_node()
+    out = await node({
+        "events": events,
+        "page": _FakePage(),
+        "userid": "이트라이브2",
+        "department": "회계팀",
+        "cost_type": "판관비",
+        "plan_rows": [_toll(note="통행료(현금)", km=None, carClass=None)],
+    })
+    assert out["filled"] == 1 and "error" not in out
+    logs = []
+    while not events.empty():
+        logs.append(events.get_nowait())
+    warns = [e for e in logs if getattr(e, "level", None) == "warn" or (isinstance(e, dict) and e.get("level") == "warn")]
+    assert warns, f"warn 로그가 없다: {logs}"
+    assert any("적요" in str(w) and "미확인" in str(w) for w in warns)

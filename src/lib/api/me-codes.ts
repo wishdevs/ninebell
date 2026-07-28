@@ -14,6 +14,10 @@
  *   GET    /me/catalog?kind=&q=&dept=&limit=&offset=   → {items,total,syncedAt}
  *   POST   /me/catalog/sync {kind}                     → 202 {started:true} | 409(한글 detail)
  *   GET    /me/catalog/sync-status?kind=               → SyncStatus
+ *   GET    /me/merchant-dict                           → {items: MerchantRule[], total} (세션)
+ *   POST   /me/merchant-dict {MerchantRuleInput}       → 201 MerchantRule (관리자, 아니면 403)
+ *   PATCH  /me/merchant-dict/{id} {MerchantRuleInput}  → MerchantRule (관리자)
+ *   DELETE /me/merchant-dict/{id}                      → 204 (관리자)
  */
 
 import { api } from './client';
@@ -321,4 +325,58 @@ export async function fetchNoteSuggest(params: {
   if (params.acctName && params.acctName.trim()) qs.set('acctName', params.acctName.trim());
   const res = await api.get<Partial<NoteSuggestResult>>(`/me/note-suggest?${qs.toString()}`);
   return { note: res.note ?? null, source: res.source ?? null };
+}
+
+// ── 가맹점 분류 사전(merchant-dict) ───────────────────────────────────────────
+/**
+ * 미등록 가맹점을 카드 표기명 키워드(부분일치·소문자)로 인식해 업종/계정 힌트를 주는 규칙 1건.
+ * strong=true 면 계정 확정 폴백, false 면 AI 힌트만. sortOrder 오름차순으로 첫 매칭 채택.
+ */
+export interface MerchantRule {
+  id: string;
+  /** 카드 표기명 부분일치(소문자) 키워드. */
+  keywords: string[];
+  /** 업종 유형(예 '주유·유류'). */
+  category: string;
+  /** 결정적 계정명(있으면 strong 후보). 없으면 null. */
+  acct: string | null;
+  /** 결정적 여부 — true=계정 확정 폴백, false=AI 힌트만. */
+  strong: boolean;
+  /** 출처('내부'/'웹'/'내부+웹'/'큐레이션'). */
+  source: string;
+  /** 매칭 우선순위(오름차순). */
+  sortOrder: number;
+  enabled: boolean;
+}
+
+/** `POST`/`PATCH /me/merchant-dict` 요청 body. keywords 최소 1개. */
+export interface MerchantRuleInput {
+  keywords: string[];
+  category: string;
+  acct?: string | null;
+  strong?: boolean;
+  source?: string;
+  sortOrder?: number;
+  enabled?: boolean;
+}
+
+/** `GET /me/merchant-dict` — 전체 규칙 목록(세션만 요구). */
+export async function fetchMerchantDict(): Promise<MerchantRule[]> {
+  const res = await api.get<{ items?: MerchantRule[] }>('/me/merchant-dict');
+  return res.items ?? [];
+}
+
+/** `POST /me/merchant-dict` — 규칙 추가(관리자만, 아니면 403). */
+export function createMerchantRule(input: MerchantRuleInput): Promise<MerchantRule> {
+  return api.post<MerchantRule>('/me/merchant-dict', { ...input });
+}
+
+/** `PATCH /me/merchant-dict/{id}` — 규칙 수정(관리자만). */
+export function updateMerchantRule(id: string, input: MerchantRuleInput): Promise<MerchantRule> {
+  return api.patch<MerchantRule>(`/me/merchant-dict/${encodeURIComponent(id)}`, { ...input });
+}
+
+/** `DELETE /me/merchant-dict/{id}` — 규칙 삭제(관리자만). */
+export function deleteMerchantRule(id: string): Promise<void> {
+  return api.delete<void>(`/me/merchant-dict/${encodeURIComponent(id)}`);
 }

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -151,7 +152,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
         _favs_loader([{"code": "2101", "name": "인사기획팀"}], [], None),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.9}}
 
     monkeypatch.setattr(prefill, "recommend_selections", _rec)
@@ -186,7 +187,7 @@ async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
         ),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.3}}
 
     monkeypatch.setattr(prefill, "recommend_selections", _rec)
@@ -216,7 +217,7 @@ async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
         ),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
         # 예산단위만 확신, 프로젝트는 빈 코드 → 프로젝트는 기본지정 폴백.
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.95}}
 
@@ -328,3 +329,215 @@ async def test_learned_note_prefills_grid(monkeypatch):
 
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}]})
     await asyncio.wait_for(task, timeout=2)
+
+
+# ── 비용구분 필터 — 반대 버킷 제외 + 중립 보존(토큰 절감, 사용자 확정 2026-07-23) ────────────
+def test_filter_budget_by_cost_drops_opposite_bucket_keeps_neutral():
+    budget = [
+        {"code": "a", "bgacctNm": "(판)여비교통비-해외출장"},
+        {"code": "b", "bgacctNm": "(제)차량유지비-유류"},  # 반대 버킷 — 제외.
+        {"code": "c", "bgacctNm": "지급수수료(구매 )"},  # 접두 없음(중립) — 유지.
+        {"code": "d", "bgacctNm": "기부금"},  # 중립 — 유지.
+    ]
+    kept = [c["code"] for c in recommend._filter_budget_by_cost(budget, "(판)")]
+    assert kept == ["a", "c", "d"]
+    # 접두 미상이면 필터하지 않는다(원본 유지).
+    assert len(recommend._filter_budget_by_cost(budget, None)) == 4
+
+
+def test_filter_project_by_cost_drops_opposite_bucket_keeps_specific():
+    proj = [
+        {"code": "500|500", "name": "제조원가"},  # 반대 버킷 — 제외.
+        {"code": "800|800", "name": "판매관리비"},  # 일치 버킷 — 유지.
+        {"code": "120|A", "name": "특정PJT"},  # 버킷 아님(부서 무관) — 유지.
+    ]
+    kept = [c["code"] for c in recommend._filter_project_by_cost(proj, "(판)")]
+    assert kept == ["800|800", "120|A"]
+    assert len(recommend._filter_project_by_cost(proj, None)) == 3
+
+
+async def test_recommend_context_slims_budget_fields_and_filters_bucket(monkeypatch):
+    """LLM 컨텍스트: 예산 후보에서 name·bizplanNm 제외 + 반대 버킷((제)) 제외."""
+    seen = {}
+
+    async def _decide(http, *, system, history, context, shot_b64, tools, settings):
+        seen["ctx"] = context
+        return "submit_recommendations", {"recommendations": []}
+
+    monkeypatch.setattr(recommend, "chat_decide", _decide)
+    monkeypatch.setattr(recommend, "llm_ready", lambda s: True)
+    budget = [
+        {"code": "2006|600|812002600", "name": "인사기획팀", "bizplanNm": "운영비", "bgacctNm": "(판)여비교통비-해외출장"},
+        {"code": "2006|500|522002600", "name": "인사기획팀", "bizplanNm": "운영비 (제조)", "bgacctNm": "(제)차량유지비-유류"},
+    ]
+    await recommend.recommend_selections(
+        [{"no": 1, "merchant": "m", "amount": "1원", "vatType": "과세", "note": "n"}],
+        budget,
+        [{"code": "800|800", "name": "판매관리비", "wbsNm": ""}],
+        http=object(),
+        settings=object(),
+        cost_prefix="(판)",
+    )
+    bc = seen["ctx"]["budgetCandidates"]
+    assert len(bc) == 1 and bc[0]["code"] == "2006|600|812002600"  # (제) 제외.
+    assert set(bc[0].keys()) == {"code", "bgacctNm"}  # name·bizplanNm 제거.
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 배치 분할(2026-07-27) — 400행을 한 번에 보내면 **출력 토큰 상한**(4096, 사고와 공유)을
+# 넘겨 응답이 잘리고 전 행이 추천 없이 진행됐다. 청크로 나누고 실패를 격리한다.
+# ══════════════════════════════════════════════════════════════════════════════
+def _rows(n: int) -> list[dict]:
+    return [{"no": i, "merchant": f"가맹점{i}", "amount": "1,000", "vatType": "과세"} for i in range(1, n + 1)]
+
+
+_CANDS = ([{"code": "B1", "bgacctNm": "판매비"}], [{"code": "P1", "name": "프로젝트"}])
+
+
+async def test_recommend_splits_large_input_into_chunks(monkeypatch):
+    seen: list[int] = []
+
+    async def _fake_decide(http, *, system, history, context, shot_b64, tools, settings):
+        rows = context["rows"]
+        seen.append(len(rows))
+        return "submit_recommendations", {
+            "recommendations": [
+                {"no": r["no"], "budgetUnitCode": "B1", "projectCode": "P1", "confidence": 0.9}
+                for r in rows
+            ]
+        }
+
+    monkeypatch.setattr(recommend, "chat_decide", _fake_decide)
+    out = await recommend.recommend_selections(
+        _rows(400), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    # 400행 → 30행씩 14청크, 각 청크는 상한(30) 이하.
+    assert len(seen) == 14 and max(seen) <= recommend.RECOMMEND_CHUNK_SIZE
+    assert sum(seen) == 400
+    assert len(out) == 400  # 전 행 추천 수신
+
+
+async def test_recommend_isolates_failing_chunk(monkeypatch):
+    """한 청크가 실패해도 나머지 청크의 추천은 살아야 한다(종전엔 전량 손실)."""
+    calls = {"n": 0}
+
+    async def _flaky(http, *, system, history, context, shot_b64, tools, settings):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("응답이 잘렸습니다(finish_reason=length)")
+        return "submit_recommendations", {
+            "recommendations": [
+                {"no": r["no"], "budgetUnitCode": "B1", "projectCode": "P1", "confidence": 0.8}
+                for r in context["rows"]
+            ]
+        }
+
+    monkeypatch.setattr(recommend, "chat_decide", _flaky)
+    out = await recommend.recommend_selections(
+        _rows(90), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    assert 0 < len(out) == 60  # 3청크 중 1개만 실패 → 60행 생존
+
+
+async def test_recommend_rejects_row_numbers_from_other_chunks(monkeypatch):
+    """청크 검증은 **그 청크의 no** 만 허용한다 — 다른 청크 행 번호 오염을 차단."""
+
+    async def _cross(http, *, system, history, context, shot_b64, tools, settings):
+        return "submit_recommendations", {
+            "recommendations": [
+                {"no": 999, "budgetUnitCode": "B1", "projectCode": "P1", "confidence": 0.9}
+            ]
+        }
+
+    monkeypatch.setattr(recommend, "chat_decide", _cross)
+    out = await recommend.recommend_selections(
+        _rows(60), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    assert out == {}
+
+
+async def test_recommend_single_chunk_when_small(monkeypatch):
+    """작은 입력은 종전대로 1회 호출(불필요한 분할 없음)."""
+    calls = {"n": 0}
+
+    async def _once(http, *, system, history, context, shot_b64, tools, settings):
+        calls["n"] += 1
+        return "submit_recommendations", {"recommendations": []}
+
+    monkeypatch.setattr(recommend, "chat_decide", _once)
+    await recommend.recommend_selections(
+        _rows(10), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    assert calls["n"] == 1
+
+
+async def test_recommend_respects_concurrency_cap(monkeypatch):
+    """동시 실행 상한을 지킨다 — 무제한 병렬은 LLM 레이트리밋·타임아웃을 부른다."""
+    live = {"now": 0, "peak": 0}
+
+    async def _slow(http, *, system, history, context, shot_b64, tools, settings):
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await asyncio.sleep(0)  # 다른 태스크에 양보
+        live["now"] -= 1
+        return "submit_recommendations", {"recommendations": []}
+
+    monkeypatch.setattr(recommend, "chat_decide", _slow)
+    await recommend.recommend_selections(
+        _rows(300), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    assert live["peak"] <= recommend.RECOMMEND_CHUNK_CONCURRENCY
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 거래일시 전달(2026-07-27 사용자 리포트)
+#   "소풍이라면 10,000원 2026-07-22 18:33:18" 이 '(판)복리후생비-**중식**'으로 추천됐다.
+#   그리드에서 TRAN_DT/TRAN_TM 을 읽어두고도 AI 에 보내지 않아 시간대를 알 수 없었다.
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_recommend_context_includes_transaction_datetime(monkeypatch):
+    seen: dict = {}
+
+    async def _capture(http, *, system, history, context, shot_b64, tools, settings):
+        seen["rows"] = context["rows"]
+        seen["system"] = system
+        return "submit_recommendations", {"recommendations": []}
+
+    monkeypatch.setattr(recommend, "chat_decide", _capture)
+    rows = [{"no": 1, "merchant": "소풍이라면", "amount": "10,000",
+             "vatType": "과세", "date": "2026-07-22", "time": "18:33:18"}]
+    await recommend.recommend_selections(
+        rows, _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+    )
+    assert seen["rows"][0]["time"] == "18:33:18"
+    assert seen["rows"][0]["date"] == "2026-07-22"
+    # 시각을 보내는 것만으로는 부족 — 시간대 구분 규칙이 프롬프트에 있어야 한다.
+    assert "중식" in seen["system"] and "석식" in seen["system"]
+
+
+async def test_prefill_builds_rows_with_time_from_grid(monkeypatch):
+    """그리드 행(TRAN_DT/TRAN_TM)이 추천 입력의 date/time 으로 전달되는지 — 배선 회귀 방지."""
+    from app.agents.card_collect.nodes import prefill as prefill_mod
+
+    captured: dict = {}
+
+    async def _spy(rows, budget_candidates, project_candidates, **kw):
+        captured["rows"] = rows
+        return {}
+
+    monkeypatch.setattr(prefill_mod, "recommend_selections", _spy)
+    src = inspect.getsource(prefill_mod)
+    # rec_rows 구성에 TRAN_DT/TRAN_TM 이 실제로 들어가는지(구성 코드 계약).
+    assert '"date": r.get("TRAN_DT")' in src
+    assert '"time": r.get("TRAN_TM")' in src
+
+
+async def test_system_prompt_puts_time_above_prior_choice(monkeypatch):
+    """⚠ 사고의 실제 경로: priorChoice('중식')를 최우선 채택하라는 지침이 시각을 눌렀다.
+
+    시간대로 나뉘는 계정에서는 **시각이 과거 선택보다 우선**한다는 예외가 명시돼야 한다.
+    """
+    sys_text = recommend._SYSTEM
+    assert "priorChoice" in sys_text
+    assert "시간대" in sys_text and "석식" in sys_text
+    # 과거 선택 지침보다 **뒤에** 예외가 와야 우선순위가 뒤집히지 않는다.
+    assert sys_text.index("priorChoice") < sys_text.index("시간대와 맞지 않으면")

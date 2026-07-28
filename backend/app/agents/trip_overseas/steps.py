@@ -21,7 +21,7 @@ import re
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, verify
 from nbkit.omnisol.codepicker import (
     _norm,
     _picker_search,
@@ -59,6 +59,51 @@ PARTNER_CELL = "PARTNER_NM"
 BUDGET_CELL = "BG_NM"
 PROJECT_CELL = "PJT_NM"
 BFC_PARTNER_CELL = "BFC_PARTNER_NM"
+
+# detail(본문 행) 그리드 인덱스 — 마스터가 0, detail 이 1(프로브 P7 실측).
+DETAIL_GRID_INDEX = 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 확인(verify) 커널 어댑터 — "세팅했다"가 아니라 "값이 반영됐다"를 판정하는 공용 조각
+# ══════════════════════════════════════════════════════════════════════════════
+def _verdict(res: verify.Confirmed, **ok_extra: Any) -> dict:
+    """확인 결과 → 스텝 반환 dict. **불일치는 하드 실패, 확인 불가는 warn 을 얹은 성공**.
+
+    리더가 그리드/행을 못 읽는 것(확인 불가)까지 실패로 올리면 리더 오탐 하나가 멀쩡한 플로우를
+    끊는다 — 대신 warn 을 올려 호출 노드가 "완료"가 아니라 "미확인"으로 노출하게 한다.
+    """
+    if res:
+        return {"ok": True, **ok_extra}
+    if res.unknown:
+        return {"ok": True, "warn": res.reason, **ok_extra}
+    return {"ok": False, "reason": res.reason}
+
+
+def _cell_unreadable(v: Any) -> bool:
+    """GRID_CELL_VALUE_JS 가 ok:false = 그리드/행을 못 읽음(값이 틀린 게 아니라 **확인 불가**)."""
+    return not (isinstance(v, dict) and v.get("ok"))
+
+
+async def _read_detail_cell(page: Any, field: str) -> Any:
+    """detail 마지막 행의 한 셀을 §C 공용 리더로 재독(부작용 없음)."""
+    return await page.evaluate(
+        js_lib.GRID_CELL_VALUE_JS, {"index": DETAIL_GRID_INDEX, "field": field}
+    )
+
+
+def _cell_raw(v: Any, field: str) -> str:
+    return _norm((v.get("raw") or {}).get(field, "")) if isinstance(v, dict) else ""
+
+
+def _cell_matches(v: Any, field: str, want: str) -> bool:
+    """정규화 후 완전일치 또는 **상호포함**(그리드 표시명 절삭 대비) 이면 반영으로 본다."""
+    if _cell_unreadable(v):
+        return False
+    cell = _cell_raw(v, field)
+    if not want:
+        return False
+    return want == cell or (bool(cell) and (want in cell or cell in want))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -194,27 +239,47 @@ async def _open_detail_cell_picker(page: Any, field_name: str, label: str) -> di
 
     캔버스 돋보기 클릭은 빗나갈 수 있어 3회 재시도(open_evdn 노드와 동일 패턴).
     반환 {ok:True} | {ok:False, reason}.
+
+    ⚠ 열림 판정을 `PICKER_ROWCOUNT_JS >= 0` **하나로만** 하면 조용한 실패가 통과한다 —
+      PICKER_ROWCOUNT 는 '최상단 팝업'을 보므로, 앞 단계 팝업이 안 닫히고 남아 있으면 돋보기
+      클릭이 빗나가 새 팝업이 안 떠도 **그 잔존 팝업의 행수**가 읽혀 열림으로 오판한다. 그 뒤
+      검색·선택·적용은 엉뚱한 팝업에서 벌어진다(js_lib.POPUP_COUNT_JS 주석의 부서-피커 사고와
+      동일 구조). 그래서 클릭 직전 팝업 개수를 캡처해 **개수 증가(=새 팝업이 떴다)** 를 먼저
+      확인하고, 그 다음에 그리드 준비(rowcount)를 확인한다.
+    ⚠ 대기는 전부 확인 커널(실시간 sleep)로 — page.wait_for_timeout 은 워크플로우 delay_scale
+      (trip-overseas 는 0.4)로 줄어들어 느린 세션에서 관찰창이 조기 소진된다.
     """
-    for attempt in range(1, 4):
+    for _attempt in range(3):
         op = await page.evaluate(js_lib.OPEN_DETAIL_CELL_EDITOR_JS, field_name)
         if not op.get("ok"):
             continue
-        rect = None
-        waited = 0
-        while waited < 1_000:  # 돋보기 rect 준비 폴링(상한 1s)
-            await page.wait_for_timeout(100)
-            waited += 100
-            rect = await page.evaluate(js_lib.DETAIL_EDITOR_MAGNIFIER_JS)
-            if rect:
-                break
-        if not rect:
+        # 돋보기 rect 준비 대기(에디터 렌더 왕복) — 나오면 즉시 진행.
+        rect_chk = await verify.confirm(
+            lambda: page.evaluate(js_lib.DETAIL_EDITOR_MAGNIFIER_JS),
+            lambda v: isinstance(v, dict) and "x" in v and "y" in v,
+            timing=verify.ASYNC,
+            what=f"{label} 셀 돋보기 rect",
+            expected="{x,y}",
+        )
+        if not rect_chk:
             continue
+        rect = rect_chk.actual
+        before = await page.evaluate(js_lib.POPUP_COUNT_JS)
         await mouse_click(page, rect["x"], rect["y"])
-        for _ in range(20):  # 팝업 그리드 준비 폴링(rowcount>=0, 상한 ~6s)
-            await page.wait_for_timeout(300)
-            n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
-            if isinstance(n, int) and n >= 0:
-                return {"ok": True}
+        if isinstance(before, int):
+            opened = await verify.confirm_popup_count(page, more_than=before, timing=verify.ASYNC)
+            if not opened:
+                continue  # 새 팝업이 안 떴다 = 클릭이 빗나갔거나 잔존 팝업에 가렸다 → 재시도.
+        # 팝업 그리드가 조회 가능한 상태(rowcount>=0)까지 확인 — 0건도 정상(검색 전).
+        ready = await verify.confirm(
+            lambda: page.evaluate(js_lib.PICKER_ROWCOUNT_JS),
+            lambda v: isinstance(v, int) and v >= 0,
+            timing=verify.HEAVY,
+            what=f"{label} 피커 그리드 rowcount",
+            expected=">=0",
+        )
+        if ready:
+            return {"ok": True}
     return {"ok": False, "reason": f"{label} 피커 팝업이 열리지 않았습니다(돋보기 클릭 3회 실패)."}
 
 
@@ -225,26 +290,21 @@ async def _fail_close(page: Any, reason: str) -> dict:
     return {"ok": False, "reason": reason}
 
 
-async def _picker_gone(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> bool:
-    """피커 팝업이 닫혔는지 폴링 — 닫히면 True, cap_ms 내 미닫힘이면 False."""
-    waited = 0
-    while waited < cap_ms:
-        await page.wait_for_timeout(interval_ms)
-        waited += interval_ms
-        n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
-        if not isinstance(n, int) or n < 0:  # 팝업 사라짐(-1) = 닫힘.
-            return True
-    return False
-
-
 async def _select_and_apply(
     page: Any, row_index: int, label: str, verify_field: str, expect_value: object
 ) -> dict:
-    """피커 행 선택 → '적용' 실클릭 → **대상 셀 반영 폴링 검증** → 팝업 닫힘 검증.
+    """피커 행 선택 → '적용' 실클릭 → **대상 셀 반영 확인** → **팝업 닫힘 확인**.
 
-    반환 {ok} | {ok:False, reason}. 적용 판정은 팝업 닫힘이 아니라 detail 셀(verify_field) 반영으로
-    한다(select_evdn_code 의 8s 폴링 미러). '적용' 버튼 미발견·셀 미반영·팝업 미닫힘은 전부 실패로
-    승격한다 — 특히 마지막 피커에서 적용을 놓치면 잔존 팝업이 F7 을 삼켜 팬텀 저장을 유발한다.
+    반환 {ok} | {ok, warn} | {ok:False, reason}. 적용 판정은 팝업 닫힘이 아니라 detail 셀
+    (verify_field) 반영으로 한다(select_evdn_code 의 8s 폴링 미러). '적용' 버튼 미발견·셀
+    미반영·팝업 미닫힘은 전부 실패로 승격한다 — 특히 마지막 피커에서 적용을 놓치면 잔존 팝업이
+    F7 을 삼켜 팬텀 저장을 유발한다.
+
+    ⚠ 닫힘 판정을 `PICKER_ROWCOUNT_JS < 0` 으로 하면 두 방향으로 오판한다: 다른 팝업이 하나 더
+      떠 있으면 그 팝업 행수가 읽혀 '안 닫혔다'가 되고, 반대로 최상단만 바뀌어도 '닫혔다'가 된다.
+      **클릭 직전 개수 대비 감소**(POPUP_COUNT_JS)로 바꿔 팝업 정체와 무관하게 판정한다.
+    ⚠ 셀 재독은 §C 공용 리더(GRID_CELL_VALUE_JS)를 쓰고, 대기는 확인 커널의 실시간 sleep 이다
+      (기존 page.wait_for_timeout 폴링은 delay_scale 0.4 에서 관찰창이 8s→3.2s 로 줄었다).
     """
     sel = await page.evaluate(js_lib.PICKER_SELECT_JS, row_index)
     if not sel.get("ok"):
@@ -253,23 +313,29 @@ async def _select_and_apply(
     apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
     if not apply_box:
         return await _fail_close(page, f"{label} '적용' 버튼을 찾지 못했습니다(피커 팝업 구조 변경?).")
+    before = await page.evaluate(js_lib.POPUP_COUNT_JS)
     await mouse_click(page, apply_box["x"], apply_box["y"])
-    # 셀 반영 폴링(300ms×27 ≈ 8s) — 정규화 후 완전일치 또는 상호포함(표시명 절삭 대비)이면 반영.
     want = _norm(expect_value)
-    actual = ""
-    for _ in range(27):
-        await page.wait_for_timeout(300)
-        rd = await page.evaluate(js.READ_DETAIL_CELL_JS, [verify_field])
-        actual = (rd.get("values") or {}).get(verify_field, "")
-        cell = _norm(actual)
-        if want and (want == cell or (cell and (want in cell or cell in want))):
-            break
-    else:
+    chk = await verify.confirm(
+        lambda: _read_detail_cell(page, verify_field),
+        lambda v: _cell_matches(v, verify_field, want),
+        timing=verify.ASYNC,
+        what=f"{label} 셀({verify_field})",
+        expected=expect_value,
+        unknown_when=_cell_unreadable,
+    )
+    if chk.mismatch:
+        actual = _cell_raw(chk.actual, verify_field)
         return await _fail_close(page, f"{label} 적용 후 셀 미반영(기대 '{expect_value}'·실제 '{actual}')")
-    # 팝업 닫힘 검증 — 잔존 피커 팝업은 F7 을 삼켜 팬텀 저장을 유발한다.
-    if not await _picker_gone(page):
-        return await _fail_close(page, f"{label} 적용 후 피커 팝업이 닫히지 않았습니다.")
-    return {"ok": True}
+    # 팝업 닫힘 확인 — 잔존 피커 팝업은 F7 을 삼켜 팬텀 저장을 유발한다.
+    if isinstance(before, int):
+        closed = await verify.confirm_popup_count(page, less_than=before, timing=verify.ASYNC)
+        if not closed:
+            return await _fail_close(page, f"{label} 적용 후 피커 팝업이 닫히지 않았습니다.")
+    out: dict = {"ok": True}
+    if chk.unknown:  # 셀을 못 읽음 = 확인 불가 → 하드 실패 대신 미확인 경고로 올린다.
+        out["warn"] = chk.reason
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -300,7 +366,10 @@ async def _fill_partner_cell(
     fin = await _select_and_apply(page, row["i"], label, open_field, row.get("PARTNER_NM") or expect_name)
     if not fin.get("ok"):
         return fin
-    return {"ok": True, "code": row.get("PARTNER_CD"), "name": row.get("PARTNER_NM")}
+    out = {"ok": True, "code": row.get("PARTNER_CD"), "name": row.get("PARTNER_NM")}
+    if fin.get("warn"):  # 셀 반영 확인 불가는 노드가 '미확인'으로 노출하도록 그대로 전달.
+        out["warn"] = fin["warn"]
+    return out
 
 
 async def fill_partner(page: Any, code: str, name: str) -> dict:
@@ -371,19 +440,37 @@ async def fill_budget_fixed(page: Any, department: str, cost_type: str) -> dict:
     op = await _open_detail_cell_picker(page, BUDGET_CELL, "예산단위")
     if not op.get("ok"):
         return op
+
+    async def _pick() -> tuple[dict | None, str | None]:
+        read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [BUDGET_FIELDS, 0])
+        return pick_budget_row(read.get("options") or [], department, bgacct_nm)
+
+    # 검색어 입력(Enter) 후 후보 재독. customTextBox 는 클라이언트 필터/정렬이라 Enter 직후
+    # 재조회가 정착하기 전 읽으면 **필터 전 상단행**이 잡혀 무매칭이 난다(거래처 경로에서 실측한
+    # 레이스). 무매칭이면 검색을 재실행(reapply)하며 정착을 기다린다 — 정상이면 첫 read(0ms)로 끝.
     await _picker_search(page, BUDGET_SEARCH_KW)
-    read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [BUDGET_FIELDS, 0])
-    row, err = pick_budget_row(read.get("options") or [], department, bgacct_nm)
-    if err:
-        return await _fail_close(page, err)
+    chk = await verify.confirm(
+        _pick,
+        lambda rv: isinstance(rv, tuple) and rv[0] is not None,
+        timing=verify.ASYNC,
+        what="예산단위 후보 매칭",
+        expected=f"{department} · {bgacct_nm}",
+        reapply=lambda: _picker_search(page, BUDGET_SEARCH_KW),
+    )
+    row, err = chk.actual if isinstance(chk.actual, tuple) else (None, None)
+    if not row:
+        return await _fail_close(page, err or f"예산단위 후보를 읽지 못했습니다: {chk.reason}")
     fin = await _select_and_apply(page, row["i"], "예산단위", "BG_NM", row.get("BG_NM"))
     if not fin.get("ok"):
         return fin
-    return {
+    out = {
         "ok": True,
         "code": row.get("BG_CD"),
         "name": f"{row.get('BG_NM')} · {row.get('BIZPLAN_NM')} · {row.get('BGACCT_NM')}",
     }
+    if fin.get("warn"):
+        out["warn"] = fin["warn"]
+    return out
 
 
 async def fill_project(page: Any, project: dict) -> dict:
@@ -408,7 +495,10 @@ async def fill_project(page: Any, project: dict) -> dict:
     fin = await _select_and_apply(page, row["i"], "프로젝트", "PJT_NM", row.get("PJT_NM"))
     if not fin.get("ok"):
         return fin
-    return {"ok": True, "code": row.get("PJT_NO"), "name": row.get("PJT_NM")}
+    out = {"ok": True, "code": row.get("PJT_NO"), "name": row.get("PJT_NM")}
+    if fin.get("warn"):
+        out["warn"] = fin["warn"]
+    return out
 
 
 # 금액 세팅 대상 컬럼(프로브 trip_amount, 2026-07-07 실측):
@@ -481,11 +571,28 @@ async def set_invoice_date(page: Any, ymd_compact: str) -> dict:
 
 
 async def set_row_note(page: Any, text: str) -> dict:
-    """적요(NOTE_DC) 셀 setValue 직접 세팅 + 반영 검증. 반환 {ok, after}."""
-    r = await page.evaluate(js.SET_DETAIL_CELL_JS, {"field": "NOTE_DC", "value": text})
+    """적요(NOTE_DC) 셀 setValue 직접 세팅 + **셀 재독 확인**. 반환 {ok, after} | {ok, warn} | {ok:False}.
+
+    ⚠ 세팅 JS 의 {ok:true} 는 "setValue 를 호출했고 예외가 없었다"까지다 — 값이 튕기거나 빈
+      문자열이 들어가도 통과해 **적요 없는 결의서가 그대로 저장**된다(다른 값 세팅 스텝은 전부
+      readback 비교가 있는데 여기만 빠져 있던 자리). 다른 셀 스텝과 동일하게 §C 공용 리더로
+      실제 셀 값을 재독해 확정하고, 튕김 성격이라 재시도 때 **재세팅**(reapply)한다.
+    """
+    payload = {"field": "NOTE_DC", "value": text}
+    r = await page.evaluate(js.SET_DETAIL_CELL_JS, payload)
     if not r.get("ok"):
         return {"ok": False, "reason": r.get("reason") or "적요 세팅 실패"}
-    return {"ok": True, "after": r.get("after")}
+    want = _norm(text)
+    chk = await verify.confirm(
+        lambda: _read_detail_cell(page, "NOTE_DC"),
+        lambda v: not _cell_unreadable(v) and _cell_raw(v, "NOTE_DC") == want,
+        timing=verify.INSTANT,
+        what="적요(NOTE_DC)",
+        expected=text,
+        reapply=lambda: page.evaluate(js.SET_DETAIL_CELL_JS, payload),
+        unknown_when=_cell_unreadable,
+    )
+    return _verdict(chk, after=r.get("after"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

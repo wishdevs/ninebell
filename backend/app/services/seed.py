@@ -38,6 +38,7 @@ from app.models import (
 )
 from app.services.agent_fixtures import AGENT_FIXTURES, AGENT_GROUP_FIXTURES
 from app.services.card_learning import sanitize_note
+from app.services.changelog_seed import seed_changelog
 from app.services.org_apply import _erp_id, _existing_path, _norm
 
 # 조직구분 시드 — ERP 조직도를 **전체 깊이**로 미러링한 기본 구조(본부>그룹>팀). org_apply 임포트와
@@ -515,3 +516,5 @@ async def seed_all(db: AsyncSession) -> None:
     await seed_org_units(db)
     await seed_card_seeds(db)
     await seed_card_seed_notes(db)
+    # 릴리스 노트 — 리포 파일이 단일 소스라 AWS·온프렘 양쪽이 같은 변경 이력을 갖는다.
+    await seed_changelog(db)

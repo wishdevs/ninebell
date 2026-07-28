@@ -98,9 +98,14 @@ def make_switch_evdn_node():
 
         # 잔여 확인 모달('예산현황' 등)이 남아 있으면 F3/코드피커가 막힌다 — 방어적 정리.
         # (실측: 적용 후 지연 모달이 화면을 덮은 채 02 선택 시도 → TypeError 실패)
-        cleared = await steps.dismiss_blocking_modals(page, rounds=3)
+        # 닫은 목록만 로그로 남기면 '닫았다고 보고했는데 남아 있는' 상태를 못 잡는다 —
+        # 팝업 개수 감소까지 확인한다(감소 미확인은 경고 후 진행: 후속 스텝이 각자 확인한다).
+        dm = await steps.dismiss_modals_verified(page, rounds=3)
+        cleared = dm.get("cleared") or []
         if cleared:
             await emit_log(events, f"잔여 확인 모달 {len(cleared)}건을 닫고 진행합니다.", "info")
+        if dm.get("warn"):
+            await emit_log(events, f"⚠ {dm['warn']}", "warn")
 
         r = await steps.close_card_popup(page)
         if not r.get("ok"):
@@ -140,6 +145,8 @@ def make_switch_evdn_node():
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}
+        if r.get("warn"):
+            await emit_log(events, f"⚠ 2차 카드 선택 미확인: {r['warn']}", "warn")
         period = state.get("period") or list(
             steps.compute_period(date.today(), _shared._params_cutoff_day(state))
         )
@@ -147,6 +154,8 @@ def make_switch_evdn_node():
         if not pr.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 승인일 기간 설정 실패: {pr}"}
+        if pr.get("warn"):
+            await emit_log(events, f"⚠ 2차 승인일 기간 미확인: {pr['warn']}", "warn")
         rows2 = await steps.run_query(page)
         if not isinstance(rows2, int) or rows2 < 0:
             await emit_step(events, "switch_evdn", "failed")

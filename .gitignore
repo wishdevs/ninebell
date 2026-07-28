@@ -52,3 +52,11 @@ deploy/api/app.env
 deploy/api/.env
 deploy/db/.env
 deploy/front/.env
+
+# LLM 프롬프트 캡처(디버깅 산출물 — 민감정보 포함, 커밋 금지)
+backend/prompt-capture*.jsonl
+docs/CARD-RECOMMEND-PROMPT.md
+docs/CARD-RECOMMEND-PROMPT-TEXT.md
+docs/CARD-RECOMMEND-PROMPT-RESPONSE.md
+docs/CARD-RECOMMEND-GEMINI-vs-ETRIBE.md
+docs/CARD-RECOMMEND-ETRIBE-AUTO.md

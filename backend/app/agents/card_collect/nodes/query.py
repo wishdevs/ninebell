@@ -27,12 +27,18 @@ def make_select_all_cards_node():
         if not r.get("ok"):
             await emit_step(events, "select_all_cards", "failed")
             return {"error": f"카드 선택 실패: {r.get('reason')}"}
+        # 확인 불가(리더가 못 읽음)는 하드 실패가 아니지만 **성공으로 단정하지 않는다** —
+        # 로그에 미확인 사실을 남겨야 사후 진단이 된다.
+        if r.get("warn"):
+            await emit_log(events, f"⚠ 카드 선택 미확인: {r['warn']}", "warn")
+        # 폼 반영을 확인하지 못했으면 '완료'가 아니라 '미확인'으로 적는다(성공 단정 금지).
+        done = "완료" if r.get("verified", True) else "적용(폼 반영 미확인)"
         if r.get("by") == "name":
             await emit_log(
-                events, f"본인('{owner}') 카드 {r.get('checked')}장 선택·적용 완료.", "ok"
+                events, f"본인('{owner}') 카드 {r.get('checked')}장 선택·적용 {done}.", "ok"
             )
         else:
-            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 완료(본인 카드 없음).", "ok")
+            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}(본인 카드 없음).", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "select_all_cards", "done", _shared._ms(t0))
         return {}
@@ -94,6 +100,8 @@ def make_set_period_node():
         if not r.get("ok"):
             await emit_step(events, "set_period", "failed")
             return {"error": f"승인일 기간 설정 실패({start}~{end}): {r}"}
+        if r.get("warn"):
+            await emit_log(events, f"⚠ 승인일 기간 미확인: {r['warn']}", "warn")
         # 기간 시작 월 == 오늘 월이면 당월 규칙, 아니면 전월 규칙(라벨은 계산 결과에서 유도).
         rule = "당월" if start[:7] == today.isoformat()[:7] else "전월"
         await emit_log(events, f"승인일 기간 = {start} ~ {end} ({rule} 규칙).", "info")

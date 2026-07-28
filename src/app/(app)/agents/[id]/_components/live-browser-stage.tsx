@@ -6,10 +6,10 @@ import {
   RiPlayCircleLine,
   RiPlayLine,
   RiRestartLine,
-  RiSparkling2Fill,
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
+import { ThinkingOrb } from '@/components/ui/thinking-orb';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
 import { formatEta } from '@/lib/data/format';
 import type { LiveRunStatus, LiveWindow } from '@/lib/live/types';
@@ -106,8 +106,8 @@ export function LiveBrowserStage({
           {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
               화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
           {aiWorking ? (
-            <div className="bg-surface/70 absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 px-6 text-center backdrop-blur-[2px]">
-              <RiSparkling2Fill size={30} aria-hidden className="animate-ai-sparkle text-accent" />
+            <div className="bg-surface/70 absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center backdrop-blur-[2px]">
+              <ThinkingOrb state="composing" size={64} speed={1.5} aria-label="AI가 계산하는 중" />
               <p className="ai-working-text text-sm font-semibold">
                 {aiWorking} — AI가 계산하는 중…
               </p>

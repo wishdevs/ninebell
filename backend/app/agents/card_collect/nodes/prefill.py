@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from typing import Any
 
 import httpx
@@ -10,8 +12,16 @@ from app.agents.common.llm import llm_ready
 from app.live.events import emit_log
 from app.services import card_learning
 
-from ..recommend import RECOMMEND_CONFIDENCE_THRESHOLD, recommend_selections
+from ..merchant_dict import load_rules, match_in
+from .. import meal_time
+from ..recommend import (
+    RECOMMEND_CHUNK_SIZE,
+    RECOMMEND_CONFIDENCE_THRESHOLD,
+    recommend_selections,
+)
 from . import _shared, catalog
+
+logger = logging.getLogger(__name__)
 
 # 비용구분 접두사 → 프로젝트 판/제 버킷(PJT_NO). 제조원가=500 / 판관비=800.
 _PREFIX_PROJECT_NO = {"(제)": "500", "(판)": "800"}
@@ -113,6 +123,26 @@ async def _prefill_selections(
             if sb:
                 seed_budget_by_no[idx + 1] = sb
 
+    # 가맹점 분류 사전(하이브리드) — learned/seed 이력이 없는 가맹점을 카드 표기명 키워드로 인식.
+    #  · dict_budget_by_no: strong 규칙(주유소·해외 OTA 등)이 계정으로 해석되면 결정적 폴백 후보.
+    #  · dict_hint_by_no: 모든 매칭의 유형 문구 — AI 프롬프트에 힌트로 주입(애매한 카페·택시 등).
+    # seed 이력이 있으면(그게 더 구체적) 사전은 건너뛴다.
+    dict_rules = await load_rules()  # DB 사전(캐시) 1회 로드 → 행별 in-memory 매칭.
+    dict_budget_by_no: dict[int, dict] = {}
+    dict_hint_by_no: dict[int, str] = {}
+    for idx, r in enumerate(rows_list):
+        no = idx + 1
+        if no in seed_budget_by_no:
+            continue
+        rule = match_in(r.get("TRAN_NM"), dict_rules)
+        if not rule:
+            continue
+        dict_hint_by_no[no] = rule.category
+        if rule.strong and rule.acct:
+            db = catalog._resolve_seed_budget(rule.acct, budget_candidates)
+            if db:
+                dict_budget_by_no[no] = db
+
     recommendations: dict[int, dict] = {}
     if llm_ready(settings) and (budget_candidates or project_candidates):
         rec_rows = [
@@ -121,6 +151,11 @@ async def _prefill_selections(
                 "merchant": r.get("TRAN_NM") or "",
                 "amount": _shared._fmt_won(r.get("TRAN_AMT")),
                 "vatType": r.get("VAT_TP") or "",
+                # ⚠ 거래일시(2026-07-27 사용자 리포트): 18:33 결제가 '복리후생비-**중식**'으로
+                #   추천된 사고 — 그리드에서 TRAN_DT/TRAN_TM 을 읽어두고도 AI 에 보내지 않아
+                #   시간대를 알 수 없었다. 식대 계정은 중식/석식/야식으로 나뉘므로 필수 근거다.
+                "date": r.get("TRAN_DT") or "",
+                "time": r.get("TRAN_TM") or "",
                 "note": recs[r.get("i", idx)],
             }
             for idx, r in enumerate(rows_list)
@@ -150,16 +185,50 @@ async def _prefill_selections(
                     "projectName": "",
                     "count": 1,
                 }
-        await emit_log(events, "AI 추천을 계산하는 중입니다…", "info")
+            elif rr["no"] in dict_budget_by_no:
+                # learned/seed 없음 + 사전 strong 매칭(주유소 등) → 사전 해석 예산단위를 AI 힌트로.
+                db = dict_budget_by_no[rr["no"]]
+                rr["priorChoice"] = {
+                    "budgetUnitCode": db.get("code") or "",
+                    "budgetUnitName": db.get("name") or "",
+                    "bgacctNm": db.get("bgacctNm") or "",
+                    "projectCode": "",
+                    "projectName": "",
+                    "count": 1,
+                }
+            # 가맹점 유형 힌트(사전 매칭) — 계정 확정과 별개로 AI 판단 근거로 주입(카페·택시 등).
+            if rr["no"] in dict_hint_by_no:
+                rr["merchantHint"] = dict_hint_by_no[rr["no"]]
+        # 청크 수를 미리 노출한다 — 400행이 한 번에 안 가고 나뉘어 간다는 것이 로그로 보여야
+        # '왜 오래 걸리는지 / 일부만 추천됐는지'를 판단할 수 있다.
+        n_chunks = max(1, -(-len(rec_rows) // RECOMMEND_CHUNK_SIZE))
+        await emit_log(
+            events,
+            f"AI 추천을 계산하는 중입니다… ({len(rec_rows)}행"
+            + (f" → {n_chunks}청크" if n_chunks > 1 else "") + ")",
+            "info",
+        )
         http = httpx.AsyncClient(timeout=60.0)
         try:
             recommendations = await recommend_selections(
-                rec_rows, budget_candidates, project_candidates, http=http, settings=settings
+                rec_rows,
+                budget_candidates,
+                project_candidates,
+                http=http,
+                settings=settings,
+                cost_prefix=cost_prefix,  # 판/제 반대 버킷 후보를 LLM 컨텍스트에서 제외(토큰 절감).
             )
         finally:
             await http.aclose()
         if not recommendations:
             await emit_log(events, "AI 추천을 받지 못해 기본지정으로 프리필합니다.", "warn")
+        elif len(recommendations) < len(rec_rows):
+            # 일부 청크만 성공한 경우 — 나머지는 기본지정으로 채워진다(전량 실패와 구분).
+            await emit_log(
+                events,
+                f"AI 추천 {len(recommendations)}/{len(rec_rows)}행 수신 — 나머지는 기본지정으로 프리필합니다.",
+                "warn",
+            )
 
     budget_by_code = {c["code"]: c for c in budget_candidates}
     project_by_code = {c["code"]: c for c in project_candidates}
@@ -179,6 +248,7 @@ async def _prefill_selections(
     default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
 
     out: dict[int, dict] = {}
+    meal_fixes: list[tuple[int, str]] = []  # 시간대 교정 내역(로그 요약용)
     for idx in range(len(rows_list)):
         no = idx + 1
         rec = recommendations.get(no) or {}
@@ -197,6 +267,9 @@ async def _prefill_selections(
             elif no in seed_budget_by_no:
                 # 전사 seed 해석 예산단위 — 일반 기본보다 나은 폴백(계정 기반 실제 관례).
                 budget, budget_source = seed_budget_by_no[no], "seed"
+            elif no in dict_budget_by_no:
+                # 사전 strong 해석(주유소 등) — seed 없을 때 blind 기본값보다 나은 폴백.
+                budget, budget_source = dict_budget_by_no[no], "dict"
             elif default_budget:
                 budget, budget_source = catalog._pick_budget(default_budget), "default"
             else:
@@ -219,6 +292,19 @@ async def _prefill_selections(
         # 판관 계정·프로젝트로 맞춘다. 예산: 같은 계정명의 부서 판/제 형제로, 프로젝트: 부서 프로젝트로.
         if budget and budget_source != "learned":
             budget = _enforce_budget_prefix(budget, cost_prefix, budget_candidates)
+
+        # ── 식대 시간대 교정(최종) ────────────────────────────────────────────
+        # ⚠ learned 를 포함해 **모든 경로**에 적용한다 — learned 가 AI 를 우회하므로, 여기서
+        #   보정하지 않으면 한 번 굳은 '석식'이 11시 결제에도 계속 붙는다(2026-07-27 감사 46건).
+        #   사용자 확정은 존중하되 '시각과 모순되는 슬롯'만 형제 계정으로 바꾼다(성격 계정은 무시).
+        if budget:
+            fixed, why = meal_time.correct_budget(
+                budget, rows_list[idx].get("TRAN_TM"), budget_candidates
+            )
+            if fixed:
+                budget = catalog._pick_budget(fixed)
+                meal_fixes.append((no, why))
+                budget_source = f"{budget_source or '?'}+시간대"
         if project and project_source != "learned":
             project = _enforce_project_cost(project, cost_prefix, cost_project)
 
@@ -230,4 +316,9 @@ async def _prefill_selections(
             # 가맹점 기반 부가세구분(AI) — collect 가 계정/VAT_TP 와 함께 classify_vat 로 최종 결정.
             "vatDeduction": rec.get("vatDeduction"),
         }
+    if meal_fixes:
+        # 무엇이 왜 바뀌었는지 한 줄로 — 조용히 바꾸면 사용자가 신뢰할 수 없다.
+        sample = ", ".join(f"{no}행 {why}" for no, why in meal_fixes[:5])
+        more = f" 외 {len(meal_fixes) - 5}건" if len(meal_fixes) > 5 else ""
+        logger.info("식대 시간대 교정 %d건 — %s%s", len(meal_fixes), sample, more)
     return out

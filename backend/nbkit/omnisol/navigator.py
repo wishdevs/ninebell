@@ -16,6 +16,7 @@ from typing import Any
 from nbkit.omnisol import js_lib
 from nbkit.omnisol.errors import MenuError
 from nbkit.omnisol.menu_schemas import MenuSchema
+from nbkit.omnisol.modals import dismiss_notice_popup
 
 logger = logging.getLogger("nbkit.omnisol.navigator")
 
@@ -49,6 +50,11 @@ async def navigate_menu(
         chk = await page.evaluate(js_lib.MENU_CHECK_JS)
         if int(chk.get("grids", 0)) >= grids_required:
             logger.info("%s 진입 성공(grids=%s)", label, chk.get("grids"))
+            # 공지팝업 재출현 방어(사용자 실측 2026-07-23: 결의서작성 진입 후 또 뜸) — 서버
+            # 정책상 하루동안 보지 않기·닫기(로그인 직후)에도 화면 전환마다 재출현한다. 공지는
+            # 화면 로드 ~1.5s 뒤 비동기 렌더라, 목적 화면 도착 확인(그리드 로드) 직후 관찰창
+            # 2.5s 로 흡수한다(전 에이전트 공통 경로 — 여기 한 곳). 없으면 no-op.
+            await dismiss_notice_popup(page, appear_cap_ms=2_500)
             return
         if chk.get("notFound"):
             raise MenuError(

@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from nbkit.omnisol import js_lib
+
 # ⚠ 공지 팝업 닫기는 공유 프리미티브 nbkit.omnisol.modals.dismiss_notice_popup(고유 앵커
 #   #close-today-chk/#notice-dialog-close, '하루동안 보지 않기' 체크 후 닫기)로 이관했다 —
 #   전 에이전트 공통(login_flow 에서 로그인 직후 호출 + _open_picker just-in-time 재확인).
@@ -37,17 +39,7 @@ FIELD_SEARCH_BTN_RECT_JS = r"""(label) => {
 # 확인한다. optional-area 필드(전표유형)가 다른 필드 조작 중간에 재접히는 레이스(실측: D2 순회
 # 5단계 뒤 재접힘 관찰)를 감지하기 위한 것 — FIELD_SEARCH_BTN_RECT_JS 단독으로는 접힌 버튼도
 # {x:0,y:0} 같은 값을 돌려줘 "찾음"으로 오판할 수 있다. 반환 bool.
-FIELD_LABEL_VISIBLE_JS = r"""(label) => {
-  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
-  const lbl = [...document.querySelectorAll('label')].find(e => c(e.innerText) === label);
-  if (!lbl) return false;
-  const li = lbl.closest('li');
-  const btns = [...li.querySelectorAll('.dews-multicodepicker-button')];
-  const btn = btns[1] || btns[0];
-  if (!btn) return false;
-  const r = btn.getBoundingClientRect();
-  return r.width > 0 && r.height > 0 && btn.offsetParent !== null;
-}"""
+FIELD_LABEL_VISIBLE_JS = js_lib.FIELD_LABEL_VISIBLE_JS  # 단일소스(js_lib §C) 재수출
 
 # 최상단 k-window 팝업의 RealGrid 가 **결과검증형 폴링**용으로 붙었는지 확인한다.
 # ⚠ 근본원인(2026-07-21 voucher-payable 라이브 스모크 2회 재현): 팝업 클릭 직후 고정 1200ms
@@ -64,6 +56,10 @@ POPUP_GRID_READY_JS = r"""() => {
   const ctrl = window.jQuery(el).data('dewsControl');
   return !!(ctrl && ctrl._grid);
 }"""
+
+# 보이는 k-window 팝업 개수 — 확인 커널과 공유하는 단일소스(js_lib §C)를 재수출한다.
+# (에이전트 전반의 '팝업 열림/닫힘 확인'이 같은 리더를 쓰도록 2026-07-27 이관.)
+POPUP_COUNT_JS = js_lib.POPUP_COUNT_JS
 
 # 최상단 k-window 팝업의 RealGrid 에서 지정 필드값과 일치하는 행을 checkRow.
 # arg = [targets(문자열 배열), fieldName]. 반환 {ok, idxs:[{t,idx,code}], n}. 무매칭 target 은 빠짐.
@@ -141,15 +137,8 @@ EXPAND_TOGGLE_RECTS_JS = r"""() => {
   return rects;
 }"""
 
-# 필드 표시값(멀티코드피커 text input) 읽기 — 검증/로깅용. 반환 문자열 또는 null.
-FIELD_DISPLAY_JS = r"""(label) => {
-  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
-  const lbl = [...document.querySelectorAll('label')].find(e => c(e.innerText) === label);
-  if (!lbl) return null;
-  const li = lbl.closest('li');
-  const inp = li.querySelector('.dews-multicodepicker-text, .dews-codepicker-text');
-  return inp ? inp.value : null;
-}"""
+# 필드 표시값(멀티코드피커 text input) 읽기 — 확인 커널과 공유하는 단일소스(js_lib §C) 재수출.
+FIELD_DISPLAY_JS = js_lib.FIELD_DISPLAY_JS
 
 # 회계일 periodpicker 를 당월(1일~말일)로 세팅하는 앱 API(setMonth). ⚠ YYYYMMDD 타이핑 아님.
 SET_PERIOD_THIS_MONTH_JS = (
@@ -339,4 +328,23 @@ CHILD_DOCU_NO_JS = r"""() => {
     if (m) out.add(m[0]);
   }
   return [...out];
+}"""
+
+# 디테일(계정정보) 그리드의 **행수 + 소속 전표번호**를 한 번에 읽는다(왕복 1회).
+# 반환 {ok:true, n, docu_no} | {ok:false, reason}. docu_no 는 첫 행의 DOCU_NO(실측: 디테일 행이
+# 자신의 전표번호를 갖는다 — e2e/artifacts/voucher_receivable_detail_counts.json).
+# ⚠ 이 docu_no 가 **스테일 판정의 근거**다: 마스터 행을 setCurrent 한 뒤 디테일이 아직 이전 행의
+#   것이면 건수를 그 행의 것으로 오인한다(대부분 전표가 3라인이라 건수만으론 구분 불가).
+#   호출부는 docu_no == 마스터 행 키가 될 때까지 확인한 뒤에야 건수를 채택한다.
+DETAIL_COUNT_JS = r"""() => {
+  try {
+    const el = document.querySelectorAll('.dews-ui-grid')[1];
+    const ctrl = el && window.jQuery(el).data('dewsControl');
+    const g = ctrl && ctrl._grid;
+    if (!g) return { ok: false, reason: 'detail-grid-not-ready' };
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const first = n > 0 ? ds.getJsonRows(0, 0)[0] : null;
+    return { ok: true, n, docu_no: first ? String(first.DOCU_NO == null ? '' : first.DOCU_NO).trim() : null };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
 }"""

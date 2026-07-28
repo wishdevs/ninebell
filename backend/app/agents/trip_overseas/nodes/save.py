@@ -12,7 +12,7 @@ import time
 
 from app.live.events import emit_chat, emit_log, emit_step
 from nbkit.browser.actions import js_click
-from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol import selectors, verify
 from nbkit.patterns import emit_shot
 
 from ...card_collect import steps as card_steps
@@ -110,24 +110,47 @@ def make_save_doc_node():
         # (rowcount 를 못 읽으면(-1/비정수) 판정 보류 — 기존 ok 유지, 오탐 방지).
         try:
             await js_click(page, selectors.BTN_LOOKUP)  # 조회(F2)
-            persisted = -1
-            for _ in range(15):  # 서버 재조회 안정 폴링(상한 ~12s)
-                await page.wait_for_timeout(800)
-                persisted = await page.evaluate(js_lib.ROWCOUNT_JS)
-                if isinstance(persisted, int) and persisted >= 1:
-                    break
-            if isinstance(persisted, int) and persisted == 0:
+            # ⚠ 기존 폴링은 page.wait_for_timeout(800)×15 였는데, 이 워크플로우는 delay_scale=0.4 로
+            #   등록돼 있어 실시간 관찰창이 ~12s → ~4.8s 로 줄었다 — 서버 재조회가 느리면 **정상
+            #   저장을 '팬텀 저장'으로 오판해 하드 실패**시킨다. 확인 커널은 실시간 대기(asyncio)라
+            #   축소되지 않고, 정상 경로는 첫 확인이 0ms 라 추가 지연이 없다.
+            #   rowcount 를 못 읽으면(-1/비정수) 값이 틀린 게 아니라 **확인 불가** → 기존대로 판정
+            #   보류(저장 ok 유지). 확정 0건일 때만 팬텀 저장으로 승격한다.
+            chk = await verify.confirm_grid_rows(
+                page,
+                index=0,
+                min_rows=1,
+                timing=verify.HEAVY,
+                unknown_when=lambda v: not isinstance(v, int) or v < 0,
+            )
+            if chk:
+                await emit_log(
+                    events, f"저장 양성 신호 확인 — 재조회 문서 지속(마스터 {chk.actual}건).", "ok"
+                )
+            elif chk.unknown:
+                await emit_log(events, f"저장 재조회 검증 보류 — {chk.reason}", "warn")
+            else:
                 await emit_step(events, "save_doc", "failed")
                 return {
                     "error": "저장 검증 실패 — F7 후 재조회에 문서가 없습니다(팬텀 저장 의심).",
                     "retry_save": False,
                 }
-            await emit_log(events, f"저장 양성 신호 확인 — 재조회 문서 지속(마스터 {persisted}건).", "ok")
         except Exception as exc:  # noqa: BLE001 — 재조회 검증 실패는 저장 판정을 뒤집지 않는다(보류).
             await emit_log(events, f"저장 재조회 검증 보류(무시): {exc}", "warn")
         await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "save_doc", "done", _ms(t0))
+        # 채움 단계에서 '확인 불가'로 남은 값이 있으면 결과 문구도 완료라고 단정하지 않는다
+        # (반영 여부를 사람이 확인할 근거를 결과에 남긴다).
+        unverified = state.get("unverified") or []
+        if unverified:
+            return {
+                "result": (
+                    f"처리 완료 — {filled}개 행 입력·저장. "
+                    f"단, 값 {len(unverified)}건은 반영을 확인하지 못했습니다({', '.join(unverified[:5])}) — 확인 필요."
+                ),
+                "retry_save": False,
+            }
         return {"result": f"처리 완료 — {filled}개 행 입력·저장.", "retry_save": False}
 
     return save_doc

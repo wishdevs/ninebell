@@ -265,6 +265,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     r.get("VAT_TP"),
                     (preselect[idx + 1].get("budgetUnit") or {}).get("bgacctNm"),
                     preselect[idx + 1].get("vatDeduction"),
+                    r.get("TRAN_NM"),  # 가맹점명 — 통행료·우체국 결정적 불공.
                 ),
                 "note": recs[r.get("i", idx)],
                 "noteSource": note_sources[r.get("i", idx)],
@@ -420,9 +421,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     "projectEdited": bool(row.get("projectEdited")),
                     "noteEdited": bool(row.get("noteEdited")),
                 }
-                # 부가세구분 파티션 — 사용자 최종 제출값(vat) 우선, 없으면(구클라) 계정+VAT_TP 자동분류.
+                # 부가세구분 파티션 — 사용자 최종 제출값(vat) 우선, 없으면(구클라) 계정+가맹점+VAT_TP 자동분류.
                 row_vat = (row.get("vat") or "").strip() or vat_rules.classify_vat(
-                    src.get("VAT_TP"), (row.get("budgetUnit") or {}).get("bgacctNm")
+                    src.get("VAT_TP"),
+                    (row.get("budgetUnit") or {}).get("bgacctNm"),
+                    merchant=src.get("TRAN_NM"),
                 )
                 if row_vat == vat_rules.TAXABLE:
                     taxable_work.append(entry)

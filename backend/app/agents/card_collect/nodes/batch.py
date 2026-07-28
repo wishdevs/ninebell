@@ -115,6 +115,8 @@ async def _apply_group_fields(
         note_res = await steps.set_note(page, row, collected["적요"])
         if not note_res.get("ok"):
             return False, f"적요 세팅 실패(행 {row + 1}): {note_res.get('err') or note_res.get('reason')}"
+        if note_res.get("warn"):
+            await emit_log(events, f"⚠ {row + 1}행 적요 미확인: {note_res['warn']}", "warn")
     applied: list[str] = []
     # 선택 단위 = (BG × 사업계획 × 예산계정) 조합 행 — 그 행을 정확히 고른다.
     r = await steps.fill_budget_codepicker(
@@ -127,7 +129,11 @@ async def _apply_group_fields(
     )
     if not r.get("ok"):
         return False, f"예산단위 '{collected['예산단위']}': {r.get('reason')}"
-    await emit_log(events, f"예산단위 = {r.get('name')} (code {r.get('code')})", "info")
+    if r.get("warn"):
+        await emit_log(events, f"⚠ 예산단위 반영 미확인: {r['warn']}", "warn")
+    # verified=False = 폼 반영을 **확인하지 못했다** — '완료'가 아니라 '미확인'으로 적는다.
+    mark = "" if r.get("verified", True) else " (반영 미확인)"
+    await emit_log(events, f"예산단위 = {r.get('name')} (code {r.get('code')}){mark}", "info")
     applied.append(f"예산단위 {r.get('name')}")
     # 프로젝트는 선택하지 않을 수 있다(옵션) — 값이 있으면 WBS 행을 정확히 고른다.
     if (collected.get("프로젝트") or "").strip():
@@ -137,10 +143,22 @@ async def _apply_group_fields(
         )
         if not r.get("ok"):
             return False, f"프로젝트 '{collected['프로젝트']}': {r.get('reason')}"
-        await emit_log(events, f"프로젝트 = {r.get('name')} (code {r.get('code')})", "info")
+        if r.get("warn"):
+            await emit_log(events, f"⚠ 프로젝트 반영 미확인: {r['warn']}", "warn")
+        mark = "" if r.get("verified", True) else " (반영 미확인)"
+        await emit_log(events, f"프로젝트 = {r.get('name')} (code {r.get('code')}){mark}", "info")
         applied.append(f"프로젝트 {r.get('name')}")
+    # 연쇄(cascade) 재확인 — 피커 '적용'이 그리드를 리로드하면 앞서 넣은 적요가 되돌려질 수
+    # 있다(§10: A 가 B 를 바꾸면 A 확인 뒤 B 재확인). 일괄적용 **직전**에 살아 있는지 본다.
+    nv = await steps.verify_notes(page, rows, collected["적요"])
+    if not nv.get("ok"):
+        return False, f"적요가 피커 적용 후 되돌려졌습니다: {nv.get('reason')}"
+    if nv.get("warn"):
+        await emit_log(events, f"⚠ 적요 생존 미확인: {nv['warn']}", "warn")
     ap = await steps.apply_rows(page, rows)
     if not ap.get("ok"):
         return False, f"일괄적용 실패: {ap.get('reason')}"
+    if ap.get("warn"):
+        await emit_log(events, f"⚠ 일괄적용 미확인: {ap['warn']}", "warn")
     suffix = f" ({len(rows)}건 일괄)" if len(rows) > 1 else ""
     return True, " / ".join(applied) + f" / 적요 '{collected['적요']}'{suffix}"
