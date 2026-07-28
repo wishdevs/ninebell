@@ -44,7 +44,9 @@ async def test_admin_crud_roundtrip(client, make_user, auth_as):
     uid = await make_user("cl-admin", "admin")
     auth_as(uid)
 
-    entry = await _create(client, version="v1.0.0", title="첫 릴리스", releasedAt="2026-07-01")
+    # ⚠ 실제 배포 릴리스 파일(backend/app/data/releases/*.md)이 시드로 먼저 들어오므로,
+    # 테스트 픽스처 버전은 실제로 쓰지 않는 값이어야 한다(v1.0.0 은 2026-07-28 실배포로 충돌).
+    entry = await _create(client, version="v0.0.0-test", title="첫 릴리스", releasedAt="2026-07-01")
     assert entry["status"] == "released"
     assert entry["releasedAt"] == "2026-07-01"
     eid = entry["id"]

@@ -16,7 +16,7 @@ from typing import Any
 from nbkit.omnisol import js_lib
 from nbkit.omnisol.errors import MenuError
 from nbkit.omnisol.menu_schemas import MenuSchema
-from nbkit.omnisol.modals import dismiss_notice_popup
+from nbkit.omnisol.modals import watch_notice_popup
 
 logger = logging.getLogger("nbkit.omnisol.navigator")
 
@@ -50,11 +50,13 @@ async def navigate_menu(
         chk = await page.evaluate(js_lib.MENU_CHECK_JS)
         if int(chk.get("grids", 0)) >= grids_required:
             logger.info("%s 진입 성공(grids=%s)", label, chk.get("grids"))
-            # 공지팝업 재출현 방어(사용자 실측 2026-07-23: 결의서작성 진입 후 또 뜸) — 서버
-            # 정책상 하루동안 보지 않기·닫기(로그인 직후)에도 화면 전환마다 재출현한다. 공지는
-            # 화면 로드 ~1.5s 뒤 비동기 렌더라, 목적 화면 도착 확인(그리드 로드) 직후 관찰창
-            # 2.5s 로 흡수한다(전 에이전트 공통 경로 — 여기 한 곳). 없으면 no-op.
-            await dismiss_notice_popup(page, appear_cap_ms=2_500)
+            # 공지팝업 재출현 방어(사용자 실측 2026-07-23: 결의서작성 진입 후 또 뜸) — 화면
+            # 전환마다 재출현할 수 있어 관찰창을 둔다. 다만 **차단형으로 기다리지 않는다**:
+            # 실측(2026-07-28) 이 관찰창 2.5s 가 진입 시간에 통째로 얹혔는데, 재출현이 없는
+            # 경우가 대부분이라 매 실행 ~2.8s 를 헛대기했다. 배경으로 돌리면 재출현 시에는
+            # 그대로 닫히고, 안 뜨면 아무 비용이 없다. 실제 클릭 직전 JIT 확인(피커·탭 열기)은
+            # 차단형으로 남아 있어 레이스 방어는 불변.
+            watch_notice_popup(page, appear_cap_ms=2_500)
             return
         if chk.get("notFound"):
             raise MenuError(
