@@ -21,7 +21,10 @@ from playwright.async_api import async_playwright
 import app.agents  # noqa: F401 — import 시 실 워크플로우(expense-card-chat)를 registry 에 등록
 from app.config import get_settings
 from app.core.assistant_ratelimit import AssistantRateLimiter
+from app.core.http_client import new_async_client
+from app.core.logging_setup import configure_logging
 from app.core.ratelimit import LoginRateLimiter
+from app.core.request_log import HttpRequestLogMiddleware
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
@@ -47,6 +50,9 @@ logger = logging.getLogger("app.main")
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # ⚠ 앱 로거 부트스트랩 — uvicorn 은 root 에 핸들러를 달지 않아 이걸 빼면 app.* 의 INFO 가
+    #   전부 유실된다(HTTP 요청 로그 포함). 라우터 등록보다 먼저 세운다.
+    configure_logging(settings.log_level, settings.log_file)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -63,7 +69,7 @@ def create_app() -> FastAPI:
 
         # --- 공용 httpx 클라이언트(AI 어시스턴트 Gemini 스트리밍) ---
         # read=None: SSE 스트림이 장시간 idle 이어도 읽기 타임아웃으로 끊기지 않게 한다.
-        app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
+        app.state.http = new_async_client(timeout=httpx.Timeout(30.0, read=None))
 
         # --- 더존 헤드리스 브라우저 + 동시 로그인 상한 ---
         # 컨테이너/Fargate 는 CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox" 로 크래시 방지(env).
@@ -131,6 +137,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # CORS **뒤에** 등록해 가장 바깥에 놓는다(Starlette 은 나중에 등록한 것이 바깥) — CORS 가
+    # 선처리하는 preflight(OPTIONS)와 CORS 단계의 예외까지 빠짐없이 남기기 위함이다.
+    app.add_middleware(HttpRequestLogMiddleware)
 
     app.include_router(auth.router)
     app.include_router(users.router)
