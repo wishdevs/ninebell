@@ -212,6 +212,21 @@ READ_ROW_ABDOCU_NO_JS = r"""(idx) => {
   } catch (e) { return null; }
 }"""
 
+# 마스터 그리드 전 행 중 결의서번호(ABDOCU_NO) 보유 행 수 — 카드: 보유 0건이면 결재 대상이
+# 없으므로 결의서조회승인 다중탭 수집 자체를 생략하고 즉시 종료한다(사용자 확정 2026-07-30).
+# arg 없음. 반환 {ok, n(조회 행수), withAb(보유 행수)} | {ok:false, reason}.
+COUNT_ROWS_WITH_ABDOCU_JS = r"""() => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    if (n <= 0) return { ok: true, n: 0, withAb: 0 };
+    const rows = ds.getJsonRows(0, n - 1) || [];
+    const withAb = rows.filter(r => r && String(r.ABDOCU_NO || '').trim()).length;
+    return { ok: true, n, withAb };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
 # 마스터 그리드 idx 행 선택 — setCurrent(하이라이트/디테일 연동) + checkRow(결재 대상 인식 필수).
 # D4 실측: checkRow 없이 setCurrent 만으론 결재 버튼이 대상을 인식하지 못한다. arg=idx. 반환 bool.
 CHECK_ROW_JS = r"""(idx) => {

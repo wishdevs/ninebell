@@ -414,6 +414,20 @@ async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
         return None
 
 
+async def count_rows_with_abdocu(page: Any) -> dict:
+    """마스터 그리드에서 결의서번호(ABDOCU_NO) 보유 행 수 — {ok, n, withAb} | {ok:False}.
+
+    카드(voucher-card)가 결의서조회승인 수집 **전에** 호출해, 보유 0건이면 다중탭 수집을
+    생략하고 즉시 종료한다(사용자 확정 2026-07-30). 읽기 실패는 ok:False 로 돌려 호출자가
+    기존 경로(수집 진행)로 폴백하게 한다.
+    """
+    try:
+        res = await page.evaluate(js.COUNT_ROWS_WITH_ABDOCU_JS)
+        return res if isinstance(res, dict) else {"ok": False, "reason": f"비정상 반환: {res!r}"}
+    except Exception as exc:  # noqa: BLE001 — 테스트 스텁/버전차 방어(soft-fail).
+        return {"ok": False, "reason": str(exc)[:ERR_REASON_MAX]}
+
+
 async def read_detail_count(page: Any, idx: int, docu_no: str | None = None) -> dict:
     """마스터 idx 행의 **하위(계정정보) 그리드 건수**를 읽는다. 반환 {ok, count, verified, reason?}.
 
