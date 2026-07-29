@@ -45,7 +45,8 @@ backend/.env.zip
 backend/.pytest_cache/
 .ruff_cache/
 
-# 로컬 로그 파일(LOG_FILE=logs/app.log). 요청 본문·LLM 프롬프트 전문이 남으므로 커밋 금지.
+# 로컬 로그 파일(LOG_FILE=logs/app.log, LLM_LOG_DIR=logs/llm).
+# 요청 본문·LLM 프롬프트 전문이 남으므로 커밋 금지.
 backend/logs/
 
 # Claude Code 에이전트 워크트리(전체 리포 사본) — Tailwind v4 가 gitignore 밖 파일을

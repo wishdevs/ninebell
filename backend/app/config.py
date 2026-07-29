@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # 온프렘은 Docker json-file 로 stdout 을 수집하므로 컨테이너 안 파일은 무의미).
     # 로컬 개발에서 터미널을 닫아도 로그를 남기려면 backend/.env 에 LOG_FILE=logs/app.log.
     log_file: str = ""
+    # LLM 호출별 파일 로그 디렉터리(호출 1건 = 파일 1개, 요청·응답 전문). 비우면 끔 —
+    # **배포 기본값**. 한 줄 로그(app.llm.wire)는 프롬프트가 수천 자라 눈으로 못 읽어서,
+    # 사람이 읽을 용도로 따로 남긴다. 로컬은 LLM_LOG_DIR=logs/llm.
+    llm_log_dir: str = ""
 
     @field_validator("llm_provider")
     @classmethod

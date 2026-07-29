@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.agents.common import llm_file_log
 from app.config import get_settings
 from app.core.redact import redact_value, safe_url
 
@@ -87,10 +88,17 @@ def _wire(kind: str, seq: int, provider: str, url: str, payload: Any) -> None:
         # 프롬프트/응답 텍스트는 전문 보존이 목적이라 절단하지 않는다. 다만 URL 쿼리의 비밀값과
         # 바디에 섞여 들어올 수 있는 자격증명 키(api_key·authorization 등)는 가린다 — 두 프로바이더의
         # 정상 바디 필드(system_instruction·contents·messages·tools·max_tokens)와는 겹치지 않는다.
-        body = json.dumps(redact_value(_elide_images(payload)), ensure_ascii=False)
+        clean = redact_value(_elide_images(payload))
+        clean_url = safe_url(url)
         wire_logger.info(
-            "%s seq=%d provider=%s url=%s %s", kind, seq, provider, safe_url(url), body
+            "%s seq=%d provider=%s url=%s %s",
+            kind, seq, provider, clean_url, json.dumps(clean, ensure_ascii=False),
         )
+        # 호출 1건 = 파일 1개(읽기용). 한 줄 로그는 프롬프트가 수천 자라 눈으로 못 읽는다.
+        if kind == "request":
+            llm_file_log.write_request(seq, provider, clean_url, clean)
+        else:
+            llm_file_log.write_response(seq, provider, clean_url, clean)
     except Exception:  # noqa: BLE001 — 로깅 실패가 LLM 호출을 막아선 안 된다.
         logger.debug("LLM 와이어 로깅 실패(무시)", exc_info=True)
 
