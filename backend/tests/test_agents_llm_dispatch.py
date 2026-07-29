@@ -119,7 +119,7 @@ def test_decls_to_openai_tools_fills_missing_parameters():
 async def test_dispatch_chat_decide_selects_provider(monkeypatch):
     seen: dict[str, tuple] = {}
 
-    async def fake_g(http, key, model, base, system, history, context, shot, tools):
+    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None):
         seen["gemini"] = (key, model, base)
         return "g_tool", {"p": 1}
 
@@ -148,7 +148,7 @@ async def test_dispatch_chat_decide_selects_provider(monkeypatch):
 async def test_dispatch_defaults_to_gemini_without_provider_attr(monkeypatch):
     called = {"gemini": False}
 
-    async def fake_g(http, key, model, base, system, history, context, shot, tools):
+    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None):
         called["gemini"] = True
         return None, {}
 

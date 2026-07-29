@@ -19,6 +19,7 @@ from typing import Any
 
 from nbkit.browser.actions import mouse_click
 from nbkit.omnisol import js_lib
+from nbkit.omnisol.codepicker import _picker_search
 
 VEHICLE_LABEL = "업무용차량"
 
@@ -79,12 +80,30 @@ _DETAIL_ROWS_DUMP_JS = r"""() => { try {
 } catch (e) { return { ok:false, err: String(e).slice(0, 100) }; } }"""
 
 # 상세행 클릭 좌표(캔버스 그리드 — 헤더 34px + 행 32px, 프로브 검증 뷰포트 1600×1000 기준).
+# 가시영역 밖 행이면 null — 좌표 클릭이 그리드 밖을 눌러 **행 전환이 조용히 실패**한다
+# (실사용 2026-07-29: 10행 이후 클릭 무효 → 직전 행에 머문 채 필터된 팝업 → '목록에 없음').
 _DETAIL_ROW_CLICK_JS = r"""(idx) => {
   const g = document.querySelectorAll('.dews-ui-grid')[1];
   if (!g) return null;
   const r = g.getBoundingClientRect();
-  return { x: Math.round(r.x + 100), y: Math.round(r.y + 34 + idx * 32 + 16) };
+  const y = r.y + 34 + idx * 32 + 16;
+  if (y > r.y + r.height - 8) return null;
+  return { x: Math.round(r.x + 100), y: Math.round(y) };
 }"""
+
+# 상세행 API 선택(setCurrent) + 현재행 확인 — 좌표 클릭이 불가한(스크롤 밖) 행용.
+_DETAIL_SET_CURRENT_JS = r"""(idx) => { try {
+  const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
+  g.setCurrent({ itemIndex: idx });
+  return { ok: true };
+} catch (e) { return { ok:false, err:String(e).slice(0,100) }; } }"""
+
+_DETAIL_CURRENT_JS = r"""() => { try {
+  const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid;
+  const cur = g.getCurrent ? g.getCurrent() : null;
+  if (!cur) return -1;
+  return cur.itemIndex != null ? cur.itemIndex : (cur.dataRow != null ? cur.dataRow : -1);
+} catch (e) { return -2; } }"""
 
 # 차량 팝업 목록 행 좌표(더블클릭용 — 프로브 검증: 더블클릭 1회 = 선택+적용+닫힘).
 # 행이 그리드 가시영역 밖이면 null — 호출부가 선택→'적용' 폴백을 탄다.
@@ -108,12 +127,26 @@ async def _read_vehicle_field(page: Any) -> dict:
 
 
 async def _select_detail_row(page: Any, idx: int) -> bool:
+    """상세행 선택 + **현재행 검증**. 가시영역 안이면 좌표 클릭(프로브 실측 경로),
+    밖이면 setCurrent(API) 후 스크롤된 위치를 다시 좌표 클릭해 패널 리바인딩을 유발한다.
+    getCurrent 로 의도한 행이 선택됐는지 확인 — 확인 실패면 False(엉뚱한 행 조작 금지)."""
     box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
-    if not box:
-        return False
-    await mouse_click(page, box["x"], box["y"])
-    await asyncio.sleep(0.8)  # 패널 갱신 대기(프로브 실측 타이밍).
-    return True
+    if box:
+        await mouse_click(page, box["x"], box["y"])
+        await asyncio.sleep(0.8)  # 패널 갱신 대기(프로브 실측 타이밍).
+    else:
+        # 스크롤 밖 — setCurrent 로 스크롤·선택 후, 가시화된 좌표를 재계산해 클릭
+        # (패널 리바인딩은 클릭에서만 실측 확인됐다).
+        r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
+        if not r.get("ok"):
+            return False
+        await asyncio.sleep(0.5)
+        box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
+        if box:
+            await mouse_click(page, box["x"], box["y"])
+        await asyncio.sleep(0.8)
+    cur = await page.evaluate(_DETAIL_CURRENT_JS)
+    return cur == idx
 
 
 async def _open_vehicle_popup(page: Any) -> dict:
@@ -182,13 +215,18 @@ async def survey_vehicle_targets(page: Any) -> dict:
     return {"ok": True, "targets": targets, "vehicles": vehicles}
 
 
-async def fill_vehicle(page: Any, assignments: list[tuple[int, dict]]) -> dict:
+async def fill_vehicle(
+    page: Any, assignments: list[tuple[int, dict]], expected: dict[int, str] | None = None
+) -> dict:
     """(상세행 인덱스, 차량) 배정 목록을 순회 반영 + 행별 readback 검증.
 
     전체 동일 차량이면 호출부가 [(idx, v), …]로 같은 v 를 배정한다(내역별 상이 배정
-    '1-1, 2-3' 지원 — 사용자 요청 2026-07-29). 반영 경로: 행 선택 → 돋보기 → 행
-    더블클릭(실측 경로, 가시영역 밖이면 선택→'적용' 폴백) → 패널 readback 의 코드가
-    차량코드와 일치해야 성공(불일치는 실패로 보고, 성공 단정 금지).
+    '1-1, 2-3' 지원 — 사용자 요청 2026-07-29). 반영 경로: 행 선택(현재행 검증) →
+    (기대 기존값 대조 — 패널이 엉뚱한 행을 표시하면 쓰기 전에 중단) → 돋보기 → 목록에
+    없으면 차량번호 재검색(값이 이미 있는 행의 팝업은 현재 값으로 **필터**돼 열릴 수 있다,
+    실사용 2026-07-29) → 행 더블클릭(실측 경로, 가시영역 밖이면 선택→'적용' 폴백) →
+    패널 readback 의 코드가 차량코드와 일치해야 성공(불일치는 실패로 보고, 성공 단정 금지).
+    expected: {상세행 idx: 반영 전 기대 코드(''=빈)} — survey 시점 값. 쓰기 전 가드.
     반환 {ok, done:[행번호], failed:[{row, reason}]}.
     """
     done: list[int] = []
@@ -196,8 +234,18 @@ async def fill_vehicle(page: Any, assignments: list[tuple[int, dict]]) -> dict:
     for i, vehicle in assignments:
         row_no = i + 1
         if not await _select_detail_row(page, i):
-            failed.append({"row": row_no, "reason": "상세행 선택 실패"})
+            failed.append({"row": row_no, "reason": "상세행 선택 확인 실패(스크롤 밖 행 선택 불가)"})
             continue
+        if expected is not None and i in expected:
+            pre = await _read_vehicle_field(page)
+            if pre.get("found") and (pre.get("code") or "") != expected[i]:
+                # 패널이 의도한 행을 표시하지 않는다(직전 행 잔상 등) — 쓰면 엉뚱한 행이
+                # 바뀐다. 쓰기 전에 중단하고 사실대로 보고.
+                failed.append({
+                    "row": row_no,
+                    "reason": f"패널 값 불일치(기대 {expected[i]!r}/실제 {pre.get('code')!r}) — 행 전환 미반영 의심, 반영 중단",
+                })
+                continue
         popup = await _open_vehicle_popup(page)
         if not popup.get("ok"):
             failed.append({"row": row_no, "reason": popup.get("reason")})
@@ -205,8 +253,17 @@ async def fill_vehicle(page: Any, assignments: list[tuple[int, dict]]) -> dict:
         rows = popup.get("rows") or []
         pick_i = next((k for k, r in enumerate(rows) if r.get("code") == vehicle.get("code")), None)
         if pick_i is None:
+            # 값이 있는 행의 팝업은 현재 값으로 필터돼 열릴 수 있다 — 차량번호로 재검색.
+            try:
+                await _picker_search(page, str(vehicle.get("carNo") or vehicle.get("code") or ""))
+                popup = await page.evaluate(_VEHICLE_POPUP_DUMP_JS)
+                rows = popup.get("rows") or [] if popup.get("ok") else []
+            except Exception:  # noqa: BLE001 — 재검색 실패는 아래 '없음' 실패로 수렴.
+                rows = []
+            pick_i = next((k for k, r in enumerate(rows) if r.get("code") == vehicle.get("code")), None)
+        if pick_i is None:
             await _close_popup(page)
-            failed.append({"row": row_no, "reason": f"팝업 목록에 차량코드 {vehicle.get('code')} 없음"})
+            failed.append({"row": row_no, "reason": f"팝업 목록에 차량코드 {vehicle.get('code')} 없음(재검색 포함)"})
             continue
         # 1차: 행 더블클릭(프로브 실측 경로 — 선택+적용+닫힘 일괄). 가시영역 밖 행(rect
         # null)만 2차: setCurrent 선택 → '적용' 버튼(표준 코드피커 패턴, 이 팝업 미실측 —

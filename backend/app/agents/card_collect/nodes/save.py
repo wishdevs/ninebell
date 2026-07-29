@@ -92,8 +92,10 @@ _HANDOFF_SYSTEM = (
     "직접 고칠 수 없다 — 화면 조작은 도구로 대행한다. 사용자의 채팅 지시를 도구 1개로 "
     "처리하라. 저장 재시도는 save_now, 건별 입력 그리드로 돌아가 재입력은 retry_grid, "
     "종료는 stop, 업무용차량 목록 보기는 list_vehicles, 차량 선택은 select_vehicle. "
-    "그 외 지원하지 않는 화면 조작을 지시하면 ask 로 무엇이 안 되는지와 대안(그리드 "
-    "재입력으로 예산계정 변경·행 제외)을 설명하라."
+    "차량 지정은 자유 발화('첫번째는 니로, 나머지는 5번', '전부 카니발')여도 컨텍스트의 "
+    "대상내역·차량목록을 근거로 select_vehicle.query 에 '내역-차량' 쌍(예: '1-2, 2-5') "
+    "또는 단일 차량 번호로 정규화해 호출하라. 그 외 지원하지 않는 화면 조작을 지시하면 "
+    "ask 로 무엇이 안 되는지와 대안(그리드 재입력으로 예산계정 변경·행 제외)을 설명하라."
 )
 
 # ERP 저장 거부 모달 파싱 — 승인번호·요구 계정을 뽑아 '어느 행을 어떤 계정으로' 안내한다.
@@ -354,8 +356,9 @@ async def _handoff_save_failure(
             f"{i + 1}행→{v.get('carNo')}-{v.get('name')}" for i, v in assignments
         )
         await _say(f"반영합니다: {desc}")
+        expected = {t["idx"]: t.get("code") or "" for t in (vehicle_ctx or {}).get("targets", [])}
         try:
-            fr = await mgmt_items.fill_vehicle(page, assignments)
+            fr = await mgmt_items.fill_vehicle(page, assignments, expected=expected)
         except Exception as exc:  # noqa: BLE001
             logger.exception("fill_vehicle failed")
             fr = {"ok": False, "done": [], "failed": [{"row": "?", "reason": str(exc)[:120]}]}
@@ -453,14 +456,32 @@ async def _handoff_save_failure(
                         b64 = base64.b64encode(buf).decode()
                     except Exception:  # noqa: BLE001
                         b64 = None
+                    context: dict = {"저장 실패 사유": reason}
+                    if vehicle_ctx:
+                        # 차량 선택 컨텍스트 — 자유 발화("첫번째는 니로, 나머지 카니발")를
+                        # select_vehicle.query 의 '내역-차량' 정규 형식으로 변환할 근거.
+                        context["업무용차량_선택중"] = {
+                            "대상내역": [
+                                {"내역": k + 1, "적요": t.get("note") or "", "현재값": t.get("code") or ""}
+                                for k, t in enumerate(vehicle_ctx["targets"])
+                            ],
+                            "차량목록": [
+                                {"차량": i + 1, "차량번호": v.get("carNo"), "차량명": v.get("name")}
+                                for i, v in enumerate(vehicle_ctx["vehicles"])
+                            ],
+                            "지시": "차량 지정 발화면 select_vehicle 을 호출하고 query 에 "
+                                   "'내역-차량' 쌍(예: '1-2, 2-5, 3-5') 또는 전체 동일이면 "
+                                   "차량 번호 하나(예: '5번')로 정규화해 담아라.",
+                        }
                     name, args = await chat_decide(
                         http,
                         system=_HANDOFF_SYSTEM,
                         history="\n".join(history.splitlines()[-30:]),
-                        context={"저장 실패 사유": reason},
+                        context=context,
                         shot_b64=b64,
                         tools=_HANDOFF_TOOLS,
                         settings=settings,
+                        thinking_budget=-1,  # 동적 사고 ON — 유연한 인텐트 해석(사용자 요청 2026-07-29).
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("save handoff chat_decide failed")

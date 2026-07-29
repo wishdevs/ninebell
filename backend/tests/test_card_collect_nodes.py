@@ -1789,7 +1789,7 @@ async def test_save_final_vehicle_flow_select_apply_and_resave(monkeypatch):
 
     fills: list[list[tuple]] = []
 
-    async def _fill(page, assignments):
+    async def _fill(page, assignments, expected=None):
         fills.append([(i, v["code"]) for i, v in assignments])
         return {"ok": True, "done": [i + 1 for i, _ in assignments], "failed": []}
 
@@ -1848,7 +1848,7 @@ async def test_save_final_vehicle_flow_per_row_assignments(monkeypatch):
 
     fills: list[list[tuple]] = []
 
-    async def _fill(page, assignments):
+    async def _fill(page, assignments, expected=None):
         fills.append([(i, v["code"]) for i, v in assignments])
         return {"ok": True, "done": [i + 1 for i, _ in assignments], "failed": []}
 
