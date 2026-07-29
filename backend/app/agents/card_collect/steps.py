@@ -124,9 +124,12 @@ from app.agents.common.doc_steps import set_acct_date  # noqa: E402, F401 — �
 async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
     """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by}.
 
-    선택 규칙(사용자 확정 2026-07-04): owner_name(=로그인ID=사용자명)이 주어지면 소유자
-    (CARD_OWNR_NM)/관리사원(KOR_NM)이 그 이름과 일치하는 카드만 선택하고, 일치 0건이면
-    기존 로직인 **전체선택**으로 폴백한다(공용카드·빈 소유자 대비). by='name'|'all'.
+    선택 규칙(사용자 확정 2026-07-04): owner_name(=로그인ID=사용자명)이 주어지면 그
+    이름과 일치하는 카드만 선택하고, 일치 0건이면 기존 로직인 **전체선택**으로 폴백한다
+    (공용카드·빈 소유자 대비). by='name'|'all'. 매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM
+    정확일치 + 카드명 괄호 '(이름)' 포함 — 실측(2026-07-29) 이 ERP 는 소유자/관리사원
+    컬럼을 채우지 않아 카드명 FINPRODUCT_NM("…법인카드(석대현)-2826")의 괄호가 유일한
+    소유자 표기다(CARD_SUB_SELECT_BY_NAME_JS 참조).
 
     ⚠ 증빙유형 01 적용 직후 법인카드 팝업이 **로딩 중**('데이터 처리 중')일 수 있다 — 돋보기
     버튼 출현을 폴링(실측 2026-07-04: 폴링 세분화 후 '돋보기 버튼 없음' 레이스).
