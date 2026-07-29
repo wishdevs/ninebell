@@ -23,3 +23,15 @@ def test_split_name_without_job_title():
 def test_split_empty_and_whitespace():
     assert split_job_title("") == ("", "")
     assert split_job_title("  석대현   프로  ") == ("석대현", "프로")
+
+
+def test_split_company_hierarchy_titles():
+    """회사 직급체계(사용자 확정 2026-07-29) 전 직급이 분리 대상이다."""
+    from app.erp.profile import JOB_TITLE_HIERARCHY
+
+    assert JOB_TITLE_HIERARCHY == (
+        "대표이사", "COO", "감사", "연구위원", "고문",
+        "그룹장", "본부장", "총괄팀장", "팀장", "팀원",
+    )
+    for title in JOB_TITLE_HIERARCHY:
+        assert split_job_title(f"홍길동 {title}") == ("홍길동", title)
