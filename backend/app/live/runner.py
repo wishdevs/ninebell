@@ -265,6 +265,22 @@ async def run_workflow(
                 ev = await events.get()
                 if "_final" in ev:
                     final = ev["_final"] or {}
+                    # 종료 후에도 라이브 화면을 약 2초 더 흘린다(사용자 요청 2026-07-30) —
+                    # 마지막 프레임이 로딩 중 화면에서 얼어붙으면 '아직 처리 중'처럼 보인다.
+                    # 캐스트 펌프는 아직 살아 있으므로(finally 에서 취소) 그동안 도착하는
+                    # 프레임·이벤트를 그대로 전달한 뒤 최종 result/error 를 내보낸다.
+                    if screencast and cast is not None:
+                        tail_deadline = time.monotonic() + 2.0
+                        while True:
+                            remain = tail_deadline - time.monotonic()
+                            if remain <= 0:
+                                break
+                            try:
+                                tail_ev = await asyncio.wait_for(events.get(), timeout=remain)
+                            except asyncio.TimeoutError:
+                                break
+                            if "_final" not in tail_ev:
+                                yield tail_ev
                     if final.get("error"):
                         yield {"error": final["error"]}
                     elif "result" in final:
