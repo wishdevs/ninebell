@@ -86,6 +86,19 @@ _DETAIL_ROW_CLICK_JS = r"""(idx) => {
   return { x: Math.round(r.x + 100), y: Math.round(r.y + 34 + idx * 32 + 16) };
 }"""
 
+# 차량 팝업 목록 행 좌표(더블클릭용 — 프로브 검증: 더블클릭 1회 = 선택+적용+닫힘).
+# 행이 그리드 가시영역 밖이면 null — 호출부가 선택→'적용' 폴백을 탄다.
+_POPUP_ROW_RECT_JS = r"""(rowIndex) => {
+  const p = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null).slice(-1)[0];
+  if (!p) return null;
+  const gridEl = p.querySelector('.dews-ui-grid');
+  if (!gridEl) return null;
+  const gr = gridEl.getBoundingClientRect();
+  const y = gr.y + 30 + rowIndex * 32 + 16;
+  if (y > gr.y + gr.height - 8) return null;
+  return { x: Math.round(gr.x + 150), y: Math.round(y) };
+}"""
+
 
 async def _read_vehicle_field(page: Any) -> dict:
     """현재 선택 상세행의 업무용차량 값 read — {found, code, name}."""
@@ -192,18 +205,26 @@ async def fill_vehicle(page: Any, vehicle: dict, target_idxs: list[int]) -> dict
             await _close_popup(page)
             failed.append({"row": row_no, "reason": f"팝업 목록에 차량코드 {vehicle.get('code')} 없음"})
             continue
-        sel = await page.evaluate(js_lib.PICKER_SELECT_JS, pick_i)
-        if not sel.get("ok"):
-            await _close_popup(page)
-            failed.append({"row": row_no, "reason": f"행 선택 실패: {sel.get('err') or sel.get('reason')}"})
-            continue
-        btn = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
-        if not btn:
-            await _close_popup(page)
-            failed.append({"row": row_no, "reason": "'적용' 버튼 없음"})
-            continue
-        await mouse_click(page, btn["x"], btn["y"])
-        await asyncio.sleep(1.2)
+        # 1차: 행 더블클릭(프로브 실측 경로 — 선택+적용+닫힘 일괄). 가시영역 밖 행(rect
+        # null)만 2차: setCurrent 선택 → '적용' 버튼(표준 코드피커 패턴, 이 팝업 미실측 —
+        # 아래 readback 검증이 성공 단정을 막는다).
+        rect = await page.evaluate(_POPUP_ROW_RECT_JS, pick_i)
+        if rect:
+            await page.mouse.dblclick(rect["x"], rect["y"])
+            await asyncio.sleep(1.2)
+        else:
+            sel = await page.evaluate(js_lib.PICKER_SELECT_JS, pick_i)
+            if not sel.get("ok"):
+                await _close_popup(page)
+                failed.append({"row": row_no, "reason": f"행 선택 실패: {sel.get('err') or sel.get('reason')}"})
+                continue
+            btn = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
+            if not btn:
+                await _close_popup(page)
+                failed.append({"row": row_no, "reason": "'적용' 버튼 없음"})
+                continue
+            await mouse_click(page, btn["x"], btn["y"])
+            await asyncio.sleep(1.2)
         rb = await _read_vehicle_field(page)
         if rb.get("found") and (rb.get("code") or "") == (vehicle.get("code") or ""):
             done.append(row_no)
