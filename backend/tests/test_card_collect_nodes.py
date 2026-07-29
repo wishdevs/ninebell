@@ -1720,3 +1720,88 @@ async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
     out = await make_switch_evdn_node()(state)
     assert all(r.get("APRVL_NO") != "00000000" for r in out["rows2_list"])
     assert [w["label"] for w in out["pass2_work"]] == [2]
+
+
+# ── 업무용차량 선택(관리항목) — 저장 실패 채팅에서 목록 제시·선택·반영·재저장 ─────────
+from app.agents.card_collect import mgmt_items  # noqa: E402
+
+_VEHICLES = [
+    {"code": "1169", "name": "G80", "carNo": "178노1169", "rent": "자가"},
+    {"code": "4101", "name": "카니발", "carNo": "259루4101", "rent": "자가"},
+    {"code": "5846", "name": "G80", "carNo": "129다5846", "rent": "자가"},
+]
+
+
+def test_resolve_vehicle_choice_by_number_carno_and_name():
+    v, _ = mgmt_items.resolve_vehicle_choice("2번", _VEHICLES)
+    assert v is not None and v["code"] == "4101"
+    v, _ = mgmt_items.resolve_vehicle_choice("129다5846", _VEHICLES)
+    assert v is not None and v["code"] == "5846"
+    v, _ = mgmt_items.resolve_vehicle_choice("카니발", _VEHICLES)
+    assert v is not None and v["code"] == "4101"
+    # 모호(G80 2대) → 임의 선택 금지, 후보 안내.
+    v, note = mgmt_items.resolve_vehicle_choice("G80", _VEHICLES)
+    assert v is None and "여러 대가" in note
+    # 범위 밖 번호.
+    v, note = mgmt_items.resolve_vehicle_choice("9번", _VEHICLES)
+    assert v is None and "없습니다" in note
+
+
+async def test_save_final_vehicle_flow_select_apply_and_resave(monkeypatch):
+    """업무용차량 미입력 거부 → 목록 선제 제시 → '2번' 선택 → 반영 → 자동 재저장 성공."""
+    saves: list[int] = []
+
+    async def _save(page, confirm):
+        saves.append(1)
+        if len(saves) == 1:
+            return {"ok": False, "reason": "계정의 관리항목[업무용차량] 항목이 입력되지 않았습니다."}
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _save)
+    _stub_save_requery(monkeypatch, rowcount=1)
+
+    async def _survey(page):
+        return {
+            "ok": True,
+            "targets": [
+                {"idx": 0, "acct": "(판)차량유지비-기타", "code": "", "name": ""},
+                {"idx": 2, "acct": "(판)차량유지비-기타", "code": "", "name": ""},
+            ],
+            "vehicles": _VEHICLES,
+        }
+
+    fills: list[tuple] = []
+
+    async def _fill(page, vehicle, idxs):
+        fills.append((vehicle["code"], tuple(idxs)))
+        return {"ok": True, "done": [i + 1 for i in idxs], "failed": []}
+
+    monkeypatch.setattr(save.mgmt_items, "survey_vehicle_targets", _survey)
+    monkeypatch.setattr(save.mgmt_items, "fill_vehicle", _fill)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 3, "pass2_filled": 0}
+        )
+    )
+    frame = await _next_hitl(events)
+    # 차량 목록 표가 선제 방출됐는지(비동기 — 잠시 대기 후 큐 스캔).
+    await asyncio.sleep(0.1)
+    seen_tables = []
+    drained = []
+    while not events.empty():
+        ev = events.get_nowait()
+        drained.append(ev)
+        if isinstance(ev.get("transactions"), dict):
+            seen_tables.append(ev["transactions"]["title"])
+    assert any("업무용 차량 목록" in t for t in seen_tables)
+    resolve_hitl(frame["id"], {"message": "2번"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert fills == [("4101", (0, 2))]  # 카니발을 미입력 두 행(1·3행)에 반영
+    assert len(saves) == 2  # 최초 실패 + 반영 후 자동 재저장
+    assert "입력·저장" in out["result"] and out["retry_save"] is False

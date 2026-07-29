@@ -12,13 +12,13 @@ import uuid
 from app.agents.common.llm import chat_decide, llm_ready
 from app.config import get_settings
 from app.core.http_client import new_async_client
-from app.live.events import emit_chat, emit_hitl, emit_log, emit_step
+from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.browser.actions import js_click
 from nbkit.omnisol import selectors, verify
 from nbkit.patterns import emit_shot
 
-from .. import steps
+from .. import mgmt_items, steps
 from . import _shared
 
 logger = logging.getLogger("app.agents.card_collect.nodes.save")
@@ -29,8 +29,28 @@ logger = logging.getLogger("app.agents.card_collect.nodes.save")
 _STOP_WORDS = ("종료", "그만", "중단", "취소", "포기", "stop")
 _GRID_WORDS = ("다시시도", "재시도", "재입력", "그리드", "돌아가")
 
-# 핸드오프 채팅 도구 — 화면 조작 도구는 실측 후 추가한다(관리항목 패널 프로브 진행 중).
+# 핸드오프 채팅 도구 — 화면 조작(업무용차량)은 mgmt_items 실측(2026-07-29) 기반.
 _HANDOFF_TOOLS: list[dict] = [
+    {
+        "name": "list_vehicles",
+        "description": (
+            "관리항목 '업무용차량' 후보(법인 차량 목록)를 불러와 표로 보여준다. 사용자가 "
+            "'차량 목록/업무용차량 보여줘/차량 골라야 해'라고 하면 호출."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "select_vehicle",
+        "description": (
+            "업무용차량을 선택해 차량유지비 상세행들에 반영한다. 사용자가 차량 번호·차량명·"
+            "목록 번호로 고르면(예: '3번', '175호3757', '카니발') 호출."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "사용자가 지정한 차량(목록 번호/차량번호/차량명)"}},
+            "required": ["query"],
+        },
+    },
     {
         "name": "save_now",
         "description": (
@@ -69,10 +89,11 @@ _HANDOFF_TOOLS: list[dict] = [
 _HANDOFF_SYSTEM = (
     "너는 더존 옴니솔 '결의서입력' 화면에서 저장(F7)이 거부된 뒤 사용자의 조치를 돕는 "
     "도우미다. 문서 초안은 이 세션(헤드리스 브라우저)에만 있어 사용자가 자기 ERP 창에서 "
-    "직접 고칠 수 없다. 사용자의 채팅 지시를 도구 1개로 처리하라. 저장 재시도는 save_now, "
-    "건별 입력 그리드로 돌아가 재입력은 retry_grid, 종료는 stop. 아직 지원하지 않는 화면 "
-    "조작을 지시하면 ask 로 무엇이 안 되는지와 대안(그리드 재입력으로 예산계정 변경·행 "
-    "제외)을 설명하라."
+    "직접 고칠 수 없다 — 화면 조작은 도구로 대행한다. 사용자의 채팅 지시를 도구 1개로 "
+    "처리하라. 저장 재시도는 save_now, 건별 입력 그리드로 돌아가 재입력은 retry_grid, "
+    "종료는 stop, 업무용차량 목록 보기는 list_vehicles, 차량 선택은 select_vehicle. "
+    "그 외 지원하지 않는 화면 조작을 지시하면 ask 로 무엇이 안 되는지와 대안(그리드 "
+    "재입력으로 예산계정 변경·행 제외)을 설명하라."
 )
 
 # ERP 저장 거부 모달 파싱 — 승인번호·요구 계정을 뽑아 '어느 행을 어떤 계정으로' 안내한다.
@@ -276,7 +297,68 @@ async def _handoff_save_failure(
         reason, issues = att["reason"], att["issues"]
         guidance = _save_guidance(issues, reason)
         await _say("여전히 저장되지 않았습니다.\n\n" + guidance + "\n\n" + prompt)
+        if "업무용차량" in reason:
+            await _offer_vehicles()
         return None
+
+    # 업무용차량 선택 컨텍스트 — {vehicles, target_idxs}. 목록 제시 후 사용자의 번호/차량번호
+    # 답변을 결정적으로 해석한다(사용자 확정 시나리오 2026-07-29: 돋보기 → 목록 → 선택).
+    vehicle_ctx: dict | None = None
+
+    async def _offer_vehicles() -> None:
+        nonlocal vehicle_ctx
+        await _say("업무용차량 미입력이 원인으로 보입니다 — 차량 목록을 불러옵니다…")
+        try:
+            sv = await mgmt_items.survey_vehicle_targets(page)
+        except Exception as exc:  # noqa: BLE001 — 목록 실패가 핸드오프를 죽여선 안 된다.
+            logger.exception("survey_vehicle_targets failed")
+            sv = {"ok": False, "reason": str(exc)[:120]}
+        if not sv.get("ok"):
+            await _say(
+                f"차량 목록을 불러오지 못했습니다: {sv.get('reason')}\n"
+                "'다시 시도'(그리드 재입력)로 예산계정을 바꾸거나 행을 제외할 수 있습니다."
+            )
+            return
+        vehicles = sv["vehicles"]
+        pending_rows = [t for t in sv["targets"] if not t["code"]] or sv["targets"]
+        vehicle_ctx = {"vehicles": vehicles, "target_idxs": [t["idx"] for t in pending_rows]}
+        await emit_transactions(
+            events,
+            title=f"업무용 차량 목록 {len(vehicles)}대",
+            columns=[
+                {"key": "no", "header": "번호"},
+                {"key": "carNo", "header": "차량번호"},
+                {"key": "name", "header": "차량명"},
+                {"key": "rent", "header": "임차여부"},
+            ],
+            rows=[
+                {"no": i + 1, "carNo": v.get("carNo") or "", "name": v.get("name") or "",
+                 "rent": v.get("rent") or ""}
+                for i, v in enumerate(vehicles)
+            ],
+        )
+        rows_desc = ", ".join(str(t["idx"] + 1) for t in pending_rows)
+        await _say(
+            f"위 목록에서 차량을 골라주세요(예: '3번' 또는 차량번호). "
+            f"선택하면 상세 {rows_desc}행(차량유지비)에 반영하고 다시 저장합니다."
+        )
+
+    async def _apply_vehicle(vehicle: dict) -> dict | None:
+        """차량 반영 → 전 행 성공 시 자동 저장 재시도. 반환 dict(종료) | None(계속 대기)."""
+        assert vehicle_ctx is not None
+        await _say(f"{vehicle.get('carNo')}-{vehicle.get('name')} 선택 — 대상 행에 반영합니다…")
+        try:
+            fr = await mgmt_items.fill_vehicle(page, vehicle, vehicle_ctx["target_idxs"])
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("fill_vehicle failed")
+            fr = {"ok": False, "done": [], "failed": [{"row": "?", "reason": str(exc)[:120]}]}
+        if fr.get("done"):
+            await _say(f"업무용차량 반영 완료: {', '.join(map(str, fr['done']))}행.")
+        if fr.get("failed"):
+            desc = " / ".join(f"{f['row']}행: {f['reason']}" for f in fr["failed"][:3])
+            await _say(f"⚠ 일부 행 반영 실패 — {desc}\n실패 행을 확인한 뒤 지시해 주세요.")
+            return None
+        return await _save_now()
 
     settings = get_settings()
     try:
@@ -286,6 +368,9 @@ async def _handoff_save_failure(
             title="저장 실패 — 조치 선택", prompt=prompt, options=[],
         )
         await emit_log(events, "저장 실패 — 사용자 조치 대기(chat HITL, 자동 재시도 안 함).", "warn")
+        # 관리항목[업무용차량] 실패는 목록을 선제 제시(사용자 확정 시나리오 — 돋보기→목록→선택).
+        if "업무용차량" in reason:
+            await _offer_vehicles()
         async with new_async_client() as http:
             while True:
                 try:
@@ -308,6 +393,17 @@ async def _handoff_save_failure(
                 if any(w in t for w in _STOP_WORDS):
                     await _say("저장 없이 종료합니다.")
                     return await _fail_dict()
+                # 차량 목록 제시 중이면 번호/차량번호 답변을 결정적으로 해석(LLM 불필요).
+                if vehicle_ctx:
+                    v, note = mgmt_items.resolve_vehicle_choice(text, vehicle_ctx["vehicles"])
+                    if v is not None:
+                        out = await _apply_vehicle(v)
+                        if out is not None:
+                            return out
+                        continue
+                    if re.fullmatch(r"\d+\s*번?", t) or "여러 대가" in note:
+                        await _say(note)
+                        continue
                 if "저장" in t:
                     out = await _save_now()
                     if out is not None:
@@ -346,6 +442,24 @@ async def _handoff_save_failure(
                     continue
                 if name == "save_now":
                     out = await _save_now()
+                    if out is not None:
+                        return out
+                    continue
+                if name == "list_vehicles":
+                    await _offer_vehicles()
+                    continue
+                if name == "select_vehicle":
+                    if vehicle_ctx is None:
+                        await _offer_vehicles()
+                    if vehicle_ctx is None:  # 목록 확보 실패 — _offer_vehicles 가 사유 안내함.
+                        continue
+                    v, note = mgmt_items.resolve_vehicle_choice(
+                        str(args.get("query") or ""), vehicle_ctx["vehicles"]
+                    )
+                    if v is None:
+                        await _say(note)
+                        continue
+                    out = await _apply_vehicle(v)
                     if out is not None:
                         return out
                     continue
