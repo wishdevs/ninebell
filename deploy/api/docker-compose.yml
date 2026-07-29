@@ -15,6 +15,14 @@ services:
       # ⚠ AWS(ECS task def)는 별도라 무관 — 온프렘 한정. 콤마로 여러 계정.
       SUPER_ADMIN_OMNISOL_IDS: "이트라이브2"
     shm_size: "1gb"
+    # ⚠ 로그 회전 — Docker 기본 json-file 은 상한이 없어 `/var/lib/docker/containers/...`
+    #   에 무제한으로 쌓인다. 앱이 모든 HTTP 요청 + LLM 요청/응답 전문을 stdout 으로 내보내므로
+    #   (card-collect 400행 런 하나에 수 MB) 상한 없이 두면 디스크가 찬다. 최대 약 250MB.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     ports:
       # 프록시(front 52)에서만 접근. 내부 인터페이스 바인딩 + 방화벽으로 52만 허용. 공개 금지.
       - "172.20.50.50:8010:8010"

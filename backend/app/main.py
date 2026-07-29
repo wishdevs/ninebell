@@ -52,7 +52,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     # ⚠ 앱 로거 부트스트랩 — uvicorn 은 root 에 핸들러를 달지 않아 이걸 빼면 app.* 의 INFO 가
     #   전부 유실된다(HTTP 요청 로그 포함). 라우터 등록보다 먼저 세운다.
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.log_file)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

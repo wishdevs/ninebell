@@ -24,6 +24,17 @@ from app.core.redact import MASK, body_preview, redact_value, safe_url
 from app.core.request_log import HttpRequestLogMiddleware
 
 
+def _file_handlers(root: logging.Logger) -> list[logging.Handler]:
+    return [h for h in root.handlers if getattr(h, "name", None) == "app-file"]
+
+
+def _drop_file_handler(root: logging.Logger) -> None:
+    """테스트가 root 에 남긴 파일 핸들러 정리 — 다른 테스트로 새지 않게."""
+    for h in _file_handlers(root):
+        h.close()
+        root.removeHandler(h)
+
+
 # ── 마스킹·절단 ────────────────────────────────────────────────────────────────
 def test_redact_masks_sensitive_keys_recursively():
     src = {"userid": "admin", "password": "1111", "nested": {"access_token": "t", "keep": 1}}
@@ -294,6 +305,61 @@ def test_configure_logging_is_idempotent():
     assert len(added) == 1
     assert len(root.handlers) <= before + 1
     assert added[0].level == logging.DEBUG  # 재호출 시 레벨만 갱신.
+
+
+def test_configure_logging_writes_to_file_when_path_given(tmp_path):
+    """LOG_FILE 이 있으면 파일에도 남는다(로컬 개발용) — 디렉터리는 자동 생성."""
+    target = tmp_path / "nested" / "app.log"
+    root = logging.getLogger()
+    try:
+        configure_logging("INFO", str(target))
+        logging.getLogger("app.test.file").info("파일 싱크 확인 %s", "OK")
+        for h in root.handlers:
+            h.flush()
+
+        assert target.exists()
+        assert "파일 싱크 확인 OK" in target.read_text(encoding="utf-8")
+    finally:
+        _drop_file_handler(root)
+
+
+def test_configure_logging_file_sink_off_by_default(tmp_path, monkeypatch):
+    """경로가 비면 파일 핸들러를 달지 않는다 — 배포 기본값(stdout 만)."""
+    root = logging.getLogger()
+    _drop_file_handler(root)
+
+    configure_logging("INFO", "")
+
+    assert _file_handlers(root) == []
+
+
+def test_configure_logging_file_handler_not_duplicated(tmp_path):
+    root = logging.getLogger()
+    target = str(tmp_path / "app.log")
+    try:
+        configure_logging("INFO", target)
+        configure_logging("INFO", target)
+        configure_logging("DEBUG", target)
+
+        handlers = _file_handlers(root)
+        assert len(handlers) == 1
+        assert handlers[0].level == logging.DEBUG
+    finally:
+        _drop_file_handler(root)
+
+
+def test_configure_logging_survives_unwritable_path(tmp_path):
+    """로그 파일 하나 때문에 부팅이 막히면 안 된다 — stdout 로깅은 유지."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    root = logging.getLogger()
+    try:
+        configure_logging("INFO", str(blocker / "sub" / "app.log"))
+
+        assert _file_handlers(root) == []
+        assert any(getattr(h, "name", None) == "app-stdout" for h in root.handlers)
+    finally:
+        _drop_file_handler(root)
 
 
 def test_configure_logging_quiets_httpx_duplicate_lines():
