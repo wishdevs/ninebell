@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from app.config import get_settings
@@ -82,10 +83,14 @@ def make_loop_approvals_node(on_popup=None):
         skipped_no_ab: list[str] = []  # 결의서번호 자체가 없는 행(직접 전표)
         skipped_unmapped: list[str] = []  # 결의서번호는 있으나 결재번호 맵에 없는 행
         for idx in range(rowcount):
-            key = await steps.read_row_key(page, idx)
             if on_popup is None:
-                targets.append((idx, key, None))
+                # 매출/매입: 사전 전량 read 를 하지 않는다 — rowcount 가 큰 화면에서 전 행
+                # getJsonRows 순회가 가상스크롤 partial fetch 를 유발해 이후 체크 상태를
+                # 되돌릴 수 있다는 프로브 가설(2026-07-30, D7 [] 소량 재현 실패 후 구조적
+                # 완화). key(DOCU_NO)는 순회 루프에서 해당 행 차례에 lazy 로 읽는다.
+                targets.append((idx, None, None))
                 continue
+            key = await steps.read_row_key(page, idx)
             abdocu_no = await steps.read_row_abdocu_no(page, idx)
             # 공백 정규화 후 매칭 — 그리드 표기값에 앞뒤 공백이 섞이면 정확일치 lookup 이 조용히
             # 실패한다(맵 키도 read_payment_map 에서 strip 해 양쪽을 맞춘다).
@@ -162,6 +167,8 @@ def make_loop_approvals_node(on_popup=None):
             return {"error": msg, "processed": len(processed_docu_nos), "processed_docu_nos": processed_docu_nos}
 
         for seq, (idx, key, gwdocu_no) in enumerate(targets, start=1):
+            if key is None and on_popup is None:
+                key = await steps.read_row_key(page, idx)  # lazy — 위 사전 스캔 제거 참조.
             key_label = key or "(번호미상)"
             # 진행 상황 노출 — 처리 대상 기준 몇 번째인지(제외분은 분모에 넣지 않는다).
             await emit_log(
@@ -180,14 +187,31 @@ def make_loop_approvals_node(on_popup=None):
                 return await fail(idx, "행 선택(checkRow) 실패")
 
             # D7: 결제 열기 직전 정확히 1행만 체크됐는지 확인(확인 가능한 경우만 — API 미확정
-            # 이거나 읽기 실패면 ok=False 로 조용히 건너뛴다. 확인됐는데 1행이 아니면 하드 실패).
+            # 이거나 읽기 실패면 ok=False 로 조용히 건너뛴다. 확인됐는데 1행이 아니면 재체크
+            # 1회 후에도 어긋날 때만 하드 실패 — 조회 직후 지연 재렌더가 체크를 되돌리는
+            # 케이스 대비(프로브 가설 2026-07-30: 실사용 '[]' 사고, 소량 데이터 재현 실패).
             chk = await steps.checked_row_indexes(page)
             if isinstance(chk, dict) and chk.get("ok"):
                 chk_rows = chk.get("rows") or []
                 if len(chk_rows) != 1:
-                    return await fail(
-                        idx, f"결제 열기 직전 체크된 행 수가 1이 아닙니다(D7 정합성): {chk_rows}"
+                    await emit_log(
+                        events,
+                        f"D7 체크행수 불일치({chk_rows}) — 재체크 후 재확인합니다(전표 {key_label}).",
+                        "warn",
                     )
+                    await asyncio.sleep(1.0)  # 지연 재렌더 정착 대기(실시간).
+                    await steps.uncheck_all_rows(page)
+                    if not await steps.check_row(page, idx):
+                        return await fail(idx, "행 선택(checkRow) 재시도 실패")
+                    await asyncio.sleep(0.5)
+                    chk = await steps.checked_row_indexes(page)
+                    if isinstance(chk, dict) and chk.get("ok"):
+                        chk_rows = chk.get("rows") or []
+                    if len(chk_rows) != 1:
+                        return await fail(
+                            idx,
+                            f"결제 열기 직전 체크된 행 수가 1이 아닙니다(D7 정합성, 재체크 후에도): {chk_rows}",
+                        )
                 await emit_log(events, f"D7 체크행수 확인 ✅ — 전표 {key_label}: {chk_rows}", "info")
             else:
                 await emit_log(

@@ -1014,3 +1014,55 @@ async def test_loop_checked_rowcount_ok_when_exactly_one(monkeypatch):
     out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
     assert out["processed"] == 1
     assert child.closed is True
+
+
+async def test_loop_lazy_key_reads_only_processed_rows(monkeypatch):
+    """매출/매입(on_popup=None): 사전 전량 스캔 없이 처리 행만 lazy 로 key 를 읽는다
+    (2026-07-30 — 대량 조회에서 전 행 getJsonRows 순회가 체크 리셋을 유발한다는 가설 완화)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    reads: list[int] = []
+
+    async def _key(page, idx):
+        reads.append(idx)
+        return f"FI{idx}"
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 5, "max_rows": 1})
+    assert out["processed"] == 1
+    assert reads == [0]  # 이전엔 range(5) 전량 사전 read.
+
+
+async def test_loop_d7_mismatch_recovers_after_recheck(monkeypatch):
+    """D7 체크행수 불일치([]) 1회차 → 재체크로 [idx] 복구되면 배치가 계속된다."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    seq: list[str] = []
+
+    async def _chk(page):
+        seq.append("chk")
+        # 첫 읽기는 빈 배열(지연 재렌더로 리셋된 상황), 재체크 후 읽기는 정상.
+        return {"ok": True, "rows": []} if len(seq) == 1 else {"ok": True, "rows": [0]}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    q = _q()
+    node = make_loop_approvals_node()
+    out = await node({"events": q, "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert out["processed"] == 1 and "error" not in out
+    logs = _logs(_drain(q))
+    assert any("재체크 후 재확인" in m for m in logs)
+
+
+async def test_loop_d7_mismatch_persists_hard_fails(monkeypatch):
+    """재체크 후에도 체크행수가 1이 아니면 기존대로 하드 실패(안전장치 유지)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _chk(page):
+        return {"ok": True, "rows": []}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert "재체크 후에도" in out["error"] and out["processed"] == 0
