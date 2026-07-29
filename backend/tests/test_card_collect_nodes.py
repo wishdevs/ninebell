@@ -1790,16 +1790,15 @@ async def test_save_final_vehicle_flow_select_apply_and_resave(monkeypatch):
         )
     )
     frame = await _next_hitl(events)
-    # 차량 목록 표가 선제 방출됐는지(비동기 — 잠시 대기 후 큐 스캔).
+    # 차량 목록이 **채팅 말풍선(마크다운 표)** 로 선제 방출됐는지 — transactions 프레임은
+    # 결과 탭에서만 렌더돼 채팅 개입 중엔 안 보인다(실사용 보고 2026-07-29).
     await asyncio.sleep(0.1)
-    seen_tables = []
-    drained = []
+    chats = []
     while not events.empty():
         ev = events.get_nowait()
-        drained.append(ev)
-        if isinstance(ev.get("transactions"), dict):
-            seen_tables.append(ev["transactions"]["title"])
-    assert any("업무용 차량 목록" in t for t in seen_tables)
+        if isinstance(ev.get("chat"), dict):
+            chats.append(ev["chat"]["content"])
+    assert any("업무용 차량 목록" in c and "259루4101" in c for c in chats)
     resolve_hitl(frame["id"], {"message": "2번"})
     out = await asyncio.wait_for(task, timeout=2)
     assert fills == [("4101", (0, 2))]  # 카니발을 미입력 두 행(1·3행)에 반영

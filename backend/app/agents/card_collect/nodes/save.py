@@ -12,7 +12,7 @@ import uuid
 from app.agents.common.llm import chat_decide, llm_ready
 from app.config import get_settings
 from app.core.http_client import new_async_client
-from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
+from app.live.events import emit_chat, emit_hitl, emit_log, emit_step
 from app.live.hitl import close_hitl_channel, open_hitl_channel
 from nbkit.browser.actions import js_click
 from nbkit.omnisol import selectors, verify
@@ -307,7 +307,7 @@ async def _handoff_save_failure(
 
     async def _offer_vehicles() -> None:
         nonlocal vehicle_ctx
-        await _say("업무용차량 미입력이 원인으로 보입니다 — 차량 목록을 불러옵니다…")
+        await _say("업무용차량 미입력이 원인으로 보입니다 — 차량 목록을 불러옵니다… (화면의 차량 팝업은 목록을 읽고 자동으로 닫힙니다. 선택은 이 채팅에서 하시면 됩니다.)")
         try:
             sv = await mgmt_items.survey_vehicle_targets(page)
         except Exception as exc:  # noqa: BLE001 — 목록 실패가 핸드오프를 죽여선 안 된다.
@@ -322,25 +322,20 @@ async def _handoff_save_failure(
         vehicles = sv["vehicles"]
         pending_rows = [t for t in sv["targets"] if not t["code"]] or sv["targets"]
         vehicle_ctx = {"vehicles": vehicles, "target_idxs": [t["idx"] for t in pending_rows]}
-        await emit_transactions(
-            events,
-            title=f"업무용 차량 목록 {len(vehicles)}대",
-            columns=[
-                {"key": "no", "header": "번호"},
-                {"key": "carNo", "header": "차량번호"},
-                {"key": "name", "header": "차량명"},
-                {"key": "rent", "header": "임차여부"},
-            ],
-            rows=[
-                {"no": i + 1, "carNo": v.get("carNo") or "", "name": v.get("name") or "",
-                 "rent": v.get("rent") or ""}
+        # 목록은 채팅 말풍선 안 마크다운 표로 — transactions 프레임은 결과 탭에서만 렌더돼
+        # 채팅 개입 중엔 안 보인다(실사용 보고 2026-07-29: "목록이 없어 선택할 수 없다").
+        table = "\n".join(
+            ["| 번호 | 차량번호 | 차량명 | 임차 |", "|---:|---|---|---|"]
+            + [
+                f"| {i + 1} | {v.get('carNo') or ''} | {v.get('name') or ''} | {v.get('rent') or ''} |"
                 for i, v in enumerate(vehicles)
-            ],
+            ]
         )
         rows_desc = ", ".join(str(t["idx"] + 1) for t in pending_rows)
         await _say(
-            f"위 목록에서 차량을 골라주세요(예: '3번' 또는 차량번호). "
-            f"선택하면 상세 {rows_desc}행(차량유지비)에 반영하고 다시 저장합니다."
+            f"업무용 차량 목록 {len(vehicles)}대:\n\n{table}\n\n"
+            f"번호(예: '3번')나 차량번호로 골라주세요 — 선택하면 상세 {rows_desc}행"
+            f"(차량유지비)에 반영하고 다시 저장합니다."
         )
 
     async def _apply_vehicle(vehicle: dict) -> dict | None:
