@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     llm_prompt_capture: bool = False
     llm_prompt_capture_path: str = "prompt-capture.jsonl"
 
+    # --- 로깅 ---
+    # root 로거 레벨. uvicorn 은 root 에 핸들러를 달지 않아 그대로 두면 app.* 의 INFO 가 전부
+    # 유실된다(core/logging_setup 참고). env LOG_LEVEL 로 운영에서 WARNING 등으로 조절한다.
+    log_level: str = "INFO"
+
     @field_validator("llm_provider")
     @classmethod
     def _normalize_llm_provider(cls, v: str) -> str:

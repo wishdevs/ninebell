@@ -25,9 +25,8 @@ import logging
 import uuid
 from typing import Any
 
-import httpx
-
 from app.config import get_settings
+from app.core.http_client import new_async_client
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 
 # 대화형(chat) HITL 은 하나의 decision_id 에 사용자 메시지를 여러 번 + '선택 완료' 1번 받는다
@@ -327,7 +326,7 @@ def make_chat_form_node(timeout_s: int | None = None):
         schema["미검증_텍스트"] = SCAFFOLD_TEXT_FIELDS
         system = _CHAT_SYSTEM_TMPL.replace("{schema}", json.dumps(schema, ensure_ascii=False, indent=2))
 
-        http = httpx.AsyncClient(timeout=60.0)
+        http = new_async_client(timeout=60.0)
         chat_prefix = uuid.uuid4().hex  # 이 노드 인스턴스의 채팅 id 접두(FE upsert 키 안정화).
         history = ""
         selections: list[dict] = []  # 성공한 fill 을 ChatSelection 으로 누적(필드별 최신값만).

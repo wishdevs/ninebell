@@ -6,9 +6,8 @@ import logging
 
 from typing import Any
 
-import httpx
-
 from app.agents.common.llm import llm_ready
+from app.core.http_client import new_async_client
 from app.live.events import emit_log
 from app.services import card_learning
 
@@ -208,7 +207,7 @@ async def _prefill_selections(
             + (f" → {n_chunks}청크" if n_chunks > 1 else "") + ")",
             "info",
         )
-        http = httpx.AsyncClient(timeout=60.0)
+        http = new_async_client(timeout=60.0)
         try:
             recommendations = await recommend_selections(
                 rec_rows,
