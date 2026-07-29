@@ -321,39 +321,68 @@ async def _handoff_save_failure(
             return
         vehicles = sv["vehicles"]
         pending_rows = [t for t in sv["targets"] if not t["code"]] or sv["targets"]
-        vehicle_ctx = {"vehicles": vehicles, "target_idxs": [t["idx"] for t in pending_rows]}
+        vehicle_ctx = {"vehicles": vehicles, "targets": pending_rows}
         # 목록은 채팅 말풍선 안 마크다운 표로 — transactions 프레임은 결과 탭에서만 렌더돼
         # 채팅 개입 중엔 안 보인다(실사용 보고 2026-07-29: "목록이 없어 선택할 수 없다").
+        targets_table = "\n".join(
+            ["| 내역 | 예산계정 | 적요 |", "|---:|---|---|"]
+            + [
+                f"| {k + 1} | {t.get('acct') or ''} | {t.get('note') or ''} |"
+                for k, t in enumerate(pending_rows)
+            ]
+        )
         table = "\n".join(
-            ["| 번호 | 차량번호 | 차량명 | 임차 |", "|---:|---|---|---|"]
+            ["| 차량 | 차량번호 | 차량명 | 임차 |", "|---:|---|---|---|"]
             + [
                 f"| {i + 1} | {v.get('carNo') or ''} | {v.get('name') or ''} | {v.get('rent') or ''} |"
                 for i, v in enumerate(vehicles)
             ]
         )
-        rows_desc = ", ".join(str(t["idx"] + 1) for t in pending_rows)
         await _say(
+            f"업무용차량 미입력 내역 {len(pending_rows)}건:\n\n{targets_table}\n\n"
             f"업무용 차량 목록 {len(vehicles)}대:\n\n{table}\n\n"
-            f"번호(예: '3번')나 차량번호로 골라주세요 — 선택하면 상세 {rows_desc}행"
-            f"(차량유지비)에 반영하고 다시 저장합니다."
+            "전체 같은 차량이면 차량 번호만(예: '3번' 또는 차량번호), 내역별로 다르게 하려면 "
+            "'1-1, 2-3, 3-1'(내역-차량) 형식으로 답해 주세요. 반영 후 다시 저장합니다."
         )
 
-    async def _apply_vehicle(vehicle: dict) -> dict | None:
-        """차량 반영 → 전 행 성공 시 자동 저장 재시도. 반환 dict(종료) | None(계속 대기)."""
-        assert vehicle_ctx is not None
-        await _say(f"{vehicle.get('carNo')}-{vehicle.get('name')} 선택 — 대상 행에 반영합니다…")
+    async def _apply_assignments(assignments: list[tuple[int, dict]]) -> dict | None:
+        """(상세행 그리드 인덱스, 차량) 배정 반영 → 전 행 성공 시 자동 저장 재시도.
+
+        반환 dict(종료) | None(계속 대기 — 일부 실패 시 사용자 재지시).
+        """
+        desc = ", ".join(
+            f"{i + 1}행→{v.get('carNo')}-{v.get('name')}" for i, v in assignments
+        )
+        await _say(f"반영합니다: {desc}")
         try:
-            fr = await mgmt_items.fill_vehicle(page, vehicle, vehicle_ctx["target_idxs"])
+            fr = await mgmt_items.fill_vehicle(page, assignments)
         except Exception as exc:  # noqa: BLE001
             logger.exception("fill_vehicle failed")
             fr = {"ok": False, "done": [], "failed": [{"row": "?", "reason": str(exc)[:120]}]}
         if fr.get("done"):
             await _say(f"업무용차량 반영 완료: {', '.join(map(str, fr['done']))}행.")
         if fr.get("failed"):
-            desc = " / ".join(f"{f['row']}행: {f['reason']}" for f in fr["failed"][:3])
-            await _say(f"⚠ 일부 행 반영 실패 — {desc}\n실패 행을 확인한 뒤 지시해 주세요.")
+            fdesc = " / ".join(f"{f['row']}행: {f['reason']}" for f in fr["failed"][:3])
+            await _say(f"⚠ 일부 행 반영 실패 — {fdesc}\n실패 행을 확인한 뒤 지시해 주세요.")
             return None
         return await _save_now()
+
+    def _resolve_vehicle_text(text: str) -> tuple[list[tuple[int, dict]] | None, str]:
+        """사용자 텍스트 → 배정 목록. '1-1, 2-3'(내역-차량) 우선, 아니면 단일 차량을 전
+        미입력 내역에 배정. (None, note) — note 빈 문자열이면 선택 시도가 아니었던 것."""
+        assert vehicle_ctx is not None
+        targets = vehicle_ctx["targets"]
+        pairs, note = mgmt_items.resolve_vehicle_assignments(
+            text, vehicle_ctx["vehicles"], len(targets)
+        )
+        if pairs is not None:
+            return [(targets[t_no - 1]["idx"], v) for t_no, v in pairs], ""
+        if note:
+            return None, note
+        v, note = mgmt_items.resolve_vehicle_choice(text, vehicle_ctx["vehicles"])
+        if v is not None:
+            return [(t["idx"], v) for t in targets], ""
+        return None, note
 
     settings = get_settings()
     try:
@@ -388,15 +417,17 @@ async def _handoff_save_failure(
                 if any(w in t for w in _STOP_WORDS):
                     await _say("저장 없이 종료합니다.")
                     return await _fail_dict()
-                # 차량 목록 제시 중이면 번호/차량번호 답변을 결정적으로 해석(LLM 불필요).
+                # 차량 목록 제시 중이면 번호/'내역-차량' 쌍 답변을 결정적으로 해석(LLM 불필요).
                 if vehicle_ctx:
-                    v, note = mgmt_items.resolve_vehicle_choice(text, vehicle_ctx["vehicles"])
-                    if v is not None:
-                        out = await _apply_vehicle(v)
+                    assignments, note = _resolve_vehicle_text(text)
+                    if assignments is not None:
+                        out = await _apply_assignments(assignments)
                         if out is not None:
                             return out
                         continue
-                    if re.fullmatch(r"\d+\s*번?", t) or "여러 대가" in note:
+                    if note and (
+                        re.fullmatch(r"[\d\s,번-]+", t) or "여러 대가" in note
+                    ):  # 번호형 답변인데 무효 — 안내하고 재입력 대기.
                         await _say(note)
                         continue
                 if "저장" in t:
@@ -448,13 +479,11 @@ async def _handoff_save_failure(
                         await _offer_vehicles()
                     if vehicle_ctx is None:  # 목록 확보 실패 — _offer_vehicles 가 사유 안내함.
                         continue
-                    v, note = mgmt_items.resolve_vehicle_choice(
-                        str(args.get("query") or ""), vehicle_ctx["vehicles"]
-                    )
-                    if v is None:
-                        await _say(note)
+                    assignments, note = _resolve_vehicle_text(str(args.get("query") or ""))
+                    if assignments is None:
+                        await _say(note or "차량을 특정하지 못했어요 — 번호나 차량번호로 알려주세요.")
                         continue
-                    out = await _apply_vehicle(v)
+                    out = await _apply_assignments(assignments)
                     if out is not None:
                         return out
                     continue

@@ -165,6 +165,7 @@ async def survey_vehicle_targets(page: Any) -> dict:
         targets.append({
             "idx": i,
             "acct": str((d["rows"][i] or {}).get("BGACCT_NM") or ""),
+            "note": str((d["rows"][i] or {}).get("NOTE_DC") or ""),
             "code": v.get("code") or "",
             "name": v.get("name") or "",
         })
@@ -181,16 +182,18 @@ async def survey_vehicle_targets(page: Any) -> dict:
     return {"ok": True, "targets": targets, "vehicles": vehicles}
 
 
-async def fill_vehicle(page: Any, vehicle: dict, target_idxs: list[int]) -> dict:
-    """선택 차량을 대상 상세행들에 반영 + 행별 readback 검증.
+async def fill_vehicle(page: Any, assignments: list[tuple[int, dict]]) -> dict:
+    """(상세행 인덱스, 차량) 배정 목록을 순회 반영 + 행별 readback 검증.
 
-    반영 경로: 행 선택 → 돋보기 → PICKER_SELECT(setCurrent/setSelection) → '적용' →
-    패널 readback 의 코드가 차량코드와 일치해야 성공(불일치는 실패로 보고, 성공 단정 금지).
+    전체 동일 차량이면 호출부가 [(idx, v), …]로 같은 v 를 배정한다(내역별 상이 배정
+    '1-1, 2-3' 지원 — 사용자 요청 2026-07-29). 반영 경로: 행 선택 → 돋보기 → 행
+    더블클릭(실측 경로, 가시영역 밖이면 선택→'적용' 폴백) → 패널 readback 의 코드가
+    차량코드와 일치해야 성공(불일치는 실패로 보고, 성공 단정 금지).
     반환 {ok, done:[행번호], failed:[{row, reason}]}.
     """
     done: list[int] = []
     failed: list[dict] = []
-    for i in target_idxs:
+    for i, vehicle in assignments:
         row_no = i + 1
         if not await _select_detail_row(page, i):
             failed.append({"row": row_no, "reason": "상세행 선택 실패"})
@@ -234,6 +237,32 @@ async def fill_vehicle(page: Any, vehicle: dict, target_idxs: list[int]) -> dict
                 "reason": f"반영 확인 실패(기대 {vehicle.get('code')} / 실제 {rb.get('code')!r})",
             })
     return {"ok": bool(done) and not failed, "done": done, "failed": failed}
+
+
+def resolve_vehicle_assignments(
+    text: str, vehicles: list[dict], n_targets: int
+) -> tuple[list[tuple[int, dict]] | None, str]:
+    """'1-1, 2-3, 3-1'(내역-차량) → [(내역번호 1-based, 차량), …] | (None, 안내).
+
+    쌍 패턴이 하나도 없으면 (None, "") — 호출부가 단일 차량 해석으로 폴백한다.
+    내역/차량 번호 범위 밖·내역 중복은 임의 해석하지 않고 안내문을 돌려준다.
+    """
+    pairs = re.findall(r"(\d+)\s*-\s*(\d+)", text or "")
+    if not pairs:
+        return None, ""
+    out: list[tuple[int, dict]] = []
+    seen: set[int] = set()
+    for a, b in pairs:
+        t_no, v_no = int(a), int(b)
+        if not (1 <= t_no <= n_targets):
+            return None, f"내역 {t_no}번은 대상 목록(1~{n_targets}번)에 없습니다."
+        if not (1 <= v_no <= len(vehicles)):
+            return None, f"차량 {v_no}번은 목록(1~{len(vehicles)}번)에 없습니다."
+        if t_no in seen:
+            return None, f"내역 {t_no}번이 두 번 지정됐습니다 — 한 번씩만 지정해 주세요."
+        seen.add(t_no)
+        out.append((t_no, vehicles[v_no - 1]))
+    return out, ""
 
 
 def resolve_vehicle_choice(text: str, vehicles: list[dict]) -> tuple[dict | None, str]:

@@ -1732,6 +1732,23 @@ _VEHICLES = [
 ]
 
 
+def test_resolve_vehicle_assignments_pairs_and_validation():
+    # '내역-차량' 쌍 — 내역별 상이 배정.
+    out, note = mgmt_items.resolve_vehicle_assignments("1-1, 2-3, 3-1", _VEHICLES, 3)
+    assert note == "" and out is not None
+    assert [(t, v["code"]) for t, v in out] == [(1, "1169"), (2, "5846"), (3, "1169")]
+    # 쌍 패턴 없음 → (None, "") — 단일 차량 해석으로 폴백하라는 신호.
+    out, note = mgmt_items.resolve_vehicle_assignments("2번", _VEHICLES, 3)
+    assert out is None and note == ""
+    # 범위 밖·중복은 임의 해석 금지.
+    out, note = mgmt_items.resolve_vehicle_assignments("4-1", _VEHICLES, 3)
+    assert out is None and "대상 목록" in note
+    out, note = mgmt_items.resolve_vehicle_assignments("1-9", _VEHICLES, 3)
+    assert out is None and "차량 9번" in note
+    out, note = mgmt_items.resolve_vehicle_assignments("1-1, 1-2", _VEHICLES, 3)
+    assert out is None and "두 번" in note
+
+
 def test_resolve_vehicle_choice_by_number_carno_and_name():
     v, _ = mgmt_items.resolve_vehicle_choice("2번", _VEHICLES)
     assert v is not None and v["code"] == "4101"
@@ -1764,17 +1781,17 @@ async def test_save_final_vehicle_flow_select_apply_and_resave(monkeypatch):
         return {
             "ok": True,
             "targets": [
-                {"idx": 0, "acct": "(판)차량유지비-기타", "code": "", "name": ""},
-                {"idx": 2, "acct": "(판)차량유지비-기타", "code": "", "name": ""},
+                {"idx": 0, "acct": "(판)차량유지비-기타", "note": "주차료", "code": "", "name": ""},
+                {"idx": 2, "acct": "(판)차량유지비-기타", "note": "주차료", "code": "", "name": ""},
             ],
             "vehicles": _VEHICLES,
         }
 
-    fills: list[tuple] = []
+    fills: list[list[tuple]] = []
 
-    async def _fill(page, vehicle, idxs):
-        fills.append((vehicle["code"], tuple(idxs)))
-        return {"ok": True, "done": [i + 1 for i in idxs], "failed": []}
+    async def _fill(page, assignments):
+        fills.append([(i, v["code"]) for i, v in assignments])
+        return {"ok": True, "done": [i + 1 for i, _ in assignments], "failed": []}
 
     monkeypatch.setattr(save.mgmt_items, "survey_vehicle_targets", _survey)
     monkeypatch.setattr(save.mgmt_items, "fill_vehicle", _fill)
@@ -1801,6 +1818,56 @@ async def test_save_final_vehicle_flow_select_apply_and_resave(monkeypatch):
     assert any("업무용 차량 목록" in c and "259루4101" in c for c in chats)
     resolve_hitl(frame["id"], {"message": "2번"})
     out = await asyncio.wait_for(task, timeout=2)
-    assert fills == [("4101", (0, 2))]  # 카니발을 미입력 두 행(1·3행)에 반영
+    assert fills == [[(0, "4101"), (2, "4101")]]  # 카니발을 미입력 두 행에 동일 배정
     assert len(saves) == 2  # 최초 실패 + 반영 후 자동 재저장
+    assert "입력·저장" in out["result"] and out["retry_save"] is False
+
+
+async def test_save_final_vehicle_flow_per_row_assignments(monkeypatch):
+    """'1-2, 2-1'(내역-차량) — 내역별로 다른 차량을 배정해 반영·재저장."""
+    saves: list[int] = []
+
+    async def _save(page, confirm):
+        saves.append(1)
+        if len(saves) == 1:
+            return {"ok": False, "reason": "계정의 관리항목[업무용차량] 항목이 입력되지 않았습니다."}
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _save)
+    _stub_save_requery(monkeypatch, rowcount=1)
+
+    async def _survey(page):
+        return {
+            "ok": True,
+            "targets": [
+                {"idx": 0, "acct": "(판)차량유지비-기타", "note": "주차료A", "code": "", "name": ""},
+                {"idx": 2, "acct": "(판)차량유지비-기타", "note": "주차료B", "code": "", "name": ""},
+            ],
+            "vehicles": _VEHICLES,
+        }
+
+    fills: list[list[tuple]] = []
+
+    async def _fill(page, assignments):
+        fills.append([(i, v["code"]) for i, v in assignments])
+        return {"ok": True, "done": [i + 1 for i, _ in assignments], "failed": []}
+
+    monkeypatch.setattr(save.mgmt_items, "survey_vehicle_targets", _survey)
+    monkeypatch.setattr(save.mgmt_items, "fill_vehicle", _fill)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 3, "pass2_filled": 0}
+        )
+    )
+    frame = await _next_hitl(events)
+    resolve_hitl(frame["id"], {"message": "1-2, 2-1"})
+    out = await asyncio.wait_for(task, timeout=2)
+    # 내역1(grid idx 0)→차량2(카니발 4101), 내역2(grid idx 2)→차량1(1169).
+    assert fills == [[(0, "4101"), (2, "1169")]]
     assert "입력·저장" in out["result"] and out["retry_save"] is False
