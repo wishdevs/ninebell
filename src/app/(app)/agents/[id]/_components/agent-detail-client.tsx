@@ -128,10 +128,17 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const panelWide = interventionActive || preRunActive;
   // 개입 레이아웃 레벨(3) — 개입 콘텐츠(kind)별로 라이브화면 노출·크기 + 개입 패널 크기를 정한다.
   //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때)
-  //  split: 작은 라이브(좌측) + 넓은 개입   — choice·chat, 실행 전 입력 폼
-  //  live : 라이브 크게 + 작은 패널          — 개입 없는 모니터링(읽기 전용 관찰)
+  //  split: 작은 라이브(좌측) + 넓은 개입   — choice, 실행 전 입력 폼
+  //  live : 라이브 크게 + 작은 패널          — 모니터링 + **chat 개입**(화면을 보면서
+  //         대화해야 하므로 채팅창은 작게, 라이브를 크게 — 사용자 요청 2026-07-29)
   const layoutLevel: 'full' | 'split' | 'live' =
-    interventionActive && run.hitl?.kind === 'grid' ? 'full' : panelWide ? 'split' : 'live';
+    interventionActive && run.hitl?.kind === 'grid'
+      ? 'full'
+      : interventionActive && run.hitl?.kind === 'chat'
+        ? 'live'
+        : panelWide
+          ? 'split'
+          : 'live';
 
   // AI 추천 계산 구간(skillKey='ai-recommend' 스텝이 running) — 화면 변화가 없어 멈춰 보이는
   // 긴 AI 콜을 라이브 화면에 눈에 띄게 오버레이한다(우측 패널만으론 잘 안 보인다는 피드백).
