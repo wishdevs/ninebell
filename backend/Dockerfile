@@ -29,5 +29,8 @@ RUN chmod +x docker-entrypoint.sh \
 USER app
 
 EXPOSE 8010
-# 마이그레이션(alembic) → uvicorn(단일 워커). 상세는 docker-entrypoint.sh 참고.
+# 마이그레이션(alembic) → CMD 실행. 상세는 docker-entrypoint.sh 참고.
+# 실행 명령을 CMD 로 분리한 이유: AWS 이미지와 스크립트를 공유하되 포트만 각자 정하기 위함
+# (온프렘 8010 / AWS 8000). 엔트리포인트가 마이그레이션 후 이 CMD 를 exec 한다.
 ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]
