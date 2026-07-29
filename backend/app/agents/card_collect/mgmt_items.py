@@ -79,16 +79,29 @@ _DETAIL_ROWS_DUMP_JS = r"""() => { try {
   return { ok:true, n, rows: rows.map(r => ({ BGACCT_NM: r.BGACCT_NM, BG_NM: r.BG_NM, NOTE_DC: r.NOTE_DC })) };
 } catch (e) { return { ok:false, err: String(e).slice(0, 100) }; } }"""
 
-# 상세행 클릭 좌표(캔버스 그리드 — 헤더 34px + 행 32px, 프로브 검증 뷰포트 1600×1000 기준).
-# 가시영역 밖 행이면 null — 좌표 클릭이 그리드 밖을 눌러 **행 전환이 조용히 실패**한다
-# (실사용 2026-07-29: 10행 이후 클릭 무효 → 직전 행에 머문 채 필터된 팝업 → '목록에 없음').
+# 상세행 클릭 좌표 — **스크롤 오프셋(getTopItem) 반영**(프로브 확정 2026-07-29: 고정 공식은
+# 그리드가 스크롤되면 idx0 클릭이 idx4 를 짚는 등 **엉뚱한 행을 조용히 선택**한다).
+# getTopItem 반환 형태가 미실측(숫자/객체)이라 방어적으로 파싱하고, 파싱 실패 시 0 으로
+# 폴백 — 어긋난 클릭은 호출부의 getCurrent 재검증 + 쓰기 전 패널 기대값 가드가 잡는다.
 _DETAIL_ROW_CLICK_JS = r"""(idx) => {
-  const g = document.querySelectorAll('.dews-ui-grid')[1];
-  if (!g) return null;
-  const r = g.getBoundingClientRect();
-  const y = r.y + 34 + idx * 32 + 16;
-  if (y > r.y + r.height - 8) return null;
-  return { x: Math.round(r.x + 100), y: Math.round(y) };
+  try {
+    const el = document.querySelectorAll('.dews-ui-grid')[1];
+    if (!el) return null;
+    let top = 0;
+    try {
+      const g = window.jQuery(el).data('dewsControl')._grid;
+      const t = g.getTopItem ? g.getTopItem() : 0;
+      top = (typeof t === 'number') ? t
+        : (t && (t.itemIndex != null ? t.itemIndex
+                 : (t.dataRow != null ? t.dataRow : 0))) || 0;
+    } catch (e) { top = 0; }
+    const off = idx - top;
+    if (off < 0) return null;
+    const r = el.getBoundingClientRect();
+    const y = r.y + 34 + off * 32 + 16;
+    if (y > r.y + r.height - 8) return null;
+    return { x: Math.round(r.x + 100), y: Math.round(y) };
+  } catch (e) { return null; }
 }"""
 
 # 상세행 API 선택(setCurrent) + 현재행 확인 — 좌표 클릭이 불가한(스크롤 밖) 행용.
@@ -127,23 +140,28 @@ async def _read_vehicle_field(page: Any) -> dict:
 
 
 async def _select_detail_row(page: Any, idx: int) -> bool:
-    """상세행 선택 + **현재행 검증**. 가시영역 안이면 좌표 클릭(프로브 실측 경로),
-    밖이면 setCurrent(API) 후 스크롤된 위치를 다시 좌표 클릭해 패널 리바인딩을 유발한다.
-    getCurrent 로 의도한 행이 선택됐는지 확인 — 확인 실패면 False(엉뚱한 행 조작 금지)."""
+    """상세행 선택 + **현재행 검증**.
+
+    프로브 확정(2026-07-29 2차): setCurrent 는 스크롤 상태와 무관하게 항상 정확하고,
+    좌표 클릭은 스크롤 오프셋이 어긋나면 엉뚱한 행을 조용히 선택한다. 그래서 순서는
+    ① setCurrent(스크롤·선택 확정) → ② top-aware 좌표로 그 행을 클릭(패널 리바인딩은
+    클릭에서만 실측 확인) → ③ 클릭이 다른 행을 짚었으면 setCurrent 재고정 →
+    ④ getCurrent==idx 최종 검증(실패면 False — 엉뚱한 행 조작 금지)."""
+    r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
+    if not r.get("ok"):
+        return False
+    await asyncio.sleep(0.5)  # 스크롤 정착 대기.
     box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
     if box:
         await mouse_click(page, box["x"], box["y"])
         await asyncio.sleep(0.8)  # 패널 갱신 대기(프로브 실측 타이밍).
+        if await page.evaluate(_DETAIL_CURRENT_JS) != idx:
+            # 클릭이 다른 행을 짚음(오프셋 계산 어긋남) — 재고정 후 패널 가드에 위임.
+            r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
+            if not r.get("ok"):
+                return False
+            await asyncio.sleep(0.8)
     else:
-        # 스크롤 밖 — setCurrent 로 스크롤·선택 후, 가시화된 좌표를 재계산해 클릭
-        # (패널 리바인딩은 클릭에서만 실측 확인됐다).
-        r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
-        if not r.get("ok"):
-            return False
-        await asyncio.sleep(0.5)
-        box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
-        if box:
-            await mouse_click(page, box["x"], box["y"])
         await asyncio.sleep(0.8)
     cur = await page.evaluate(_DETAIL_CURRENT_JS)
     return cur == idx
