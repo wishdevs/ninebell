@@ -16,7 +16,7 @@ from app.services.code_sync import dept_matches_budget_name
 
 from .. import steps, vat as vat_rules
 from . import _shared, batch, catalog, prefill
-from .save import MAX_SAVE_RETRIES, _save_guidance  # 재개입 그리드 상단 직전 저장 실패 사유+조치.
+from .save import _save_guidance  # 재개입 그리드 상단 직전 저장 실패 사유+조치.
 
 logger = logging.getLogger("app.agents.card_collect.nodes.collect")
 
@@ -98,7 +98,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
         n = len(rows_list)
 
         # 행별 추천 적요(prefill) + 처리 현황(status)·적요(notes) 트래킹. status/notes 는
-        # r.get("i", idx)(=행 인덱스, 제출행 no-1 과 동일)를 키로 쓴다(_status_table 과 같은 규칙).
+        # r.get("i", idx)(=원본 그리드 인덱스)를 키로 쓴다(batch 의 status 갱신과 같은 규칙).
         recs = {r.get("i", idx): _shared.recommend_note(r.get("TRAN_NM") or "", r.get("TRAN_AMT") or "")
                 for idx, r in enumerate(rows_list)}
         status: dict[int, str] = {r.get("i", idx): "pending" for idx, r in enumerate(rows_list)}
@@ -316,7 +316,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
         retry_no = state.get("save_retries") or 0
         retry_notice = _save_guidance(issues, save_error) if save_error else None
         if retry_notice and retry_no:
-            retry_notice = f"[저장 재시도 {retry_no}/{MAX_SAVE_RETRIES}] {retry_notice}"
+            # 재시도는 사용자 결정(채팅 핸드오프)이라 상한이 없다 — 회차만 표시.
+            retry_notice = f"[저장 재시도 {retry_no}회차] {retry_notice}"
 
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
@@ -402,7 +403,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
             skipped = 0
             for r in submitted:
                 if r.get("skip"):
-                    status[r["no"] - 1] = "skipped"
+                    # status 키는 그리드 인덱스(i) — no 는 목록 위치+1(필터로 어긋날 수 있음).
+                    status[rows_list[r["no"] - 1].get("i", r["no"] - 1)] = "skipped"
                     skipped += 1
 
             taxable_work: list[dict] = []
@@ -410,8 +412,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
             for row in apply_rows:
                 idx = row["no"] - 1
                 src = rows_list[idx]
+                # ERP 그리드 행 인덱스는 src['i'] — 저장 제외 필터로 rows_list 위치와
+                # 그리드 인덱스가 어긋날 수 있어 위치(idx)를 그대로 쓰면 엉뚱한 행을 채운다.
+                gi = src.get("i", idx)
                 entry = {
-                    "idx": idx,
+                    "idx": gi,
                     "label": row["no"],
                     "budgetUnit": row.get("budgetUnit") or {},
                     "project": row.get("project") or None,
@@ -433,12 +438,12 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     pending_nontax.append(
                         {**entry, "key": _shared._row_key(src), "merchant": src.get("TRAN_NM") or ""}
                     )
-                    status[idx] = "wait2"
-                    notes[idx] = entry["note"]
+                    status[gi] = "wait2"
+                    notes[gi] = entry["note"]
 
             # 행 분류 전문 로깅 — 승인취소(음수) 행이 어느 패스로 갔는지 사후 진단용.
             def _row_desc(e: dict, tag: str) -> str:
-                src2 = rows_list[e["idx"]]
+                src2 = rows_list[e["label"] - 1]  # label=제출 행번호(위치+1) — idx 는 그리드 인덱스.
                 return (
                     f"{e['label']}행 {(src2.get('TRAN_NM') or '?')[:10]} {src2.get('TRAN_AMT', '?')}"
                     f"(승인 {src2.get('APRVL_NO', '?')}·'{src2.get('VAT_TP', '')}'→{tag})"
@@ -465,7 +470,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 if budget or project or note:  # 바꾼 게 하나라도 있을 때만 학습.
                     learn_entries.append(
                         {
-                            "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                            "merchant": rows_list[e["label"] - 1].get("TRAN_NM") or "",
                             "budget": budget,
                             "project": project,
                             "note": note,
@@ -487,7 +492,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     continue
                 note_entries.append(
                     {
-                        "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                        "merchant": rows_list[e["label"] - 1].get("TRAN_NM") or "",
                         "acct_code": acct_code,
                         "acct_name": (bu.get("bgacctNm") or "").strip() or None,
                         "note": e["note"],
@@ -520,11 +525,13 @@ def make_collect_rows_node(timeout_s: int | None = None):
         )
         if failures:
             summary += "\n\n실패 상세:\n- " + "\n- ".join(failures)
+        # 진행 현황 카드(cc-status)를 최종 요약으로 대체 — 같은 내용의 카드가 두 장 남지
+        # 않게 한다(사용자 요청 2026-07-29: 중복 + 채팅 과대).
         await emit_chat(
             events,
-            chat_id="cc-summary",
+            chat_id="cc-status",
             role="assistant",
-            content=summary + "\n\n" + _shared._status_table(rows_list, status, notes),
+            content=summary,
             streaming=False,
         )
         await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")

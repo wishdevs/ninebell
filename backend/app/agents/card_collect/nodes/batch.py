@@ -87,12 +87,13 @@ async def _apply_batch(
         if not ok:
             # 실패 사유를 실행 로그에도 남긴다 — 현황표(chat)만으론 종료 후 진단 불가(실전 런 교훈).
             await emit_log(events, f"{labels}행 반영 실패: {detail}", "warn")
-        # 진행 현황 표를 그룹마다 갱신(같은 chat_id 로 대체) + 스냅샷.
+        # 진행 현황 한 줄을 그룹마다 갱신(같은 chat_id 로 대체) + 스냅샷. 표는 채팅을
+        # 가려서 제거(사용자 요청 2026-07-29) — 행별 상세는 그리드·실행 로그가 담당.
         await emit_chat(
             events,
             chat_id=chat_id,
             role="assistant",
-            content="처리 현황:\n\n" + _shared._status_table(rows_view, status, notes),
+            content=f"처리 현황: {_shared._status_line(status)}",
             streaming=False,
         )
         if (pos + 1) % 2 == 0 or pos == total_groups - 1:

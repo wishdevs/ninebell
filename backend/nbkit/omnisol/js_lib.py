@@ -605,10 +605,23 @@ MODAL_BTN_BOX_JS = """(btnText) => {
 # 항목이 있습니다' 토스트가 뜨는데 결의번호는 blank(미저장). 실패 문구를 담은 보이는 짧은
 # 요소들의 텍스트를 반환한다. 반환 [] = 실패 신호 없음.
 VALIDATION_TOAST_JS = r"""() => {
-  const phrases = ['필수 값','필수값','입력되지 않은','입력되지않은','저장에 실패','저장 실패',
-                   '실패했습니다','확인해 주세요','확인하세요','오류가 발생'];
   const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
   const out = new Set();
+  // 구조적 탐지(프로브 실측 2026-07-29, save_toast_probe): 검증 실패 토스트는
+  // body 직계 자식 `.dews-ui-snackbar.warning`(수명 ~3.6s, DOM 추가→제거)이다.
+  // 문구와 무관하게 클래스만으로 잡는다 — 심각도는 warning/error 만 실패 신호로
+  // 취급(성공/안내 스낵바 오탐 방지; 이번 실측은 warning 1종만 확인).
+  for (const el of document.querySelectorAll('.dews-ui-snackbar.warning, .dews-ui-snackbar.error')) {
+    if (el.offsetParent === null) continue;
+    const t = c(el.innerText);
+    if (t) out.add(t);
+  }
+  // 문구 폴백('입력되지 않았습니다' — 관리항목 미입력 토스트("계정의 관리항목[업무용차량]
+  // 항목이 입력되지 않았습니다", 2026-07-29 실사용 보고)가 '입력되지 않은'과 어형이 달라
+  // 누락되던 것). 스낵바가 아닌 형태로 뜨는 실패 문구 대비로 유지한다.
+  const phrases = ['필수 값','필수값','입력되지 않은','입력되지않은','입력되지 않았습니다',
+                   '입력되지않았습니다','저장에 실패','저장 실패',
+                   '실패했습니다','확인해 주세요','확인하세요','오류가 발생'];
   for (const el of document.querySelectorAll('div,span,p,td,li')) {
     if (el.offsetParent === null) continue;
     const t = c(el.innerText);

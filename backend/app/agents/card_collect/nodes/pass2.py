@@ -161,6 +161,16 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": "2차 조회에 실패했습니다(그리드 로딩 실패)."}
         lst2 = await steps.read_rows(page, limit=500)
+        # 저장 제외 필터(1차 query 와 동일 규칙) — 저장 전 리스트 재확인: 승인번호 00000000·
+        # 거래처 빈 행은 매칭 후보에서 뺀다(같은 복합키의 정상 행을 오소비하는 것도 방지).
+        dropped2 = [(r, why) for r in lst2 if (why := _shared._exclude_reason(r))]
+        if dropped2:
+            desc2 = ", ".join(
+                f"{(r.get('TRAN_NM') or '(거래처 없음)')[:10]} {r.get('TRAN_AMT', '?')}원({why})"
+                for r, why in dropped2[:5]
+            )
+            await emit_log(events, f"2차 저장 제외 {len(dropped2)}건 — {desc2}", "warn")
+            lst2 = [r for r in lst2 if _shared._exclude_reason(r) is None]
         # 2차 조회 리스트 전문 로깅 — 1차에서 적용된 행이 '처리여부' 전환 실패로 재출현하는
         # 이상 징후(실전 관찰: 불공 리스트 2건) 진단용. 승인번호·금액·부가세구분을 남긴다.
         summary2 = ", ".join(
@@ -261,11 +271,12 @@ def make_apply_pass2_node():
             summary += f"\n\n⚠ 매칭 실패(수동 확인 필요): {state.get('pass2_unmatched_desc', '')}"
         if failures2:
             summary += "\n\n실패 상세:\n- " + "\n- ".join(failures2)
+        # 진행 현황 카드(cc-status2)를 최종 요약으로 대체 — 표·중복 카드 제거(2026-07-29).
         await emit_chat(
             events,
-            chat_id="cc-summary2",
+            chat_id="cc-status2",
             role="assistant",
-            content=summary + "\n\n" + _shared._status_table(rows_view, status2, notes2),
+            content=summary,
             streaming=False,
         )
         await emit_log(events, f"2차(불공) 처리 완료 — {filled2}건 반영(저장 전).", "ok")

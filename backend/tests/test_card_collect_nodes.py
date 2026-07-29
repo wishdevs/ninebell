@@ -207,7 +207,7 @@ async def test_grid_retry_frame_carries_save_failure_notice(monkeypatch):
     frame = await _next_hitl(events)
     notice = frame.get("notice") or ""
     assert "필수값" in notice and "프로젝트" in notice  # 유형별 구체 조치
-    assert "재시도 1/" in notice  # 몇 회차 재시도인지
+    assert "재시도 1회차" in notice  # 몇 회차 재시도인지(사용자 결정 재시도라 상한 없음)
     resolve_hitl(frame["id"], {"rows": [{"no": 1, "skip": True}, {"no": 2, "skip": True}]})
     await asyncio.wait_for(task, timeout=2)
 
@@ -715,6 +715,21 @@ async def test_apply_pass2_closes_popup_when_all_apply_fail(monkeypatch):
     assert out["pass2_applied_idx"] == []
 
 
+def _stub_save_requery(monkeypatch, *, rowcount: int = 1, unknown: bool = False):
+    """save_final 의 저장 후 재조회 양성 검증을 즉답 스텁으로 — 실시간 재시도 대기 제거."""
+    from nbkit.omnisol.verify import Confirmed
+
+    async def _click(page, sel):
+        return True
+
+    async def _rows(page, **kw):
+        ok = (not unknown) and rowcount >= 1
+        return Confirmed(ok, rowcount, 1, 0, None if ok else "stub", unknown)
+
+    monkeypatch.setattr(save, "js_click", _click)
+    monkeypatch.setattr(save.verify, "confirm_grid_rows", _rows)
+
+
 async def test_save_final_saves_without_confirmation(monkeypatch):
     """그리드 '입력 완료'가 곧 승인 — 확인 HITL 없이 F7 저장을 진행한다(사용자 업무 규칙)."""
 
@@ -723,6 +738,7 @@ async def test_save_final_saves_without_confirmation(monkeypatch):
         return {"ok": True, "via": "F7", "modals_seen": []}
 
     monkeypatch.setattr(steps, "save_document", _ok_save)
+    _stub_save_requery(monkeypatch, rowcount=1)
 
     async def _noop_shot(put, page):
         return None
@@ -733,6 +749,68 @@ async def test_save_final_saves_without_confirmation(monkeypatch):
         {"events": events, "page": object(), "filled": 3, "pass2_filled": 1}
     )
     assert out == {"result": "처리 완료 — 과세 3건 · 불공 1건 입력·저장.", "retry_save": False}
+
+
+async def test_save_final_phantom_requery_zero_hands_off_then_retry(monkeypatch):
+    """F7 ok 여도 재조회 0건 = 팬텀 저장 → 채팅 핸드오프. '다시 시도' 답변에만 재시도 신호."""
+
+    async def _ok_save(page, confirm):
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+    _stub_save_requery(monkeypatch, rowcount=0)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 1, "pass2_filled": 0, "save_retries": 0}
+        )
+    )
+    frame = await _next_hitl(events)
+    assert frame["kind"] == "chat" and "저장 실패" in frame["title"]
+    resolve_hitl(frame["id"], {"message": "다시 시도"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out["retry_save"] is True and out["save_retries"] == 1
+    assert "문서가 없습니다" in out["save_error_msg"]
+
+
+async def test_save_final_phantom_stop_ends_without_retry(monkeypatch):
+    """팬텀 저장 핸드오프에서 '종료' 답변 → 재시도 없이 사유를 담아 실패 종료."""
+
+    async def _ok_save(page, confirm):
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+    _stub_save_requery(monkeypatch, rowcount=0)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
+        )
+    )
+    frame = await _next_hitl(events)
+    resolve_hitl(frame["id"], {"message": "종료"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out["retry_save"] is False and "문서가 없습니다" in out["error"]
+
+
+async def test_save_final_requery_unreadable_holds_judgment(monkeypatch):
+    """rowcount 를 못 읽으면(-1) 팬텀 판정 대신 보류 — 저장 성공을 뒤집지 않는다."""
+
+    async def _ok_save(page, confirm):
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+    _stub_save_requery(monkeypatch, rowcount=-1, unknown=True)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_final_node()(
+        {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
+    )
+    assert "처리 완료" in out["result"] and out["retry_save"] is False
 
 
 def test_parse_save_rejections_extracts_aprvl_account_and_maps_row():
@@ -886,8 +964,38 @@ async def test_save_final_closed_period_is_terminal_no_retry(monkeypatch):
     assert "0회 재시도 후 포기" not in out["error"]  # 확정 실패엔 '재시도 후 포기' 접두 없음
 
 
-async def test_save_final_giveup_includes_guidance(monkeypatch):
-    """최종 포기(재시도 초과) 메시지에 원인+조치가 담긴다 — 원문 사유만 남기지 않는다."""
+async def test_save_final_rejection_hands_off_to_chat(monkeypatch):
+    """저장 거부 시 자동 재시도 없이 채팅으로 키를 넘긴다 — '다시 시도' 답변에만 재시도 신호."""
+
+    async def _reject(page, confirm):
+        return {"ok": False, "reason": "승인 건 계정과 다릅니다."}
+
+    monkeypatch.setattr(steps, "save_document", _reject)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
+        )
+    )
+    frame = await _next_hitl(events)
+    assert frame["kind"] == "chat" and "저장 실패" in frame["title"]
+    resolve_hitl(frame["id"], {"message": "다시 시도할게"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out == {
+        "retry_save": True,
+        "save_retries": 1,
+        "save_error_msg": "승인 건 계정과 다릅니다.",
+        "save_error_issues": [],  # 승인번호/요구계정 없는 메시지 → 파싱 없음(원문 폴백)
+    }
+
+
+async def test_save_final_rejection_chat_stop_includes_guidance(monkeypatch):
+    """핸드오프에서 '종료'(또는 완료 버튼) → 재시도 없이 원인+조치를 담아 실패 종료."""
 
     async def _reject(page, confirm):
         return {
@@ -901,55 +1009,74 @@ async def test_save_final_giveup_includes_guidance(monkeypatch):
         return None
 
     monkeypatch.setattr(save, "emit_shot", _noop_shot)
-
-    out = await make_save_final_node()(
-        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 2}
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 3, "pass2_filled": 1}
+        )
     )
+    frame = await _next_hitl(events)
+    resolve_hitl(frame["id"], {"done": True})
+    out = await asyncio.wait_for(task, timeout=2)
     assert out["retry_save"] is False
-    assert "저장 실패" in out["error"]
     assert "필수값" in out["error"] and "프로젝트" in out["error"]  # 조치까지 포함
 
 
-async def test_save_final_retries_on_erp_rejection_then_gives_up(monkeypatch):
-    """저장 거부(ERP 오류) 시 상한까지 retry_save 를 켜 그리드로 되돌리고, 초과하면 실패 종료."""
+async def test_save_final_rejection_chat_unclear_then_retry(monkeypatch):
+    """핸드오프에서 모호한 답변이면 안내 후 계속 대기 — 이후 '다시 시도'로 재시도."""
 
     async def _reject(page, confirm):
         return {"ok": False, "reason": "승인 건 계정과 다릅니다."}
 
     monkeypatch.setattr(steps, "save_document", _reject)
+    monkeypatch.setattr(save, "llm_ready", lambda s: False)  # 테스트에선 실 LLM 호출 차단
 
     async def _noop_shot(put, page):
         return None
 
     monkeypatch.setattr(save, "emit_shot", _noop_shot)
-
-    from app.agents.card_collect.nodes.save import MAX_SAVE_RETRIES
-
-    # 1차 실패(save_retries 0): 재시도가 켜져 있으면(MAX>=1) 재시도 신호, 꺼져 있으면(MAX=0) 즉시 종료.
-    out1 = await make_save_final_node()(
-        {"events": asyncio.Queue(), "page": object(), "filled": 3, "pass2_filled": 1, "save_retries": 0}
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
+        )
     )
-    if MAX_SAVE_RETRIES >= 1:
-        assert out1 == {
-            "retry_save": True,
-            "save_retries": 1,
-            "save_error_msg": "승인 건 계정과 다릅니다.",
-            "save_error_issues": [],  # 승인번호/요구계정 없는 메시지 → 파싱 없음(원문 폴백)
-        }
-    else:
-        assert out1["retry_save"] is False and "저장 실패" in out1["error"]
+    frame = await _next_hitl(events)
+    resolve_hitl(frame["id"], {"message": "음... 뭐가 문제야?"})  # 모호 → (LLM 미구성) 안내 후 대기
+    await asyncio.sleep(0.05)  # 재안내 채팅 방출 여유
+    resolve_hitl(frame["id"], {"message": "다시 시도"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert out["retry_save"] is True and out["save_retries"] == 1
 
-    # 상한 도달(save_retries==MAX) 후 또 실패 → 재시도 안 하고 error(retry_save False).
-    out2 = await make_save_final_node()(
-        {
-            "events": asyncio.Queue(),
-            "page": object(),
-            "filled": 3,
-            "pass2_filled": 1,
-            "save_retries": MAX_SAVE_RETRIES,
-        }
+
+async def test_save_final_chat_save_now_retries_f7_inline(monkeypatch):
+    """'저장해줘' — 문서 재작성 없이 같은 화면에서 F7 재시도. 성공하면 그대로 처리 완료."""
+    calls: list[int] = []
+
+    async def _save(page, confirm):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"ok": False, "reason": "계정의 관리항목[업무용차량] 항목이 입력되지 않았습니다."}
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _save)
+    _stub_save_requery(monkeypatch, rowcount=1)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(
+        make_save_final_node()(
+            {"events": events, "page": object(), "filled": 2, "pass2_filled": 0}
+        )
     )
-    assert out2["retry_save"] is False and "저장 실패" in out2["error"]
+    frame = await _next_hitl(events)
+    resolve_hitl(frame["id"], {"message": "화면에서 고쳤어. 다시 저장해줘"})
+    out = await asyncio.wait_for(task, timeout=2)
+    assert len(calls) == 2  # F7 두 번(최초 + 재시도), 문서 재작성 없음
+    assert "입력·저장" in out["result"] and out["retry_save"] is False
 
 
 def test_graph_has_save_retry_edge_to_menu_nav():
@@ -1471,3 +1598,125 @@ async def test_apply_group_fields_fails_when_note_reverted_by_picker(monkeypatch
     )
     assert ok is False and "되돌려졌" in detail
     assert applied == []  # 일괄적용을 실행하지 않았다
+
+
+# ── 저장 제외 필터(승인번호 00000000·거래처 빈 값 — 사용자 규칙 2026-07-29) ──────────
+from app.agents.card_collect.nodes import _shared as cc_shared  # noqa: E402
+
+
+def test_exclude_reason_rules():
+    assert cc_shared._exclude_reason({"APRVL_NO": "00000000", "TRAN_NM": "가맹점"}) == "승인번호 00000000"
+    assert cc_shared._exclude_reason({"APRVL_NO": "12345678", "TRAN_NM": "  "}) == "거래처 없음"
+    assert cc_shared._exclude_reason({"APRVL_NO": "12345678", "TRAN_NM": "가맹점"}) is None
+    # 빈 승인번호만으로는 제외하지 않는다(규칙은 '전부 0'만) — 거래처가 있으면 정상 처리.
+    assert cc_shared._exclude_reason({"APRVL_NO": "", "TRAN_NM": "가맹점"}) is None
+
+
+async def test_query_excludes_zero_aprvl_and_empty_merchant(monkeypatch):
+    """1차 조회 리스트에서 제외 행을 걸러내고(i 보존) 경고 로그를 남긴다."""
+
+    async def _q(page, timeout_polls=20):
+        return 3
+
+    rows = _rows(3)
+    rows[1]["APRVL_NO"] = "00000000"
+    rows[2]["TRAN_NM"] = ""
+
+    async def _read(page, limit=200):
+        return rows
+
+    monkeypatch.setattr(steps, "run_query", _q)
+    monkeypatch.setattr(steps, "read_rows", _read)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await cc_nodes.make_query_node()({"events": events, "page": object()})
+    assert [r["i"] for r in out["rows_list"]] == [0]
+    logs, titles = [], []
+    while not events.empty():
+        ev = events.get_nowait()
+        if isinstance(ev.get("log"), str):
+            logs.append(ev["log"])
+        if isinstance(ev.get("transactions"), dict):
+            titles.append(ev["transactions"]["title"])
+    assert any("저장 제외 2건" in m for m in logs)
+    assert titles and "1건" in titles[0] and "제외 2건" in titles[0]
+
+
+async def test_grid_submit_uses_grid_index_after_exclusion(monkeypatch):
+    """저장 제외로 위치≠그리드인덱스일 때도 반영·적용은 원본 그리드 인덱스(i)로 간다."""
+    _stub_dumps(monkeypatch, units=[])
+    calls: list[int] = []
+
+    async def _fake_apply(page, events, rows, collected):
+        calls.extend(rows)
+        return True, "ok"
+
+    monkeypatch.setattr(batch, "_apply_group_fields", _fake_apply)
+    events: asyncio.Queue = asyncio.Queue()
+    rows = _rows(2)
+    rows[0]["i"], rows[1]["i"] = 1, 3  # 그리드 0·2행이 제외돼 위치와 인덱스가 어긋난 상황.
+    state = {"events": events, "page": object(), "rows_list": rows, "owner": None}
+    task = asyncio.create_task(make_collect_rows_node()(state))
+    frame = await _next_hitl(events)
+    resolve_hitl(
+        frame["id"],
+        {
+            "rows": [
+                {"no": 1, "budgetUnit": {"code": "2000", "name": "경영본부", "bgacctNm": "(판)복리후생비"}, "project": {"code": "800|W1", "name": "판관비"}, "note": "회식"},
+                {"no": 2, "skip": True},
+            ]
+        },
+    )
+    out = await asyncio.wait_for(task, timeout=2)
+    assert calls == [1]  # rows_list[0] 의 그리드 인덱스 i=1 로 반영(위치 0 아님).
+    assert out["pass1_applied_idx"] == [1]
+
+
+async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
+    """2차 재조회 리스트에도 저장 제외 필터 적용 — 제외 행은 매칭 후보·rows2_list 에서 빠진다."""
+
+    async def _ok_close(page):
+        return {"ok": True}
+
+    async def _ok_cards(page, owner_name=None):
+        return {"ok": True, "n": 5, "checked": 5, "by": "all"}
+
+    async def _ok_period(page, s, e):
+        return {"ok": True}
+
+    async def _q(page, timeout_polls=20):
+        return 3
+
+    rows2 = _mixed_rows()
+    rows2.append({**_rows(1)[0], "i": 3, "APRVL_NO": "00000000", "TRAN_NM": "무승인가맹점"})
+
+    async def _read(page, limit=200):
+        return rows2
+
+    async def _no_modals(page, rounds=3):
+        return {"cleared": [], "warn": None}
+
+    monkeypatch.setattr(steps, "close_card_popup", _ok_close)
+    monkeypatch.setattr(steps, "select_all_cards", _ok_cards)
+    monkeypatch.setattr(steps, "set_period", _ok_period)
+    monkeypatch.setattr(steps, "run_query", _q)
+    monkeypatch.setattr(steps, "read_rows", _read)
+    monkeypatch.setattr(steps, "dismiss_modals_verified", _no_modals)
+
+    async def _noop_node(state):
+        return {}
+
+    monkeypatch.setattr(pass2, "make_open_evdn_node", lambda: _noop_node)
+    monkeypatch.setattr(pass2, "make_select_evdn_node", lambda code="01": _noop_node)
+
+    events: asyncio.Queue = asyncio.Queue()
+    pending = [
+        {"label": 2, "key": _row_key(rows2[1]), "budgetUnit": {"code": "2000", "name": "경영본부"},
+         "project": None, "note": "소모품", "merchant": "가맹점1"},
+    ]
+    state = {
+        "events": events, "page": object(), "owner": None, "run_id": None,
+        "pending_nontax": pending, "period": ["2026-06-01", "2026-06-30"],
+    }
+    out = await make_switch_evdn_node()(state)
+    assert all(r.get("APRVL_NO") != "00000000" for r in out["rows2_list"])
+    assert [w["label"] for w in out["pass2_work"]] == [2]

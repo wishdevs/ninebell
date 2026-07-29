@@ -125,6 +125,21 @@ def make_query_node():
             await emit_step(events, "query", "failed")
             return {"error": "조회에 실패했습니다(그리드 로딩 실패)."}
         lst = await steps.read_rows(page, limit=500)
+        # 저장 제외 필터(사용자 규칙 2026-07-29): 승인번호 00000000·거래처 빈 행은 처리
+        # 대상에서 뺀다 — 이후 그리드·반영·저장 전부에서 자연히 제외된다.
+        dropped = [(r, why) for r in lst if (why := _shared._exclude_reason(r))]
+        if dropped:
+            desc = ", ".join(
+                f"{(r.get('TRAN_NM') or '(거래처 없음)')[:10]} {r.get('TRAN_AMT', '?')}원({why})"
+                for r, why in dropped[:5]
+            )
+            await emit_log(
+                events,
+                f"저장 제외 {len(dropped)}건 — {desc}"
+                + (" 외" if len(dropped) > 5 else ""),
+                "warn",
+            )
+            lst = [r for r in lst if _shared._exclude_reason(r) is None]
         # 리스트 표 보고(승인일/가맹점명/승인액/부가세구분).
         columns = [
             {"key": "d", "header": "승인일"},
@@ -141,8 +156,13 @@ def make_query_node():
             }
             for r in lst
         ]
-        await emit_transactions(events, title=f"법인카드 승인내역 {rows}건", columns=columns, rows=table_rows)
-        await emit_log(events, f"조회 완료 — 승인내역 {rows}건.", "ok")
+        title = f"법인카드 승인내역 {len(lst)}건" + (f" (제외 {len(dropped)}건)" if dropped else "")
+        await emit_transactions(events, title=title, columns=columns, rows=table_rows)
+        await emit_log(
+            events,
+            f"조회 완료 — 승인내역 {rows}건" + (f" 중 처리 대상 {len(lst)}건." if dropped else "."),
+            "ok",
+        )
         await emit_shot(events.put, page)
         await emit_step(events, "query", "done", _shared._ms(t0))
         return {"rows_list": lst}
