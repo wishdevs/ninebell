@@ -83,6 +83,7 @@ async def _prefill_selections(
     cost_project: dict | None = None,
     learned: dict | None = None,
     seed: dict | None = None,
+    user_job_title: str | None = None,
 ) -> dict[int, dict]:
     """행별 예산단위·프로젝트 프리셀렉트 — 예산단위 단: 학습(결정적) > AI > 전사seed > 기본지정.
 
@@ -216,6 +217,7 @@ async def _prefill_selections(
                 http=http,
                 settings=settings,
                 cost_prefix=cost_prefix,  # 판/제 반대 버킷 후보를 LLM 컨텍스트에서 제외(토큰 절감).
+                user_job_title=user_job_title,  # 직급 제외 계정(팀원→접대비·회식비) 필터.
             )
         finally:
             await http.aclose()

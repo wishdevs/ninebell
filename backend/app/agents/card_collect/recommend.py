@@ -162,6 +162,26 @@ def _filter_budget_by_cost(candidates: list[dict], cost_prefix: str | None) -> l
     return kept
 
 
+# 직급별 추천 제외 계정 키워드(사용자 확정 2026-07-29): 최하위 '팀원'은 접대비·회식비 등을
+# 쓸 일이 없다. 후보 목록에서 아예 제외해 LLM 이 추천 자체를 못 하게 한다(프롬프트 지시보다
+# 결정적). '회식'은 '회식비'·'복리후생비-회식' 등 표기 변형을 포괄. 추후 직급·키워드 추가 예정
+# (직급체계: app.erp.profile.JOB_TITLE_HIERARCHY).
+_EXCLUDED_BUDGET_KEYWORDS_BY_JOB_TITLE: dict[str, tuple[str, ...]] = {
+    "팀원": ("접대비", "회식"),
+}
+
+
+def _filter_budget_by_job_title(candidates: list[dict], job_title: str | None) -> list[dict]:
+    """접속자 직급이 쓸 일 없는 계정(팀원→접대비·회식비)을 후보에서 제외. 직급 미상이면 원본."""
+    keywords = _EXCLUDED_BUDGET_KEYWORDS_BY_JOB_TITLE.get((job_title or "").strip())
+    if not keywords:
+        return candidates
+    return [
+        c for c in candidates
+        if not any(k in (c.get("bgacctNm") or "") for k in keywords)
+    ]
+
+
 def _filter_project_by_cost(candidates: list[dict], cost_prefix: str | None) -> list[dict]:
     """반대 버킷(제조원가 500 / 판관비 800) 프로젝트만 제외. 버킷 아닌 특정 프로젝트는 부서
     무관이라 유지. 접두 미상이면 원본."""
@@ -185,6 +205,7 @@ async def recommend_selections(
     http: Any,
     settings: Any,
     cost_prefix: str | None = None,
+    user_job_title: str | None = None,
 ) -> dict[int, dict]:
     """행별 예산단위·프로젝트 프리셀렉트 추천을 Gemini 1회 배치 호출로 받는다.
 
@@ -202,7 +223,10 @@ async def recommend_selections(
 
     # 접속자 비용구분(판/제)에 맞는 후보만 LLM 에 보낸다 — 반대 버킷은 선택 대상이 아니므로
     # 컨텍스트에서 빼 토큰을 아낀다. 검증(코드 화이트리스트)도 같은 필터본 기준으로 좁힌다.
-    budget_ctx = _filter_budget_by_cost(budget_candidates, cost_prefix)[:_MAX_BUDGET_CANDIDATES]
+    # 직급 필터(팀원→접대비·회식비 제외)도 같은 원리 — 후보에서 빠지면 검증에서도 걸러진다.
+    budget_ctx = _filter_budget_by_job_title(
+        _filter_budget_by_cost(budget_candidates, cost_prefix), user_job_title
+    )[:_MAX_BUDGET_CANDIDATES]
     project_ctx = _filter_project_by_cost(project_candidates, cost_prefix)[:_MAX_PROJECT_CANDIDATES]
 
     chunks = [
