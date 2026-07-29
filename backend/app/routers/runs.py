@@ -202,7 +202,9 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 권한 상승을 차단한다(리뷰 HIGH). 권위 키 집합 = effective_settings 가 그 에이전트에 대해
     # 반환하는 키(스키마 유일소스라 에이전트별 하드코딩 없음) + department/cost_type(서버 주입).
     server_settings = effective_settings(agent_row.id, agent_row.settings)
-    authoritative_keys = set(server_settings) | {"department", "cost_type"}
+    authoritative_keys = set(server_settings) | {
+        "department", "cost_type", "user_display_name", "user_job_title"
+    }
     user_params = {
         k: v for k, v in (body.params or {}).items() if k not in authoritative_keys
     }
@@ -217,6 +219,12 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 으로 특정한다(카드 경로는 department 를 읽지 않아 불변). body.params 가 있으면 우선.
     if user.department:
         params.setdefault("department", user.department)
+    # 사용자 이름·직책(ERP 프로필 분리값) 주입 → 법인카드 본인 카드 매칭이 로그인ID 외에
+    # 순수 이름("석대현")과 "이름 직책"("석대현 프로") 표기까지 대조할 수 있게 한다.
+    if user.display_name:
+        params["user_display_name"] = user.display_name
+    if user.job_title:
+        params["user_job_title"] = user.job_title
 
     # AUTO 재생(회수): templateId 가 있으면 소유자·워크플로우를 검증하고 저장된 selections 를
     # params["template"] 로 주입한다. chat_form 이 이를 보면 대화 없이 순서대로 적용한다.

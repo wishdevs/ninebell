@@ -53,6 +53,11 @@ _SYSTEM = (
     "(중식·석식·야식·조식 등) **반드시 이 시각으로 구분**하세요 — 대략 11~15시는 중식, "
     "17시 이후는 석식, 22시 이후는 야식, 11시 이전은 조식입니다. 가맹점명이나 과거 선택만 보고 "
     "시간대를 단정하지 마세요(예: 18:33 결제를 '중식'으로 고르면 안 됩니다). "
+    # ⚠ 00:00:00 은 자정 결제가 아니라 카드사가 승인 시각을 안 넘겨준 것(사용자 확정 2026-07-29).
+    #   시각을 근거로 쓰면 자정 결제로 오판한다(예: 시외버스 승차권을 야식/심야로 해석).
+    "단, time 이 '00:00:00'(또는 00:00)이면 실제 자정 결제가 아니라 **카드사에서 승인 시각이 "
+    "전달되지 않은 것**입니다. 이 경우 시각을 판단 근거로 쓰지 말고(야식·심야 등 시간대 단정 금지) "
+    "가맹점명·merchantHint·priorChoice 등 나머지 근거로만 판단하세요. "
     "확신이 서지 않으면 낮은 confidence 를 매기고, 적당한 후보가 없으면 해당 코드를 null 로 두세요. "
     "budgetUnitCode·projectCode 는 반드시 제공된 후보의 code 값을 그대로 사용하고, 새로 만들지 마세요. "
     "행에 priorChoice(과거 사용자가 같은 가맹점에 확정했던 선택)가 있으면, 그 code 를 최우선으로 "
@@ -157,6 +162,26 @@ def _filter_budget_by_cost(candidates: list[dict], cost_prefix: str | None) -> l
     return kept
 
 
+# 직급별 추천 제외 계정 키워드(사용자 확정 2026-07-29): 최하위 '팀원'은 접대비·회식비 등을
+# 쓸 일이 없다. 후보 목록에서 아예 제외해 LLM 이 추천 자체를 못 하게 한다(프롬프트 지시보다
+# 결정적). '회식'은 '회식비'·'복리후생비-회식' 등 표기 변형을 포괄. 추후 직급·키워드 추가 예정
+# (직급체계: app.erp.profile.JOB_TITLE_HIERARCHY).
+_EXCLUDED_BUDGET_KEYWORDS_BY_JOB_TITLE: dict[str, tuple[str, ...]] = {
+    "팀원": ("접대비", "회식"),
+}
+
+
+def _filter_budget_by_job_title(candidates: list[dict], job_title: str | None) -> list[dict]:
+    """접속자 직급이 쓸 일 없는 계정(팀원→접대비·회식비)을 후보에서 제외. 직급 미상이면 원본."""
+    keywords = _EXCLUDED_BUDGET_KEYWORDS_BY_JOB_TITLE.get((job_title or "").strip())
+    if not keywords:
+        return candidates
+    return [
+        c for c in candidates
+        if not any(k in (c.get("bgacctNm") or "") for k in keywords)
+    ]
+
+
 def _filter_project_by_cost(candidates: list[dict], cost_prefix: str | None) -> list[dict]:
     """반대 버킷(제조원가 500 / 판관비 800) 프로젝트만 제외. 버킷 아닌 특정 프로젝트는 부서
     무관이라 유지. 접두 미상이면 원본."""
@@ -180,6 +205,7 @@ async def recommend_selections(
     http: Any,
     settings: Any,
     cost_prefix: str | None = None,
+    user_job_title: str | None = None,
 ) -> dict[int, dict]:
     """행별 예산단위·프로젝트 프리셀렉트 추천을 Gemini 1회 배치 호출로 받는다.
 
@@ -197,7 +223,10 @@ async def recommend_selections(
 
     # 접속자 비용구분(판/제)에 맞는 후보만 LLM 에 보낸다 — 반대 버킷은 선택 대상이 아니므로
     # 컨텍스트에서 빼 토큰을 아낀다. 검증(코드 화이트리스트)도 같은 필터본 기준으로 좁힌다.
-    budget_ctx = _filter_budget_by_cost(budget_candidates, cost_prefix)[:_MAX_BUDGET_CANDIDATES]
+    # 직급 필터(팀원→접대비·회식비 제외)도 같은 원리 — 후보에서 빠지면 검증에서도 걸러진다.
+    budget_ctx = _filter_budget_by_job_title(
+        _filter_budget_by_cost(budget_candidates, cost_prefix), user_job_title
+    )[:_MAX_BUDGET_CANDIDATES]
     project_ctx = _filter_project_by_cost(project_candidates, cost_prefix)[:_MAX_PROJECT_CANDIDATES]
 
     chunks = [

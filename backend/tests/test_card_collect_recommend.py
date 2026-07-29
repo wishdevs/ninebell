@@ -152,7 +152,7 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
         _favs_loader([{"code": "2101", "name": "인사기획팀"}], [], None),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None, user_job_title=None):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.9}}
 
     monkeypatch.setattr(prefill, "recommend_selections", _rec)
@@ -187,7 +187,7 @@ async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
         ),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None, user_job_title=None):
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.3}}
 
     monkeypatch.setattr(prefill, "recommend_selections", _rec)
@@ -217,7 +217,7 @@ async def test_collect_rows_budget_ai_project_default_independent(monkeypatch):
         ),
     )
 
-    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None):
+    async def _rec(rec_rows, budget_c, project_c, *, http, settings, cost_prefix=None, user_job_title=None):
         # 예산단위만 확신, 프로젝트는 빈 코드 → 프로젝트는 기본지정 폴백.
         return {1: {"budgetUnitCode": "2101", "projectCode": "", "confidence": 0.95}}
 
@@ -343,6 +343,49 @@ def test_filter_budget_by_cost_drops_opposite_bucket_keeps_neutral():
     assert kept == ["a", "c", "d"]
     # 접두 미상이면 필터하지 않는다(원본 유지).
     assert len(recommend._filter_budget_by_cost(budget, None)) == 4
+
+
+def test_filter_budget_by_job_title_excludes_entertainment_for_lowest_rank():
+    """팀원은 접대비·회식비 계정을 쓸 일이 없다 — 후보에서 제외(사용자 확정 2026-07-29)."""
+    budget = [
+        {"code": "a", "bgacctNm": "(판)접대비"},  # 팀원 제외.
+        {"code": "b", "bgacctNm": "(판)복리후생비-회식대"},  # '회식' 포함 — 팀원 제외.
+        {"code": "c", "bgacctNm": "(판)여비교통비-국내출장"},  # 무관 — 유지.
+    ]
+    kept = [c["code"] for c in recommend._filter_budget_by_job_title(budget, "팀원")]
+    assert kept == ["c"]
+    # 팀원이 아니거나 직급 미상이면 필터하지 않는다(원본 유지).
+    assert len(recommend._filter_budget_by_job_title(budget, "팀장")) == 3
+    assert len(recommend._filter_budget_by_job_title(budget, None)) == 3
+
+
+async def test_recommend_excludes_entertainment_candidates_for_lowest_rank(monkeypatch):
+    """user_job_title='팀원'이면 접대비·회식 후보가 LLM 컨텍스트·검증 화이트리스트에서 빠진다."""
+    captured: dict = {}
+
+    async def _fake_chat_decide(http, *, system, history, context, shot_b64, tools, settings):
+        captured["context"] = context
+        return "submit_recommendations", {
+            # 후보에서 빠진 접대비 code 를 돌려줘도 화이트리스트 검증에서 걸러져야 한다.
+            "recommendations": [{"no": 1, "budgetUnitCode": "ent", "confidence": 0.9}]
+        }
+
+    monkeypatch.setattr(recommend, "chat_decide", _fake_chat_decide)
+    monkeypatch.setattr(recommend, "llm_ready", lambda s: True)
+    out = await recommend.recommend_selections(
+        [{"no": 1, "merchant": "고깃집", "amount": "100,000"}],
+        [
+            {"code": "ent", "bgacctNm": "(판)접대비"},
+            {"code": "ok", "bgacctNm": "(판)여비교통비-국내출장"},
+        ],
+        [],
+        http=object(),
+        settings=object(),
+        user_job_title="팀원",
+    )
+    sent_codes = [c["code"] for c in captured["context"]["budgetCandidates"]]
+    assert sent_codes == ["ok"]  # 접대비 후보는 컨텍스트에 없다.
+    assert out[1]["budgetUnitCode"] == ""  # 제외 code 응답은 검증에서 폐기.
 
 
 def test_filter_project_by_cost_drops_opposite_bucket_keeps_specific():
@@ -541,3 +584,11 @@ async def test_system_prompt_puts_time_above_prior_choice(monkeypatch):
     assert "시간대" in sys_text and "석식" in sys_text
     # 과거 선택 지침보다 **뒤에** 예외가 와야 우선순위가 뒤집히지 않는다.
     assert sys_text.index("priorChoice") < sys_text.index("시간대와 맞지 않으면")
+
+
+async def test_system_prompt_treats_midnight_as_missing_time():
+    """00:00:00 은 자정 결제가 아니라 승인 시각 미전달 — 시각을 근거로 쓰지 말라는 규칙
+    (사용자 확정 2026-07-29: 시외버스 승차권 등 00:00 행의 시간대 오판 방지)."""
+    sys_text = recommend._SYSTEM
+    assert "00:00:00" in sys_text
+    assert "전달되지 않은" in sys_text  # 승인 시각 미전달 의미가 명시돼야 한다.

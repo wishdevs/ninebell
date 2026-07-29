@@ -23,6 +23,9 @@ class User(UuidPkMixin, Base, TimestampMixin):
     # 로컬 계정 전용 bcrypt 해시(예: 시스템 관리자 admin). 옴니솔 계정은 null.
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # 직책(예: "프로") — 사용자 패널 이름 "석대현 프로"에서 분리. 법인카드 본인 카드 매칭
+    # (카드명 괄호 "(이름)" / 소유자 "이름 직책" 표기 대응)에 쓴다.
+    job_title: Mapped[str | None] = mapped_column(String(100), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     # 회원가입 약관 동의 시각(가입한 옴니솔 계정). 미동의/미가입은 null.

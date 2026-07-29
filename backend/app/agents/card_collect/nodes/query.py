@@ -21,9 +21,14 @@ def make_select_all_cards_node():
         page = state["page"]
         await emit_step(events, "select_all_cards", "running")
         t0 = time.monotonic()
-        # 로그인ID(=사용자명)와 일치하는 본인 카드만 우선 선택, 없으면 전체선택 폴백.
-        owner = state.get("userid")
-        r = await steps.select_all_cards(page, owner_name=owner)
+        # 로그인ID·프로필 이름·"이름 직책"과 일치하는 본인 카드만 우선 선택, 없으면 전체선택
+        # 폴백. 직책 변형은 패널 이름 "석대현 프로" 표기 대응(사용자 요청 2026-07-29).
+        params = state.get("params") or {}
+        owners = steps.owner_name_variants(
+            state.get("userid"), params.get("user_display_name"), params.get("user_job_title")
+        )
+        owner = owners[0] if owners else None  # 로그 표시용 대표 키.
+        r = await steps.select_all_cards(page, owner_name=owners)
         if not r.get("ok"):
             await emit_step(events, "select_all_cards", "failed")
             return {"error": f"카드 선택 실패: {r.get('reason')}"}
