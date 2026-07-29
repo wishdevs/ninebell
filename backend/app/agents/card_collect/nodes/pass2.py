@@ -141,7 +141,15 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": state["error"]}
 
-        r = await steps.select_all_cards(page, owner_name=state.get("userid"))
+        p2_params = state.get("params") or {}
+        r = await steps.select_all_cards(
+            page,
+            owner_name=steps.owner_name_variants(
+                state.get("userid"),
+                p2_params.get("user_display_name"),
+                p2_params.get("user_job_title"),
+            ),
+        )
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}

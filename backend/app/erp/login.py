@@ -22,7 +22,7 @@ class ErpAuthError(Exception):
 async def authenticate(browser, userid: str, password: str, base: str) -> dict:
     """헤드리스 로그인 검증 + 더존 기본정보 best-effort 추출.
 
-    성공 시 프로필 dict ``{display_name, department, email|None}`` 반환,
+    성공 시 프로필 dict ``{display_name, job_title, department, email|None}`` 반환,
     실패 시 :class:`ErpAuthError`. 매 호출마다 새 컨텍스트를 만들고 즉시 폐기한다
     (자격증명 비저장 + 컨텍스트 격리). 호출자는 동시 로그인 세마포어로 보호한다.
 

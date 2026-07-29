@@ -121,12 +121,36 @@ from app.agents.common.doc_steps import set_acct_date  # noqa: E402, F401 — �
 
 
 # ── 카드 선택(본인 카드 우선, 없으면 전체) ─────────────────────────────────────────
-async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
+def owner_name_variants(
+    userid: str | None, display_name: str | None = None, job_title: str | None = None
+) -> list[str]:
+    """본인 카드 매칭 키 변형 목록 — 로그인ID + 프로필 순수 이름 + "이름 직책".
+
+    패널 이름이 "석대현 프로"처럼 직책을 달고 있어(사용자 확정 2026-07-29) 카드명 괄호
+    "(석대현)"과 소유자 컬럼 "석대현 프로" 표기를 모두 잡으려면 변형 전부가 필요하다.
+    중복 제거·빈 값 제외, 순서 보존.
+    """
+    variants = [userid, display_name]
+    if display_name and job_title:
+        variants.append(f"{display_name} {job_title}")
+    out: list[str] = []
+    for v in variants:
+        s = (v or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+async def select_all_cards(page: Any, owner_name: str | list[str] | None = None) -> dict:
     """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by}.
 
-    선택 규칙(사용자 확정 2026-07-04): owner_name(=로그인ID=사용자명)이 주어지면 소유자
-    (CARD_OWNR_NM)/관리사원(KOR_NM)이 그 이름과 일치하는 카드만 선택하고, 일치 0건이면
+    선택 규칙(사용자 확정 2026-07-04): owner_name(로그인ID 문자열 또는 이름 변형 목록 —
+    owner_name_variants 참조)이 주어지면 그 이름과 일치하는 카드만 선택하고, 일치 0건이면
     기존 로직인 **전체선택**으로 폴백한다(공용카드·빈 소유자 대비). by='name'|'all'.
+    매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치 + 카드명 괄호 '(이름)' 포함 —
+    실측(2026-07-29) 이 ERP 는 소유자/관리사원 컬럼을 채우지 않아 카드명
+    FINPRODUCT_NM("…법인카드(석대현)-2826")의 괄호가 유일한 소유자 표기다
+    (CARD_SUB_SELECT_BY_NAME_JS 참조).
 
     ⚠ 증빙유형 01 적용 직후 법인카드 팝업이 **로딩 중**('데이터 처리 중')일 수 있다 — 돋보기
     버튼 출현을 폴링(실측 2026-07-04: 폴링 세분화 후 '돋보기 버튼 없음' 레이스).
@@ -172,9 +196,11 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
     for wait_ms in verify.ASYNC:
         if wait_ms:
             await _real_sleep(wait_ms / 1000)
-        if owner_name and (owner_name or "").strip():
+        owners = [owner_name] if isinstance(owner_name, str) else list(owner_name or [])
+        owners = [o.strip() for o in owners if o and o.strip()]
+        if owners:
             # 본인 이름 매칭 우선 — matched>0 이면 그것으로 확정, matched==0 이면 전체선택 폴백.
-            r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owner_name)
+            r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owners)
             if r.get("ok") and r.get("n", 0) > 0:
                 if r.get("matched", 0) > 0:
                     sel, by = r, "name"

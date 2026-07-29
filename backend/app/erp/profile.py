@@ -84,8 +84,30 @@ async def _open_user_panel(page) -> None:
     await page.wait_for_timeout(1_500)
 
 
+# 사용자 패널 이름 표기는 "이름 직책"(예: "석대현 프로") 형태 — 마지막 토큰이 이 목록에 있으면
+# 직책으로 분리한다(사용자 확정 2026-07-29). 직책이 섞인 채 저장하면 카드명 괄호 "(석대현)"
+# 같은 순수 이름 매칭(법인카드 본인 카드 선택)에 쓸 수 없다.
+_JOB_TITLES = {
+    "프로", "사원", "주임", "대리", "과장", "차장", "부장", "팀장", "실장", "본부장",
+    "이사", "상무", "전무", "부사장", "사장", "대표", "대표이사", "매니저",
+    "선임", "책임", "수석", "연구원", "센터장", "그룹장", "파트장",
+}
+
+
+def split_job_title(name_text: str) -> tuple[str, str]:
+    """"석대현 프로" → ("석대현", "프로"). 직책 미포함이면 (원문, "")."""
+    tokens = (name_text or "").split()
+    if len(tokens) >= 2 and tokens[-1] in _JOB_TITLES:
+        return " ".join(tokens[:-1]), tokens[-1]
+    return (name_text or "").strip(), ""
+
+
 async def read_profile(page) -> dict:
-    """로그인된 page 에서 더존 기본정보 추출. 항상 ``{display_name, department, email}`` 반환."""
+    """로그인된 page 에서 더존 기본정보 추출.
+
+    항상 ``{display_name, job_title, department, email}`` 반환 — display_name 은 직책을
+    뗀 순수 이름(카드 소유자 매칭용), job_title 은 분리된 직책(예: "프로").
+    """
     try:
         await _open_user_panel(page)
     except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
@@ -95,8 +117,10 @@ async def read_profile(page) -> dict:
     except Exception:  # noqa: BLE001
         logger.warning("프로필 추출 실패 — 빈 값으로 진행(셀렉터 변경 가능성)")
         raw = {}
+    display_name, job_title = split_job_title((raw.get("display_name") or "").strip())
     return {
-        "display_name": (raw.get("display_name") or "").strip(),
+        "display_name": display_name,
+        "job_title": job_title,
         "department": (raw.get("department") or "").strip(),
         "email": None,
     }
