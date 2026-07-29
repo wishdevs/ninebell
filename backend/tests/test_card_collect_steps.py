@@ -183,6 +183,7 @@ class _CardSubPage:
         self._matched = matched
         self._total = total
         self.by_name_called = False
+        self.by_name_arg = None  # by-name JS 로 전달된 owners 인자(변형 목록 검증용)
         self.all_called = False
         self.clicks: list[tuple] = []
         self.mouse = self  # click 을 자기 자신에서 받음
@@ -198,6 +199,7 @@ class _CardSubPage:
             return {"x": 1, "y": 2}  # 돋보기 버튼
         if script == js.CARD_SUB_SELECT_BY_NAME_JS:
             self.by_name_called = True
+            self.by_name_arg = arg
             return {"ok": True, "n": self._total, "matched": self._matched, "checked": self._matched}
         if script == js.CARD_SUB_SELECT_ALL_JS:
             self.all_called = True
@@ -229,6 +231,24 @@ async def test_select_cards_all_when_no_owner():
     r = await steps.select_all_cards(page, owner_name=None)
     assert r["ok"] and r["by"] == "all"
     assert not page.by_name_called and page.all_called
+
+
+async def test_select_cards_passes_variant_list_to_js():
+    """이름 변형 목록을 주면 JS 에 배열 그대로 전달된다(빈 값·공백 정리 포함)."""
+    page = _CardSubPage(matched=1)
+    r = await steps.select_all_cards(page, owner_name=["sdh", " 석대현 ", ""])
+    assert r["ok"] and r["by"] == "name"
+    assert page.by_name_arg == ["sdh", "석대현"]
+
+
+async def test_owner_name_variants_includes_job_title_form():
+    """로그인ID + 순수 이름 + '이름 직책' 변형을 중복 없이 만든다(사용자 요청 2026-07-29)."""
+    assert steps.owner_name_variants("sdh", "석대현", "프로") == ["sdh", "석대현", "석대현 프로"]
+    # 직책 없으면 '이름 직책' 변형 없음, 이름 없으면 로그인ID 만.
+    assert steps.owner_name_variants("sdh", "석대현", None) == ["sdh", "석대현"]
+    assert steps.owner_name_variants("sdh", None, "프로") == ["sdh"]
+    # 로그인ID == 이름(이 ERP 관례)이면 중복 제거.
+    assert steps.owner_name_variants("석대현", "석대현", "프로") == ["석대현", "석대현 프로"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

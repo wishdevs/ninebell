@@ -541,3 +541,11 @@ async def test_system_prompt_puts_time_above_prior_choice(monkeypatch):
     assert "시간대" in sys_text and "석식" in sys_text
     # 과거 선택 지침보다 **뒤에** 예외가 와야 우선순위가 뒤집히지 않는다.
     assert sys_text.index("priorChoice") < sys_text.index("시간대와 맞지 않으면")
+
+
+async def test_system_prompt_treats_midnight_as_missing_time():
+    """00:00:00 은 자정 결제가 아니라 승인 시각 미전달 — 시각을 근거로 쓰지 말라는 규칙
+    (사용자 확정 2026-07-29: 시외버스 승차권 등 00:00 행의 시간대 오판 방지)."""
+    sys_text = recommend._SYSTEM
+    assert "00:00:00" in sys_text
+    assert "전달되지 않은" in sys_text  # 승인 시각 미전달 의미가 명시돼야 한다.
