@@ -225,3 +225,23 @@ READ_AMOUNT_FIELDS_JS = """() => {
   } catch (e) { out.detail_err = String(e).slice(0, 80); }
   return out;
 }"""
+
+
+# 확인 모달 버튼 **느슨 매칭** 폴백 — MODAL_BTN_BOX_JS('확인'/'예')의 정확일치가 놓치는
+# 라벨 변형("확 인"·"OK"·에러성 모달의 "닫기") 대비(2026-07-30: 예산현황 모달이 8회 시도에도
+# 안 닫혀 출장/가족행사 3에이전트 동시 실패 — 표준 조합 재현 4회 전부 정상이라 변형 모달
+# 가설). 최상단 보이는 k-window 부터 공백 제거 후 확인|예|OK|닫기 를 찾는다.
+# 반환 {x, y, title, label} | null.
+MODAL_BTN_LOOSE_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,'');
+  const wins = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null);
+  for (const w of wins.reverse()) {
+    const b = [...w.querySelectorAll('button')].filter(x=>x.offsetParent!==null)
+      .find(x => /^(확인|예|ok|닫기)$/i.test(c(x.innerText)));
+    if (b) { const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2),
+               title: String(((w.querySelector('.k-window-title')||{}).innerText)||'').trim(),
+               label: c(b.innerText) }; }
+  }
+  return null;
+}"""

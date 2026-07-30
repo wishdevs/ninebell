@@ -722,12 +722,13 @@ class _AmountTypePage:
     """
 
     def __init__(self, *, amount: int, editor_ready_at: int = 1, modal_rounds: int = 1,
-                 modal_closable: bool = True) -> None:
+                 modal_closable: bool = True, loose_only: bool = False) -> None:
         self._amount = amount
         self._editor_ready_at = editor_ready_at
         self._editor_reads = 0
         self.modal_left = modal_rounds
         self._modal_closable = modal_closable
+        self._loose_only = loose_only  # 정확일치('확인') 실패, 느슨 매칭만 버튼을 찾는 변형 모달.
         self.editor_opens = 0
         self.mouse = _AmountMouse(self)
 
@@ -747,9 +748,13 @@ class _AmountTypePage:
         if jsstr is js_lib.MODALS_SNAPSHOT_JS:
             return [{"title": "예산현황", "text": "", "buttons": ["확인"]}] * (1 if self.modal_left > 0 else 0)
         if jsstr is js_lib.MODAL_BTN_BOX_JS:
-            if not self._modal_closable:
+            if not self._modal_closable or self._loose_only:
                 return None
             return {"x": 3, "y": 3, "title": "예산현황"}
+        if jsstr is trip_js.MODAL_BTN_LOOSE_JS:
+            if not self._modal_closable:
+                return None
+            return {"x": 3, "y": 3, "title": "예산현황", "label": "닫기"}
         if jsstr is js_lib.POPUP_COUNT_JS:
             return self.modal_left
         if jsstr is trip_js.READ_AMT_JS:
@@ -775,6 +780,14 @@ async def test_type_amount_leftover_modal_fails_hard():
     page = _AmountTypePage(amount=15400, modal_closable=False)
     r = await steps.type_amount(page, 15400)
     assert r["ok"] is False and "닫히지 않았습니다" in r["reason"]
+    assert "버튼:" in r["reason"]  # 진단 강화(2026-07-30) — 남은 모달의 버튼 목록 포함.
+
+
+async def test_type_amount_variant_modal_closed_via_loose_match():
+    """라벨 변형 모달('확 인'·'닫기' 등) — 정확일치가 놓쳐도 느슨 매칭 폴백으로 닫는다(2026-07-30)."""
+    page = _AmountTypePage(amount=15400, loose_only=True)
+    r = await steps.type_amount(page, 15400)
+    assert r["ok"] is True and r["modals"] == ["예산현황"]
 
 
 async def test_type_amount_mismatch_fails_hard():

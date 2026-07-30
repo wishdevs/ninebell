@@ -617,14 +617,28 @@ async def type_amount(page: Any, amount: int) -> dict:
                 clicked = True
                 break
         if not clicked:
+            # 정확일치('확인'/'예') 실패 — 라벨 변형·에러성 모달('닫기' 등) 느슨 매칭 폴백
+            # (2026-07-30: 3에이전트 동시 실패, 표준 조합 재현 전부 정상 → 변형 모달 가설).
+            # '닫기'로 닫힌 에러 모달(예산 초과 등)은 금액이 미반영일 수 있으나, 아래 반영
+            # 검증(READ_AMT)이 불일치를 하드 실패로 잡으므로 성공 위장은 없다.
+            btn = await page.evaluate(js.MODAL_BTN_LOOSE_JS)
+            if btn:
+                await mouse_click(page, btn["x"], btn["y"])
+                clicked = True
+        if not clicked:
             break
         await verify.confirm_popup_count(page, less_than=before, timing=verify.ASYNC)
     left = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
     if left:
-        titles = " / ".join(str((m or {}).get("title") or "") for m in left[:3])
+        # 진단 강화(2026-07-30): 남은 모달의 **버튼 목록**까지 사유에 담는다 — 다음 실패에서
+        # 어떤 변형 모달이었는지 로그만으로 확정할 수 있게(재현 실패로 원인 미상였던 교훈).
+        desc = " / ".join(
+            f"{str((m or {}).get('title') or '')}〔버튼: {', '.join((m or {}).get('buttons') or []) or '없음'}〕"
+            for m in left[:3]
+        )
         return {
             "ok": False,
-            "reason": f"금액 입력 후 확인 모달이 닫히지 않았습니다([{titles}]) — 잔존 팝업은 이후 피커 오독·F7 삼킴을 유발합니다.",
+            "reason": f"금액 입력 후 확인 모달이 닫히지 않았습니다([{desc}]) — 잔존 팝업은 이후 피커 오독·F7 삼킴을 유발합니다.",
             "modals": modals_seen,
         }
     # 반영 금액 확인 — 재시도 안전판(자동계산이 늦게 붙는 세션 대비). 불일치는 하드 실패.
