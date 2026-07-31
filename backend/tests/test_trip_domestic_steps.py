@@ -739,6 +739,91 @@ async def test_delete_blank_row_no_reclick_when_row_count_dropped():
     assert page.clicks.count((9, 9)) == 1  # n 감소 감지 → 재시도 클릭이 나가지 않았다.
 
 
+# ── delete_blank_row: 상단 버튼영역 차단 오버레이 해제(2026-08-01 라이브 규명) ──────
+class _BlockedMouse(_DeleteMouse):
+    """오버레이가 덮고 있는 동안의 삭제 버튼 좌표 클릭은 **ERP 에 전달되지 않는다**."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9) and not self._p.blocked and self._p.delete_effective:
+            self._p.deleted.append(self._p.current)
+            self._p.rows.pop(self._p.current)
+
+
+class _Keyboard:
+    def __init__(self, page) -> None:  # noqa: ANN001
+        self._p = page
+
+    async def press(self, key):  # noqa: ANN001
+        self._p.keys.append(key)
+        if key == "Escape" and self._p.unblockable:  # 셀 에디터 종료 → 상단영역 차단 해제.
+            self._p.blocked = False
+
+
+class _BlockedTopAreaPage(_DeletePage):
+    """detail 셀 편집 중 상단 버튼영역이 `.disabled-main-top-area` 로 덮인 세션.
+
+    실물 시맨틱(2026-08-01 라이브 계측, 3행 3/3): 빈 행 선택 클릭이 셀 에디터를 열면 DEWS 가
+    상단 버튼영역을 오버레이로 덮어, 삭제 버튼 좌표 실클릭이 버튼이 아니라 오버레이에 떨어진다
+    (elementFromPoint=오버레이·확인 모달 미출현·행수 불변). 예전 코드는 이 무효 클릭이
+    오버레이를 걷어내는 역할만 해서 '가드된 재시도'가 매번 구제했다.
+    ``diag_cur`` 은 진단 스냅샷이 보고하는 **현재 행**(None = 실제 current 와 동일).
+    """
+
+    def __init__(self, *, diag_cur: int | None = None, unblockable: bool = True, **kw) -> None:
+        super().__init__(**kw)
+        self.blocked = True
+        self.unblockable = unblockable
+        self.diag_cur = diag_cur
+        self.dismissed = 0
+        self.keys: list[str] = []
+        self.mouse = _BlockedMouse(self)
+        self.keyboard = _Keyboard(self)
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is trip_js.DELETE_BTN_DIAG_JS:
+            cur = self.current if self.diag_cur is None else self.diag_cur
+            return {
+                "total": 1, "visible": 1, "rect": {"x": 0, "y": 0, "w": 32, "h": 32},
+                "disabled": False, "aria": None, "hit_is_btn": not self.blocked,
+                "blocked": self.blocked,
+                "grids": [{"i": 0, "rows": 1, "cur": 0}, {"i": 1, "rows": len(self.rows), "cur": cur}],
+            }
+        if jsstr is trip_js.DISMISS_TOP_BLOCK_JS:
+            if self.blocked and self.unblockable:
+                self.blocked = False
+                self.dismissed += 1
+                return {"found": True, "clicked": True}
+            return {"found": False, "clicked": False}
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_delete_blank_row_unblocks_top_area_and_succeeds_on_first_click():
+    """차단 오버레이를 먼저 걷어내므로 **1차 클릭에 삭제된다**(재시도 클릭이 나가지 않는다)."""
+    page = _BlockedTopAreaPage(rows=["한국도로공사", ""], current=1)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.rows == ["한국도로공사"]
+    assert "Escape" in page.keys  # 셀 에디터 종료(정공법)를 먼저 시도했다.
+    assert page.clicks.count((9, 9)) == 1  # 무효 1차 + 재시도가 아니라 한 번에 성공.
+
+
+async def test_delete_blank_row_gate_blocks_click_when_current_moved_to_data_row():
+    """차단 해제 직전 스냅샷의 **현재 행이 데이터 행**이면 삭제 클릭 자체를 내보내지 않는다."""
+    page = _BlockedTopAreaPage(rows=["한국도로공사", ""], current=1, diag_cur=0)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is False and "삭제 건너뜀" in r["warn"]
+    assert page.clicks.count((9, 9)) == 0 and page.deleted == []
+
+
+async def test_delete_blank_row_still_clicks_when_block_cannot_be_cleared():
+    """차단이 안 풀려도 클릭은 시도한다 — 게이트 오탐이 삭제를 막지 않게(종전 안전망 유지)."""
+    page = _BlockedTopAreaPage(rows=["한국도로공사", ""], current=1, unblockable=False)
+    r = await steps.delete_blank_row(page)
+    assert page.clicks.count((9, 9)) >= 1  # 클릭은 나갔다(가드된 재시도 안전망까지 포함).
+    assert r["ok"] is False and "빈 행 삭제 실패" in r["reason"]
+
+
 # ── register_counter_partner: 대리 신호(빈 행 +1) 대신 실제 값 확인 ─────────────
 class _CounterMouse:
     def __init__(self, page) -> None:  # noqa: ANN001
