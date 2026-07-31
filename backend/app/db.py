@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -22,9 +23,31 @@ _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 def init_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
     """엔진/세션메이커를 (재)생성하고 반환한다."""
     global _engine, _sessionmaker
-    _engine = create_async_engine(database_url, echo=echo, pool_pre_ping=True, future=True)
+    if make_url(database_url).get_backend_name() == "sqlite":
+        # SQLite(aiosqlite — 테스트/로컬): QueuePool 노브 미적용(기존 동작 불변).
+        _engine = create_async_engine(database_url, echo=echo, pool_pre_ping=True, future=True)
+    else:
+        # PG: 풀을 settings 로 명시한다. 기본(5+10)은 SSE 장기 점유·동시 실행이 겹치면
+        # 고갈되고, pool_timeout 초과 시 대기 요청이 TimeoutError 로 죽는다.
+        s = _pool_settings()
+        _engine = create_async_engine(
+            database_url,
+            echo=echo,
+            pool_size=s.db_pool_size,
+            max_overflow=s.db_max_overflow,
+            pool_timeout=s.db_pool_timeout,
+            pool_pre_ping=s.db_pool_pre_ping,
+            future=True,
+        )
     _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False, autoflush=False)
     return _engine
+
+
+def _pool_settings():
+    """풀 노브 지연 로드 — 모듈 임포트 시점의 config 순환/조기 평가를 피한다."""
+    from app.config import get_settings
+
+    return get_settings()
 
 
 def get_engine() -> AsyncEngine:
