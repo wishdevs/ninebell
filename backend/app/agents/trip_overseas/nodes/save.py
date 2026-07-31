@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 
+from app.agents.common.commit_shield import shielded_commit
 from app.live.events import emit_chat, emit_log, emit_step
 from nbkit.browser.actions import js_click
 from nbkit.omnisol import selectors, verify
@@ -57,7 +58,12 @@ def make_save_doc_node():
         # ⚠ TODO(Phase 6): 저장 성공의 **양성 신호**(결의번호 채번·성공 토스트)는 실 F7 저장으로만
         #   실측 가능하다. 현재 save_document 는 실패 신호(검증 토스트·오류 모달) 부재로 ok 를 판정한다
         #   (card 와 동일). 실측 후 양성 신호 검증을 추가한다 — PROCESS.md '남은 작업' 플래그 참조.
-        r = await card_steps.save_document(page, confirm=True)
+        # F7 클릭~판정(확인 모달 포함)은 '확정' 구간(ACTIONS.md [저장]) — 외부 취소(사용자
+        # 취소·리퍼·셧다운·워치독)가 한가운데 끊으면 반저장이 남는다. shielded_commit 이
+        # 내부 완료까지 취소를 억류한 뒤 정상 취소 흐름으로 복귀시킨다.
+        r = await shielded_commit(
+            lambda: card_steps.save_document(page, confirm=True), events=events, label="저장(F7)"
+        )
         if not r.get("ok"):
             await emit_step(events, "save_doc", "failed")
             reason = r.get("reason") or str(r)

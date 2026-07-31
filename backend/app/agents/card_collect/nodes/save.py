@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 
+from app.agents.common.commit_shield import shielded_commit
 from app.agents.common.llm import chat_decide, llm_ready
 from app.config import get_settings
 from app.core.http_client import new_async_client
@@ -200,7 +201,12 @@ async def _attempt_save(state: dict, events, page) -> dict:
     검증 토스트(.dews-ui-snackbar, '관리항목[업무용차량] 미입력' 등)를 문구 매칭이 놓쳐도
     재조회 0건으로 잡힌다.
     """
-    r = await steps.save_document(page, confirm=True)
+    # F7 클릭~판정(확인 모달 포함)은 '확정' 구간(ACTIONS.md [저장]) — 외부 취소(사용자
+    # 취소·리퍼·셧다운·워치독)가 한가운데 끊으면 ERP 엔 저장됐는데 기록은 취소인 반저장이
+    # 남는다. shielded_commit 이 내부 완료까지 취소를 억류한 뒤 정상 취소 흐름으로 복귀시킨다.
+    r = await shielded_commit(
+        lambda: steps.save_document(page, confirm=True), events=events, label="저장(F7)"
+    )
     if not r.get("ok"):
         reason = r.get("reason") or str(r)
         issues = _parse_save_rejections(reason, state.get("rows_list") or [])
