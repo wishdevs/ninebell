@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import CamelModel
+
+# 이메일 형식 — 새 의존성(email-validator) 없이 최소 구조(local@domain.tld)만 강제한다.
+# 빈문자열/None 은 '이메일 없음(지움)'으로 통과(라우터가 None 정규화).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_email_format(v: str | None) -> str | None:
+    if v is None or not v.strip():
+        return v
+    if not _EMAIL_RE.match(v.strip()):
+        raise ValueError("올바른 이메일 형식이 아닙니다.")
+    return v
 
 
 class LoginBody(BaseModel):
@@ -30,12 +43,22 @@ class SignupBody(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     agreed_terms: bool = Field(alias="agreedTerms")
 
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str | None) -> str | None:
+        return _validate_email_format(v)
+
 
 class AuthMeUpdate(CamelModel):
     """PATCH /auth/me — 본인 이메일 수정. 이름/부서는 ERP 동기화값이라 변경 불가(로그인 식별자·롤도 불변)."""
 
     # 빈 문자열은 "이메일 지움"으로 취급(None 정규화는 라우터에서).
     email: str | None = Field(default=None, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str | None) -> str | None:
+        return _validate_email_format(v)
 
 
 class AuthMe(CamelModel):

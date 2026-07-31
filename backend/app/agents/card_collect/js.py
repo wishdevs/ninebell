@@ -204,8 +204,8 @@ CHECK_ROWS_JS = f"""(indices) => {{
 # FINPRODUCT_NM("국민법인카드(석대현)-2826")의 괄호에만 존재한다(PARTNER_NM 은 개인카드에
 # 한해 실명). owners 는 이름 변형 배열(로그인ID·프로필 순수 이름·"이름 직책") — 패널 이름이
 # "석대현 프로"처럼 직책을 달고 있어 단일 키로는 못 잡는 표기 대응(사용자 요청 2026-07-29).
-# 반환 {ok, n(전체), matched(체크수)}.
-# matched==0 이면 호출부가 기존 전체선택으로 폴백한다(빈 소유자/공용카드 대비).
+# 반환 {ok, n(전체), matched(체크수), names(매칭 카드명 최대 10)}.
+# matched==0 처리(폴백/중단)는 호출부(steps.select_all_cards)의 own_only 가 결정한다.
 CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
   const c = s => String(s==null?'':s).replace(/\\s+/g,'').toLowerCase();
   const keys = (Array.isArray(owners)?owners:[owners]).map(c).filter(k=>k);
@@ -223,6 +223,7 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
     const rows = ds.getJsonRows(0, n-1);
     try { g.checkAll(false); } catch(e) {}
     let matched = 0;
+    const names = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i] || {};
       const exact = keys.some(k =>
@@ -230,10 +231,11 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
       if (keys.length && (exact || inAnyField(r))) {
         g.setChecked ? g.setChecked(i, true) : g.checkRow && g.checkRow(i, true);
         matched++;
+        if (names.length < 10) names.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());
       }
     }
     let checked=-1; try { checked=(g.getCheckedRows()||[]).length; } catch(e){}
-    return { ok:true, n, matched, checked };
+    return { ok:true, n, matched, checked, names };
   } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
 }"""
 

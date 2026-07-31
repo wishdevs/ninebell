@@ -46,6 +46,19 @@ router = APIRouter(
 )
 
 
+async def _release_db(db) -> None:
+    """SSE 응답 반환 직전에 요청 세션을 반납(commit+close)한다.
+
+    StreamingResponse 는 스트림이 끝나야 의존성 teardown 이 돌므로, 그대로 두면 요청
+    세션이 스트림 수명(HITL 대기 600s/턴 × 재연결) 내내 idle-in-transaction 으로 풀을
+    점유한다. 스트림 제너레이터(LiveSession.stream)는 인메모리 버퍼만 읽고, 런 기록은
+    live/store 가 자체 세션(get_sessionmaker)을 열므로 이 세션은 이후 쓰이지 않는다.
+    teardown 의 close 재호출은 멱등이라 무해하다.
+    """
+    await db.commit()
+    await db.close()
+
+
 def _sse(events) -> StreamingResponse:
     """이벤트 dict 비동기 이터러블을 SSE(text/event-stream) 응답으로 감싼다."""
 
@@ -152,6 +165,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     if sess is not None:
         if sess.owner and sess.owner != owner:
             return JSONResponse({"error": "이 흐름에 대한 권한이 없습니다."}, status_code=403)
+        await _release_db(db)
         return _sse(sess.stream(body.cursor))
 
     # 세션이 없는데 커서>0 → 흐름이 이미 종료/정리됨(새 브라우저를 띄우지 않는다).
@@ -210,6 +224,11 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     }
     params = {**server_settings, **user_params}
 
+    # 디버그 모드(로그인 화면 체크) — true 면 카드 선택이 종전처럼 전체 카드, 기본(false)은
+    # **본인 카드만**. 클라이언트 값은 불리언 True 만 인정(문자열 'true'·숫자 1 등은 전부
+    # False 강제) — 서버 기본 '본인만'을 타입 조작으로 뒤집을 수 없게 한다(신뢰 최소화).
+    params["debug"] = (body.params or {}).get("debug") is True
+
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).
     team_cost_type = await user_cost_type(db, user)
@@ -260,6 +279,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             await store.set_terminal(tracked_run_id, status, note, logs)
 
     sess = create_session(body.runId, owner, producer, on_terminal)
+    await _release_db(db)
     return _sse(sess.stream(0))
 
 

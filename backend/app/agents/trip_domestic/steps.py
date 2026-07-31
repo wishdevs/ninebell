@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.codepicker import (
     _norm,
     _picker_search,
@@ -617,14 +618,28 @@ async def type_amount(page: Any, amount: int) -> dict:
                 clicked = True
                 break
         if not clicked:
+            # 정확일치('확인'/'예') 실패 — 라벨 변형·에러성 모달('닫기' 등) 느슨 매칭 폴백
+            # (2026-07-30: 3에이전트 동시 실패, 표준 조합 재현 전부 정상 → 변형 모달 가설).
+            # '닫기'로 닫힌 에러 모달(예산 초과 등)은 금액이 미반영일 수 있으나, 아래 반영
+            # 검증(READ_AMT)이 불일치를 하드 실패로 잡으므로 성공 위장은 없다.
+            btn = await page.evaluate(js.MODAL_BTN_LOOSE_JS)
+            if btn:
+                await mouse_click(page, btn["x"], btn["y"])
+                clicked = True
+        if not clicked:
             break
         await verify.confirm_popup_count(page, less_than=before, timing=verify.ASYNC)
     left = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
     if left:
-        titles = " / ".join(str((m or {}).get("title") or "") for m in left[:3])
+        # 진단 강화(2026-07-30): 남은 모달의 **버튼 목록**까지 사유에 담는다 — 다음 실패에서
+        # 어떤 변형 모달이었는지 로그만으로 확정할 수 있게(재현 실패로 원인 미상였던 교훈).
+        desc = " / ".join(
+            f"{str((m or {}).get('title') or '')}〔버튼: {', '.join((m or {}).get('buttons') or []) or '없음'}〕"
+            for m in left[:3]
+        )
         return {
             "ok": False,
-            "reason": f"금액 입력 후 확인 모달이 닫히지 않았습니다([{titles}]) — 잔존 팝업은 이후 피커 오독·F7 삼킴을 유발합니다.",
+            "reason": f"금액 입력 후 확인 모달이 닫히지 않았습니다([{desc}]) — 잔존 팝업은 이후 피커 오독·F7 삼킴을 유발합니다.",
             "modals": modals_seen,
         }
     # 반영 금액 확인 — 재시도 안전판(자동계산이 늦게 붙는 세션 대비). 불일치는 하드 실패.
@@ -740,6 +755,57 @@ def _data_rows(snapshot: Any) -> int:
     return sum(1 for r in (snapshot.get("rows") or []) if r.get("PARTNER"))
 
 
+# ── 삭제 확인 모달 관찰 파라미터(실시간) ──────────────────────────────────────────
+# ⚠ 예전 관찰 루프는 page.wait_for_timeout(500) 폴링이라 _ScaledPage(delay_scale=0.4)에서
+#   실제 200ms — 모달이 그보다 늦게 뜨면 첫 체크가 빈 스냅샷을 보고 즉시 break 해 '예'를
+#   못 눌렀다(2026-07-31 라이브 실증, verify.py 모듈 docstring 이 경고하는 "delay_scale
+#   관찰창 붕괴"와 동종). 관찰창은 time.monotonic 기준 **실시간**으로 잡고, 대기도 확인
+#   커널과 같은 실시간 구현(verify.DEFAULT_SLEEP — 단위 테스트는 conftest 가 no-op 대체)이다.
+_DEL_MODAL_WINDOW_S = 3.0  # 모달 출현 관찰창 — 소진 전에는 '모달 없음'으로 break 하지 않는다.
+_DEL_MODAL_POLL_S = 0.25  # 스냅샷 폴 간격.
+_DEL_MODAL_MAX_POLLS = 40  # 폴 횟수 상한(실시간 ~10s) — no-op sleep 테스트에서도 루프가 끝나는 안전판.
+
+
+async def _handle_delete_modal(page: Any) -> None:
+    """삭제 확인 모달 관찰·처리(best-effort) — 출현 대기→버튼 클릭→소멸 확인까지 실시간 상한.
+
+    버튼은 정확일치('예'/'확인'/'삭제') 우선, 실패 시 느슨 매칭(`js.MODAL_BTN_LOOSE_JS`,
+    d155dd6 예산현황 모달 처리와 동일 패턴) 폴백. 삭제 반영 자체는 호출측 HEAVY confirm 이
+    별도 확인하므로 여기서는 실패를 만들지 않는다(로그만 남긴다).
+    """
+    t0 = time.monotonic()
+    seen = False
+    # 적응형 상한 — 출현 관찰창(3s)·소멸 상한(폴 회수)에만 지연 배율(≤×4)을 곱한다.
+    # 폴 간격은 불변 — 모달이 즉시 뜨면(평시) 추가 지연 0.
+    window_s = latency.budget_ms(_DEL_MODAL_WINDOW_S * 1_000) / 1_000
+    for _ in range(latency.budget_polls(_DEL_MODAL_MAX_POLLS)):
+        modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
+        if modals:
+            seen = True
+            clicked = False
+            for label in ("예", "확인", "삭제"):
+                btn = await page.evaluate(js_lib.MODAL_BTN_BOX_JS, label)
+                if btn:
+                    await mouse_click(page, btn["x"], btn["y"])
+                    clicked = True
+                    break
+            if not clicked:
+                # 정확일치 실패 — 라벨 변형('확 인'·'OK' 등) 느슨 매칭 폴백(d155dd6 과 동일).
+                btn = await page.evaluate(js.MODAL_BTN_LOOSE_JS)
+                if btn:
+                    await mouse_click(page, btn["x"], btn["y"])
+                    clicked = True
+            if not clicked:
+                logger.warning("삭제 확인 모달 버튼 미발견(느슨 매칭 포함) — %r", modals[:2])
+        elif seen:
+            return  # 모달 처리 후 소멸 확인됨.
+        elif time.monotonic() - t0 >= window_s:
+            return  # 출현 관찰창 소진 — 모달 없이 즉시 삭제되는 세션.
+        await verify.DEFAULT_SLEEP(_DEL_MODAL_POLL_S)
+    if seen:
+        logger.warning("삭제 확인 모달이 관찰 상한까지 잔존 — 이후 HEAVY 반영 확인이 최종 판정한다.")
+
+
 async def delete_blank_row(page: Any) -> dict:
     """상대계정 등록 시 추가된 빈(마지막) detail 행 삭제 — 빈 행 선택 → 툴바 삭제 버튼 + 확인 모달.
 
@@ -753,6 +819,11 @@ async def delete_blank_row(page: Any) -> dict:
       빈 행이 남는 것은 되돌릴 수 있고 데이터 행 삭제는 되돌릴 수 없다.
     ⚠ 사후 확인도 행수 감소만 보지 않는다 — **데이터 행 수 보존**까지 함께 본다(어느 행이 지워
       졌는지). 데이터 행이 줄었으면 하드 실패로 드러낸다.
+    ⚠ 확인 모달 관찰은 **실시간 창**(`_handle_delete_modal`)이다 — 예전 wait_for_timeout(500)
+      폴링은 delay_scale=0.4 에서 실 200ms 로 줄어, 모달이 그보다 늦게 뜨면 첫 체크가 빈
+      스냅샷을 보고 즉시 break → '예' 미클릭 → 삭제 미반영 → 최종 confirm 실패였다
+      (2026-07-31 라이브 실증). 느슨 매칭 폴백과 **빈 행 잔존 가드**가 걸린 1회 재시도도
+      이때 함께 추가(가드 없는 재클릭은 실데이터 행 삭제 사고가 된다).
     """
     rows = await page.evaluate(js.DETAIL_ROWS_JS)
     before_n = int(rows.get("n") or 0)
@@ -775,31 +846,74 @@ async def delete_blank_row(page: Any) -> dict:
         # 불일치·확인 불가 모두 **삭제 스킵**(보수적). 빈 행이 남으면 이후 저장 검증에서
         # 드러나지만(되돌릴 수 있음), 잘못 고른 데이터 행 삭제는 되돌릴 수 없다.
         return {"ok": True, "verified": False, "warn": f"삭제 건너뜀 — {cur.reason}"}
+    # 진단(2026-07-31): BTN_BOX_JS 는 querySelector **첫 매치**라, 3그리드 화면에서 동일
+    # 셀렉터 버튼이 여러 개면 엉뚱한 툴바의 삭제 버튼일 수 있다(미확증 후보). 매치 개수와
+    # 클릭 rect 를 로그로 남겨 다음 실패 때 로그만으로 판별할 수 있게 한다.
+    cnt = await page.evaluate(js.BTN_COUNT_JS, selectors.BTN_DELETE)
     box = await page.evaluate(js.BTN_BOX_JS, selectors.BTN_DELETE)
     if not box:
-        return {"ok": False, "reason": "삭제 버튼을 찾지 못함"}
+        return {"ok": False, "reason": f"삭제 버튼을 찾지 못함(셀렉터 {selectors.BTN_DELETE!r} 매치 {cnt!r})"}
+    total = cnt.get("total") if isinstance(cnt, dict) else None
+    if isinstance(total, int) and total > 1:
+        logger.warning(
+            "삭제 버튼 셀렉터 %r 매치 %s개(보임 %s개) — 첫 매치 rect %s 클릭(버튼 모호성 후보)",
+            selectors.BTN_DELETE, total, cnt.get("visible"), box,
+        )
+    else:
+        logger.debug("삭제 버튼 진단 — 셀렉터 %r 매치 %r, 클릭 rect %s", selectors.BTN_DELETE, cnt, box)
     await mouse_click(page, box["x"], box["y"])
-    # 확인 모달 처리 — 모달이 사라질 때까지(최대 20회). 삭제 반영은 아래에서 별도 확인한다.
-    for _ in range(20):
-        await page.wait_for_timeout(500)
-        modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
-        if not modals:
-            break
-        for label in ("예", "확인", "삭제"):
-            btn = await page.evaluate(js_lib.MODAL_BTN_BOX_JS, label)
-            if btn:
-                await mouse_click(page, btn["x"], btn["y"])
-                break
-    done = await verify.confirm(
-        lambda: page.evaluate(js.DETAIL_ROWS_JS),
-        lambda v: isinstance(v, dict)
-        and int(v.get("n") or -1) == before_n - 1
-        and _data_rows(v) == before_data,
-        timing=verify.HEAVY,
-        what="빈 행 삭제 반영",
-        expected=f"행수 {before_n - 1}·데이터행 {before_data}",
-        unknown_when=lambda v: not (isinstance(v, dict) and isinstance(v.get("n"), int)),
-    )
+    # 확인 모달 처리 — 실시간 관찰창(_handle_delete_modal). 삭제 반영은 아래에서 별도 확인한다.
+    await _handle_delete_modal(page)
+
+    async def _confirm_deleted() -> verify.Confirmed:
+        return await verify.confirm(
+            lambda: page.evaluate(js.DETAIL_ROWS_JS),
+            lambda v: isinstance(v, dict)
+            and int(v.get("n") or -1) == before_n - 1
+            and _data_rows(v) == before_data,
+            timing=verify.HEAVY,
+            what="빈 행 삭제 반영",
+            expected=f"행수 {before_n - 1}·데이터행 {before_data}",
+            unknown_when=lambda v: not (isinstance(v, dict) and isinstance(v.get("n"), int)),
+        )
+
+    done = await _confirm_deleted()
+    if done.mismatch:
+        # 가드된 삭제 재시도 1회(2026-07-31) — 모달 처리 실패 등으로 클릭 1회가 유실된 세션 구제.
+        # ⚠ 재클릭 전 **빈 행 잔존 재확인이 핵심 가드**: 행수가 이미 줄었으면(늦은 반영·다른 행
+        #   삭제) 재클릭이 곧 실데이터 행 삭제 사고다 — 절대 재클릭하지 않는다.
+        snap = await page.evaluate(js.DETAIL_ROWS_JS)
+        n_now = int(snap.get("n") or -1) if isinstance(snap, dict) else -1
+        row_bi = (
+            next((r for r in (snap.get("rows") or []) if r.get("i") == bi), None)
+            if isinstance(snap, dict)
+            else None
+        )
+        if n_now == before_n - 1 and _data_rows(snap) == before_data:
+            # HEAVY 관찰창 이후 늦게 반영된 세션 — 이미 지워졌으므로 재클릭 없이 성공 확정.
+            return {"ok": True, "verified": True}
+        if n_now >= before_n and row_bi is not None and not row_bi.get("PARTNER"):
+            logger.info("빈 행 삭제 미반영(행수 %s 유지·행 %s 빈값 잔존) — 가드 통과, 삭제 1회 재시도", n_now, bi)
+            await mouse_click(page, pt["x"], pt["y"])
+            cur2 = await verify.confirm(
+                lambda: page.evaluate(js_lib.GRID_CURRENT_ROW_JS, 1),
+                lambda v: isinstance(v, dict) and bool(v.get("ok")) and v.get("current") == bi,
+                timing=verify.INSTANT,
+                what=f"재시도 삭제 대상 빈 행({bi}) 재선택",
+                expected=bi,
+                reapply=lambda: mouse_click(page, pt["x"], pt["y"]),
+            )
+            if cur2:
+                await mouse_click(page, box["x"], box["y"])
+                await _handle_delete_modal(page)
+                done = await _confirm_deleted()
+            else:
+                logger.warning("삭제 재시도 중단 — %s (파괴적 액션 게이트 유지)", cur2.reason)
+        else:
+            logger.warning(
+                "삭제 재시도 금지 — 행수 %s→%s·행 %s 상태 변화(실데이터 행 오삭제 방지 가드)",
+                before_n, n_now, bi,
+            )
     if done:
         return {"ok": True, "verified": True}
     if done.unknown:
@@ -877,6 +991,27 @@ async def set_row_note(page: Any, text: str) -> dict:
 PARTNER_PICKER_CAP = 500
 
 
+async def _poll_rowcount_over(page: Any, prev: Any, *, cap_ms: int, interval_ms: int = 300) -> Any:
+    """피커 rowcount 가 ``prev`` 를 **넘는 즉시** 반환하는 실시간 폴링(서버 페이징 도착 신호).
+
+    dump_partners 의 종전 고정 3s/2s 대기 대체 — 무엇을 기다리나: ArrowDown 페이징으로
+    발사한 서버 재조회 결과(행 추가)가 그리드에 도착하는 것(PICKER_ROWCOUNT_JS 증가).
+    증가가 없으면 상한 소진 후 마지막 값을 반환한다(= 기존 고정 대기 후 1회 읽기와 동일
+    수순 — 호출부의 stable 카운트가 종료를 판정). 상한은 실시간(monotonic, delay_scale
+    무관) × latency 배율(ERP 지연 시 ≤×4 확대), 폴 간격 300ms 관례.
+    """
+    t0 = time.monotonic()
+    budget = latency.budget_ms(cap_ms)
+    cur: Any = None
+    while True:
+        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        if isinstance(cur, int) and isinstance(prev, int) and cur > prev:
+            return cur
+        if (time.monotonic() - t0) * 1_000 >= budget:
+            return cur
+        await page.wait_for_timeout(interval_ms)
+
+
 async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
     """거래처(partner_cd) 코드피커 빈검색 전량 — 끝행 포커스+ArrowDown 페이징 후 유니크.
 
@@ -912,14 +1047,16 @@ async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
             break
         for _ in range(30):
             await page.keyboard.press("ArrowDown", delay=30)
-        await page.wait_for_timeout(3_000)
-        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        # 서버 페이징 도착 폴링(종전 고정 3s) — 행 증가 즉시 진행, 미도착이면 상한 소진.
+        cur = await _poll_rowcount_over(page, prev, cap_ms=3_000)
         logger.info("거래처 스크롤 r%d — rows=%s(prev=%s) stable=%d", rnd, cur, prev, stable)
         if not isinstance(cur, int) or cur <= prev:
             stable += 1
             if stable >= 3:
                 break
-            await page.wait_for_timeout(2_000)
+            # 추가 관찰창(종전 고정 2s) — 늦은 도착이 감지되면 즉시 다음 라운드로(다음
+            # 라운드의 cur > prev 가 stable 을 리셋한다 — 기존 의미 보존).
+            await _poll_rowcount_over(page, prev, cap_ms=2_000)
         else:
             stable = 0
         prev = max(prev, cur if isinstance(cur, int) else prev)

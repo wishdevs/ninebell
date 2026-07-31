@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 # 재수출(하위호환·가독성) — card js.SET_ACCT_DATE_JS 도 js_lib 단일소스를 재수출한다.
@@ -87,7 +87,8 @@ async def add_next_row(page: Any, expected_count: int, *, timeout_polls: int = 3
     """
     await js_click(page, selectors.BTN_ADD)
     rows: Any = -1
-    for _ in range(timeout_polls):  # 300ms 간격(상한 ~10s) — add_row 노드와 동일 폴링.
+    # 300ms 간격(상한 ~10s) — add_row 노드와 동일 폴링. 회수 상한만 지연 배율(≤×4) 확대.
+    for _ in range(latency.budget_polls(timeout_polls)):
         await page.wait_for_timeout(300)
         rows = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
         if isinstance(rows, int) and rows >= expected_count:
@@ -129,7 +130,8 @@ async def open_evdn_editor(page: Any) -> dict:
             continue
         rect = None
         waited = 0
-        while waited < 1_000:  # 돋보기 rect 준비 폴링(상한 1s)
+        rect_cap_ms = latency.budget_ms(1_000)  # 돋보기 rect 준비 폴링(상한 1s × 지연 배율).
+        while waited < rect_cap_ms:
             await page.wait_for_timeout(100)
             waited += 100
             rect = await page.evaluate(js_lib.EVDN_EDITOR_MAGNIFIER_RECT_JS)
@@ -139,7 +141,7 @@ async def open_evdn_editor(page: Any) -> dict:
             continue
         await mouse_click(page, rect["x"], rect["y"])  # 돋보기(캔버스) 클릭
         opened = False
-        for _ in range(20):  # 300ms 간격(상한 6s)
+        for _ in range(latency.budget_polls(20)):  # 300ms 간격(상한 6s, 회수만 배율 확대)
             await page.wait_for_timeout(300)
             opened = await page.evaluate(js_lib.EVDN_POPUP_OPEN_JS)
             if opened:
@@ -165,7 +167,7 @@ async def select_evdn_code(page: Any, code: str) -> dict:
     # 전 1회 재확인(EVDN_* JS 는 그리드 보유 다이얼로그만 잡아 오인은 없지만 클릭은 좌표라 방어).
     await dismiss_notice_popup(page, appear_cap_ms=0)
     r: dict = {}
-    for _ in range(20):  # 행 로드 폴링(상한 ~6s)
+    for _ in range(latency.budget_polls(20)):  # 행 로드 폴링(상한 ~6s, 회수만 배율 확대)
         r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
         if r.get("ok"):
             break
@@ -177,7 +179,7 @@ async def select_evdn_code(page: Any, code: str) -> dict:
     box = await page.evaluate(js_lib.EVDN_APPLY_BOX_JS)
     if box:
         await mouse_click(page, box["x"], box["y"])
-    for _ in range(27):  # 셀 반영 폴링(상한 ~8s)
+    for _ in range(latency.budget_polls(27)):  # 셀 반영 폴링(상한 ~8s, 회수만 배율 확대)
         await page.wait_for_timeout(300)
         cell = await page.evaluate(js_lib.DETAIL_EVDN_CELL_JS)
         if sel_name and sel_name in cell:

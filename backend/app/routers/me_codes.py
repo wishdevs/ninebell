@@ -192,6 +192,10 @@ async def set_default_favorite(fav_id: str, user: CurrentUser, db: DbSession):
     )
     for s in siblings:
         s.is_default = False
+    # 해제 UPDATE 를 대상 지정보다 **먼저 방출**한다 — 한 플러시에 섞이면 SQLAlchemy UOW 가
+    # UPDATE 를 uuid PK 정렬로 내보내 대상 지정이 먼저 나갈 수 있고, 그 순간 부분 유니크
+    # 인덱스(uq_user_code_favorites_default, 0034) 위반으로 IntegrityError 가 난다.
+    await db.flush()
     target.is_default = True
     await db.commit()
     return _fav_dict(target)
@@ -560,6 +564,14 @@ async def get_catalog(
         .scalars()
         .all()
     )
+    # 인메모리 필터는 'kind 당 수천 건 이내' 전제 — 임계 초과를 조기 감지해 DB 필터 전환
+    # 시점을 놓치지 않게 한다(동작 불변, 경고만).
+    if len(rows) > 10_000:
+        logger.warning(
+            "코드 카탈로그 kind=%s 행수 %d — 인메모리 필터 전제(수천 건)를 초과했습니다.",
+            kind,
+            len(rows),
+        )
 
     if kind == "budget_unit":
         # '내 부서' 필터 — 예산단위명 정규화 매칭.

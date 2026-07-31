@@ -156,6 +156,35 @@ async def test_collect_tab_back_failure_errors(monkeypatch):
     assert_keys_declared(VoucherCardState, out)
 
 
+async def test_collect_no_abdocu_rows_skips_tab_and_ends(monkeypatch):
+    """결의서번호(ABDOCU_NO) 보유 0건 — 결의서조회승인 탭을 열지 않고 빈 맵으로 즉시 종료
+    (사용자 확정 2026-07-30: 대상이 없으면 다중탭 수집 불필요)."""
+    calls = _patch_collect_ok(monkeypatch)
+
+    async def _count(page):
+        return {"ok": True, "n": 5, "withAb": 0}
+
+    monkeypatch.setattr(cp_mod.shared_steps, "count_rows_with_abdocu", _count)
+    node = make_collect_payments_node()
+    out = await node({"events": _q(), "page": _StubPage(), "master_rowcount": 5})
+    assert out == {"payment_map": {}, "payment_map_count": 0}
+    assert calls == []  # 탭 열기·조건 세팅·조회 전부 미실행.
+    assert_keys_declared(VoucherCardState, out)
+
+
+async def test_collect_abdocu_precheck_failure_falls_back_to_collect(monkeypatch):
+    """사전 판정 실패(ok:False)는 즉시 종료하지 않고 기존 경로(수집 진행)로 폴백한다."""
+    calls = _patch_collect_ok(monkeypatch)
+
+    async def _count(page):
+        return {"ok": False, "reason": "stub"}
+
+    monkeypatch.setattr(cp_mod.shared_steps, "count_rows_with_abdocu", _count)
+    node = make_collect_payments_node()
+    out = await node({"events": _q(), "page": _StubPage(), "master_rowcount": 2})
+    assert "open_tab" in calls and "error" not in out
+
+
 async def test_collect_grid_unreadable_proceeds_empty(monkeypatch):
     # 그리드 읽기 실패는 error 로 단락하지 않고 빈 맵으로 진행(참조문서 훅이 우아하게 처리).
     _patch_collect_ok(monkeypatch)

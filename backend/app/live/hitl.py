@@ -15,6 +15,33 @@ import uuid
 
 from app.config import get_settings
 
+from . import run_budget
+
+
+class _BudgetPausedQueue(asyncio.Queue):
+    """get() 대기 동안 런 활동 시간 예산을 일시정지하는 HITL 큐.
+
+    런 전역 예산(run_budget)은 HITL 대기 시간을 제외한 **활동 시간** 기준이다. 노드는
+    이 큐를 `asyncio.wait_for(q.get(), ...)` 로 그대로 쓰므로(계약 불변), 실제 사용자
+    입력을 기다리는 블로킹 구간이 정확히 pause/resume 으로 감싸진다. 타임아웃/취소로
+    get() 이 중단돼도 finally 로 resume 이 보장된다(run_budget 은 중첩 안전).
+    run_id 미바인딩(스크립트/익명) 큐는 순수 asyncio.Queue 와 동일하게 동작한다.
+    """
+
+    def __init__(self, run_id: str | None = None) -> None:
+        super().__init__()
+        self._budget_run_id = run_id
+
+    async def get(self):  # noqa: ANN201 — asyncio.Queue.get 시그니처 유지
+        if not self._budget_run_id:
+            return await super().get()
+        run_budget.pause(self._budget_run_id)
+        try:
+            return await super().get()
+        finally:
+            run_budget.resume(self._budget_run_id)
+
+
 # decision_id → 대기 큐. 노드가 만들고, resolve_hitl 이 넣고, 노드가 pop 한다.
 _hitl_queues: dict[str, asyncio.Queue] = {}
 # decision_id → owner(세션 사용자 식별자). 값이 있으면 그 사용자만 resolve 가능.
@@ -36,8 +63,11 @@ def open_hitl_channel(
     소유권(`owner`)·런바인딩(`run_id`)은 채널 오픈 시점에 등록해, LiveSession 이 hitl 프레임을
     관찰하기 전 `/runs/hitl` 이 소유권 검사를 건너뛰던 레이스 창을 없앤다. falsy 면 미등록
     (스크립트/익명 경로 — session 펌프가 프레임 관찰 시 폴백 등록).
+
+    반환 큐는 get() 대기 동안 런 활동 시간 예산을 일시정지한다(HITL 대기 제외 정책 —
+    `_BudgetPausedQueue`). 노드 쪽 소비 계약(`asyncio.wait_for(q.get(), ...)`)은 불변.
     """
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = _BudgetPausedQueue(run_id)
     _hitl_queues[decision_id] = q
     if owner:
         _hitl_owner[decision_id] = owner
@@ -100,11 +130,13 @@ async def wait_hitl(
     소유권(`owner`)·런바인딩(`run_id`)은 큐 생성 시점에 등록해 레이스 창을 없앤다(falsy 면
     미등록 — session 펌프 폴백). 타임아웃 시 asyncio.TimeoutError 를 던진다(호출 노드가 실패
     이벤트로 변환). timeout_s 미지정 시 config.hitl_timeout_s(단일 소스)를 쓴다.
+
+    대기(q.get) 동안 런 활동 시간 예산은 일시정지된다(HITL 대기 제외 — `_BudgetPausedQueue`).
     """
     if timeout_s is None:
         timeout_s = get_settings().hitl_timeout_s
     decision_id = uuid.uuid4().hex
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = _BudgetPausedQueue(run_id)
     _hitl_queues[decision_id] = q
     if owner:
         _hitl_owner[decision_id] = owner

@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, latency
 
 logger = logging.getLogger("nbkit.omnisol.codepicker")
 
@@ -77,11 +77,17 @@ async def _wait_picker_rows_stable(
 
 
 async def _wait_picker_closed(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> None:
-    """'적용' 클릭 후 피커 팝업이 닫힐 때까지 폴링(고정 1000ms 대체)."""
-    waited = 0
-    while waited < cap_ms:
+    """'적용' 클릭 후 피커 팝업이 닫힐 때까지 폴링(고정 1000ms 대체).
+
+    ⚠ 상한은 **실시간(monotonic)** × latency 배율 — 명목 카운터(waited += interval)는
+    delay_scale 에서 실관찰창이 쪼그라들어(예: 0.15 배 → 1.5s 가 실 ~225ms) 닫힘 애니메이션
+    (실시간)을 다 못 보고 '진행'해 다음 피커가 잔존 팝업을 오독한다 —
+    _wait_picker_rows_stable 의 2026-07-04 회귀와 동일 함정.
+    """
+    t0 = time.monotonic()
+    budget_ms = latency.budget_ms(cap_ms)
+    while (time.monotonic() - t0) * 1_000 < budget_ms:
         await page.wait_for_timeout(interval_ms)
-        waited += interval_ms
         n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
         if not isinstance(n, int) or n < 0:  # 팝업 사라짐
             return

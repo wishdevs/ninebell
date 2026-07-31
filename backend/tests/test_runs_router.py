@@ -154,6 +154,38 @@ async def test_body_params_cannot_override_server_authoritative_keys(
 
 
 @pytest.mark.asyncio
+async def test_collect_debug_param_boolean_only(client, make_user, make_agent, auth_as):
+    """카드 선택 분기용 debug 는 **불리언 True 만** 통과 — 부재/문자열/숫자/객체는 False 강제.
+
+    서버 기본은 '본인 카드만'(debug=False) — 클라이언트가 타입 조작('true'·1 등)으로
+    디버그 전체선택을 켤 수 없다(신뢰 최소화). 그래프 state.params 에 항상 불리언으로 실린다.
+    """
+    uid = await make_user("debugger", "user")
+    auth_as(uid)
+    await make_agent("debug-wf-agent", workflow_id="test-debug-wf")
+
+    seen: list[dict] = []
+
+    class _CaptureGraph:
+        async def ainvoke(self, state: dict) -> dict:
+            seen.append(dict(state.get("params") or {}))
+            await state["events"].put({"step": "x", "status": "done"})
+            return {"result": "ok"}
+
+    register_workflow("test-debug-wf", lambda: _CaptureGraph())
+    fastapi_app.state.browser_factory = _fake_browser_factory
+
+    cases = [None, {"debug": True}, {"debug": "true"}, {"debug": 1}, {"debug": {"on": True}}]
+    for params in cases:
+        body: dict = {"agentId": "test-debug-wf"}
+        if params is not None:
+            body["params"] = params
+        r = await client.post("/runs/collect", json=body)
+        assert r.status_code == 200, params
+    assert [p.get("debug") for p in seen] == [False, True, False, False, False]
+
+
+@pytest.mark.asyncio
 async def test_hitl_unknown_decision_returns_not_resolved(client, make_user, auth_as):
     uid = await make_user("dave", "user")
     auth_as(uid)

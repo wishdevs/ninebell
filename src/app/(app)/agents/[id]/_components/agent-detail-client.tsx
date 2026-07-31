@@ -15,6 +15,7 @@ import {
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { cn } from '@/lib/utils';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
@@ -261,57 +262,81 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
       {/* 브라우저 + 우측 패널. 상단 섹션이 없어 그리드가 남는 높이를 전부 쓴다. 브라우저 열 폭은
           스크린캐스트 종횡비(≈16:10)에 맞춰 (가용 높이)×16/10 로 잡아 화면이 잘리지 않고 꽉
-          차게(레터박스 최소), 좌우로 과하게 넓지 않게 하고 패널 최소폭(≈440px)은 유지한다. */}
-      <div
-        className={cn(
-          'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
-          layoutLevel === 'full'
-            ? 'lg:grid-cols-1' // 라이브 숨김 — 개입 패널이 전체폭
-            : layoutLevel === 'split'
-              ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
-              : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
+          차게(레터박스 최소), 좌우로 과하게 넓지 않게 하고 패널 최소폭(≈440px)은 유지한다.
+          라이브 실행(실제 ERP 저장 진행) 중 렌더 예외가 화면 전체를 무너뜨리지 않도록
+          바운더리로 카드 영역 안에 가둔다 — 헤더·실행 컨트롤(중단/닫기)은 살아남는다. */}
+      <ErrorBoundary
+        fallback={({ reset }) => (
+          <div className="border-danger/30 bg-danger/10 flex flex-col items-start gap-2.5 rounded-[var(--radius-lg)] border px-5 py-4 lg:min-h-0 lg:flex-1">
+            <div className="text-danger flex items-start gap-2.5">
+              <RiErrorWarningLine size={18} aria-hidden className="mt-0.5 shrink-0" />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <p className="text-[length:var(--text-body-sm)] font-semibold">
+                  라이브 화면을 표시하는 중 문제가 발생했습니다
+                </p>
+                <p className="text-foreground-secondary text-[length:var(--text-body-sm)] leading-relaxed">
+                  실행 세션은 유지됩니다. 다시 표시를 눌러 화면만 다시 그리거나, 상단 컨트롤로
+                  실행을 중단할 수 있습니다.
+                </p>
+              </div>
+            </div>
+            <Button size="sm" variant="secondary" onClick={reset}>
+              다시 표시
+            </Button>
+          </div>
         )}
       >
-        {/* 라이브 스테이지 — full 레벨(그리드 개입)에선 숨겨 개입 패널에 전체폭을 준다. 그 외엔
+        <div
+          className={cn(
+            'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
+            layoutLevel === 'full'
+              ? 'lg:grid-cols-1' // 라이브 숨김 — 개입 패널이 전체폭
+              : layoutLevel === 'split'
+                ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
+                : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
+          )}
+        >
+          {/* 라이브 스테이지 — full 레벨(그리드 개입)에선 숨겨 개입 패널에 전체폭을 준다. 그 외엔
             미실행 시 idle 중립 대기 화면(가짜 LIVE 노출 안 함), idle/종료엔 중앙 대형 실행 CTA 겹침. */}
-        {layoutLevel !== 'full' ? (
-          <LiveBrowserStage
-            targetUrl={agent.targetUrl}
-            status={run.status}
-            screenshots={run.screenshots}
-            activeWindow={run.activeWindow}
-            onSelectWindow={run.selectWindow}
-            connected={run.connected}
-            canRun={canRun}
-            etaHint={etaHint}
-            aiWorking={aiWorkingLabel}
-            // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
-            // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
-            onStart={
-              usePreRun
-                ? undefined
-                : () => {
-                    const workflowId =
-                      (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
-                    if (workflowId) startRun(workflowId, session.params);
-                  }
-            }
-          />
-        ) : null}
-        {isLive ? (
-          <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
-        ) : PreRunForm ? (
-          // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
-          <PreRunForm
-            key={formRunSeq}
-            agent={agent}
-            initialParams={formSeed}
-            onStart={startFromForm}
-          />
-        ) : (
-          <AgentSidePanel agent={view} />
-        )}
-      </div>
+          {layoutLevel !== 'full' ? (
+            <LiveBrowserStage
+              targetUrl={agent.targetUrl}
+              status={run.status}
+              screenshots={run.screenshots}
+              activeWindow={run.activeWindow}
+              onSelectWindow={run.selectWindow}
+              connected={run.connected}
+              canRun={canRun}
+              etaHint={etaHint}
+              aiWorking={aiWorkingLabel}
+              // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
+              // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
+              onStart={
+                usePreRun
+                  ? undefined
+                  : () => {
+                      const workflowId =
+                        (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
+                      if (workflowId) startRun(workflowId, session.params);
+                    }
+              }
+            />
+          ) : null}
+          {isLive ? (
+            <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
+          ) : PreRunForm ? (
+            // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
+            <PreRunForm
+              key={formRunSeq}
+              agent={agent}
+              initialParams={formSeed}
+              onStart={startFromForm}
+            />
+          ) : (
+            <AgentSidePanel agent={view} />
+          )}
+        </div>
+      </ErrorBoundary>
     </div>
   );
 }

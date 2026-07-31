@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { API_BASE } from '@/lib/api/client';
+import { readDebugMode } from '@/lib/debug-mode';
 import { cancelRun } from './runs-api';
 import type {
   ChatMessage,
@@ -317,7 +318,10 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
             agentId,
             cursor, // >0 이면 기존 세션 재부착(새 흐름 시작 안 함)
             ...(templateIdRef.current ? { templateId: templateIdRef.current } : {}),
-            ...(paramsRef.current ? { params: paramsRef.current } : {}),
+            // 디버그 모드(로그인 화면 체크, localStorage)를 항상 함께 싣는다 — 서버(runs.py)가
+            // 불리언 True 만 인정·기본 false(본인 카드만)라 조작 여지는 없다. 카드 선택 분기
+            // (card_collect select_all_cards)가 이 값을 읽는다.
+            params: { ...(paramsRef.current ?? {}), debug: readDebugMode() },
           }),
         });
       } catch {

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UuidPkMixin
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 class User(UuidPkMixin, Base, TimestampMixin):
     __tablename__ = "users"
+    # status 는 UserPatch(MemberStatus Literal)와 동일 집합만 허용(0033 과 동일 정의).
+    __table_args__ = (CheckConstraint("status IN ('active','suspended')", name="status"),)
 
     # 로그인 식별자(더존 userid). 옴니솔 계정은 비밀번호를 절대 저장하지 않는다.
     omnisol_userid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)

@@ -33,6 +33,7 @@ from . import js
 # 국내/자차에서 확정된 공통 스텝을 재사용(중복 방지) — 금액 예산현황 타이핑·상대계정 부가선택
 # 위젯 등록·딸려온 빈 행 삭제. detail 그리드 조작이 국내와 동일 구조라 그대로 통용된다(2026-07-09).
 from app.agents.trip_domestic.steps import (  # noqa: E402
+    _poll_rowcount_over,
     delete_blank_row,
     register_counter_partner,
     type_amount,
@@ -632,14 +633,15 @@ async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
             break
         for _ in range(30):
             await page.keyboard.press("ArrowDown", delay=30)
-        await page.wait_for_timeout(3_000)
-        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        # 서버 페이징 도착 폴링(종전 고정 3s) — 행 증가 즉시 진행(국내 dump_partners 미러).
+        cur = await _poll_rowcount_over(page, prev, cap_ms=3_000)
         logger.info("거래처 스크롤 r%d — rows=%s(prev=%s) stable=%d", rnd, cur, prev, stable)
         if not isinstance(cur, int) or cur <= prev:
             stable += 1
             if stable >= 3:
                 break
-            await page.wait_for_timeout(2_000)
+            # 추가 관찰창(종전 고정 2s) — 늦은 도착 감지 시 즉시 다음 라운드로(미러).
+            await _poll_rowcount_over(page, prev, cap_ms=2_000)
         else:
             stable = 0
         prev = max(prev, cur if isinstance(cur, int) else prev)

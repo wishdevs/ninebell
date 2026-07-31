@@ -210,23 +210,32 @@ class _CardSubPage:
 
 
 async def test_select_cards_by_name_when_match():
-    """본인 이름과 일치하는 카드가 있으면 그 카드만 선택(by='name')."""
+    """일반 모드(own_only=True): 본인 이름과 일치하는 카드만 선택(by='name')."""
     page = _CardSubPage(matched=2)
-    r = await steps.select_all_cards(page, owner_name="이트라이브2")
+    r = await steps.select_all_cards(page, owner_name="이트라이브2", own_only=True)
     assert r["ok"] and r["by"] == "name" and r["checked"] == 2
     assert page.by_name_called and not page.all_called  # 전체선택 미호출
 
 
-async def test_select_cards_falls_back_to_all_when_no_match():
-    """본인 카드 0건이면 기존 로직(전체선택)으로 폴백(by='all')."""
+async def test_select_cards_own_only_zero_match_fails_without_fallback():
+    """일반 모드 본인 카드 0건 — 전체선택 폴백 없이 하드 실패(무매칭 임의선택 금지)."""
     page = _CardSubPage(matched=0)
-    r = await steps.select_all_cards(page, owner_name="이트라이브2")
-    assert r["ok"] and r["by"] == "all"
-    assert page.by_name_called and page.all_called  # 매칭 0 → 전체선택 폴백
+    r = await steps.select_all_cards(page, owner_name="이트라이브2", own_only=True)
+    assert r["ok"] is False and "본인 카드 0장" in r["reason"]
+    assert r["n"] == 5 and r["matched"] == 0  # 진단 정보(카드 수·매칭 수) 포함
+    assert page.by_name_called and not page.all_called  # 전체선택 미호출
+
+
+async def test_select_cards_own_only_without_owner_fails():
+    """일반 모드인데 본인 판정 이름이 없으면 즉시 실패 — 팝업도 열지 않는다."""
+    page = _CardSubPage(matched=3)
+    r = await steps.select_all_cards(page, owner_name=None, own_only=True)
+    assert r["ok"] is False and "사용자 이름" in r["reason"]
+    assert not page.by_name_called and not page.all_called and page.clicks == []
 
 
 async def test_select_cards_all_when_no_owner():
-    """owner_name 미지정이면 by-name 미호출·전체선택."""
+    """디버그 모드(own_only=False 기본)면 by-name 미호출·전체선택."""
     page = _CardSubPage(matched=3)
     r = await steps.select_all_cards(page, owner_name=None)
     assert r["ok"] and r["by"] == "all"
@@ -236,7 +245,7 @@ async def test_select_cards_all_when_no_owner():
 async def test_select_cards_passes_variant_list_to_js():
     """이름 변형 목록을 주면 JS 에 배열 그대로 전달된다(빈 값·공백 정리 포함)."""
     page = _CardSubPage(matched=1)
-    r = await steps.select_all_cards(page, owner_name=["sdh", " 석대현 ", ""])
+    r = await steps.select_all_cards(page, owner_name=["sdh", " 석대현 ", ""], own_only=True)
     assert r["ok"] and r["by"] == "name"
     assert page.by_name_arg == ["sdh", "석대현"]
 

@@ -176,9 +176,18 @@ class _FakePartnerPage:
         self.popups = 0
         self.closed = False
         self.read_calls = 0
+        self.clock_ms = 0.0
 
     async def wait_for_timeout(self, ms):  # noqa: ANN001
-        return None
+        # (2026-07-31 전환) 페이징 도착 대기가 고정 3s/2s → 실시간(monotonic) 조건 폴링이라,
+        # 가짜 시계를 전진시키고 time.monotonic 를 patch 해야 '증가 없음 → 상한 소진' 경로가
+        # 실시간 낭비 없이 진행된다(install_clock — _LogPage 선례).
+        self.clock_ms += ms
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "app.agents.trip_domestic.steps.time.monotonic", lambda: self.clock_ms / 1_000
+        )
 
     async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
         if jsstr is js_lib.PICKER_ROWCOUNT_JS:
@@ -439,13 +448,14 @@ async def test_select_and_apply_popup_not_closed_fails():
     assert r["ok"] is False and "닫히지 않" in r["reason"]
 
 
-async def test_dump_partners_pages_then_reads_and_dedupes():
+async def test_dump_partners_pages_then_reads_and_dedupes(monkeypatch):
     opts = [
         {"PARTNER_CD": "10512", "PARTNER_NM": "한국도로공사", "BIZR_NO": "1298200103"},
         {"PARTNER_CD": "00037", "PARTNER_NM": "전준현", "BIZR_NO": None},
         {"PARTNER_CD": "10512", "PARTNER_NM": "한국도로공사", "BIZR_NO": "1298200103"},  # 중복
     ]
     page = _FakePartnerPage(rowcount=3, options=opts)
+    page.install_clock(monkeypatch)
     rows = await steps.dump_partners(page, max_rounds=5)
     assert page.closed is True  # 종료 시 팝업 닫힘.
     assert page.read_calls == 1  # 페이징 종료 후 1회 전량 읽기.
@@ -612,6 +622,123 @@ async def test_delete_blank_row_missing_delete_button_fails():
     assert r["ok"] is False and "삭제 버튼" in r["reason"]
 
 
+# ── delete_blank_row: 확인 모달 실시간 관찰창·느슨 폴백·가드된 재시도(2026-07-31) ──
+class _LateModalMouse(_DeleteMouse):
+    """삭제 클릭(9,9) → 확인 모달이 **뒤늦게** 뜨고, 모달 버튼(8,8) 실클릭 시에만 행이 지워진다."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9):
+            self._p.modal_countdown = self._p.modal_delay_polls
+        elif (x, y) == (8, 8) and self._p.modal_open:
+            self._p.modal_open = False
+            self._p.modal_countdown = None
+            self._p.deleted.append(self._p.current)
+            self._p.rows.pop(self._p.current)
+
+
+class _LateModalPage(_DeletePage):
+    """삭제 확인 모달이 클릭 후 **몇 번의 스냅샷 폴링 뒤에야** 출현하는 세션.
+
+    실물 시맨틱: 예전 코드는 wait_for_timeout(500) 폴링(delay_scale=0.4 → 실 200ms)이라
+    첫 체크가 빈 스냅샷이면 즉시 break — '예'를 못 눌러 삭제 미반영으로 실패하던 자리
+    (2026-07-31 라이브 실증). 관찰창이 폴링을 유지해야 통과한다.
+    exact=False 면 정확일치('예'/'확인'/'삭제')로는 안 잡히는 라벨 변형 모달(느슨 폴백 전용).
+    """
+
+    def __init__(self, *, modal_delay_polls: int, exact: bool = True, **kw) -> None:
+        super().__init__(**kw)
+        self.modal_delay_polls = modal_delay_polls
+        self.exact = exact
+        self.modal_countdown = None
+        self.modal_open = False
+        self.mouse = _LateModalMouse(self)
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is js_lib.MODALS_SNAPSHOT_JS:
+            if self.modal_open:
+                return [{"title": "삭제 확인", "text": "", "buttons": ["예", "아니오"]}]
+            if self.modal_countdown is not None:
+                if self.modal_countdown > 0:
+                    self.modal_countdown -= 1
+                    return []
+                self.modal_open = True
+                return [{"title": "삭제 확인", "text": "", "buttons": ["예", "아니오"]}]
+            return []
+        if jsstr is js_lib.MODAL_BTN_BOX_JS:
+            hit = self.modal_open and self.exact and arg == "예"
+            return {"x": 8, "y": 8, "title": "삭제 확인"} if hit else None
+        if jsstr is trip_js.MODAL_BTN_LOOSE_JS:
+            return {"x": 8, "y": 8, "title": "삭제 확인", "label": "확인"} if self.modal_open else None
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_delete_blank_row_handles_late_modal():
+    """모달이 첫 폴링 이후 늦게 떠도(실시간 관찰창 유지) '예'를 눌러 삭제가 반영된다."""
+    page = _LateModalPage(rows=["한국도로공사", ""], current=1, modal_delay_polls=3)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.rows == ["한국도로공사"]
+    assert (8, 8) in page.clicks  # 모달 '예' 실클릭(정확일치 경로)으로 지워졌다.
+
+
+async def test_delete_blank_row_variant_modal_closed_via_loose_match():
+    """정확일치가 놓치는 라벨 변형 모달 — 느슨 매칭 폴백(d155dd6 패턴)으로 닫아 삭제를 살린다."""
+    page = _LateModalPage(rows=["한국도로공사", ""], current=1, modal_delay_polls=1, exact=False)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.rows == ["한국도로공사"]
+
+
+class _FlakyDeleteMouse(_DeleteMouse):
+    """첫 삭제 클릭(9,9)이 유실되는 세션 — effective_at 번째 클릭부터 실제로 지워진다."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9) and self._p.clicks.count((9, 9)) >= self._p.effective_at:
+            self._p.deleted.append(self._p.current)
+            self._p.rows.pop(self._p.current)
+
+
+class _FlakyDeletePage(_DeletePage):
+    def __init__(self, *, effective_at: int = 2, **kw) -> None:
+        super().__init__(**kw)
+        self.effective_at = effective_at
+        self.mouse = _FlakyDeleteMouse(self)
+
+
+async def test_delete_blank_row_retries_once_when_blank_row_remains():
+    """confirm 실패 + **빈 행 잔존 재확인** 통과 시에만 삭제 1회 재시도(클릭 유실 세션 구제)."""
+    page = _FlakyDeletePage(rows=["한국도로공사", ""], current=1, effective_at=2)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.clicks.count((9, 9)) == 2 and page.rows == ["한국도로공사"]
+
+
+class _MisfireDeleteMouse(_DeleteMouse):
+    """삭제 클릭이 **데이터 행(0)** 을 지워버린 사고 세션 — 재클릭 금지 가드 검증용."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9):
+            self._p.deleted.append(0)
+            self._p.rows.pop(0)
+
+
+class _MisfireDeletePage(_DeletePage):
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.mouse = _MisfireDeleteMouse(self)
+
+
+async def test_delete_blank_row_no_reclick_when_row_count_dropped():
+    """행수가 이미 줄었으면 **재클릭 금지**(실데이터 행 오삭제 방지 — 핵심 가드) + 하드 실패."""
+    page = _MisfireDeletePage(rows=["한국도로공사", ""], current=1)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is False and "빈 행 삭제 실패" in r["reason"]
+    assert page.clicks.count((9, 9)) == 1  # n 감소 감지 → 재시도 클릭이 나가지 않았다.
+
+
 # ── register_counter_partner: 대리 신호(빈 행 +1) 대신 실제 값 확인 ─────────────
 class _CounterMouse:
     def __init__(self, page) -> None:  # noqa: ANN001
@@ -722,12 +849,13 @@ class _AmountTypePage:
     """
 
     def __init__(self, *, amount: int, editor_ready_at: int = 1, modal_rounds: int = 1,
-                 modal_closable: bool = True) -> None:
+                 modal_closable: bool = True, loose_only: bool = False) -> None:
         self._amount = amount
         self._editor_ready_at = editor_ready_at
         self._editor_reads = 0
         self.modal_left = modal_rounds
         self._modal_closable = modal_closable
+        self._loose_only = loose_only  # 정확일치('확인') 실패, 느슨 매칭만 버튼을 찾는 변형 모달.
         self.editor_opens = 0
         self.mouse = _AmountMouse(self)
 
@@ -747,9 +875,13 @@ class _AmountTypePage:
         if jsstr is js_lib.MODALS_SNAPSHOT_JS:
             return [{"title": "예산현황", "text": "", "buttons": ["확인"]}] * (1 if self.modal_left > 0 else 0)
         if jsstr is js_lib.MODAL_BTN_BOX_JS:
-            if not self._modal_closable:
+            if not self._modal_closable or self._loose_only:
                 return None
             return {"x": 3, "y": 3, "title": "예산현황"}
+        if jsstr is trip_js.MODAL_BTN_LOOSE_JS:
+            if not self._modal_closable:
+                return None
+            return {"x": 3, "y": 3, "title": "예산현황", "label": "닫기"}
         if jsstr is js_lib.POPUP_COUNT_JS:
             return self.modal_left
         if jsstr is trip_js.READ_AMT_JS:
@@ -775,6 +907,14 @@ async def test_type_amount_leftover_modal_fails_hard():
     page = _AmountTypePage(amount=15400, modal_closable=False)
     r = await steps.type_amount(page, 15400)
     assert r["ok"] is False and "닫히지 않았습니다" in r["reason"]
+    assert "버튼:" in r["reason"]  # 진단 강화(2026-07-30) — 남은 모달의 버튼 목록 포함.
+
+
+async def test_type_amount_variant_modal_closed_via_loose_match():
+    """라벨 변형 모달('확 인'·'닫기' 등) — 정확일치가 놓쳐도 느슨 매칭 폴백으로 닫는다(2026-07-30)."""
+    page = _AmountTypePage(amount=15400, loose_only=True)
+    r = await steps.type_amount(page, 15400)
+    assert r["ok"] is True and r["modals"] == ["예산현황"]
 
 
 async def test_type_amount_mismatch_fails_hard():

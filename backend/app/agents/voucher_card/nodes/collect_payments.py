@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 
+from app.agents.voucher_receivable import steps as shared_steps
 from app.live.events import emit_log, emit_step
 from nbkit.patterns import emit_shot
 
@@ -41,6 +42,26 @@ def make_collect_payments_node():
             await emit_log(events, "대상 전표 0건 — 결재번호 수집을 건너뜁니다.", "info")
             await emit_step(events, "collect_payments", "done", _ms(t0))
             return {"payment_map": {}, "payment_map_count": 0}
+
+        # 결의서번호(ABDOCU_NO) 보유 행이 0건이면 결재 대상 자체가 없다 — 결의서조회승인
+        # 다중탭을 열 필요 없이 즉시 종료 경로로 보낸다(사용자 확정 2026-07-30: 불필요한
+        # 탭 이동·수집 제거). 판정 실패(ok:False)는 기존 경로(수집 진행)로 폴백.
+        ab = await shared_steps.count_rows_with_abdocu(page)
+        if ab.get("ok") and int(ab.get("withAb", 0)) == 0:
+            await emit_log(
+                events,
+                f"조회 {ab.get('n', 0)}건 모두 결의서번호가 없어(직접 전표) 결재 대상이 "
+                "없습니다 — 결의서조회승인 수집을 생략하고 종료합니다.",
+                "info",
+            )
+            await emit_step(events, "collect_payments", "done", _ms(t0))
+            return {"payment_map": {}, "payment_map_count": 0}
+        if not ab.get("ok"):
+            await emit_log(
+                events,
+                f"결의서번호 사전 판정 실패({ab.get('reason')}) — 기존대로 수집을 진행합니다.",
+                "warn",
+            )
 
         await emit_log(events, "결의서조회승인 탭을 열어 결재번호를 수집합니다…", "action")
         # 화면 도착 확인(하드) — 탭이 안 열렸는데 전표조회승인 화면을 결의서 화면으로 착각하고

@@ -32,7 +32,7 @@ from app.core.security import (
     InvalidTokenError,
     create_session_token,
     decode_session_token,
-    verify_password,
+    verify_password_async,
 )
 from app.erp.login import ErpAuthError
 from app.models import User
@@ -126,9 +126,9 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         await db.execute(select(User).where(User.omnisol_userid == body.userid))
     ).scalar_one_or_none()
 
-    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출).
+    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출). CPU 바운드라 워커 스레드에서(async 래퍼).
     if user is not None and user.password_hash is not None:
-        if not verify_password(body.password, user.password_hash):
+        if not await verify_password_async(body.password, user.password_hash):
             _record_failure()
             await record_access(
                 db,

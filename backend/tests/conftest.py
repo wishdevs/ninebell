@@ -16,7 +16,7 @@ from app.core.deps import DbSession, get_current_user, get_db, get_role_by_code
 from app.main import app as fastapi_app
 from app.models import Base, User
 from app.services.seed import seed_all
-from nbkit.omnisol import verify
+from nbkit.omnisol import latency, verify
 
 
 @pytest_asyncio.fixture
@@ -145,9 +145,16 @@ def _no_realtime_verify_backoff(monkeypatch):
     커널의 기본 대기는 **실시간**(delay_scale 무관)이라, 실패 경로를 태우는 테스트가
     회차당 수 초씩 잡아먹는다. 대기 규율 자체는 sleep= 을 직접 주입하는 커널 전용
     테스트(test_verify_kernel.py)에서 검증하므로, 여기서는 no-op 으로 갈아끼운다.
+
+    지연 배율(nbkit.omnisol.latency)도 함께 격리한다 — ① 프로세스 전역 EMA 를 매 테스트
+    리셋하고 ② record 를 no-op 으로 갈아끼워, 재시도 성공 되먹임이 EMA 를 올려 다른
+    테스트의 대기·폴 상한(factor)이 1.0 을 벗어나는 누수를 막는다. 배율 자체를 검증하는
+    테스트(test_adaptive_latency.py)는 latency.factor/record 를 스스로 패치한다.
     """
 
     async def _instant(_seconds: float) -> None:
         return None
 
     monkeypatch.setattr(verify, "DEFAULT_SLEEP", _instant)
+    latency.reset()
+    monkeypatch.setattr(latency, "record", lambda *_a, **_k: None)

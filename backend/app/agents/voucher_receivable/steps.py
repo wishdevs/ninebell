@@ -12,10 +12,11 @@ app.agents.voucher_receivable.js + nbkit.omnisol.{js_lib,selectors} 단일소스
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
@@ -113,9 +114,17 @@ async def ensure_field_visible(page: Any, label: str, *, max_toggles: int = 4) -
     rects = await page.evaluate(js.EXPAND_TOGGLE_RECTS_JS) or []
     for rect in rects[:max_toggles]:
         await mouse_click(page, rect["x"], rect["y"])
-        await page.wait_for_timeout(1_000)
-        if await page.evaluate(js.FIELD_LABEL_VISIBLE_JS, label):
-            return True
+        # 무엇을 기다리나: 이 토글의 확장 애니메이션 뒤 **목표 라벨 가시화**(종전 고정 1s 후
+        # 1회 확인). 보이는 즉시 진행하고, 이 토글이 목표 필드를 안 드러내면 상한(1s ×
+        # latency 배율, 실시간 monotonic — delay_scale 무관) 소진 후 다음 토글(기존 수순 동일).
+        t0 = time.monotonic()
+        cap_ms = latency.budget_ms(1_000)
+        while True:
+            if await page.evaluate(js.FIELD_LABEL_VISIBLE_JS, label):
+                return True
+            if (time.monotonic() - t0) * 1_000 >= cap_ms:
+                break
+            await page.wait_for_timeout(200)
     return False
 
 
@@ -153,9 +162,13 @@ async def _open_picker(
     if not rect:
         return False
     await mouse_click(page, rect["x"], rect["y"])
-    await page.wait_for_timeout(1_200)
+    # 무엇을 기다리나: **새 팝업 출현(개수 증가) + 그리드 부착(POPUP_GRID_READY_JS)** — 종전
+    # '고정 1200ms 선대기 후 폴링'에서 고정 선대기를 제거하고 즉시 같은 조건을 폴링한다
+    # (조건이 곧 아래 성공 판정이라 조기 진행 위험 없음). 느린 세션 실측 근거(12s 상한,
+    # 2026-07-21)는 유지하되 ERP 지연 시 latency 배율(≤×4)로만 확대.
     waited = 0
-    while waited < ready_cap_ms:
+    cap_ms = latency.budget_ms(ready_cap_ms)
+    while True:
         try:
             opened = await page.evaluate(js.POPUP_COUNT_JS) > before
             ready = await page.evaluate(js.POPUP_GRID_READY_JS)
@@ -163,6 +176,8 @@ async def _open_picker(
             return True
         if opened and ready:
             return True
+        if waited >= cap_ms:
+            break
         await page.wait_for_timeout(ready_interval_ms)
         waited += ready_interval_ms
     # 타임아웃: 새 팝업이 떴으면(개수 증가) 그리드 부착만 느린 것 — 기존 하드닝(2026-07-21)대로
@@ -412,6 +427,20 @@ async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
         return await page.evaluate(js.READ_ROW_ABDOCU_NO_JS, idx)
     except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
         return None
+
+
+async def count_rows_with_abdocu(page: Any) -> dict:
+    """마스터 그리드에서 결의서번호(ABDOCU_NO) 보유 행 수 — {ok, n, withAb} | {ok:False}.
+
+    카드(voucher-card)가 결의서조회승인 수집 **전에** 호출해, 보유 0건이면 다중탭 수집을
+    생략하고 즉시 종료한다(사용자 확정 2026-07-30). 읽기 실패는 ok:False 로 돌려 호출자가
+    기존 경로(수집 진행)로 폴백하게 한다.
+    """
+    try:
+        res = await page.evaluate(js.COUNT_ROWS_WITH_ABDOCU_JS)
+        return res if isinstance(res, dict) else {"ok": False, "reason": f"비정상 반환: {res!r}"}
+    except Exception as exc:  # noqa: BLE001 — 테스트 스텁/버전차 방어(soft-fail).
+        return {"ok": False, "reason": str(exc)[:ERR_REASON_MAX]}
 
 
 async def read_detail_count(page: Any, idx: int, docu_no: str | None = None) -> dict:

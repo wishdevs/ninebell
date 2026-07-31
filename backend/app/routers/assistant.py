@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.config import Settings, get_settings
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, DbSession
 from app.core.llm_runtime import effective_llm_provider
 from app.llm.base import ChatMessage, LLMProvider
 from app.llm.etribe import ContextLengthExceededError, EtribeProvider
@@ -127,7 +127,9 @@ def _system_prompt(req: ChatRequest) -> str:
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, request: Request, _actor: CurrentUser) -> StreamingResponse:
+async def chat(
+    req: ChatRequest, request: Request, _actor: CurrentUser, db: DbSession
+) -> StreamingResponse:
     settings = get_settings()
     system = _system_prompt(req)
     msgs = [ChatMessage(role=m.role, content=m.content) for m in req.messages]
@@ -166,6 +168,12 @@ async def chat(req: ChatRequest, request: Request, _actor: CurrentUser) -> Strea
             message = _stream_error_message(exc)
             yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
+
+    # 요청 세션 조기 반납: 스트림은 DB 를 쓰지 않는데(컨텍스트는 요청 body, LLM 은 httpx)
+    # StreamingResponse 수명 내내 세션이 idle-in-transaction 으로 풀을 점유하는 것을 막는다.
+    # db 는 get_current_user 와 같은 캐시된 요청 세션이며, teardown 의 close 재호출은 멱등.
+    await db.commit()
+    await db.close()
 
     # 슬롯 해제는 BackgroundTask 로 응답 종료(정상 완료·클라이언트 중단 무관)에 묶는다 —
     # 제너레이터가 아예 소비되지 않아도 해제가 보장되고, 중복 해제도 없다.

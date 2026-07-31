@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 개발 기본 시크릿 — 운영 휴리스틱(cookie_secure=true)에서는 이 값으로 부팅을 차단한다.
+_DEV_AUTH_SECRET = "dev-insecure-change-me-please"
 
 
 class Settings(BaseSettings):
@@ -18,9 +21,14 @@ class Settings(BaseSettings):
 
     # --- DB ---
     database_url: str = "postgresql+asyncpg://dashboard:dashboard@localhost:5432/dashboard"
+    # PG 커넥션 풀 노브(create_async_engine). SQLite(aiosqlite) 경로에는 적용하지 않는다.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_pre_ping: bool = True
 
     # --- 세션/JWT ---
-    auth_secret: str = "dev-insecure-change-me-please"
+    auth_secret: str = _DEV_AUTH_SECRET
     jwt_algorithm: str = "HS256"
     session_ttl_hours: int = 12
     # '로그인 상태 유지' 체크 시의 연장 세션 수명(기본 30일). 미체크는 session_ttl_hours.
@@ -100,6 +108,21 @@ class Settings(BaseSettings):
             raise ValueError(f"LLM_PROVIDER 는 'gemini'|'etribe' 만 허용합니다(입력: {v!r})")
         return norm
 
+    @model_validator(mode="after")
+    def _reject_dev_secret_in_prod(self) -> Settings:
+        """운영 휴리스틱(cookie_secure=true)에서 기본 auth_secret 부팅 차단.
+
+        기본 시크릿으로 운영에 뜨면 세션 JWT 를 누구나 위조할 수 있다 — 조용한 폴백 대신
+        부팅 시점에 명확히 실패시킨다(_normalize_llm_provider 와 동일 철학). 로컬/테스트
+        (cookie_secure=false)는 기본값 부팅을 그대로 허용한다.
+        """
+        if self.cookie_secure and self.auth_secret == _DEV_AUTH_SECRET:
+            raise ValueError(
+                "COOKIE_SECURE=true(운영)인데 AUTH_SECRET 이 개발 기본값입니다 — "
+                "세션 토큰 위조가 가능하므로 부팅을 중단합니다. AUTH_SECRET 을 설정하세요."
+            )
+        return self
+
     # --- 라이브 세션(run) / 스크린캐스트 ---
     # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).
     session_detach_grace_s: float = 120.0
@@ -113,6 +136,11 @@ class Settings(BaseSettings):
     screencast_every_nth_frame: int = 2
     # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
     hitl_timeout_s: int = 600
+    # 런 전역 활동 시간 예산(초) — **HITL 대기 시간을 제외한 활동 시간** 기준. 사용자가
+    # 그리드/채팅 응답을 오래 고민하는 것은 정당(턴당 hitl_timeout_s 상한이 별도)하므로 세지
+    # 않고, 자동화 구간이 무한히 도는 것만 제한한다(세마포어 슬롯·Chromium 메모리 무기한
+    # 점유 방지). 초과 시 러너 워치독이 그래프를 취소하고 런을 failed 로 확정한다. 0=비활성.
+    run_active_budget_s: int = 1200
 
     # --- 로컬 시스템 관리자(admin) ---
     # 비우면 seed 가 폴백 '1111'을 쓰되 critical 경고. 프로덕션은 반드시 env 로 지정.
