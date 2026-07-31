@@ -11,10 +11,20 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models import AgentRun
+from app.services import agents as agents_service
 
 pytestmark = pytest.mark.asyncio
 
 _T0 = datetime(2026, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _clear_stats_cache():
+    """compute_run_stats 의 모듈 전역 TTL 캐시가 테스트 간 새지 않도록 비운다
+    (test_step_timings 의 _clear_cache 와 동일 규율)."""
+    agents_service._stats_cache.clear()
+    yield
+    agents_service._stats_cache.clear()
 
 
 async def _add_run(sm, *, rid, agent_id, user_id, status, started, dur_s) -> None:

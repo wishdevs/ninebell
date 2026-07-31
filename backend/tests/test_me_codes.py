@@ -224,6 +224,26 @@ async def test_set_default_is_scoped_per_kind(client, make_user, auth_as):
     assert bg_items[bg.json()["id"]] is True
 
 
+async def test_set_default_invariant_exactly_one_across_switches(client, make_user, auth_as):
+    """기본 전환을 반복해도 (user,kind) 당 default 는 항상 정확히 1개.
+
+    DB 부분 유니크(uq_user_code_favorites_default, 0034)가 강제하는 불변식 — 라우터가 형제
+    해제 직후 flush 로 해제 UPDATE 를 먼저 방출하지 않으면 전환 시 IntegrityError 가 난다.
+    """
+    uid = await make_user("fav-default-invariant", "user")
+    auth_as(uid)
+    ids = []
+    for code in ("A", "B", "C"):
+        r = await client.post("/me/favorites", json={"kind": "budget_unit", "code": code, "name": code})
+        ids.append(r.json()["id"])
+    # A→B→C→A 연속 전환 — 매 전환이 형제 해제 + 대상 지정을 한 트랜잭션으로 수행한다.
+    for fav_id in (ids[0], ids[1], ids[2], ids[0]):
+        resp = await client.post(f"/me/favorites/{fav_id}/default")
+        assert resp.status_code == 200
+        items = (await client.get("/me/favorites?kind=budget_unit")).json()["items"]
+        assert [i["id"] for i in items if i["isDefault"]] == [fav_id]
+
+
 async def test_set_default_others_favorite_returns_404(client, make_user, auth_as):
     owner = await make_user("def-owner", "user")
     other = await make_user("def-other", "user")

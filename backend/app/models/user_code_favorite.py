@@ -20,6 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,6 +32,17 @@ class UserCodeFavorite(UuidPkMixin, Base):
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "code", name="uq_user_code_favorites_user_id"),
         Index("ix_user_code_favorites_user_id_kind", "user_id", "kind"),
+        # (user_id, kind) 당 is_default=true 1행 강제 — 부분 유니크(0034). 라우터가 형제 해제
+        # 직후 flush 로 해제 UPDATE 를 먼저 방출해야 안전하다(me_codes.set_default_favorite).
+        # sqlite_where 병기 — 테스트 sqlite create_all 경로에도 같은 불변식이 걸린다.
+        Index(
+            "uq_user_code_favorites_default",
+            "user_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("is_default"),
+            sqlite_where=text("is_default"),
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -45,7 +57,8 @@ class UserCodeFavorite(UuidPkMixin, Base):
     # 부가 스냅샷(예: {"deptNm": ...}) — 카탈로그에서 복사.
     extra: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # (user, kind) 당 1개만 True — 단일성은 라우터(POST /me/favorites/{id}/default)가 보장.
+    # (user, kind) 당 1개만 True — 라우터(POST /me/favorites/{id}/default)가 유지하고,
+    # DB 부분 유니크(uq_user_code_favorites_default, 0034)가 강제한다.
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
     )

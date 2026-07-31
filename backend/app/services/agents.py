@@ -7,10 +7,11 @@ logs[].at 는 logged_at(ISO), 옵셔널 필드(skill/detail/substeps/interventio
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Agent, AgentIntervention, AgentLog, AgentRun, AgentStep
@@ -25,18 +26,59 @@ _EMPTY_STATS: dict[str, Any] = {
     "last_run_at": None,
 }
 
+# 인프로세스 TTL 캐시(step_timings 패턴) — GET /agents 마다 agent_runs 를 재집계하지
+# 않는다. 키는 요청 agent_ids(정렬 tuple), 값은 (기록 시각 monotonic, 결과 dict).
+_STATS_CACHE_TTL_SEC = 300.0
+_stats_cache: dict[tuple[str, ...], tuple[float, dict[str, dict]]] = {}
 
-async def compute_run_stats(db: AsyncSession, agent_ids: list[str]) -> dict[str, dict]:
-    """agent_runs 실 이력에서 에이전트별 표시 통계를 집계한다(실행수·성공률·평균시간·최근실행).
 
-    - run_count = 전체 실행 수(진행 중 포함), last_run_at = 가장 최근 시작 시각.
-    - success_rate = 성공/(성공+실패)×100 — 종료(취소·진행중 제외) 런만. 없으면 0.
-    - avg_seconds = 완료(finished_at 있음) 런의 평균 소요(초). 없으면 0.
-    DB 종류 무관하게 파이썬으로 집계한다(PG/SQLite 이식성 — 인터벌·epoch 추출 방언 회피).
-    앱 규모(내부 도구)에서 인메모리 집계로 충분하며, agent_id 인덱스로 스캔을 좁힌다.
+def _finalize(total: int, ok: int, fail: int, last, avg_s: float | None) -> dict:
+    """집계 원시값 → 반환 계약(run_count/success_rate/avg_seconds/last_run_at) 공통 변환."""
+    terminal = ok + fail
+    return {
+        "run_count": total,
+        "success_rate": round(ok / terminal * 100, 1) if terminal else 0.0,
+        "avg_seconds": round(avg_s) if avg_s is not None else 0,
+        "last_run_at": last,
+    }
+
+
+async def _stats_sql(db: AsyncSession, agent_ids: list[str]) -> dict[str, dict]:
+    """단일 SQL(GROUP BY agent_id + count FILTER + avg(소요초)) 집계 — 운영 PG 주 경로.
+
+    완료 런 평균은 avg 가 NULL(미종료 finished_at) 행을 자동 제외하는 SQL 시맨틱을 쓴다.
+    소요초 표현식만 방언 분기: PG 는 extract(epoch, finished-started), SQLite 는
+    julianday 차 ×86400 — SQLite 분기는 운영 디스패치(아래 compute_run_stats)에선 타지
+    않지만, 테스트가 SQL 경로와 파이썬 폴백의 동일 결과를 실제로 비교할 수 있게 둔다.
     """
-    if not agent_ids:
-        return {}
+    bind = db.bind
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect == "sqlite":
+        dur_s = (func.julianday(AgentRun.finished_at) - func.julianday(AgentRun.started_at)) * 86400.0
+    else:
+        dur_s = func.extract("epoch", AgentRun.finished_at - AgentRun.started_at)
+    rows = (
+        await db.execute(
+            select(
+                AgentRun.agent_id,
+                func.count(),
+                func.count().filter(AgentRun.status == "succeeded"),
+                func.count().filter(AgentRun.status == "failed"),
+                func.max(AgentRun.started_at),
+                func.avg(dur_s),
+            )
+            .where(AgentRun.agent_id.in_(agent_ids))
+            .group_by(AgentRun.agent_id)
+        )
+    ).all()
+    return {
+        agent_id: _finalize(total, ok, fail, last, float(avg_s) if avg_s is not None else None)
+        for agent_id, total, ok, fail, last, avg_s in rows
+    }
+
+
+async def _stats_python(db: AsyncSession, agent_ids: list[str]) -> dict[str, dict]:
+    """파이썬 집계 폴백 — SQLite(테스트) 등 비 PG 방언용(기존 경로 그대로)."""
     rows = (
         await db.execute(
             select(
@@ -65,16 +107,41 @@ async def compute_run_stats(db: AsyncSession, agent_ids: list[str]) -> dict[str,
             a["dur_sum"] += (finished_at - started_at).total_seconds()
             a["dur_n"] += 1
 
-    out: dict[str, dict] = {}
-    for agent_id, a in agg.items():
-        terminal = a["ok"] + a["fail"]
-        out[agent_id] = {
-            "run_count": a["total"],
-            "success_rate": round(a["ok"] / terminal * 100, 1) if terminal else 0.0,
-            "avg_seconds": round(a["dur_sum"] / a["dur_n"]) if a["dur_n"] else 0,
-            "last_run_at": a["last"],
-        }
-    return out
+    return {
+        agent_id: _finalize(
+            a["total"], a["ok"], a["fail"], a["last"],
+            (a["dur_sum"] / a["dur_n"]) if a["dur_n"] else None,
+        )
+        for agent_id, a in agg.items()
+    }
+
+
+async def compute_run_stats(db: AsyncSession, agent_ids: list[str]) -> dict[str, dict]:
+    """agent_runs 실 이력에서 에이전트별 표시 통계를 집계한다(실행수·성공률·평균시간·최근실행).
+
+    - run_count = 전체 실행 수(진행 중 포함), last_run_at = 가장 최근 시작 시각.
+    - success_rate = 성공/(성공+실패)×100 — 종료(취소·진행중 제외) 런만. 없으면 0.
+    - avg_seconds = 완료(finished_at 있음) 런의 평균 소요(초). 없으면 0.
+    PG 는 단일 SQL(GROUP BY) 로 DB 안에서 집계하고(전 행 로드 없음), SQLite(테스트)는
+    파이썬 집계 폴백을 쓴다. 결과는 TTL 캐시(300s)로 재사용 — 통계는 표시용이라 5분
+    지연을 허용한다(step_timings 와 동일 규율).
+    """
+    if not agent_ids:
+        return {}
+    key = tuple(sorted(agent_ids))
+    now = time.monotonic()
+    hit = _stats_cache.get(key)
+    if hit is not None and now - hit[0] < _STATS_CACHE_TTL_SEC:
+        return hit[1]
+
+    bind = db.bind
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect == "postgresql":
+        result = await _stats_sql(db, agent_ids)
+    else:
+        result = await _stats_python(db, agent_ids)
+    _stats_cache[key] = (now, result)
+    return result
 
 
 def _serialize_step(step: AgentStep, expected_ms: dict[str, int] | None = None) -> dict:
