@@ -97,6 +97,23 @@ async def test_open_picker_false_when_no_search_button():
     assert page.clicks == []
 
 
+async def test_open_picker_reclicks_when_first_click_swallowed():
+    # ⚠ 회귀 핵심(2026-08-01 전표유형 라이브 실증): 확장 애니메이션 중 좌표로 클릭이 빗나가면
+    # 팝업이 안 뜸 — 출현 관찰창 소진 후 fresh 좌표로 재클릭해 열어야 한다.
+    class _SwallowFirstClickPage(_SeqPage):
+        async def evaluate(self, js_src, arg=None):
+            if js_src == vjs.POPUP_COUNT_JS:
+                return 1 if len(self.clicks) >= 2 else 0  # 두 번째 클릭부터 팝업 출현.
+            return await super().evaluate(js_src, arg)
+
+    page = _SwallowFirstClickPage(
+        [], {vjs.FIELD_SEARCH_BTN_RECT_JS: {"x": 7, "y": 8}, vjs.POPUP_GRID_READY_JS: True}
+    )
+    ok = await vsteps._open_picker(page, "전표유형", ready_cap_ms=800, ready_interval_ms=50)
+    assert ok is True
+    assert page.clicks == [(7, 8), (7, 8)]  # 최초 클릭(삼킴) + 재클릭.
+
+
 # ── set_dept_all: 목록 로드 폴링 + 전체선택 반영 검증 ─────────────────────────────
 class _DeptPage:
     """set_dept_all 전체 흐름 시뮬 — 팝업 개수(돋보기(10,10)=열림/적용(20,20)=닫힘),
@@ -336,3 +353,24 @@ async def test_docu_types_polls_until_popup_rows_arrive():
     page = _LateRowsPage(empty_calls=2, display="일반")
     res = await vsteps.set_docu_types(page, ("일반",))
     assert res["ok"] is True and page.rows_calls >= 3
+
+
+async def test_docu_types_reensures_visibility_and_retries_open():
+    # ⚠ 재접힘 레이스: 가시성 확인 통과 후 rect 를 읽는 순간 패널이 접혀 null — 첫 열기가
+    # 실패해도 가시성 재확보 후 1회 재시도로 성공해야 한다.
+    class _CollapseOncePage(_FieldPage):
+        def __init__(self) -> None:
+            super().__init__(display="일반")
+            self.rect_calls = 0
+
+        async def evaluate(self, js_src, arg=None):
+            if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+                self.rect_calls += 1
+                if self.rect_calls <= 4:  # 첫 _open_picker 의 null 재관찰 전부 실패시킴.
+                    return None
+            return await super().evaluate(js_src, arg)
+
+    page = _CollapseOncePage()
+    res = await vsteps.set_docu_types(page, ("일반",))
+    assert res["ok"] is True
+    assert page.rect_calls >= 5  # 첫 시도 null×4 → 재시도에서 유효 rect.

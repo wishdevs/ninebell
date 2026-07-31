@@ -47,6 +47,34 @@ _DEPT_APPLY_SETTLE_MS = 300  # checkAll 체크 반영 대기(적용 전).
 _PICKER_ROWS_CAP_MS = 6_000  # 팝업 행 도착 관찰 상한(실시간) — ERP 지연 시 latency 배율(≤×4)로 확대.
 _PICKER_ROWS_INTERVAL_S = 0.25
 _PICKER_ROWS_MAX_POLLS = 40  # 테스트의 no-op sleep 에서도 유한 종료를 보장하는 안전판.
+_BTN_RECT_TRIES = 4  # 돋보기 rect null(재접힘 직후) 짧은 재관찰 횟수.
+_BTN_RECT_INTERVAL_S = 0.15
+_BTN_STABLE_GAP_S = 0.12  # 좌표 2회 연속 동일 판정 간격(패널 확장 애니메이션 정착).
+_OPEN_CLICK_MAX = 3  # 팝업 미출현 시 돋보기 재클릭 상한.
+_OPEN_WINDOW_MS = 2_500  # 클릭당 팝업 출현 관찰창(실시간, latency 배율 적용).
+
+
+async def _search_btn_rect_stable(page: Any, label: str) -> Any:
+    """돋보기 버튼 rect 를 **정착 좌표**로 얻는다 — null 이면 짧게 재관찰(재접힘 직후 재출현),
+    얻으면 같은 좌표가 2회 연속 읽힐 때까지 확인해 확장 애니메이션 중의 이동 좌표 클릭을 막는다.
+    계속 null 이면 None(패널 접힘 — 가시성 재확보는 호출부 몫)."""
+    rect = None
+    for _ in range(_BTN_RECT_TRIES):
+        rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
+        if rect:
+            break
+        await verify.DEFAULT_SLEEP(_BTN_RECT_INTERVAL_S)
+    if not rect:
+        return None
+    for _ in range(_BTN_RECT_TRIES):
+        await verify.DEFAULT_SLEEP(_BTN_STABLE_GAP_S)
+        again = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
+        if again == rect:
+            return rect
+        if not again:
+            return None
+        rect = again
+    return rect  # 계속 흔들리면 마지막 좌표로 진행 — 클릭 실패는 상위 재클릭이 흡수.
 
 # 결제창 렌더 완료 폴링 상한(SSO 리다이렉트+SPA 마운트 1~12s 편차 — 고정대기 금지, 조건폴링).
 CHILD_READY_CAP_MS = 25_000
@@ -159,35 +187,54 @@ async def _open_picker(
         before = await page.evaluate(js.POPUP_COUNT_JS)
     except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
         before = 0
-    rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
-    if not rect:
-        return False
-    await mouse_click(page, rect["x"], rect["y"])
-    # 무엇을 기다리나: **새 팝업 출현(개수 증가) + 그리드 부착(POPUP_GRID_READY_JS)** — 종전
-    # '고정 1200ms 선대기 후 폴링'에서 고정 선대기를 제거하고 즉시 같은 조건을 폴링한다
-    # (조건이 곧 아래 성공 판정이라 조기 진행 위험 없음). 느린 세션 실측 근거(12s 상한,
-    # 2026-07-21)는 유지하되 ERP 지연 시 latency 배율(≤×4)로만 확대.
-    waited = 0
-    cap_ms = latency.budget_ms(ready_cap_ms)
-    while True:
+    # ⚠ 결과검증형 클릭 재시도(2026-08-01 전표유형 라이브 실증): 가시성 확인(ensure_field_visible)
+    #   통과 직후에도 ① rect 읽는 순간 패널이 재접혀 null 이거나 ② 확장 애니메이션 중의 좌표를
+    #   읽어 클릭이 빗나가 팝업이 안 뜨는 레이스가 있다(종전엔 고정 선대기가 우연히 가림).
+    #   좌표는 2회 연속 동일(애니메이션 정착 — 사용자유형 드롭다운과 동일 패턴)일 때만 클릭하고,
+    #   클릭당 출현 관찰창 안에 팝업이 안 뜨면 fresh 좌표로 재클릭한다(최대 3회 — 이미 첫
+    #   클릭이 먹은 경우의 중복 오픈을 피하기 위해 관찰창을 충분히 두고 상한을 낮게 유지).
+    deadline = time.monotonic() + latency.budget_ms(ready_cap_ms) / 1000.0
+    opened = False
+    for _ in range(_OPEN_CLICK_MAX):
+        rect = await _search_btn_rect_stable(page, label)
+        if not rect:
+            return False  # 접힘/미발견 — 호출부가 가시성 재확보 후 재시도할 몫.
+        await mouse_click(page, rect["x"], rect["y"])
+        window_end = min(deadline, time.monotonic() + latency.budget_ms(_OPEN_WINDOW_MS) / 1000.0)
+        polls = 0
+        while polls < _PICKER_ROWS_MAX_POLLS:
+            try:
+                if await page.evaluate(js.POPUP_COUNT_JS) > before:
+                    opened = True
+                    break
+            except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+                return True
+            if time.monotonic() >= window_end:
+                break
+            polls += 1
+            await verify.DEFAULT_SLEEP(ready_interval_ms / 1000.0)
+        if opened or time.monotonic() >= deadline:
+            break
+    if not opened:
+        # 새 팝업이 안 떴으면(스테일 잔여 팝업/열기 실패) False 로 명확히 실패시킨다.
         try:
-            opened = await page.evaluate(js.POPUP_COUNT_JS) > before
-            ready = await page.evaluate(js.POPUP_GRID_READY_JS)
+            return await page.evaluate(js.POPUP_COUNT_JS) > before
         except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
             return True
-        if opened and ready:
+    # 그리드 부착 폴링(기존 하드닝 유지) — 상한 내 미부착이어도 팝업이 떴으면 진행을 허용한다
+    # (호출부 JS 가 grid-not-ready 를 우아하게 반환하는 최종 방어선이 있다). 실시간 상한과
+    # 명목 횟수 상한을 병행한다(no-op sleep 테스트에서의 폴 폭증 방지).
+    ready_polls_cap = max(1, latency.budget_ms(ready_cap_ms) // max(1, ready_interval_ms))
+    for _ in range(ready_polls_cap):
+        try:
+            if await page.evaluate(js.POPUP_GRID_READY_JS):
+                return True
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
             return True
-        if waited >= cap_ms:
-            break
-        await page.wait_for_timeout(ready_interval_ms)
-        waited += ready_interval_ms
-    # 타임아웃: 새 팝업이 떴으면(개수 증가) 그리드 부착만 느린 것 — 기존 하드닝(2026-07-21)대로
-    # 진행을 허용한다(호출부 JS 가 grid-not-ready 를 우아하게 반환하는 최종 방어선이 있다).
-    # 새 팝업이 안 떴으면(스테일 잔여 팝업/열기 실패) False 로 명확히 실패시킨다.
-    try:
-        return await page.evaluate(js.POPUP_COUNT_JS) > before
-    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
-        return True
+        if time.monotonic() >= deadline:
+            return True
+        await verify.DEFAULT_SLEEP(ready_interval_ms / 1000.0)
+    return True
 
 
 async def _eval_rows_when_loaded(page: Any, script: str, arg: Any = None) -> Any:
@@ -404,7 +451,12 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
     if not await ensure_field_visible(page, DOCU_TYPE_LABEL):
         return {"ok": False, "reason": "전표유형 필드가 어떤 확장 토글로도 보이지 않았습니다."}
     if not await _open_picker(page, DOCU_TYPE_LABEL):
-        return {"ok": False, "reason": "전표유형 팝업을 열지 못했습니다(돋보기 미발견/팝업 미표시 — 패널 확장 확인)."}
+        # ⚠ 재접힘 레이스(2026-08-01 라이브 실증): 가시성 확인~돋보기 클릭 사이에 패널이 다시
+        #   접히면 rect 가 null 로 남아 열기가 실패한다 — 가시성을 재확보하고 1회만 재시도.
+        logger.warning("전표유형 팝업 열기 실패 — 패널 재접힘 의심, 가시성 재확보 후 재시도")
+        reopened = await ensure_field_visible(page, DOCU_TYPE_LABEL) and await _open_picker(page, DOCU_TYPE_LABEL)
+        if not reopened:
+            return {"ok": False, "reason": "전표유형 팝업을 열지 못했습니다(돋보기 미발견/팝업 미표시 — 패널 확장 확인)."}
     # ⚠ 실측(2026-07-21 읽기전용 진단, e2e/voucher_receivable_docu_type_diag.py): 이 팝업의
     # 실제 RealGrid 필드는 전자결재상태 팝업과 동일한 범용 코드테이블 스키마
     # SYSDEF_CD/SYSDEF_NM 이다 — 'DOCU_NM'/'DOCU_CD' 필드는 이 팝업엔 없다(2026-07-20 프로브
