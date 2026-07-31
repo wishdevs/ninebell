@@ -141,13 +141,17 @@ def owner_name_variants(
     return out
 
 
-async def select_all_cards(page: Any, owner_name: str | list[str] | None = None) -> dict:
-    """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by}.
+async def select_all_cards(
+    page: Any, owner_name: str | list[str] | None = None, own_only: bool = False
+) -> dict:
+    """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by, names}.
 
-    선택 규칙(사용자 확정 2026-07-04): owner_name(로그인ID 문자열 또는 이름 변형 목록 —
-    owner_name_variants 참조)이 주어지면 그 이름과 일치하는 카드만 선택하고, 일치 0건이면
-    기존 로직인 **전체선택**으로 폴백한다(공용카드·빈 소유자 대비). by='name'|'all'.
-    매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치 + 카드명 괄호 '(이름)' 포함 —
+    선택 규칙(사용자 확정 2026-07-31 — 디버그 모드 분기):
+      · own_only=True(일반 모드 기본): owner_name(로그인ID 문자열 또는 이름 변형 목록 —
+        owner_name_variants 참조)과 일치하는 **본인 카드만** 선택. 일치 0건이면 전체선택
+        폴백 없이 **하드 실패**(무매칭 임의선택 금지 규율). 이름이 비어 있어도 실패.
+      · own_only=False(디버그 모드): 종전 동작 그대로 **전체선택**(owner_name 무시).
+    by='name'|'all'. 매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치 + 카드명 괄호 '(이름)' 포함 —
     실측(2026-07-29) 이 ERP 는 소유자/관리사원 컬럼을 채우지 않아 카드명
     FINPRODUCT_NM("…법인카드(석대현)-2826")의 괄호가 유일한 소유자 표기다
     (CARD_SUB_SELECT_BY_NAME_JS 참조).
@@ -164,6 +168,11 @@ async def select_all_cards(page: Any, owner_name: str | list[str] | None = None)
       (4) '적용' 후 서브팝업 **닫힘** — 예전엔 상한 내 안 닫혀도 {ok:True} 를 돌려줬다.
     카드번호 필드 표시값(폼 반영)은 리더 스코프가 미실측이라 **경고 수준**으로만 본다.
     """
+    owners = [owner_name] if isinstance(owner_name, str) else list(owner_name or [])
+    owners = [o.strip() for o in owners if o and o.strip()]
+    if own_only and not owners:
+        # 본인 판정 키가 없으면 어떤 카드도 고를 수 없다 — 임의 전체선택으로 넘어가지 않는다.
+        return {"ok": False, "reason": "본인 카드 판별에 쓸 사용자 이름이 없습니다(로그인 정보 확인 불가)"}
     warns: list[str] = []
     # (1) 돋보기 버튼 출현 — 실시간 재시도(delay_scale 무관).
     found = await verify.confirm(
@@ -196,19 +205,23 @@ async def select_all_cards(page: Any, owner_name: str | list[str] | None = None)
     for wait_ms in verify.ASYNC:
         if wait_ms:
             await _real_sleep(wait_ms / 1000)
-        owners = [owner_name] if isinstance(owner_name, str) else list(owner_name or [])
-        owners = [o.strip() for o in owners if o and o.strip()]
-        if owners:
-            # 본인 이름 매칭 우선 — matched>0 이면 그것으로 확정, matched==0 이면 전체선택 폴백.
+        if own_only:
+            # 본인 카드만 — matched>0 이면 확정, matched==0(그리드는 로드됨)이면 즉시 실패.
+            # 전체선택 폴백은 하지 않는다(무매칭 임의선택 금지 — 디버그 모드에서만 전체선택).
             r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owners)
             if r.get("ok") and r.get("n", 0) > 0:
                 if r.get("matched", 0) > 0:
                     sel, by = r, "name"
                     break
-                r = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)  # 매칭 0 → 전체선택
-                if r.get("ok") and r.get("n", 0) > 0:
-                    sel = r
-                    break
+                return {
+                    "ok": False,
+                    "n": r.get("n"),
+                    "matched": 0,
+                    "reason": (
+                        f"본인 카드 0장 — 카드 {r.get('n')}장 중 이름({', '.join(owners)}) "
+                        "일치 없음. 임의 전체선택 없이 중단합니다(디버그 모드에서만 전체 카드)."
+                    ),
+                }
         else:
             r = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
             if r.get("ok") and r.get("n", 0) > 0:
@@ -261,6 +274,7 @@ async def select_all_cards(page: Any, owner_name: str | list[str] | None = None)
         "n": sel.get("n"),
         "checked": sel.get("checked"),
         "by": by,
+        "names": sel.get("names"),  # by='name' 일 때 매칭 카드명(최대 10) — 로그 노출용
         "display": disp.actual,
         "verified": bool(disp),  # False = 폼 반영 **미확인**(완료로 단정하지 않는다)
     }
