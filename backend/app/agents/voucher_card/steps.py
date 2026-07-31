@@ -112,12 +112,9 @@ async def set_collect_dept_all(page: Any) -> bool:
     async def attempt() -> None:
         if not await vr_steps._open_picker(page, COLLECT_DEPT_LABEL):
             return
-        res: Any = None
-        for _ in range(vr_steps._DEPT_LOAD_TRIES):
-            res = await page.evaluate(vr_js.POPUP_CHECK_ALL_JS)
-            if isinstance(res, dict) and res.get("ok") and (res.get("n") or 0) > 0:
-                break
-            await page.wait_for_timeout(vr_steps._DEPT_LOAD_INTERVAL_MS)
+        # 행 도착 대기 — vr_steps 공용 헬퍼(실시간 monotonic+latency 배율)로 통일. 종전 자체
+        # 루프는 wait_for_timeout 이 delay_scale 로 축소돼 관찰창이 줄던 명목 카운터 함정.
+        res = await vr_steps._eval_rows_when_loaded(page, vr_js.POPUP_CHECK_ALL_JS)
         if not (isinstance(res, dict) and res.get("ok") and (res.get("n") or 0) > 0):
             return
         checked["n"] = int(res.get("n") or 0)

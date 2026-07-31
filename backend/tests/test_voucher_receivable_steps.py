@@ -279,3 +279,60 @@ async def test_set_docu_types_requires_form_reflection():
     assert ok["ok"] is True and ok["checked"]
     empty = await vsteps.set_docu_types(_FieldPage(display=""), ("일반",))
     assert empty["ok"] is False and "확인 실패" in empty["reason"]
+
+
+# ── 팝업 행 도착 레이스(2026-08-01 전자결재상태 라이브 실증) ─────────────────────────
+class _LateRowsPage(_FieldPage):
+    """그리드 부착 후 행 도착이 늦는 팝업 재현 — 처음 empty_calls 회는 {ok, n:0} 을 돌려주고
+    이후 _FieldPage 의 정상 매칭으로 위임한다(행이 영영 안 오면 empty_calls 를 크게)."""
+
+    def __init__(self, *, empty_calls: int, **kw) -> None:
+        super().__init__(**kw)
+        self.rows_calls = 0
+        self._empty_calls = empty_calls
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.POPUP_CHECK_ROWS_JS:
+            self.rows_calls += 1
+            if self.rows_calls <= self._empty_calls:
+                return {"ok": True, "idxs": [], "n": 0}
+        return await super().evaluate(js_src, arg)
+
+
+async def test_gwaprvlst_polls_until_popup_rows_arrive():
+    # ⚠ 회귀 핵심: _open_picker 는 '그리드 부착'까지만 보장 — 행 도착 전 단발 checkRow 가
+    # {ok:True, n:0} 실패로 오판되던 레이스(고정 1200ms 선대기 제거로 노출). 도착까지 폴링한다.
+    page = _LateRowsPage(empty_calls=3, display="저장")
+    res = await vsteps.set_gwaprvlst(page)
+    assert res["ok"] is True and page.rows_calls >= 4
+
+
+async def test_gwaprvlst_fails_clearly_when_rows_never_load():
+    page = _LateRowsPage(empty_calls=10_000, display="저장")
+    res = await vsteps.set_gwaprvlst(page)
+    assert res["ok"] is False and "행이 로드되지 않았습니다" in res["reason"]
+
+
+async def test_gwaprvlst_target_missing_fails_fast_without_full_polling():
+    # 행은 로드됐는데(n>0) 대상만 없는 경우 — 기다려도 안 생기므로 즉시 실패해야 한다.
+    class _NoMatchPage(_FieldPage):
+        def __init__(self) -> None:
+            super().__init__(display="저장")
+            self.rows_calls = 0
+
+        async def evaluate(self, js_src, arg=None):
+            if js_src == vjs.POPUP_CHECK_ROWS_JS:
+                self.rows_calls += 1
+                return {"ok": True, "idxs": [], "n": 7}
+            return await super().evaluate(js_src, arg)
+
+    page = _NoMatchPage()
+    res = await vsteps.set_gwaprvlst(page)
+    assert res["ok"] is False and "찾지 못했습니다" in res["reason"]
+    assert page.rows_calls == 1  # n>0 이면 폴링 없이 즉시 판정.
+
+
+async def test_docu_types_polls_until_popup_rows_arrive():
+    page = _LateRowsPage(empty_calls=2, display="일반")
+    res = await vsteps.set_docu_types(page, ("일반",))
+    assert res["ok"] is True and page.rows_calls >= 3

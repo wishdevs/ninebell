@@ -43,9 +43,10 @@ PERIOD_FIELD = "#s_period"  # 회계일 periodpicker 컨테이너(반영 확인 
 
 # 작성부서 팝업 그리드 데이터(부서 목록) 로드 폴링 — 그리드 컨트롤 부착(_grid) 후에도 46건
 # 데이터 fetch 가 늦으면 checkAll 이 0건을 체크한다(2026-07-24 '전체선택 안 됨' 실측).
-_DEPT_LOAD_TRIES = 8
-_DEPT_LOAD_INTERVAL_MS = 500
 _DEPT_APPLY_SETTLE_MS = 300  # checkAll 체크 반영 대기(적용 전).
+_PICKER_ROWS_CAP_MS = 6_000  # 팝업 행 도착 관찰 상한(실시간) — ERP 지연 시 latency 배율(≤×4)로 확대.
+_PICKER_ROWS_INTERVAL_S = 0.25
+_PICKER_ROWS_MAX_POLLS = 40  # 테스트의 no-op sleep 에서도 유한 종료를 보장하는 안전판.
 
 # 결제창 렌더 완료 폴링 상한(SSO 리다이렉트+SPA 마운트 1~12s 편차 — 고정대기 금지, 조건폴링).
 CHILD_READY_CAP_MS = 25_000
@@ -189,6 +190,38 @@ async def _open_picker(
         return True
 
 
+async def _eval_rows_when_loaded(page: Any, script: str, arg: Any = None) -> Any:
+    """팝업 행 검색/전체선택 JS 를 **행 도착까지** 실시간 폴링한 뒤 마지막 결과를 반환한다.
+
+    ⚠ 근본원인(2026-08-01 전자결재상태 라이브 실증): `_open_picker` 는 '팝업 출현 + 그리드
+    부착'까지만 보장하고 **데이터 행 도착은 별개의 비동기 로드**다. 종전에는 열기 경로의
+    고정 1200ms 선대기가 이 틈을 우연히 가렸으나, 조건 폴링 전환(bcf6106)으로 선대기가
+    사라지자 '그리드는 붙었는데 행은 0개'인 순간의 단발 checkRow 가 {ok:True, n:0} 으로
+    실패 오판됐다. 부서(checkAll)만 자체 로드 폴링이 있었고 전자결재상태·전표유형은 단발이라
+    이 공용 헬퍼로 통일한다.
+    - 무엇을 기다리나: 행 도착(n>0 또는 idxs 비어있지 않음). 그 동안의 {ok:False}(grid-not-ready
+      우아 반환 포함)·n==0 은 '아직'으로 보고 재시도한다.
+    - n>0 인데 대상 미매칭이면 즉시 반환 — 대상 부재는 기다려도 생기지 않으므로 빠른 실패가 옳다.
+    - 대기는 확인 커널과 같은 실시간 sleep(verify.DEFAULT_SLEEP — delay_scale 무관, 테스트는
+      conftest 가 no-op 대체)이며 상한은 latency 배율로만 확대된다.
+    """
+    deadline = time.monotonic() + latency.budget_ms(_PICKER_ROWS_CAP_MS) / 1000.0
+    res: Any = None
+    for _ in range(_PICKER_ROWS_MAX_POLLS):
+        res = await (page.evaluate(script, arg) if arg is not None else page.evaluate(script))
+        if isinstance(res, dict) and res.get("ok") and ((res.get("n") or 0) > 0 or res.get("idxs")):
+            return res
+        if time.monotonic() >= deadline:
+            break
+        await verify.DEFAULT_SLEEP(_PICKER_ROWS_INTERVAL_S)
+    return res
+
+
+def _rows_never_loaded(res: Any) -> bool:
+    """행 도착 대기가 끝내 실패했는지(대상 부재와 구분) — ok 인데 n==0(빈 그리드)이면 참."""
+    return isinstance(res, dict) and bool(res.get("ok")) and not res.get("idxs") and (res.get("n") or 0) == 0
+
+
 async def _apply_popup(
     page: Any, *, close_cap_ms: int = 8_000, interval_ms: int = 300, reclick_after_ms: int = 1_500
 ) -> bool:
@@ -243,13 +276,10 @@ async def set_dept_all(page: Any) -> dict:
     """
     if not await _open_picker(page, DEPT_LABEL):
         return {"ok": False, "reason": "작성부서 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
-    # (1) 부서 목록 로드 대기 — checkAll 이 실제로 행을 체크(n>0)할 때까지 폴링.
-    res: Any = None
-    for _ in range(_DEPT_LOAD_TRIES):
-        res = await page.evaluate(js.POPUP_CHECK_ALL_JS)
-        if isinstance(res, dict) and res.get("ok") and (res.get("n") or 0) > 0:
-            break
-        await page.wait_for_timeout(_DEPT_LOAD_INTERVAL_MS)
+    # (1) 부서 목록 로드 대기 — checkAll 이 실제로 행을 체크(n>0)할 때까지 공용 헬퍼로 폴링
+    #     (종전 자체 루프는 wait_for_timeout 이 delay_scale 로 축소돼 관찰창이 줄던 명목 카운터
+    #     함정이 있었다 — 실시간 monotonic + latency 배율로 통일).
+    res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ALL_JS)
     if not (isinstance(res, dict) and res.get("ok")):
         return {"ok": False, "reason": f"작성부서 팝업 전체선택(checkAll) 실패: {res}"}
     if (res.get("n") or 0) <= 0:
@@ -347,8 +377,10 @@ async def set_gwaprvlst(page: Any, target: str = GWAPRVLST_TARGET) -> dict:
     """전자결재상태 = 저장 — MultiCodePicker 팝업 RealGrid checkRow(SYSDEF_NM==target) → 적용."""
     if not await _open_picker(page, GWAPRVLST_LABEL):
         return {"ok": False, "reason": "전자결재상태 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
-    res = await page.evaluate(js.POPUP_CHECK_ROWS_JS, [[target], "SYSDEF_NM"])
+    res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ROWS_JS, [[target], "SYSDEF_NM"])
     if not (isinstance(res, dict) and res.get("ok") and res.get("idxs")):
+        if _rows_never_loaded(res):
+            return {"ok": False, "reason": f"전자결재상태 팝업 행이 로드되지 않았습니다(행 도착 대기 실패): {res}"}
         return {"ok": False, "reason": f"전자결재상태 '{target}' 행을 팝업에서 찾지 못했습니다: {res}"}
     if not await _apply_popup(page):
         return {"ok": False, "reason": "전자결재상태 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
@@ -377,9 +409,11 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
     # 실제 RealGrid 필드는 전자결재상태 팝업과 동일한 범용 코드테이블 스키마
     # SYSDEF_CD/SYSDEF_NM 이다 — 'DOCU_NM'/'DOCU_CD' 필드는 이 팝업엔 없다(2026-07-20 프로브
     # 기록이 실측과 어긋남 — 코드/명칭 레벨 불일치, PROCESS.md D2 정정 대상).
-    res = await page.evaluate(js.POPUP_CHECK_ROWS_JS, [list(targets), "SYSDEF_NM"])
+    res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ROWS_JS, [list(targets), "SYSDEF_NM"])
     checked = res.get("idxs") if isinstance(res, dict) else None
     if not (isinstance(res, dict) and res.get("ok") and checked and len(checked) == len(targets)):
+        if _rows_never_loaded(res):
+            return {"ok": False, "reason": f"전표유형 팝업 행이 로드되지 않았습니다(행 도착 대기 실패): {res}"}
         return {"ok": False, "reason": f"전표유형 {list(targets)} 전부를 팝업에서 찾지 못했습니다: {res}"}
     if not await _apply_popup(page):
         return {"ok": False, "reason": "전표유형 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
