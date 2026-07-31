@@ -1307,6 +1307,138 @@ async def test_prefill_uses_seed_budget_between_ai_and_default():
     assert out[1]["budgetUnit"]["code"] == "B1"  # 기본(B0) 아닌 seed 해석(B1)
 
 
+# ── 그룹 판단 통합(2026-07-31) — 대표 1행 AI·전파·금액 이탈·취소 미러 ────────────
+def _grp_row(i: int, merchant: str, amt: str, tm: str, yn: str = "승인", aprvl: str = "") -> dict:
+    return {
+        "i": i, "TRAN_NM": merchant, "TRAN_AMT": amt, "TRAN_TM": tm,
+        "VAT_TP": "과세", "APRVL_YN": yn, "APRVL_NO": aprvl,
+    }
+
+
+def _capture_recommend(monkeypatch, reply: dict | None = None) -> list[int]:
+    """recommend_selections 를 가로채 전송된 행 번호를 기록 — reply 는 {code 필드} 기본값."""
+    sent: list[int] = []
+    base = {"projectCode": "", "confidence": 0.9, "vatDeduction": None, **(reply or {})}
+
+    async def _fake(rows, *args, **kwargs):
+        sent.extend(r["no"] for r in rows)
+        return {r["no"]: dict(base) for r in rows}
+
+    monkeypatch.setattr(prefill, "recommend_selections", _fake)
+    return sent
+
+
+async def test_prefill_sends_one_representative_per_group(monkeypatch):
+    """같은 (가맹점×시간슬롯) 반복 결제는 대표 1행만 AI 로 가고 결과가 전원에 전파된다."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "맘스터치 상대원점", "9,000", "18:10:00"),
+        _grp_row(1, "맘스터치 상대원점", "9,900", "18:30:00"),
+        _grp_row(2, "맘스터치 상대원점", "10,000", "19:00:00"),
+    ]
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n"}, budget_favs, [], [],
+    )
+    assert len(sent) == 1  # 대표 1행만 AI 전송 — 나머지는 전파
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "ai"
+        assert out[no]["budgetUnit"]["code"] == "B1"
+
+
+async def test_prefill_learned_deterministic_rows_not_sent_to_ai(monkeypatch):
+    """learned 결정적 행(예산·프로젝트 모두 확보)은 최종 선택에서 AI 를 이기므로 AI 미전송."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "맛남의광장", "8,000", "18:07:00"),
+        _grp_row(1, "맛남의광장", "8,000", "18:09:00"),
+        _grp_row(2, "맛남의광장", "8,000", "18:10:00"),
+    ]
+    learned = {
+        card_learning.norm_merchant("맛남의광장"): {
+            "budget": {"code": "L1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+            "project": {"code": "P1", "name": "판관비"},
+            "count": 5,
+        }
+    }
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n"}, budget_favs, [], [], learned=learned,
+    )
+    assert sent == []  # 전원 learned 결정적 — AI 호출 대상 0행
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "learned"
+        assert out[no]["budgetUnit"]["code"] == "L1"
+
+
+async def test_prefill_amount_outlier_bypasses_learned_and_goes_individual(monkeypatch):
+    """그룹 금액대를 크게 벗어난 행(회식/접대 후보)은 learned 를 우회해 개별 AI 판단."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B2"})
+    rows_list = [
+        _grp_row(0, "맘스터치 상대원점", "9,000", "18:10:00"),
+        _grp_row(1, "맘스터치 상대원점", "9,900", "18:30:00"),
+        _grp_row(2, "맘스터치 상대원점", "10,000", "19:00:00"),
+        _grp_row(3, "맘스터치 상대원점", "150,000", "19:30:00"),  # 중앙값 3배·5만 초과 — 이탈
+    ]
+    learned = {
+        card_learning.norm_merchant("맘스터치 상대원점"): {
+            "budget": {"code": "L1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+            "project": {"code": "P1", "name": "판관비"},
+            "count": 9,
+        }
+    }
+    budget_favs = [
+        {"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+        {"code": "B2", "name": "인사기획팀", "bgacctNm": "(판)접대비"},
+    ]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n", 3: "n"}, budget_favs, [], [], learned=learned,
+    )
+    assert sent == [4]  # 이탈 행만 개별 AI — 나머지는 learned 로 확정
+    assert out[4]["budgetSource"] == "ai"
+    assert out[4]["budgetUnit"]["code"] == "B2"  # learned(L1) 아닌 개별 판단(B2)
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "learned"
+
+
+async def test_prefill_cancel_row_mirrors_original(monkeypatch):
+    """승인취소 행은 AI 를 거치지 않고 원거래의 최종 선택을 미러링한다(전표 상계)."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "시외버스 모바일 승차권", "13,600", "12:58:55", aprvl="A1"),
+        _grp_row(1, "시외버스 모바일 승차권", "-13,600", "12:58:55", yn="승인취소", aprvl="A1"),
+    ]
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)여비교통비-국내출장"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n"}, budget_favs, [], [],
+    )
+    assert sent == [1]  # 원거래만 AI — 취소 행은 판단하지 않는다
+    assert out[2]["budgetSource"] == "mirror"
+    assert out[2]["budgetUnit"]["code"] == out[1]["budgetUnit"]["code"] == "B1"
+
+
 # ── 패스 스킵 경로 보증(사용자 지적 2026-07-04) ─────────────────────────────────
 async def test_save_final_saves_when_no_nontax(monkeypatch):
     """불공 0건: 2차를 생략해도 과세 반영분만으로 최종 저장(F7)해야 한다."""

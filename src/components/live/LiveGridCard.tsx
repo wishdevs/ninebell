@@ -1282,6 +1282,11 @@ const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: st
     title: '예산계정 변경에 맞춰 실시간 재추천된 적요 — 확인 후 필요시 수정',
     cls: 'bg-warning/15 text-warning',
   },
+  mirror: {
+    label: '취소',
+    title: '승인취소 — 원거래와 같은 분류로 자동 채움(상계)',
+    cls: 'bg-danger/15 text-danger',
+  },
   default: {
     label: '기본',
     title: '기본지정으로 미리 선택됨',
