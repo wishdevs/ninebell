@@ -77,8 +77,10 @@ async def test_admin_crud_roundtrip(client, make_user, auth_as):
 async def test_draft_hidden_from_normal_user(client, make_user, auth_as):
     admin = await make_user("cl-admin2", "admin")
     auth_as(admin)
-    draft = await _create(client, version="v2.0.0-draft", status="draft")
-    public = await _create(client, version="v2.0.0", status="released")
+    # ⚠ 실배포 릴리스 파일(backend/app/data/releases/*.md)이 시드로 먼저 들어오므로
+    # 실제로 쓰지 않는 버전이어야 한다(v2.0.0 은 2026-07 실배포로 충돌).
+    draft = await _create(client, version="v0.0.2-test-draft", status="draft")
+    public = await _create(client, version="v0.0.2-test", status="released")
 
     viewer = await make_user("cl-viewer2", "user")
     auth_as(viewer)
