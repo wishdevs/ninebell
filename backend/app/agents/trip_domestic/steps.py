@@ -991,6 +991,27 @@ async def set_row_note(page: Any, text: str) -> dict:
 PARTNER_PICKER_CAP = 500
 
 
+async def _poll_rowcount_over(page: Any, prev: Any, *, cap_ms: int, interval_ms: int = 300) -> Any:
+    """피커 rowcount 가 ``prev`` 를 **넘는 즉시** 반환하는 실시간 폴링(서버 페이징 도착 신호).
+
+    dump_partners 의 종전 고정 3s/2s 대기 대체 — 무엇을 기다리나: ArrowDown 페이징으로
+    발사한 서버 재조회 결과(행 추가)가 그리드에 도착하는 것(PICKER_ROWCOUNT_JS 증가).
+    증가가 없으면 상한 소진 후 마지막 값을 반환한다(= 기존 고정 대기 후 1회 읽기와 동일
+    수순 — 호출부의 stable 카운트가 종료를 판정). 상한은 실시간(monotonic, delay_scale
+    무관) × latency 배율(ERP 지연 시 ≤×4 확대), 폴 간격 300ms 관례.
+    """
+    t0 = time.monotonic()
+    budget = latency.budget_ms(cap_ms)
+    cur: Any = None
+    while True:
+        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        if isinstance(cur, int) and isinstance(prev, int) and cur > prev:
+            return cur
+        if (time.monotonic() - t0) * 1_000 >= budget:
+            return cur
+        await page.wait_for_timeout(interval_ms)
+
+
 async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
     """거래처(partner_cd) 코드피커 빈검색 전량 — 끝행 포커스+ArrowDown 페이징 후 유니크.
 
@@ -1026,14 +1047,16 @@ async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
             break
         for _ in range(30):
             await page.keyboard.press("ArrowDown", delay=30)
-        await page.wait_for_timeout(3_000)
-        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        # 서버 페이징 도착 폴링(종전 고정 3s) — 행 증가 즉시 진행, 미도착이면 상한 소진.
+        cur = await _poll_rowcount_over(page, prev, cap_ms=3_000)
         logger.info("거래처 스크롤 r%d — rows=%s(prev=%s) stable=%d", rnd, cur, prev, stable)
         if not isinstance(cur, int) or cur <= prev:
             stable += 1
             if stable >= 3:
                 break
-            await page.wait_for_timeout(2_000)
+            # 추가 관찰창(종전 고정 2s) — 늦은 도착이 감지되면 즉시 다음 라운드로(다음
+            # 라운드의 cur > prev 가 stable 을 리셋한다 — 기존 의미 보존).
+            await _poll_rowcount_over(page, prev, cap_ms=2_000)
         else:
             stable = 0
         prev = max(prev, cur if isinstance(cur, int) else prev)

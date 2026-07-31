@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, latency
 from nbkit.omnisol.codepicker import _picker_search
 
 VEHICLE_LABEL = "업무용차량"
@@ -175,11 +176,42 @@ async def _open_vehicle_popup(page: Any) -> dict:
     if not box:
         return {"ok": False, "reason": "업무용차량 돋보기를 찾지 못했습니다(관리항목 패널에 해당 행 없음)"}
     await mouse_click(page, box["x"], box["y"])
-    await asyncio.sleep(1.2)
-    dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS)
+    # 무엇을 기다리나: 차량 팝업 **오픈 + 목록 행 도착**(종전 고정 1.2s 후 1회 덤프). 덤프
+    # ok(팝업+그리드 부착)이고 행이 있으면 즉시 진행. 필터로 정말 0건인 팝업은 상한(1.5s ×
+    # latency 배율, 실시간 monotonic) 소진 후 마지막 덤프로 진행 — 기존 재검색 폴백 수순 유지.
+    dump: dict = {}
+    t0 = time.monotonic()
+    cap_s = latency.budget_ms(1_500) / 1_000
+    while True:
+        dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS) or {}
+        if dump.get("ok") and (dump.get("rows") or []):
+            break
+        if time.monotonic() - t0 >= cap_s:
+            break
+        await asyncio.sleep(0.3)
     if not dump.get("ok"):
         return {"ok": False, "reason": f"차량 팝업 덤프 실패: {dump.get('reason') or dump.get('err')}"}
     return dump
+
+
+async def _poll_vehicle_reflected(page: Any, code: str, *, cap_ms: int = 2_400) -> dict:
+    """팝업 적용(더블클릭/'적용') 후 패널 readback 이 ``code`` 로 반영될 때까지 실시간 폴링.
+
+    종전 고정 1.2s 후 1회 readback 대체 — 무엇을 기다리나: 팝업 닫힘 + 관리항목 패널
+    리바인딩으로 업무용차량 값이 배정 코드로 붙는 것(성공 판정과 동일 신호라 조기 진행
+    위험 없음). 반영 즉시 마지막 readback 을 반환하고, 미반영이면 상한(latency 배율 확대,
+    monotonic) 소진 후 마지막 readback 반환 — 호출부의 코드 일치 판정(실패 보고)은 기존
+    그대로. _read_vehicle_field 자체가 스크롤 정착 0.3s 를 포함해 폴 간격을 겸한다.
+    """
+    t0 = time.monotonic()
+    cap_s = latency.budget_ms(cap_ms) / 1_000
+    rb: dict = {}
+    while True:
+        rb = await _read_vehicle_field(page) or {}
+        if rb.get("found") and (rb.get("code") or "") == code:
+            return rb
+        if time.monotonic() - t0 >= cap_s:
+            return rb
 
 
 async def _close_popup(page: Any) -> None:
@@ -289,7 +321,6 @@ async def fill_vehicle(
         rect = await page.evaluate(_POPUP_ROW_RECT_JS, pick_i)
         if rect:
             await page.mouse.dblclick(rect["x"], rect["y"])
-            await asyncio.sleep(1.2)
         else:
             sel = await page.evaluate(js_lib.PICKER_SELECT_JS, pick_i)
             if not sel.get("ok"):
@@ -302,8 +333,8 @@ async def fill_vehicle(
                 failed.append({"row": row_no, "reason": "'적용' 버튼 없음"})
                 continue
             await mouse_click(page, btn["x"], btn["y"])
-            await asyncio.sleep(1.2)
-        rb = await _read_vehicle_field(page)
+        # 반영 폴링(종전 고정 1.2s 후 1회 readback) — 패널 readback 코드 일치가 신호.
+        rb = await _poll_vehicle_reflected(page, str(vehicle.get("code") or ""))
         if rb.get("found") and (rb.get("code") or "") == (vehicle.get("code") or ""):
             done.append(row_no)
         else:

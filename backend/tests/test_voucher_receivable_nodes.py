@@ -706,13 +706,19 @@ class _VisFakeMouse:
 
 class _VisFakePage:
     """ensure_field_visible 테스트용 — FIELD_LABEL_VISIBLE_JS/EXPAND_TOGGLE_RECTS_JS 를
-    시나리오별로 스텁하고 클릭 좌표를 기록한다(어느 토글까지 시도했는지 검증)."""
+    시나리오별로 스텁하고 클릭 좌표를 기록한다(어느 토글까지 시도했는지 검증).
+
+    (2026-07-31 전환) 라벨 가시화 대기가 고정 1s → 실시간(monotonic) 조건 폴링이 돼,
+    wait_for_timeout 이 가짜 시계를 전진시키고 steps.time.monotonic 를 그 시계로 patch 해야
+    '안 드러나는 토글'의 상한 소진이 실시간 낭비 없이 진행된다(_LogPage.install_clock 선례).
+    """
 
     def __init__(self, *, visible_after_clicks: int, toggle_rects: list[dict]) -> None:
         self.visible_after_clicks = visible_after_clicks
         self.toggle_rects = toggle_rects
         self.clicks: list[tuple[int, int]] = []
         self.mouse = _VisFakeMouse(self)
+        self.clock_ms = 0.0
 
     async def evaluate(self, js_src, arg=None):
         if js_src == vjs.FIELD_LABEL_VISIBLE_JS:
@@ -722,33 +728,52 @@ class _VisFakePage:
         raise AssertionError(f"unexpected evaluate call: {js_src[:60]!r}")
 
     async def wait_for_timeout(self, ms):
-        return None
+        self.clock_ms += ms  # 가짜 실시간 진행 — monotonic 상한 소진용.
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "app.agents.voucher_receivable.steps.time.monotonic", lambda: self.clock_ms / 1_000
+        )
 
 
-async def test_ensure_field_visible_already_visible_clicks_nothing():
+async def test_ensure_field_visible_already_visible_clicks_nothing(monkeypatch):
     """이미 보이면 어떤 토글도 누르지 않는다(역방향 접힘 방지 — 이미 펼쳐진 토글을 다시
     누르면 접힐 수 있다)."""
     page = _VisFakePage(visible_after_clicks=0, toggle_rects=[{"x": 1, "y": 1}])
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형")
     assert ok is True
     assert page.clicks == []
 
 
-async def test_ensure_field_visible_tries_toggles_left_to_right_until_visible():
+async def test_ensure_field_visible_tries_toggles_left_to_right_until_visible(monkeypatch):
     """숨김 상태면 좌→우 순으로 토글을 하나씩 결과검증형으로 눌러본다(여러 토글 시나리오,
     도메인전문가 실측: 확장 토글이 여러 개일 수 있고 어느 것이 목표 필드를 드러내는지 미리
     알 수 없다). 목표가 보이면 그 이상은 누르지 않는다."""
     rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}, {"x": 300, "y": 10}]
     page = _VisFakePage(visible_after_clicks=2, toggle_rects=rects)
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형")
     assert ok is True
     assert page.clicks == [(100, 10), (200, 10)]  # 세 번째 토글은 누르지 않았다.
 
 
-async def test_ensure_field_visible_gives_up_after_max_toggles():
+async def test_ensure_field_visible_returns_immediately_when_toggle_reveals(monkeypatch):
+    """(전환 검증) 토글이 라벨을 즉시 드러내면 종전 고정 1s 를 기다리지 않고 바로 True —
+    폴링 첫 확인에서 성공하므로 가짜 시계가 전혀 진행되지 않아야 한다."""
+    page = _VisFakePage(visible_after_clicks=1, toggle_rects=[{"x": 100, "y": 10}])
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형")
+    assert ok is True
+    assert page.clicks == [(100, 10)]
+    assert page.clock_ms == 0  # 고정 1s 대기가 사라졌다(조건 충족 즉시 진행).
+
+
+async def test_ensure_field_visible_gives_up_after_max_toggles(monkeypatch):
     """어떤 토글로도 목표 필드가 보이지 않으면 False(무한 클릭 금지, max_toggles 상한)."""
     rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}]
     page = _VisFakePage(visible_after_clicks=99, toggle_rects=rects)
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형", max_toggles=2)
     assert ok is False
     assert page.clicks == [(100, 10), (200, 10)]

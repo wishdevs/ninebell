@@ -176,9 +176,18 @@ class _FakePartnerPage:
         self.popups = 0
         self.closed = False
         self.read_calls = 0
+        self.clock_ms = 0.0
 
     async def wait_for_timeout(self, ms):  # noqa: ANN001
-        return None
+        # (2026-07-31 전환) 페이징 도착 대기가 고정 3s/2s → 실시간(monotonic) 조건 폴링이라,
+        # 가짜 시계를 전진시키고 time.monotonic 를 patch 해야 '증가 없음 → 상한 소진' 경로가
+        # 실시간 낭비 없이 진행된다(install_clock — _LogPage 선례).
+        self.clock_ms += ms
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "app.agents.trip_domestic.steps.time.monotonic", lambda: self.clock_ms / 1_000
+        )
 
     async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
         if jsstr is js_lib.PICKER_ROWCOUNT_JS:
@@ -439,13 +448,14 @@ async def test_select_and_apply_popup_not_closed_fails():
     assert r["ok"] is False and "닫히지 않" in r["reason"]
 
 
-async def test_dump_partners_pages_then_reads_and_dedupes():
+async def test_dump_partners_pages_then_reads_and_dedupes(monkeypatch):
     opts = [
         {"PARTNER_CD": "10512", "PARTNER_NM": "한국도로공사", "BIZR_NO": "1298200103"},
         {"PARTNER_CD": "00037", "PARTNER_NM": "전준현", "BIZR_NO": None},
         {"PARTNER_CD": "10512", "PARTNER_NM": "한국도로공사", "BIZR_NO": "1298200103"},  # 중복
     ]
     page = _FakePartnerPage(rowcount=3, options=opts)
+    page.install_clock(monkeypatch)
     rows = await steps.dump_partners(page, max_rounds=5)
     assert page.closed is True  # 종료 시 팝업 닫힘.
     assert page.read_calls == 1  # 페이징 종료 후 1회 전량 읽기.
