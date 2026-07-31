@@ -185,6 +185,15 @@ BTN_BOX_JS = """(sel) => {
   const r = b.getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) };
 }"""
 
+# 툴바 버튼(selector) 매치 개수 진단(읽기 전용) — BTN_BOX_JS 는 querySelector **첫 매치**만
+# 쓰므로, 3그리드 화면에서 동일 셀렉터 버튼이 여러 개면 엉뚱한 툴바의 버튼일 수 있다
+# (2026-07-31 미확증 후보). 다음 실패 때 로그만으로 모호성을 판별하기 위한 카운트.
+# 반환 {total, visible}.
+BTN_COUNT_JS = """(sel) => {
+  const all = [...document.querySelectorAll(sel)];
+  return { total: all.length, visible: all.filter(b => b.offsetParent !== null).length };
+}"""
+
 
 # 마스터(결의서, grid 0) 상세합계금액(DETAIL_SUM_AMT) 직접 세팅 + 재독 검증. 인자 total(int).
 # ⚠ setValue 는 ERP 합계 재계산 핸들러를 발화하지 않아, 행별 금액 setValue 후에도 마스터 합계가

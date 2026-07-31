@@ -612,6 +612,123 @@ async def test_delete_blank_row_missing_delete_button_fails():
     assert r["ok"] is False and "삭제 버튼" in r["reason"]
 
 
+# ── delete_blank_row: 확인 모달 실시간 관찰창·느슨 폴백·가드된 재시도(2026-07-31) ──
+class _LateModalMouse(_DeleteMouse):
+    """삭제 클릭(9,9) → 확인 모달이 **뒤늦게** 뜨고, 모달 버튼(8,8) 실클릭 시에만 행이 지워진다."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9):
+            self._p.modal_countdown = self._p.modal_delay_polls
+        elif (x, y) == (8, 8) and self._p.modal_open:
+            self._p.modal_open = False
+            self._p.modal_countdown = None
+            self._p.deleted.append(self._p.current)
+            self._p.rows.pop(self._p.current)
+
+
+class _LateModalPage(_DeletePage):
+    """삭제 확인 모달이 클릭 후 **몇 번의 스냅샷 폴링 뒤에야** 출현하는 세션.
+
+    실물 시맨틱: 예전 코드는 wait_for_timeout(500) 폴링(delay_scale=0.4 → 실 200ms)이라
+    첫 체크가 빈 스냅샷이면 즉시 break — '예'를 못 눌러 삭제 미반영으로 실패하던 자리
+    (2026-07-31 라이브 실증). 관찰창이 폴링을 유지해야 통과한다.
+    exact=False 면 정확일치('예'/'확인'/'삭제')로는 안 잡히는 라벨 변형 모달(느슨 폴백 전용).
+    """
+
+    def __init__(self, *, modal_delay_polls: int, exact: bool = True, **kw) -> None:
+        super().__init__(**kw)
+        self.modal_delay_polls = modal_delay_polls
+        self.exact = exact
+        self.modal_countdown = None
+        self.modal_open = False
+        self.mouse = _LateModalMouse(self)
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is js_lib.MODALS_SNAPSHOT_JS:
+            if self.modal_open:
+                return [{"title": "삭제 확인", "text": "", "buttons": ["예", "아니오"]}]
+            if self.modal_countdown is not None:
+                if self.modal_countdown > 0:
+                    self.modal_countdown -= 1
+                    return []
+                self.modal_open = True
+                return [{"title": "삭제 확인", "text": "", "buttons": ["예", "아니오"]}]
+            return []
+        if jsstr is js_lib.MODAL_BTN_BOX_JS:
+            hit = self.modal_open and self.exact and arg == "예"
+            return {"x": 8, "y": 8, "title": "삭제 확인"} if hit else None
+        if jsstr is trip_js.MODAL_BTN_LOOSE_JS:
+            return {"x": 8, "y": 8, "title": "삭제 확인", "label": "확인"} if self.modal_open else None
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_delete_blank_row_handles_late_modal():
+    """모달이 첫 폴링 이후 늦게 떠도(실시간 관찰창 유지) '예'를 눌러 삭제가 반영된다."""
+    page = _LateModalPage(rows=["한국도로공사", ""], current=1, modal_delay_polls=3)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.rows == ["한국도로공사"]
+    assert (8, 8) in page.clicks  # 모달 '예' 실클릭(정확일치 경로)으로 지워졌다.
+
+
+async def test_delete_blank_row_variant_modal_closed_via_loose_match():
+    """정확일치가 놓치는 라벨 변형 모달 — 느슨 매칭 폴백(d155dd6 패턴)으로 닫아 삭제를 살린다."""
+    page = _LateModalPage(rows=["한국도로공사", ""], current=1, modal_delay_polls=1, exact=False)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.rows == ["한국도로공사"]
+
+
+class _FlakyDeleteMouse(_DeleteMouse):
+    """첫 삭제 클릭(9,9)이 유실되는 세션 — effective_at 번째 클릭부터 실제로 지워진다."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9) and self._p.clicks.count((9, 9)) >= self._p.effective_at:
+            self._p.deleted.append(self._p.current)
+            self._p.rows.pop(self._p.current)
+
+
+class _FlakyDeletePage(_DeletePage):
+    def __init__(self, *, effective_at: int = 2, **kw) -> None:
+        super().__init__(**kw)
+        self.effective_at = effective_at
+        self.mouse = _FlakyDeleteMouse(self)
+
+
+async def test_delete_blank_row_retries_once_when_blank_row_remains():
+    """confirm 실패 + **빈 행 잔존 재확인** 통과 시에만 삭제 1회 재시도(클릭 유실 세션 구제)."""
+    page = _FlakyDeletePage(rows=["한국도로공사", ""], current=1, effective_at=2)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is True and r["verified"] is True
+    assert page.clicks.count((9, 9)) == 2 and page.rows == ["한국도로공사"]
+
+
+class _MisfireDeleteMouse(_DeleteMouse):
+    """삭제 클릭이 **데이터 행(0)** 을 지워버린 사고 세션 — 재클릭 금지 가드 검증용."""
+
+    async def click(self, x, y):  # noqa: ANN001
+        self._p.clicks.append((x, y))
+        if (x, y) == (9, 9):
+            self._p.deleted.append(0)
+            self._p.rows.pop(0)
+
+
+class _MisfireDeletePage(_DeletePage):
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.mouse = _MisfireDeleteMouse(self)
+
+
+async def test_delete_blank_row_no_reclick_when_row_count_dropped():
+    """행수가 이미 줄었으면 **재클릭 금지**(실데이터 행 오삭제 방지 — 핵심 가드) + 하드 실패."""
+    page = _MisfireDeletePage(rows=["한국도로공사", ""], current=1)
+    r = await steps.delete_blank_row(page)
+    assert r["ok"] is False and "빈 행 삭제 실패" in r["reason"]
+    assert page.clicks.count((9, 9)) == 1  # n 감소 감지 → 재시도 클릭이 나가지 않았다.
+
+
 # ── register_counter_partner: 대리 신호(빈 행 +1) 대신 실제 값 확인 ─────────────
 class _CounterMouse:
     def __init__(self, page) -> None:  # noqa: ANN001
