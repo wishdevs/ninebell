@@ -22,7 +22,7 @@ from app.agents.common import doc_steps
 from app.config import get_settings
 from nbkit.browser.actions import js_click
 from nbkit.browser.popups import close_foreign_pages
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, MenuSchema
 from nbkit.patterns import emit_log, emit_shot, emit_step
 from nbkit.patterns.login_flow import ensure_logged_in
@@ -117,6 +117,13 @@ def make_menu_nav_node(schema: MenuSchema = EXPENSE_CARD):
             closed = await close_foreign_pages(page, base)
             for url in closed:
                 await emit_log(emit, f"메뉴 진입 후 뜬 외부 창을 닫았습니다 — {url}", "info")
+            # ERP 지연 감지 안내(관측성) — 그리드 출현 되먹임(navigate_menu) 직후가 배율이
+            # 갱신된 첫 지점이라, 사용자에게 상한 확대 사실을 1줄로 알린다(성공 경로 불변).
+            f = latency.factor()
+            if f > 1.5:
+                await emit_log(
+                    emit, f"ERP 응답 지연 감지 — 대기 상한을 ×{f:.1f}로 확대해 진행합니다.", "warn"
+                )
         except Exception as exc:  # noqa: BLE001
             # 예외를 error 프레임으로 삼키면 runner 의 logger.exception 에 도달하지 않아 서버
             # 로그에 트레이스백이 전혀 없었다(라이브 실증 2026-07-31: 렌더러 크래시 원인
@@ -150,7 +157,8 @@ def make_set_gubun_node(gubun_text: str):
         page = state["page"]
         await emit_step(emit, "set_gubun", "running")
         t0 = time.monotonic()
-        for _ in range(50):  # select 로드 폴링(300ms 간격, 상한 15s 유지)
+        # select 로드 폴링(300ms 간격, 상한 15s 기준 — ERP 지연 시 회수 상한만 배율 ≤×4 확대)
+        for _ in range(latency.budget_polls(50)):
             if await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
                 break
             await page.wait_for_timeout(300)

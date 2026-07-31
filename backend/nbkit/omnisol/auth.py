@@ -18,7 +18,7 @@ from typing import Any
 from nbkit.browser import waits
 from nbkit.browser.actions import mouse_click, safe_evaluate
 from nbkit.browser.detection import is_authenticated, selector_present
-from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol import js_lib, latency, selectors
 from nbkit.omnisol.errors import AuthError, LoginPageError, UserTypeError
 from nbkit.omnisol.modals import dismiss_notice_popup
 
@@ -42,7 +42,8 @@ async def omnisol_login(
     # 쪽으로 분기 폴링. 폼 부재(음성)가 아니라 요소 수(양성)로 워밍을 판정해, 폼이 아직
     # 안 그려진 초기 화면을 인증으로 오판하지 않는다. 만료 세션은 폼이 보여 정상 로그인.
     await page.goto(f"{base.rstrip('/')}/", wait_until="domcontentloaded", timeout=timeout_ms)
-    for i in range(40):  # 상한 ~12s
+    # 상한 ~12s — ERP 지연 시 폴 간격은 불변, 회수 상한만 배율(≤×4)로 확대(latency).
+    for i in range(latency.budget_polls(40)):
         if await selector_present(page, selectors.LOGIN_USERID):
             break  # 로그인 폼 확인 → 콜드 경로.
         # 웜 판정은 **아바타**(로그인 후에만 렌더, 헤더라 이른 시점 출현)를 1순위 양성 신호로 —
@@ -62,7 +63,7 @@ async def omnisol_login(
     # 제출 후 성공을 **양성 신호(아바타 출현)** 폴링으로 판정 — 기존 wait_networkidle(20s)
     # 은 메인 SPA 의 롱폴링/지속 요청 때문에 상한을 통째로 태우는 경우가 잦았다(실측:
     # login 단계 ~17s). 상한(~20s)은 유지하되 아바타가 뜨는 즉시 진행한다.
-    for i in range(66):
+    for i in range(latency.budget_polls(66)):  # 회수 상한만 배율 확대(간격 불변).
         await page.wait_for_timeout(300)
         if await selector_present(page, selectors.AVATAR):
             logger.info("옴니솔 로그인 성공(%d폴): userid=%s", i + 1, userid)
@@ -85,9 +86,11 @@ async def open_user_panel(page: Any) -> None:
         await page.click(selectors.AVATAR, timeout=4_000)
     except Exception:  # noqa: BLE001 — 실클릭 실패 시 JS 폴백
         await page.evaluate(js_lib.AVATAR_CLICK_JS)
-    # 고정 1.5s 대신 유형 선택기가 읽히는(패널 렌더 완료) 즉시 진행 — 폴링(상한 1.5s 유지).
+    # 고정 1.5s 대신 유형 선택기가 읽히는(패널 렌더 완료) 즉시 진행 — 폴링(상한 1.5s 기준,
+    # ERP 지연 시 배율 ≤×4 로만 확대 — latency.budget_ms).
     waited = 0
-    while waited < 1_500:
+    cap_ms = latency.budget_ms(1_500)
+    while waited < cap_ms:
         await page.wait_for_timeout(150)
         waited += 150
         if await safe_evaluate(page, js_lib.USER_TYPE_READ_JS, default="?") not in ("", "?"):

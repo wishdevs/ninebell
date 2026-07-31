@@ -32,7 +32,7 @@ import time
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.codepicker import (
     _norm,
     _picker_search,
@@ -775,7 +775,10 @@ async def _handle_delete_modal(page: Any) -> None:
     """
     t0 = time.monotonic()
     seen = False
-    for _ in range(_DEL_MODAL_MAX_POLLS):
+    # 적응형 상한 — 출현 관찰창(3s)·소멸 상한(폴 회수)에만 지연 배율(≤×4)을 곱한다.
+    # 폴 간격은 불변 — 모달이 즉시 뜨면(평시) 추가 지연 0.
+    window_s = latency.budget_ms(_DEL_MODAL_WINDOW_S * 1_000) / 1_000
+    for _ in range(latency.budget_polls(_DEL_MODAL_MAX_POLLS)):
         modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
         if modals:
             seen = True
@@ -796,7 +799,7 @@ async def _handle_delete_modal(page: Any) -> None:
                 logger.warning("삭제 확인 모달 버튼 미발견(느슨 매칭 포함) — %r", modals[:2])
         elif seen:
             return  # 모달 처리 후 소멸 확인됨.
-        elif time.monotonic() - t0 >= _DEL_MODAL_WINDOW_S:
+        elif time.monotonic() - t0 >= window_s:
             return  # 출현 관찰창 소진 — 모달 없이 즉시 삭제되는 세션.
         await verify.DEFAULT_SLEEP(_DEL_MODAL_POLL_S)
     if seen:
