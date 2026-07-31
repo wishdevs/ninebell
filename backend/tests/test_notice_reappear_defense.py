@@ -101,7 +101,7 @@ async def test_switch_user_type_dismisses_before_and_after_switch(monkeypatch):
     async def _read(p):
         return next(reads)
 
-    async def _switch(p, target):
+    async def _switch(p, target, **_kw):  # **_kw: 라벨 해석 결과(exact=…)를 무시하는 스텁.
         log.append("switch")
         return True
 

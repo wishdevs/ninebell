@@ -84,13 +84,71 @@ AVATAR_CLICK_JS = (
     "|| [...document.querySelectorAll('header img, img[alt]')].pop(); if (a) a.click(); }"
 )
 
-PROFILE_JS = r"""() => {
+# ── 사용자유형 select 탐색(단일 헬퍼) ──────────────────────────────────────────
+# ⚠ 종전 탐색조건은 "옵션 텍스트에 '사용자' 포함" 이었다. 2026-08-01 라이브 실측에서 옵션이
+#   `회계사용자(예외)` / `인사사용자(예외)` / **`SCM-구매`** 3개로 늘었고 앞으로 더 늘어난다 —
+#   '○○사용자' 접미사 가정은 유형이 추가될수록 깨진다. 그래서 라벨 텍스트에 의존하지 않는
+#   신호를 우선한다:
+#     1순위 `#ch_group` — 실측 확정 id(프로브 e2e/user_type_selector_probe.py). 라벨이 전부
+#           바뀌어도 불변.
+#     2순위 **사용자 패널 스코프 내 select** — 아바타로 여는 패널(.user-info-box 계열)에는
+#           유형 선택기 외의 select 가 없다(실측). id 가 바뀌어도 '패널 안의 select' 라는
+#           구조적 신호는 남는다.
+#     3순위(최후) 옵션 중 '사용자' 포함 — 종전 방식. 위 둘이 실패한 스킨 변경 상황의 안전망일
+#           뿐이며, 이 조건에 미래를 걸지 않는다.
+#   in-page 함수 `__utSelect()` 로 노출하며, 이 파일의 사용자유형 리더 전부가 이걸 쓴다.
+_UT_SELECT_FINDER_JS = r"""
+  const __utSelect = () => {
+    const byId = document.getElementById('ch_group');
+    if (byId && byId.tagName === 'SELECT') return byId;
+    const panel = document.querySelector('.user-info-box, .user-info-change, .user-info');
+    if (panel) {
+      const inPanel = [...panel.querySelectorAll('select')]
+        .filter(s => s.options && s.options.length >= 2);
+      if (inPanel.length) return inPanel[0];
+    }
+    return [...document.querySelectorAll('select')]
+      .find(s => [...s.options].some(o => /사용자/.test(o.text || ''))) || null;
+  };
+"""
+
+# ── 사용자유형 select → kendo 위젯 wrapper 역참조 ──────────────────────────────
+# 화면에 실제로 보이는 것은 hidden select 가 아니라 kendo DropDownList 의 wrapper(.k-dropdown)다.
+# 종전에는 `.k-dropdown` 중 innerText 가 /사용자/ 매치하는 것을 텍스트로 스캔했는데, 현재 선택이
+# `SCM-구매`(‘사용자’ 없음)면 **전부 탈락**해 드롭다운을 못 열었다(H1 근본원인, 2026-08-01 실측:
+# UT_DROPDOWN_BOX_JS→null / UT_DISPLAY_JS→'' 인데 위젯 자체는 정상 렌더).
+# → 표시 라벨과 무관하게 select 에서 위젯을 역참조한다(프로브 검증 원리, via='kendo-widget').
+# kendo API 부재 시 폴백: 인접 형제 `.k-dropdown` → 조상 스코프 스캔(둘 다 텍스트 비의존).
+_UT_WRAPPER_JS = r"""
+  const __utWrapper = (sel) => {
+    try {
+      const w = window.jQuery ? window.jQuery(sel).data('kendoDropDownList') : null;
+      if (w && w.wrapper && w.wrapper[0]) return w.wrapper[0];
+    } catch (e) {}
+    let node = sel.nextElementSibling;
+    for (let i = 0; i < 5 && node; i++) {
+      if (node.classList && node.classList.contains('k-dropdown')) return node;
+      node = node.nextElementSibling;
+    }
+    let anc = sel.parentElement;
+    for (let i = 0; i < 5 && anc; i++) {
+      const found = anc.querySelector('.k-dropdown');
+      if (found) return found;
+      anc = anc.parentElement;
+    }
+    return null;
+  };
+"""
+
+PROFILE_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
   const out = { display_name: "", department: "", user_types: [] };
   const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   // '/' 포함 전체 부서명 포착(예 '인사/기획팀'). '/'가 빠지면 접두부(인사)가 잘린다.
   const deptRe = /([가-힣A-Za-z0-9][가-힣A-Za-z0-9/]*(?:팀|부서|부|실|본부|센터|그룹|사업부|TF))/;
-  const sel = [...document.querySelectorAll('select')]
-    .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
+  const sel = __utSelect();
   if (sel) out.user_types = [...sel.options].map(o => (o.text || '').trim()).filter(Boolean);
   // 1) 전용 엘리먼트(.dept-name) — 가장 정확(슬래시 포함 전체 부서명, 실측 확인).
   const deptEl = document.querySelector('.user-info .dept-name, .dept-name');
@@ -116,34 +174,119 @@ PROFILE_JS = r"""() => {
   if (nameEl) out.display_name = ((nameEl.innerText || nameEl.textContent) || '').trim().slice(0, 40);
   return out;
 }"""
+)
 
 # ── 사용자유형 전환(실클릭 좌표만 반환; 실제 클릭은 page.mouse) ────────────────
 # ⚠ JS .click()/위젯 .value() 는 더존 변경적용 핸들러를 못 깨운다 → 좌표 실클릭 필수.
+
+# 사용자 패널(아바타로 여는 .user-info-box) 열림 여부 — open_user_panel 을 idempotent 하게
+# 만드는 신호(H0). 아바타 클릭은 **토글**이라 이미 열린 패널을 또 누르면 닫힌다(2026-08-01
+# 실측: ensure_logged_in→read_profile 이 패널을 연 채 남기고, switch_user_type 첫 줄의
+# open_user_panel 이 그것을 닫아 attempt 1 을 통째로 낭비 — 패널 rect 0/0/0/0 확인).
+# ⚠ 컨테이너는 **실측 확인된 `.user-info-box` 하나만** 본다 — 오탐(항상 보이는 헤더 요소를
+# '패널 열림'으로 읽음)은 아바타를 영영 안 눌러 전환 자체를 막지만, 미탐(false)은 종전대로
+# 클릭하는 안전한 퇴화일 뿐이다. 비대칭 위험이라 미검증 셀렉터를 더 얹지 않는다.
+USER_PANEL_OPEN_JS = r"""() => {
+  const box = document.querySelector('.user-info-box');
+  if (!box || box.offsetParent === null) return false;
+  const r = box.getBoundingClientRect();
+  return !!(r.width && r.height);
+}"""
+
 UT_DROPDOWN_BOX_JS = (
-    "() => { const d=[...document.querySelectorAll('.k-dropdown')].find(e=>e.offsetParent!==null"
-    " && /사용자/.test(e.innerText||'')); if(!d) return null; const r=d.getBoundingClientRect();"
-    " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + _UT_WRAPPER_JS
+    + r"""
+  const sel = __utSelect();
+  if (!sel) return null;
+  const w = __utWrapper(sel);
+  if (!w) return null;
+  const r = w.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
 )
-UT_OPTION_BOX_JS = (
-    "(target) => { const li=[...document.querySelectorAll('li.k-item, .k-list li, ul[role=listbox] li')]"
-    ".find(e=>e.offsetParent!==null && new RegExp(target+'사용자').test(e.innerText||''));"
-    " if(!li) return null; const r=li.getBoundingClientRect();"
-    " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
-)
+
+# 열린 드롭다운에서 **라벨 원문**(인자)에 해당하는 li 좌표. 종전 `new RegExp(target+'사용자')`
+# 는 두 가지로 깨졌다: ① 'SCM-구매' 처럼 접미사가 없는 유형은 절대 매칭 불가(실측: li 텍스트
+# 'SCM-구매 3'), ② 라벨의 정규식 메타문자('(예외)' 의 괄호 등)가 패턴으로 해석된다.
+# → 정규식 삽입 폐기. 공백 축약 정규화 후 ① 완전일치 → ② 접두일치(나머지가 공백/숫자뿐 —
+#   실측된 인덱스 접미사 ' 3' 만 허용) → ③ 포함 순으로 좁히고, **후보가 정확히 1개일 때만**
+#   좌표를 돌려준다(0개=미발견, 2개 이상=모호 → 임의 선택 금지).
+UT_OPTION_BOX_JS = r"""(label) => {
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const want = norm(label);
+  if (!want) return null;
+  const items = [...document.querySelectorAll('li.k-item, .k-list li, ul[role=listbox] li')]
+    .filter(e => e.offsetParent !== null)
+    .map(e => ({ el: e, text: norm(e.innerText) }));
+  let hit = items.filter(o => o.text === want);
+  if (hit.length !== 1) {
+    hit = items.filter(
+      o => o.text.startsWith(want) && /^[\s\d]*$/.test(o.text.slice(want.length))
+    );
+  }
+  if (hit.length !== 1) hit = items.filter(o => o.text.includes(want));
+  if (hit.length !== 1) return null;
+  const r = hit[0].el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
 UT_APPLY_BOX_JS = (
     "() => { const a=[...document.querySelectorAll('button.apply, button')].find(e=>e.offsetParent!==null"
     " && (e.innerText||'').trim()==='변경적용'); if(!a) return null; const r=a.getBoundingClientRect();"
     " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
 )
+
+# 드롭다운 **표시 텍스트**(선택 반영 확인용). kendo wrapper 의 innerText 가 1순위,
+# 위젯/wrapper 부재(kendo API 없음·스킨 변경) 시에는 native select 의 선택 옵션 텍스트로
+# 폴백한다 — kendo 는 항목 선택 시 하부 select 를 갱신하므로 '선택이 반영됐는가' 신호로 동등.
 UT_DISPLAY_JS = (
-    "() => { const d=[...document.querySelectorAll('.k-dropdown')].find(e=>e.offsetParent!==null"
-    " && /사용자/.test(e.innerText||'')); return d?(d.innerText||'').trim():''; }"
-)
-# 현재 사용자유형 읽기(전환 안 함) — 숨은 native select 의 선택 옵션 텍스트.
-USER_TYPE_READ_JS = """() => {
-  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => /사용자/.test(o.text)));
-  return sel ? sel.options[sel.selectedIndex].text.trim() : '?';
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + _UT_WRAPPER_JS
+    + r"""
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const sel = __utSelect();
+  if (!sel) return '';
+  const w = __utWrapper(sel);
+  if (w) { const t = norm(w.innerText); if (t) return t; }
+  const o = sel.options[sel.selectedIndex];
+  return o ? norm(o.text) : '';
 }"""
+)
+
+# 현재 사용자유형 읽기(전환 안 함) — select 의 선택 옵션 텍스트. 없으면 '?'.
+USER_TYPE_READ_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
+  const sel = __utSelect();
+  if (!sel) return '?';
+  const o = sel.options[sel.selectedIndex];
+  return o ? String(o.text || '').replace(/\s+/g, ' ').trim() : '?';
+}"""
+)
+
+# 옵션 목록 리더 — 매칭·진단의 **단일 소스**. 유형이 추가돼도 코드를 고칠 필요가 없게,
+# 별칭 해석(auth.resolve_user_type_label)과 로그가 모두 이 반환값만 본다.
+# 반환 {selectId, selectedIndex, options:[라벨…]} | null(선택기 없음 = 패널 미개방 등).
+USER_TYPE_OPTIONS_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const sel = __utSelect();
+  if (!sel) return null;
+  return {
+    selectId: sel.id || '',
+    selectedIndex: sel.selectedIndex,
+    options: [...sel.options].map(o => norm(o.text)),
+  };
+}"""
+)
 
 # ── 공장(플랜트) 확인 — 조회 폼 값 또는 타이틀에 '나인벨' 포함 여부 ──────────────
 PLANT_CHECK_JS = (
