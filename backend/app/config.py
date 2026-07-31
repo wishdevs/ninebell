@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     screencast_every_nth_frame: int = 2
     # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
     hitl_timeout_s: int = 600
+    # 런 전역 활동 시간 예산(초) — **HITL 대기 시간을 제외한 활동 시간** 기준. 사용자가
+    # 그리드/채팅 응답을 오래 고민하는 것은 정당(턴당 hitl_timeout_s 상한이 별도)하므로 세지
+    # 않고, 자동화 구간이 무한히 도는 것만 제한한다(세마포어 슬롯·Chromium 메모리 무기한
+    # 점유 방지). 초과 시 러너 워치독이 그래프를 취소하고 런을 failed 로 확정한다. 0=비활성.
+    run_active_budget_s: int = 1200
 
     # --- 로컬 시스템 관리자(admin) ---
     # 비우면 seed 가 폴백 '1111'을 쓰되 critical 경고. 프로덕션은 반드시 env 로 지정.

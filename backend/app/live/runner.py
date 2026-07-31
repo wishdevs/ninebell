@@ -16,6 +16,7 @@ ninebell-bak `erp/graph.py` 의 `run_graph` 를 워크플로우 무관 러너로
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import os
@@ -25,6 +26,9 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from nbkit.browser.popups import install_notice_autoclose
 
+from app.config import get_settings
+
+from . import run_budget
 from .screencast import screencast_pump
 
 logger = logging.getLogger(__name__)
@@ -130,6 +134,71 @@ async def _save_state(
         logger.debug("storage_state 캐시 갱신 실패(무시)", exc_info=True)
 
 
+# ── 런 전역 활동 시간 예산(워치독) ───────────────────────────────────────────────
+# 체크 간격(초) — 테스트가 monkeypatch 로 단축한다(루프마다 모듈 전역을 다시 읽음).
+_BUDGET_CHECK_INTERVAL_S = 5.0
+# 경고 임계 — 예산의 80% 소진 시 1회 warn(러너 로그 + 런 로그).
+_BUDGET_WARN_RATIO = 0.8
+
+
+async def _budget_watchdog(
+    run_id: str,
+    budget_s: float,
+    events: asyncio.Queue,
+    graph_task: asyncio.Task,
+    raw_page: Any,
+) -> None:
+    """활동 시간 예산 워치독 — 주기 체크로 80% 경고 1회, 초과 시 그래프 태스크를 취소한다.
+
+    예산은 HITL 대기 시간을 제외한 활동 시간(run_budget — hitl 이 대기 구간을 pause).
+    초과 시 신규 종료 경로를 만들지 않는다: 그래프 태스크 cancel 후 `_final` error 프레임을
+    큐에 넣으면 run_workflow 본류가 error 를 방출하고 finally 에서 러너·캐스트·브라우저를
+    정리한다(그래프 예외·사용자 취소와 동일한 teardown). 세션 펌프는 error 프레임으로
+    failed + 사유를 확정하고 on_terminal 기존 규약대로 영속한다.
+
+    ⚠ 한계: 이 cancel 은 사용자 취소와 동일하게 저장 확정 구간 한가운데를 자를 수 있다
+    (반저장 위험 — run_budget 모듈 docstring 참고).
+    """
+    warned = False
+    while True:
+        await asyncio.sleep(_BUDGET_CHECK_INTERVAL_S)
+        elapsed = run_budget.active_elapsed(run_id)
+        if not warned and elapsed >= budget_s * _BUDGET_WARN_RATIO:
+            warned = True
+            logger.warning(
+                "run_workflow: 런 시간 예산 80%% 소진 run_id=%s (활동 %.0fs/한도 %.0fs)",
+                run_id,
+                elapsed,
+                budget_s,
+            )
+            await events.put(
+                {
+                    "log": f"런 시간 예산 80% 소진(활동 {elapsed / 60:.1f}분/한도 {budget_s / 60:.0f}분)",
+                    "level": "warn",
+                }
+            )
+        if elapsed > budget_s:
+            reason = (
+                f"런 시간 예산 초과(활동 {elapsed / 60:.1f}분/한도 {budget_s / 60:.0f}분) — 자동 중단"
+            )
+            logger.error("run_workflow: %s run_id=%s", reason, run_id)
+            await events.put({"log": reason, "level": "error"})
+            # best-effort 마지막 화면 1장 — 어느 화면에서 멈췄는지 남긴다(실패해도 종료 계속).
+            try:
+                if raw_page is not None:
+                    shot = await asyncio.wait_for(
+                        raw_page.screenshot(type="jpeg", quality=60), timeout=3
+                    )
+                    await events.put(
+                        {"screenshot": "data:image/jpeg;base64," + base64.b64encode(shot).decode()}
+                    )
+            except Exception:  # noqa: BLE001 — 스크린샷 실패가 중단을 막아선 안 된다.
+                logger.debug("예산 초과 스크린샷 실패(무시)", exc_info=True)
+            graph_task.cancel()
+            await events.put({"_final": {"error": reason}})
+            return
+
+
 async def run_workflow(
     graph: Any,
     browser_factory: BrowserFactory | None,
@@ -215,6 +284,15 @@ async def run_workflow(
                 await events.put({"_final": {"error": "실행 중 오류(워크플로우/브라우저)."}})
 
         task = asyncio.create_task(runner())
+        # 런 전역 활동 시간 예산 — budget=0(비활성) 또는 run_id 없음(스크립트/익명 — 추적 키
+        # 부재)이면 미기동(현행 동작 유지). HITL 대기 구간은 hitl 의 예산 일시정지 큐가 제외한다.
+        budget_s = get_settings().run_active_budget_s
+        budget_task: asyncio.Task | None = None
+        if budget_s > 0 and run_id:
+            run_budget.start(run_id)
+            budget_task = asyncio.create_task(
+                _budget_watchdog(run_id, float(budget_s), events, task, raw_page)
+            )
         cast: asyncio.Task | None = None
         # 자식 창(팝업) 스크린캐스트 태스크들 — 진짜 두 번째 Playwright Page(예: SSO 교차출처
         # 전자결재 창)가 열리면 창별로 하나씩 생기고, 종료 시 부모 cast 와 함께 취소한다.
@@ -297,6 +375,10 @@ async def run_workflow(
                     page_listener_ctx.remove_listener("page", _on_new_page)
                 except Exception:
                     logger.debug("context.remove_listener('page') 실패(무시)", exc_info=True)
+            # 예산 워치독·추적 정리 — 종료·취소·예외 모든 경로에서 clear 를 보장한다.
+            if budget_task is not None:
+                budget_task.cancel()
+            run_budget.clear(run_id)
             if cast is not None:
                 cast.cancel()
             for child_cast in child_casts:
