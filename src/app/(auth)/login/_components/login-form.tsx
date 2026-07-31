@@ -15,14 +15,29 @@ const SIGNUP_STORAGE_KEY = 'nb_signup';
 /** '아이디 저장' 프리필 키(localStorage). 비밀번호는 절대 저장하지 않는다. */
 const REMEMBERED_ID_KEY = 'nb_remembered_userid';
 
-/** 개발 환경 전용 빠른 로그인 계정(테스트 자격증명). 프로덕션 빌드에선 렌더되지 않는다
- * (NODE_ENV 정적 치환으로 트리셰이킹). 실 배포엔 포함되지 않으므로 테스트 편의용으로만 쓴다. */
-const DEV_QUICK_ACCOUNTS: ReadonlyArray<{ userid: string; password: string }> = [
-  { userid: 'admin', password: '1111' },
-  { userid: '이트라이브', password: '1111' },
-  { userid: '이트라이브2', password: '1111' },
-  { userid: '석대현', password: '0525' },
-];
+/** 개발 환경 전용 빠른 로그인 계정(테스트 자격증명). 소스에 평문 자격증명을 두지 않기 위해
+ * `.env.local`(미추적)의 NEXT_PUBLIC_DEV_QUICK_ACCOUNTS — `[{"userid","password"},…]` JSON —
+ * 에서 읽는다. 값이 없거나 형식이 틀리면 빈 목록 → 빠른 로그인 미렌더. 프로덕션 빌드에선
+ * 렌더되지 않는다(NODE_ENV 정적 치환으로 트리셰이킹). */
+function parseDevQuickAccounts(): ReadonlyArray<{ userid: string; password: string }> {
+  if (process.env.NODE_ENV === 'production') return [];
+  const raw = process.env.NEXT_PUBLIC_DEV_QUICK_ACCOUNTS;
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (a): a is { userid: string; password: string } =>
+        typeof a === 'object' &&
+        a !== null &&
+        typeof (a as { userid?: unknown }).userid === 'string' &&
+        typeof (a as { password?: unknown }).password === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+const DEV_QUICK_ACCOUNTS = parseDevQuickAccounts();
 
 /**
  * `POST /auth/login` 응답 계약.
@@ -206,7 +221,7 @@ export function LoginForm() {
         )}
       </Button>
 
-      {process.env.NODE_ENV !== 'production' ? (
+      {process.env.NODE_ENV !== 'production' && DEV_QUICK_ACCOUNTS.length > 0 ? (
         <div className="border-border/60 mt-1 flex flex-col gap-2 border-t border-dashed pt-4">
           <span className="text-foreground-tertiary text-[length:var(--text-body-sm)]">
             개발 전용 · 빠른 로그인

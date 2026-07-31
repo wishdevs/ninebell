@@ -62,8 +62,11 @@ function normAcctName(s?: string): string {
     .toLowerCase();
 }
 // 정확일치(특정 세부계정) — 복리후생비-'업무'만 불공('석식' 아님).
+// ⚠ 백엔드 _NONDEDUCTIBLE_ACCTS 와 항목이 같아야 한다 — backend/tests/test_fe_be_mirror_parity.py 가 대조.
 const NONDEDUCTIBLE_ACCTS = new Set(
-  ['복리후생비-업무', '여비교통비-해외출장', '차량유지비-유류'].map(normAcctName),
+  ['복리후생비-업무', '여비교통비-해외출장', '차량유지비-유류', '차량유지비-관리', '기부금'].map(
+    normAcctName,
+  ),
 );
 // 접대비 계열(접대비·국내/해외·해외접대비 등, 어순 무관) → 부분일치로 전부 불공.
 const NONDEDUCTIBLE_CONTAINS = [normAcctName('접대비')];

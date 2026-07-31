@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { RiCloseLine } from '@remixicon/react';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { cn } from '@/lib/utils';
 
 const noopSubscribe = () => () => {};
@@ -44,6 +45,11 @@ export function Dialog({
     () => true,
     () => false,
   );
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // 포커스 트랩(초기 포커스·Tab 순환·닫을 때 트리거 복원) — Drawer 와 공용 훅.
+  // 없으면 키보드 포커스가 배경으로 빠져 aria-modal 계약이 깨진다.
+  useFocusTrap(panelRef, open);
 
   useEffect(() => {
     if (!open) return;
@@ -77,11 +83,13 @@ export function Dialog({
         aria-label="닫기"
       />
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
+        tabIndex={-1}
         className={cn(
-          'border-border bg-surface animate-page-enter relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-overlay)]',
+          'border-border bg-surface animate-page-enter relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-overlay)] focus:outline-none',
           SIZE_CLASS[size],
         )}
       >
