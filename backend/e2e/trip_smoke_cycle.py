@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -25,11 +26,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend 루트
 
+# ⚠ 진단 로그 가시화(2026-08-01): app/core/logging_setup 은 app.main 부팅 경로에서만 불려서,
+#   독립 실행 e2e 는 root 기본값(WARNING)으로 돌아 사용자유형 해석·적응형 대기 배율 같은
+#   INFO 진단이 통째로 유실됐다. 스모크는 진단이 목적이므로 여기서 직접 켠다.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+
 from playwright.async_api import async_playwright  # noqa: E402
 
 from app.agents import build_trip_domestic_graph  # noqa: E402
 from app.agents.card_collect import js as cc_js  # noqa: E402 — MODAL_* JS
 from app.live.runner import LIVE_VIEWPORT  # noqa: E402
+from app.services.agent_settings import effective_settings  # noqa: E402 — 실효 설정 미러
 from nbkit.omnisol import selectors  # noqa: E402
 # card e2e 검증 JS 재사용(마스터 조회·덤프·전체선택).
 from e2e.e2e_smoke import BTN_BOX_JS, MASTER_DUMP_JS, MASTER_ROWCOUNT_JS, SELECT_MASTER_JS  # noqa: E402
@@ -47,24 +54,41 @@ _TOLL_PARTNER = {"partnerCode": "10512", "partnerName": "한국도로공사"}
 _PROJECT = {"code": "1310|1310", "name": "포장개선"}
 _DEPARTMENT = "인사/기획팀"
 _COST_TYPE = "판관비"
-_CAR_CLASSES = ["under1000", "under1600", "under2000", "over2000"]
+
+# ⚠ 에이전트 세부설정 미러(2026-08-01 수정) — runs.py 는 effective_settings(agent, stored) 가
+#   돌려준 실효 설정을 **params 로 평탄화**해 깔고(runs.py:218~225), validate 노드는 params
+#   자체를 settings Mapping 으로 parse_trip_params 에 넘긴다. 2026-07-08 '기준연비 동적화'
+#   이후 유효 키는 fuel_unit_price + fuel_classes[{id,label,kmPerL}] 뿐이고, 옛 스칼라
+#   fuel_eff_under_1000/1600/2000/over_2000 은 **죽은 키**다(effective_settings 가 만들지도,
+#   params.py 가 읽지도 않는다). 그 죽은 키만 넘긴 탓에 fuel_classes 가 통째로 비어
+#   "알 수 없는 차량종류입니다: under1600" 으로 매 사이클 저장이 거부됐다.
+#   DB 미의존(stored=None)이라 서버 설정 상태와 무관하게 자족적으로 유효한 params 가 된다.
+_AGENT_SETTINGS: dict = effective_settings("trip-domestic", None)
+# 차량종류 id 도 설정 목록에서 파생 — 기본 목록이 바뀌어도 하네스가 따라간다(하드코딩 금지).
+_CAR_CLASSES = [str(c["id"]) for c in _AGENT_SETTINGS["fuel_classes"]]
 
 
 def _cycle_params(cycle: int) -> dict:
+    # ⚠ 행별 invoiceDate(계산서일) 필수 — 909ec32(2026-07-09)가 회계일을 '행별 계산서일의
+    #   최댓값 파생'으로 바꾸면서 params.parse_trip_params 가 행마다 invoiceDate 를 요구하게 됐다.
+    #   이 스크립트는 그 전(66b0d9d) 형태로 멈춰 있어 **2026-07-09 이후 항상 로그인 전에**
+    #   "1번째 행에 계산서일(증빙일)이 없습니다" 로 즉시 실패했다(라이브 커버리지 3주 공백,
+    #   2026-08-01 실측 확인). 프로덕션 FE 폼은 행별 증빙일을 보내므로 하네스만의 부패였다.
     toll_n = 1 + (cycle % 2)
     rows: list[dict] = []
     for j in range(toll_n):
         rows.append({"type": "toll", **_TOLL_PARTNER, "amount": 12000 + cycle * 500 + j * 3300,
+                     "invoiceDate": TODAY,
                      "project": dict(_PROJECT), "note": "통행료(현금)"})
     car_class = _CAR_CLASSES[cycle % len(_CAR_CLASSES)]
     km = 50 + (cycle * 25) % 251
-    rows.append({"type": "fuel", "km": km, "carClass": car_class, "project": dict(_PROJECT),
-                 "note": "국내출장 자차 유류비 지원"})
+    rows.append({"type": "fuel", "km": km, "carClass": car_class, "invoiceDate": TODAY,
+                 "project": dict(_PROJECT), "note": "국내출장 자차 유류비 지원"})
     return {
+        # acctDate 는 하위호환으로 남기되 실제 회계일은 행별 invoiceDate 최댓값에서 파생된다.
         "trip": {"acctDate": TODAY, "rows": rows},
         "department": _DEPARTMENT, "cost_type": _COST_TYPE,
-        "fuel_eff_under_1000": 14, "fuel_eff_under_1600": 9,
-        "fuel_eff_under_2000": 7, "fuel_eff_over_2000": 6, "fuel_unit_price": 2000,
+        **_AGENT_SETTINGS,  # fuel_unit_price + fuel_classes[{id,label,kmPerL}]
         "_summary": {"toll_rows": toll_n, "fuel_km": km, "fuel_car_class": car_class},
     }
 

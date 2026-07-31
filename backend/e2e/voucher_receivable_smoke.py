@@ -154,7 +154,9 @@ async def main() -> None:
                             d7_soft.append(msg)
                         elif "D7 정합성 오류" in msg:
                             d7_mismatch.append(msg)
-                        elif msg.startswith("D7 체크행수 확인 ✅"):
+                        elif msg.startswith("D7 체크행수 확인 ✅") or msg.startswith("D7 체크행 확인 ✅"):
+                            # 배치 노드는 '체크행 확인', 건별 노드는 '체크행수 확인' — 두 문구 모두 수용
+                            # (2026-08-01 실측: 배치 경로에서 d7_checked_ok 가 항상 비던 원인).
                             d7_checked_ok.append(msg)
                         elif msg.startswith("D7 체크행수 확인 불가"):
                             d7_checked_soft.append(msg)
@@ -244,9 +246,11 @@ async def main() -> None:
     )
     checks["d7_docu_nos_distinct"] = len(set(processed_docu_nos)) == len(processed_docu_nos)
     checks["d7_no_confirmed_mismatch"] = len(d7_mismatch) == 0
-    checks["d7_child_count_within_processed"] = (
-        1 <= counts["closed_child"] <= max(1, len(processed_docu_nos))
-    )
+    # ⚠ 상한 제거(2026-08-01 실측): closed_child 는 runner 가 **모든 Page 종료**에 붙이는
+    #   카운터라 결재창 외 팝업(set_query 구간에서 단명하는 창 등)도 센다 — 처리 1건인데
+    #   closed_child=2 로 관측돼 정상 런이 FAIL 로 오판됐다. '결재창이 최소 1개는 열렸다 닫혔다'
+    #   만 본다(상한 판정은 자식창 종류를 구분할 수 있게 되면 그때 복원).
+    checks["d7_child_closed_at_least_once"] = counts["closed_child"] >= 1
 
     print("\n===== SMOKE ASSERTIONS =====", flush=True)
     for k, v in checks.items():

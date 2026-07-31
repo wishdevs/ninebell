@@ -48,7 +48,11 @@ OVERALL_TIMEOUT_S = 300  # 5분 상한.
 ARTIFACTS = Path(__file__).resolve().parent / "artifacts"
 ARTIFACTS.mkdir(exist_ok=True)
 
-_SUBMIT_RE = re.compile(r"^가상 상신: 전표 (\S+)$")
+_SUBMIT_RE = re.compile(r"^가상 상신: 전표 (\S+)$")  # 구 문구(하위호환).
+# ⚠ 현재 그래프 문구(approvals.py): "[1/1] 가상 상신 완료 — 전표 FI2026… (누적 1/1건 실행)."
+#   구 정규식만 쓰면 processed_docu_nos 가 비어 정상 런이 FAIL 로 오판된다(2026-08-01 실측).
+#   매출 스크립트가 이미 쓰는 전표번호 추출 방식을 동일 적용한다.
+_DOCU_RE = re.compile(r"\bFI\d{8,}\b")
 _ROWCOUNT_RE = re.compile(r"조회 완료 — 대상 전표 (\d+)건\.")
 
 
@@ -130,6 +134,8 @@ async def main() -> None:
                         m = _SUBMIT_RE.match(msg)
                         if m:
                             processed_docu_nos.append(m.group(1))
+                        elif "가상 상신 완료 — 전표 " in msg:
+                            processed_docu_nos.extend(_DOCU_RE.findall(msg))
                         rc_m = _ROWCOUNT_RE.search(msg)
                         if rc_m:
                             rowcount = int(rc_m.group(1))
