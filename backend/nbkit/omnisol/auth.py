@@ -19,7 +19,7 @@ from nbkit.browser import waits
 from nbkit.browser.actions import mouse_click, safe_evaluate
 from nbkit.browser.detection import is_authenticated, selector_present
 from nbkit.omnisol import js_lib, selectors
-from nbkit.omnisol.errors import AuthError, UserTypeError
+from nbkit.omnisol.errors import AuthError, LoginPageError, UserTypeError
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 logger = logging.getLogger("nbkit.omnisol.auth")
@@ -53,7 +53,9 @@ async def omnisol_login(
             return
         await page.wait_for_timeout(300)
     else:
-        raise AuthError("로그인 페이지가 로드되지 않았습니다(폼/대시보드 모두 미출현).")
+        # 페이지는 로드됐지만 폼/아바타 모두 미출현 = 옴니솔 점검·SPA 지연(인프라성).
+        # 자격증명 실패와 구분되는 LoginPageError(AuthError 서브클래스)로 던진다.
+        raise LoginPageError("로그인 페이지가 로드되지 않았습니다(폼/대시보드 모두 미출현).")
     await page.fill(selectors.LOGIN_USERID, userid)
     await page.fill(selectors.LOGIN_PASSWORD, password)
     await page.click(selectors.LOGIN_SUBMIT)

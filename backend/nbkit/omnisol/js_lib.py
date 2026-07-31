@@ -14,6 +14,8 @@ RealGrid 는 캔버스라 DOM 추출이 안 통한다 → 그리드 인스턴스
 
 from __future__ import annotations
 
+from nbkit.browser.detection import DIALOG_SELECTORS
+
 # ══════════════════════════════════════════════════════════════════════════════
 # [A] 코어 — P1 (grid/provider·omnisol/auth·navigator·profile) 가 사용
 # ══════════════════════════════════════════════════════════════════════════════
@@ -42,6 +44,16 @@ GET_JSON_ROWS_JS = """({ index, start, end }) => {
   } catch (e) { return null; }
 }"""
 
+# 그리드[index] 의 화면 bbox 읽기 — 첫 행 실클릭 좌표를 뷰포트와 무관하게 계산하는 근거.
+# (고정 좌표는 뷰포트가 다르면(라이브 1440×900) 빗나간다 — selectors.VIEWPORT 주석 참조.)
+# arg = index. 반환 {x, y, width, height} | null(그리드 없음/0크기 → 호출자가 폴백).
+GRID_RECT_BY_INDEX_JS = (
+    "(index) => { const g = document.querySelectorAll('.dews-ui-grid')[index];"
+    " if (!g) return null; const r = g.getBoundingClientRect();"
+    " if (!r.width || !r.height) return null;"
+    " return { x: r.x, y: r.y, width: r.width, height: r.height }; }"
+)
+
 # 그리드[index] 의 현재 행 앵커링(키보드 폴백 방법B 시작점). arg = {index, itemIndex}.
 # ⚠ setCurrent 는 디테일 로딩을 트리거하지 않는다 — 앵커링 전용. 로딩은 trusted 키보드로.
 SET_CURRENT_BY_INDEX_JS = """({ index, itemIndex }) => {
@@ -53,13 +65,14 @@ SET_CURRENT_BY_INDEX_JS = """({ index, itemIndex }) => {
 
 # ── 메뉴 진입 상태 판별 ────────────────────────────────────────────────────────
 # 그리드가 떴는지 / "메뉴를 찾을 수 없습니다" 권한 팝업인지. {grids, notFound, popup}.
-MENU_CHECK_JS = """() => {
+# 다이얼로그 목록은 detection.DIALOG_SELECTORS 단일 소스를 임베드한다(별도 하드코딩 금지).
+MENU_CHECK_JS = f"""() => {{
   const grids = document.querySelectorAll('.dews-ui-grid').length;
-  const dlg = [...document.querySelectorAll('.k-window, [role=dialog], .modal')].find(x => x.offsetParent !== null);
+  const dlg = [...document.querySelectorAll('{DIALOG_SELECTORS}')].find(x => x.offsetParent !== null);
   const popup = dlg ? (dlg.innerText || '').trim() : '';
   const notFound = /찾을 수 없|권한이 없|접근/.test(popup) && /메뉴|모듈/.test(popup);
-  return { grids, notFound, popup: popup.replace(/\\n+/g, ' ').slice(0, 50) };
-}"""
+  return {{ grids, notFound, popup: popup.replace(/\\n+/g, ' ').slice(0, 50) }};
+}}"""
 
 # ── 프로필(이름·부서·사용자유형) best-effort 추출 ──────────────────────────────
 # 아바타 JS 폴백 클릭 — 실클릭 실패 시에만. 앵커(a.user-pic) 우선, 그다음 기본 아바타 이미지,
@@ -438,12 +451,23 @@ def picker_btn_js(field_id: str) -> str:
     }}"""
 
 
+# 코드피커 팝업 로케이터 프리앰블 — "최근 열린 non-법인카드 k-window"(피커 팝업은 항상
+# 마지막에 열린다) 탐색 + 공백 정리 헬퍼 c. PICKER_* 상수 전부가 이 프리앰블을 공유한다 —
+# CARD_WIN/picker_btn_js 선례처럼 탐색 규칙을 여기 한 곳에만 둔다(9회 복붙 제거).
+_PICKER_POP_PREAMBLE = (
+    "  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();\n"
+    "  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)\n"
+    "    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];"
+)
+
+
+def _picker_pop_js(params: str, body: str) -> str:
+    """PICKER_* 상수 빌더 — 프리앰블(팝업 로케이터 p + 헬퍼 c) 1곳 + 본문 결합."""
+    return f"({params}) => {{\n{_PICKER_POP_PREAMBLE}\n{body}\n}}"
+
+
 # 코드피커 팝업(최근 열린 non-법인카드 k-window) keyword 검색 세팅. 인자 q.
-PICKER_SEARCH_JS = """(q) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_SEARCH_JS = _picker_pop_js("q", """  if (!p) return { ok:false, reason:'no-pop' };
   // 팝업별 검색창 id 상이: 예산단위/계정=#keyword, 프로젝트=#s_search_key, 거래처=#customTextBox.
   // 알려진 id 우선(card 동작 보존), 없으면 search_key/keyword/customText 접미·접두 → 첫 보이는 text input.
   const kw = p.querySelector('#keyword') || p.querySelector('#s_search_key')
@@ -457,31 +481,21 @@ PICKER_SEARCH_JS = """(q) => {
   // 셀 에디터(showEditor)로 연 팝업(거래처 customTextBox 등)은 포커스가 그리드 캔버스에 있어
   // focus 없이 Enter 를 누르면 검색이 트리거되지 않는다(프로브 trip_probe3 실측 2026-07-06).
   kw.focus();
-  return { ok:true, field: kw.id || '(no-id)' };
-}"""
+  return { ok:true, field: kw.id || '(no-id)' };""")
 
 # 코드피커 팝업 옵션 읽기(인자 [codeField,nameField,limit]). 반환 {rows, options:[{code,name}]}.
-PICKER_READ_JS = """([codeField, nameField, limit]) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { rows:-1, reason:'no-pop' };
+PICKER_READ_JS = _picker_pop_js("[codeField, nameField, limit]", """  if (!p) return { rows:-1, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const n = g.getDataSource().getRowCount(); const out = [];
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({
       i, code: String(g.getValue(i, codeField)), name: String(g.getValue(i, nameField)) });
     return { rows:n, options: out };
-  } catch(e) { return { rows:-1, err:String(e).slice(0,60) }; }
-}"""
+  } catch(e) { return { rows:-1, err:String(e).slice(0,60) }; }""")
 
 # 코드피커 팝업 다중필드 전량 읽기(인자 [fields, limit]). limit 0/null = 전량.
 # getJsonRows(0, n-1) 로 로드분 전량을 읽는다(예산단위 2천여행/프로젝트 500행 캡). 반환
 # {rows, options:[{i, <field>: str|null,...}]}. '법인카드' 창 제외 필터는 PICKER_READ_JS 와 동일.
-PICKER_READ_MULTI_JS = """([fields, limit]) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { rows:-1, reason:'no-pop' };
+PICKER_READ_MULTI_JS = _picker_pop_js("[fields, limit]", """  if (!p) return { rows:-1, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const ds = g.getDataSource();
     const n = ds.getRowCount();
@@ -490,75 +504,45 @@ PICKER_READ_MULTI_JS = """([fields, limit]) => {
     const out = rows.slice(0, Math.min(rows.length, cap)).map((r,i)=>{
       const o = { i }; for (const f of fields) o[f] = r[f]==null?null:String(r[f]); return o; });
     return { rows:n, options: out };
-  } catch(e) { return { rows:-1, err:String(e).slice(0,80) }; }
-}"""
+  } catch(e) { return { rows:-1, err:String(e).slice(0,80) }; }""")
 
 # 코드피커 팝업 행 선택(인자 rowIndex). setCurrent + setSelection.
-PICKER_SELECT_JS = """(row) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_SELECT_JS = _picker_pop_js("row", """  if (!p) return { ok:false, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     g.setCurrent({ itemIndex: row, fieldName: g.getColumns()[1].fieldName });
     g.setSelection({ startRow: row, endRow: row, startColumn: 0, endColumn: 0 });
     return { ok:true };
-  } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
-}"""
+  } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }""")
 
 # 코드피커 팝업 닫기(실패 경로에서 열린 채 남으면 다음 코드피커가 이 팝업을 읽어 오작동).
-PICKER_CLOSE_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return false;
+PICKER_CLOSE_JS = _picker_pop_js("", """  if (!p) return false;
   const x = p.querySelector('.k-i-close, .k-window-action, [aria-label*=Close], [title*=닫기]');
   if (x) { x.click(); return true; }
   const b = [...p.querySelectorAll('button')].filter(e=>e.offsetParent!==null)
     .find(e => /닫기|취소|close/i.test(c(e.innerText)));
   if (b) { b.click(); return true; }
-  return false;
-}"""
+  return false;""")
 
 # 코드피커 팝업 '적용/확인' 버튼 좌표.
-PICKER_APPLY_BTN_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return null;
+PICKER_APPLY_BTN_JS = _picker_pop_js("", """  if (!p) return null;
   const b = [...p.querySelectorAll('button')].filter(x=>x.offsetParent!==null).find(x=>/적용|확인|선택/.test(c(x.innerText)));
   if (!b) return null; const r = b.getBoundingClientRect();
-  return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2), text:c(b.innerText) };
-}"""
+  return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2), text:c(b.innerText) };""")
 
 # 코드피커 팝업 그리드의 중심 좌표(휠 스크롤 로딩용). 반환 {x,y} | null.
-PICKER_GRID_RECT_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return null;
+PICKER_GRID_RECT_JS = _picker_pop_js("", """  if (!p) return null;
   const g = p.querySelector('.dews-ui-grid'); if (!g) return null;
   const r = g.getBoundingClientRect();
-  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
-}"""
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };""")
 
 # 코드피커 팝업 그리드 행 수(스크롤 로딩 진행 판정).
-PICKER_ROWCOUNT_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return -1;
+PICKER_ROWCOUNT_JS = _picker_pop_js("", """  if (!p) return -1;
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
-    return g.getDataSource().getRowCount(); } catch(e) { return -2; }
-}"""
+    return g.getDataSource().getRowCount(); } catch(e) { return -2; }""")
 
 # 코드피커 팝업 그리드 마지막 행 setCurrent + 포커스 — ArrowDown 으로 다음 페이지 로드 트리거.
 # (프로브 2026-07-02: 휠은 1,318행 정체, setCurrent(끝행)+ArrowDown 은 라운드당 +500 결정적.)
-PICKER_FOCUS_LAST_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_FOCUS_LAST_JS = _picker_pop_js("", """  if (!p) return { ok:false, reason:'no-pop' };
   try { const gridEl = p.querySelector('.dews-ui-grid');
     const g = window.jQuery(gridEl).data('dewsControl')._grid;
     const n = g.getDataSource().getRowCount();
@@ -568,8 +552,7 @@ PICKER_FOCUS_LAST_JS = """() => {
     const focusable = gridEl.querySelector('[tabindex], canvas, .k-grid-content') || gridEl;
     focusable.focus && focusable.focus();
     return { ok:true, row: n-1 };
-  } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }
-}"""
+  } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }""")
 
 
 # ── 모달/토스트 관찰 공용 JS — card_collect 에서 승격(2026-07-05) ──────────────────
