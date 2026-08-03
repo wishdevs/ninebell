@@ -76,12 +76,15 @@ export interface EvidenceType {
 /**
  * 답 조합 → 증빙유형. 아직 못 정하면 null(질문이 덜 끝났다는 뜻).
  *
+ * **비용분할은 원증빙으로 넣는다**(사용자 확정 2026-08-03) — 분할이면 과세 11 · 비과세 13.
+ * 불공은 애초에 분할할 수 없으므로 분할 × 불공 조합은 존재하지 않는다.
+ *
  * ⚠ 발행 전 불공은 코드가 **24(차량용) 하나뿐**이라 차량 외 사유를 담을 자리가 없다.
  *   업무 확인 전까지 코드는 24 로 두되 그 사실을 화면에 드러낸다(조용히 뭉개지 않는다).
- *   11·13(원증빙)은 이 플로우의 어떤 조합으로도 선택되지 않는다.
  */
 export function evidenceFor(
   issue: IssueState | null,
+  split: SplitChoice | null,
   tax: TaxKind | null,
   nondeduct: NondeductReason | null,
 ): EvidenceType | null {
@@ -94,6 +97,12 @@ export function evidenceFor(
       label: EVIDENCE_LABEL['24'],
       caution: '발행 전 불공 코드는 24(차량용) 하나뿐입니다 — 차량 외 사유는 담을 코드가 없습니다.',
     };
+  }
+  // 발행 후 — 분할이면 원증빙 계열로 갈린다.
+  if (split === 'split') {
+    if (tax === 'taxable') return { code: '11', label: EVIDENCE_LABEL['11'] };
+    if (tax === 'exempt') return { code: '13', label: EVIDENCE_LABEL['13'] };
+    return null; // 불공 × 분할은 성립하지 않는다(질문 단계에서 이미 막힌다)
   }
   if (tax === 'taxable') return { code: '03', label: EVIDENCE_LABEL['03'] };
   if (tax === 'exempt') return { code: '04', label: EVIDENCE_LABEL['04'] };

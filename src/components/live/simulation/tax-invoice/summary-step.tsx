@@ -89,7 +89,7 @@ export function SummaryStep({
             </Row>
             {/* 답 조합이 접혀 들어가는 최종 값 — ERP 에 실제로 넣는 코드라 굵게 세운다. */}
             {(() => {
-              const ev = evidenceFor(answers.issue, answers.tax, answers.nondeduct);
+              const ev = evidenceFor(answers.issue, answers.split, answers.tax, answers.nondeduct);
               if (!ev) return null;
               return (
                 <>
