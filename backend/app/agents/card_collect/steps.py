@@ -141,15 +141,30 @@ def owner_name_variants(
     return out
 
 
+def _card_names_hint(res: dict, limit: int = 6) -> str:
+    """진단용 카드명 요약 — 매칭 0장 실패/폴백 로그에 '무엇이 있었는지'를 남긴다.
+
+    2026-08-02 실측: 실패 로그가 '6장 중 일치 없음'만 남겨 카드 목록을 알 수 없었고,
+    라이브 프로브 없이는 '본인 카드가 없는 계정'인지 '매칭 규칙 결함'인지 판별 불가했다.
+    """
+    names = [str(x).strip() for x in (res.get("allNames") or res.get("names") or []) if str(x).strip()]
+    if not names:
+        return "(카드명 확인 불가)"
+    head = ", ".join(names[:limit])
+    return f"{head}{' 외 …' if len(names) > limit else ''}"
+
+
 async def select_all_cards(
     page: Any, owner_name: str | list[str] | None = None, own_only: bool = False
 ) -> dict:
     """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by, names}.
 
-    선택 규칙(사용자 확정 2026-07-31 — 디버그 모드 분기):
+    선택 규칙(사용자 확정 2026-07-31 분기 → 2026-08-03 폴백 추가):
       · own_only=True(일반 모드 기본): owner_name(로그인ID 문자열 또는 이름 변형 목록 —
-        owner_name_variants 참조)과 일치하는 **본인 카드만** 선택. 일치 0건이면 전체선택
-        폴백 없이 **하드 실패**(무매칭 임의선택 금지 규율). 이름이 비어 있어도 실패.
+        owner_name_variants 참조)과 일치하는 **본인 카드만** 선택. **일치 0건이면 전체선택으로
+        폴백**한다 — 법인 공용 카드만 쓰는 계정은 본인 명의 카드가 아예 없어서(카드명 괄호에
+        개인명 없음) 하드 실패시키면 실행이 막힌다. 처리 대상은 뒤의 그리드 개입에서 사용자가
+        확정하므로 전체를 담는 것은 후보 제시다(폴백 사실은 warn 으로 남긴다).
       · own_only=False(디버그 모드): 종전 동작 그대로 **전체선택**(owner_name 무시).
     by='name'|'all'. 매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치 + 카드명 괄호 '(이름)' 포함 —
     실측(2026-07-29) 이 ERP 는 소유자/관리사원 컬럼을 채우지 않아 카드명
@@ -206,22 +221,24 @@ async def select_all_cards(
         if wait_ms:
             await _real_sleep(wait_ms / 1000)
         if own_only:
-            # 본인 카드만 — matched>0 이면 확정, matched==0(그리드는 로드됨)이면 즉시 실패.
-            # 전체선택 폴백은 하지 않는다(무매칭 임의선택 금지 — 디버그 모드에서만 전체선택).
+            # 본인 카드만 — matched>0 이면 확정. matched==0(그리드는 로드됨)이면 **전체선택으로
+            # 폴백**한다(사용자 확정 2026-08-03): 법인 공용 카드만 쓰는 계정은 본인 명의 카드가
+            # 아예 없어(카드명 괄호에 개인명이 없음) 하드 실패시키면 실행 자체가 막힌다.
+            # 어느 카드를 실제로 처리할지는 뒤의 그리드 개입에서 사용자가 확인하므로, 여기서
+            # 전체를 담는 것은 '임의 선택'이 아니라 후보 제시다. 폴백 사실은 warn 으로 남긴다.
             r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owners)
             if r.get("ok") and r.get("n", 0) > 0:
                 if r.get("matched", 0) > 0:
                     sel, by = r, "name"
                     break
-                return {
-                    "ok": False,
-                    "n": r.get("n"),
-                    "matched": 0,
-                    "reason": (
-                        f"본인 카드 0장 — 카드 {r.get('n')}장 중 이름({', '.join(owners)}) "
-                        "일치 없음. 임의 전체선택 없이 중단합니다(디버그 모드에서만 전체 카드)."
-                    ),
-                }
+                fallback = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
+                if fallback.get("ok") and fallback.get("n", 0) > 0:
+                    warns.append(
+                        f"본인 카드 0장(전체 {r.get('n')}장·대조 이름 {', '.join(owners)}) "
+                        f"— 전체 카드로 진행합니다. 카드 목록: {_card_names_hint(r)}"
+                    )
+                    sel, by = fallback, "all"
+                    break
         else:
             r = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
             if r.get("ok") and r.get("n", 0) > 0:

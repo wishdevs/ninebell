@@ -1746,6 +1746,36 @@ async def test_select_all_cards_node_default_selects_own_only(monkeypatch):
     assert any("본인('sdh') 카드 1장" in m and "국민법인카드(석대현)-2826" in m for m in logs)
 
 
+async def test_select_all_cards_node_announces_all_fallback(monkeypatch):
+    """일반 모드에서 본인 카드 0장 → 전체선택 폴백 시 **안내 메시지가 화면에 노출**돼야 한다.
+
+    사용자 요구(2026-08-03): "본인카드가 없을시 전체선택한다고 안내메시지를 노출합니다".
+    디버그 모드 문구('디버그 모드')와 혼동되지 않아야 하고, 다음 단계에서 사용자가 직접
+    고르라는 안내까지 포함한다.
+    """
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    async def _fallback(page, owner_name=None, own_only=False):
+        return {"ok": True, "n": 6, "checked": 6, "by": "all", "verified": True,
+                "warn": "본인 카드 0장(전체 6장·대조 이름 이트라이브2) — 전체 카드로 진행합니다."}
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(steps, "select_all_cards", _fallback)
+    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "userid": "이트라이브2", "params": {}}
+    out = await make_select_all_cards_node()(state)
+    assert out == {}  # 실행은 계속된다(하드 실패 아님)
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    notices = [f["log"] for f in frames if isinstance(f.get("log"), str) and f.get("level") == "warn"]
+    assert any("명의 카드가 없어" in m and "전체" in m and "그리드에서 직접" in m for m in notices)
+    assert not any("디버그 모드" in m for f in frames if isinstance((m := f.get("log")), str))
+
+
 async def test_select_all_cards_node_debug_selects_all(monkeypatch):
     """디버그 모드(params.debug=True): 종전 전체선택 — owner 미전달·own_only=False."""
     from app.agents.card_collect.nodes.query import make_select_all_cards_node

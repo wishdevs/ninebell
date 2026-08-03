@@ -224,8 +224,12 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
     try { g.checkAll(false); } catch(e) {}
     let matched = 0;
     const names = [];
+    // allNames: 전체 카드명(매칭 여부 무관, 최대 10) — 매칭 0장일 때 '무엇이 있었는지'를
+    // 로그로 남기기 위한 진단 필드(2026-08-02 실측: 실패 로그에 목록이 없어 원인 판별 불가했다).
+    const allNames = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i] || {};
+      if (allNames.length < 10) allNames.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());
       const exact = keys.some(k =>
         c(r.CARD_OWNR_NM) === k || c(r.KOR_NM) === k || c(r.PARTNER_NM) === k);
       if (keys.length && (exact || inAnyField(r))) {
@@ -235,7 +239,7 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
       }
     }
     let checked=-1; try { checked=(g.getCheckedRows()||[]).length; } catch(e){}
-    return { ok:true, n, matched, checked, names };
+    return { ok:true, n, matched, checked, names, allNames };
   } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
 }"""
 

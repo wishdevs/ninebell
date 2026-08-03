@@ -59,8 +59,18 @@ def make_select_all_cards_node():
                 + (f" — {names}" if names else ""),
                 "ok",
             )
-        else:
+        elif debug:
             await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}(디버그 모드).", "ok")
+        else:
+            # 일반 모드인데 by='all' = 본인 카드 0장 폴백(사용자 확정 2026-08-03).
+            # 왜 전체가 선택됐는지 사용자가 화면에서 바로 알 수 있어야 한다.
+            await emit_log(
+                events,
+                f"본인('{owner}') 명의 카드가 없어 법인카드 {r.get('n')}장 **전체**를 선택했습니다"
+                " — 처리할 내역은 다음 단계 그리드에서 직접 확인·선택해 주세요.",
+                "warn",
+            )
+            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}.", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "select_all_cards", "done", _shared._ms(t0))
         return {}

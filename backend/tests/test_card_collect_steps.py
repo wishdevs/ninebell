@@ -217,13 +217,18 @@ async def test_select_cards_by_name_when_match():
     assert page.by_name_called and not page.all_called  # 전체선택 미호출
 
 
-async def test_select_cards_own_only_zero_match_fails_without_fallback():
-    """일반 모드 본인 카드 0건 — 전체선택 폴백 없이 하드 실패(무매칭 임의선택 금지)."""
+async def test_select_cards_own_only_zero_match_falls_back_to_all():
+    """일반 모드 본인 카드 0건 — **전체선택으로 폴백**(사용자 확정 2026-08-03).
+
+    법인 공용 카드만 쓰는 계정은 본인 명의 카드가 아예 없어(카드명 괄호에 개인명 없음)
+    하드 실패시키면 실행 자체가 막힌다. 처리 대상은 뒤의 그리드 개입에서 사용자가 확정하므로
+    전체를 담는 것은 후보 제시다. 폴백 사실은 warn 으로 반드시 남아야 한다(안내 노출 근거).
+    """
     page = _CardSubPage(matched=0)
     r = await steps.select_all_cards(page, owner_name="이트라이브2", own_only=True)
-    assert r["ok"] is False and "본인 카드 0장" in r["reason"]
-    assert r["n"] == 5 and r["matched"] == 0  # 진단 정보(카드 수·매칭 수) 포함
-    assert page.by_name_called and not page.all_called  # 전체선택 미호출
+    assert r["ok"] is True and r["by"] == "all"
+    assert page.by_name_called and page.all_called  # 본인 매칭 시도 후 전체선택
+    assert "본인 카드 0장" in (r.get("warn") or "")  # 폴백 사유가 로그로 노출된다
 
 
 async def test_select_cards_own_only_without_owner_fails():
