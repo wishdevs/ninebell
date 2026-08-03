@@ -105,9 +105,29 @@ function row(
   };
 }
 
-/** 더미 리스트가 덮는 (세금)계산서일 범위 — 1단계 기간 선택 기본값. */
+/** 더미 리스트가 덮는 (세금)계산서일 범위 — 기간 힌트 표시용. */
 export const INVOICE_DATE_MIN = '2026-07-01';
 export const INVOICE_DATE_MAX = '2026-07-10';
+
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 기간 기본값 — **한 달 전부터 오늘까지**(사용자 확정 2026-08-03).
+ *
+ * 실무 조회는 대개 최근 한 달이라 발행 후를 고르는 즉시 채워 두고, 필요하면 사용자가 바꾼다.
+ * 말일 보정: setMonth 는 3/31→2/31 같은 없는 날짜를 다음 달로 넘기므로, 넘어갔으면 그 달의
+ * 말일로 당긴다(3/31 → 2/28).
+ */
+export function defaultInvoiceRange(): { from: string; to: string } {
+  const today = new Date();
+  const from = new Date(today);
+  const day = from.getDate();
+  from.setMonth(from.getMonth() - 1);
+  if (from.getDate() !== day) from.setDate(0);
+  return { from: isoDate(from), to: isoDate(today) };
+}
 
 // ── 입력항목 선택지(더미) ────────────────────────────────────────────────────
 
