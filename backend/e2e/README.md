@@ -179,17 +179,39 @@ PASS 가 아니면 나머지 사이클을 돌리지 않는다(회귀 상태에�
 - 스모크의 역할은 **그 게이트가 실제로 닫힌 채 종단 완주하는지 관찰**하는 것이다. 스모크가
   게이트를 여는 인자를 넘기거나 그래프를 직접 조립하지 않는다 — 등록된 팩토리를 그대로 태운다.
 
-**되돌릴 수 없는 부작용: 0건.** 유일한 잔여물은 결재창을 여는 것만으로 생길 수 있는
-**EAP 임시문서(draft)** 이며(각 PROCESS.md 기지 이슈, 사용자 승인 범위), `max_rows` 로 건수를
-묶어 최소화한다. 실제 상신은 사용자가 전자결재에서 직접 한다.
+**되돌릴 수 없는 부작용: 0건.** 유일한 잔여물은 결재창을 여는 것만으로 생기는
+**EAP 임시문서(draft)** 이며(각 PROCESS.md 기지 이슈, 사용자 승인 범위), draft 수 = **결제창을
+연 횟수**다(묶음 결재는 1회에 N건 처리 → 1 draft). 실제 상신은 사용자가 전자결재에서 직접 한다.
+
+### draft 를 어떻게 최소화하는가 — 제품 폼엔 `max_rows` 노브가 없다
+
+3종은 결의서입력 4종과 같이 **제품 경로**(대시보드 폼 → 실행)로 돈다(2026-08-03 전환). 그런데
+제품 폼 `VoucherPreRunForm` 이 받는 값은 **회계일 기간 하나뿐**이고 서버 기본값은
+`max_rows=None`(=조회된 전 건 순회, `voucher_receivable/params.py:30`)이다 — 즉 제품 경로에는
+건수를 묶는 노브 자체가 없고, **기간이 유일한 레버**다. 기본 기간(당월)으로 돌리면 실측
+2026-07 매출 **181건**이 그대로 대상이 된다.
+
+그래서 각 스모크는 phase0 에서 **읽기 전용 ERP 조회**로 기간을 이분 탐색해 대상이
+1~`VOUCHER_MAX_TARGET_ROWS`(기본 3)건인 부분기간을 **실측으로** 찾아 폼에 넣는다. phase0 은
+조회(F2)만 하고 결재 버튼을 누르지 않으므로 draft 를 1건도 만들지 않는다. 못 찾으면 실행하지
+않고 중단한다.
+
+> ⚠ 날짜 필드를 추정해 그룹핑하지 않는다. 결과 그리드의 `ACTG_DT` 도 `WRT_DT` 도 회계일 필터
+> 대상이 아니다(2026-08-03 실측: 20260701~20260731 결과에 `ACTG_DT=20260630` 행이 섞였고,
+> `WRT_DT` 로 좁힌 하루는 실제 조회 0건). 필드를 짚어 그룹핑하면 "하루로 좁혔다"고 **믿고**
+> 대량 처리하게 된다 — 실제로 1건인 줄 알고 11건을 처리한 회귀가 났다.
 
 ## 3종
 
 | 스크립트 | 에이전트 | 전표유형 | 특징 |
 |---|---|---|---|
 | `voucher_receivable_smoke.py` | `voucher-receivable` | 국내매출·해외매출 | **배치 결재**(묶음 1개 = 결제창 1개) · EAP 자식창 캡처 · D7 정합성 |
-| `voucher_payable_smoke.py` | `voucher-payable` | 내수구매 | 위 하네스 재사용, 건별 단건(`max_rows=1`) |
+| `voucher_payable_smoke.py` | `voucher-payable` | 내수구매 | 위 하네스 재사용, **건별** 순회 |
 | `voucher_card_smoke.py` | `voucher-card` | 일반 | 위 하네스 재사용 + **카드 3대 델타**(아래) |
+
+공통 골격은 `voucher_product.py`(phase0 기간 선별 · SSE 탭 · `agent_runs.logs` 파서)이고,
+제품 UI 조작(로그인 → 폼 → 실행 → 종료 판정 → `agent_runs` 확인)은 결의서입력 4종과 같은
+`product_cycle.run_product()` 를 공유한다.
 
 ```bash
 cd backend
@@ -198,9 +220,26 @@ cd backend
 .venv/bin/python e2e/voucher_card_smoke.py
 ```
 
-셋 다 프로덕션 라이브 러너(`app.live.runner.run_workflow`)로 **실제 등록 그래프**를 태우고,
-단계별 ms 타이밍 · 프레임 카운트 · 어설션을 출력하며 `artifacts/` 에 스크린샷 PNG 와
-프레임 JSON 을 남긴다.
+셋 다 **제품 UI(:3101)** 에서 실행하므로 프론트 폼 → `runs.py` collect → 세션/SSE →
+러너 → `agent_runs` 기록까지 전 구간을 탄다. 그래프를 직접 조립하지 않는다.
+
+### 관측 경로 — 프레임을 직접 못 받는 대신 두 갈래로 복원한다
+
+종전 하네스는 `run_workflow` 가 yield 하는 프레임을 파이썬이 직접 받아 검증했다. 제품 경로에서는
+프레임이 러너 → 세션 → SSE → 브라우저로 흐르므로 직접 받을 수 없다.
+
+| 무엇을 보는가 | 종전 | 지금 |
+|---|---|---|
+| 로그 메시지(D7·가상 상신·rowcount·전표유형·참조문서·커버리지·제외회계) | `log` 프레임 | **`agent_runs.logs`** — 세션이 종료 시 전량 영속(`app/live/session.py:167`) |
+| 단계 상태/순서 | `step` 프레임 | 같은 `agent_runs.logs`(step·status·ms 보존) |
+| 최종 결과 · 오류 | `result`/`error` 프레임 | `agent_runs.status`/`result` + SSE 탭 |
+| 자식창(EAP) 스크린샷 · 닫힘 전이 | `screenshot`/`closed` 프레임 | **SSE 탭** — `window.fetch` 래핑 + `body.tee()` 로 제품 스트림을 **복제만** 해서 센다(소비·변형 없음) |
+
+SSE 탭은 종전보다 강한 증거다 — 프레임이 러너에서 났다는 것뿐 아니라 **브라우저까지 실제로
+도달했다**는 것까지 확인된다. 다만 세션 stream 은 스크린샷을 **창별 최신 1장으로 합쳐** 보내므로
+(`session.py:238`) 자식 스크린샷 **개수**는 러너 방출수와 다르다 — `>=1`(도달 여부)만 유효하고
+개수 비교는 의미가 없다. 자식창 **닫힘 전이**는 커서 버퍼라 유실 없이 전량 도달하므로, 결제창
+개봉 횟수와의 일치 검증은 그대로 유지된다.
 
 > ⚠ 셋은 같은 ERP 계정을 쓴다. **동시 실행 금지** — 세션이 서로를 밀어낸다.
 
@@ -236,10 +275,10 @@ env:
 E2E_USERID / E2E_PASSWORD            # 자격증명(기본 이트라이브2/1111)
 E2E_HEADLESS=0                       # 헤드풀
 E2E_DELAY_SCALE=0.4                  # 대기 배율(등록 워크플로우와 동일)
-VOUCHER_CARD_SMOKE_MAX_ROWS=1        # 결재 대상 상한(기본 1, 0=전체). 폴백 E2E_MAX_ROWS
-VOUCHER_CARD_SMOKE_PERIOD_FROM/_TO   # 회계일 YYYYMMDD(미지정=당월). 폴백 E2E_PERIOD_START/_END
-VOUCHER_CARD_SMOKE_TIMEOUT_S=420     # 전체 상한(2nd 탭 왕복이 형제보다 길다)
+VOUCHER_MAX_TARGET_ROWS=3            # phase0 기간 선별 상한(= 최대 EAP draft 수)
+VOUCHER_SCAN_MONTHS=3                # 대상이 있는 달을 찾을 때 역방향 탐색 개월
+VOUCHER_QUERY_BUDGET=16              # phase0 이분 탐색 조회 횟수 상한
 ```
 
-아티팩트: `artifacts/voucher_card_smoke_{parent,child,child_row*}.png` ·
-`voucher_card_smoke_frames.json` · `voucher_card_smoke_report.json`(단계별 ms·검증 결과 포함).
+아티팩트: `artifacts/voucher_{receivable,payable,card}_product{,_parent,_child}.png` ·
+`voucher_*_product.json`(기간 선별 이력 · 어설션 · 관측치 · `agent_runs.logs` 원문 포함).

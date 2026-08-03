@@ -348,23 +348,33 @@ async def run_product(
     fill: Callable[[Page], Awaitable[None]],
     tag: str,
     timeout_s: int = RESULT_WAIT_TIMEOUT_S,
+    init_script: str | None = None,
+    on_page_done: Callable[[Page], Awaitable[dict]] | None = None,
 ) -> dict:
     """phase1 — 제품 UI 완주(로그인 → 폼 채움 → 실행 → 종료 → agent_runs 확인).
 
     반환 dict 의 ``run_recorded`` 가 True 면 이 실행이 **제품 경로(runs.py collect → 러너)** 를
     탔다는 증거다(그래프 직접 호출은 agent_runs 행을 만들지 않는다).
+
+    선택 훅(둘 다 기본 None → 결의서입력 4종 동작 불변):
+      init_script   첫 내비게이션 **전에** 심을 페이지 초기화 스크립트. 회계전표 3종이 SSE
+                    프레임 탭(스크린샷·자식창 닫힘 관측)을 심는 데 쓴다.
+      on_page_done  종료 판정 직후 **브라우저를 닫기 전에** 페이지에서 무언가를 걷어오는 훅.
+                    반환 dict 는 리포트의 ``page_probe`` 로 실린다.
     """
     report: dict = {
         "logged_in": False, "form_filled": False, "submitted": False, "terminal": False,
         "ui_status": None, "result_text": None, "fail_reason": None,
         "run_before": None, "run_after": None, "run_recorded": False, "db_status": None,
-        "screenshot": None, "error": None,
+        "screenshot": None, "error": None, "page_probe": None,
     }
     report["run_before"] = db_latest_run(workflow_id)
 
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO)
     ctx = await browser.new_context(viewport={"width": 1600, "height": 1000})
+    if init_script:
+        await ctx.add_init_script(init_script)
     page = await ctx.new_page()
     try:
         print(f"[P1] 대시보드 로그인({FRONTEND_BASE})…", flush=True)
@@ -391,6 +401,9 @@ async def run_product(
         report["screenshot"] = shot
         if not term["terminal"]:
             report["error"] = f"{timeout_s}s 안에 종료(닫기)에 도달하지 못했습니다."
+        if on_page_done is not None:
+            # ⚠ 브라우저를 닫기 전에 걷는다 — 페이지가 사라지면 관측 자체가 불가능하다.
+            report["page_probe"] = await on_page_done(page)
     except Exception as exc:  # noqa: BLE001 — 실패도 리포트로 돌려 상위가 사이클을 끊게 한다.
         report["error"] = f"phase1 예외: {exc!r}"
         try:
