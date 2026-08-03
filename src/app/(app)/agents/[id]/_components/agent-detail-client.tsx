@@ -25,6 +25,7 @@ import {
   useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
 import { PRE_RUN_FORMS } from '@/components/live/pre-run';
+import { SIMULATION_PANELS } from '@/components/live/simulation';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -85,6 +86,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 받아 실행한다(card-chat 등 폼 없는 에이전트는 종전대로 바로 실행). 없으면 undefined.
   const PreRunForm = canRun ? PRE_RUN_FORMS[defaultWorkflow] : undefined;
   const usePreRun = !!PreRunForm;
+  // 화면 시뮬레이션 패널 — 자동화 그래프가 아직 없는(실행 불가) 에이전트가 화면 흐름만
+  // 확정하는 단계에 쓴다. 실행 경로를 타지 않으므로 라이브 세션과 무관하다.
+  const SimulationPanel = canRun ? undefined : SIMULATION_PANELS[agent.id];
   // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
   // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
   const [session, setSession] = useState<{
@@ -132,8 +136,10 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   //  split: 작은 라이브(좌측) + 넓은 개입   — choice, 실행 전 입력 폼
   //  live : 라이브 크게 + 작은 패널          — 모니터링 + **chat 개입**(화면을 보면서
   //         대화해야 하므로 채팅창은 작게, 라이브를 크게 — 사용자 요청 2026-07-29)
-  const layoutLevel: 'full' | 'split' | 'live' =
-    interventionActive && run.hitl?.kind === 'grid'
+  // 시뮬레이션 패널은 라이브 화면이 존재하지 않는다(실행 없음) → 그리드 개입과 같은 full 폭.
+  const layoutLevel: 'full' | 'split' | 'live' = SimulationPanel
+    ? 'full'
+    : interventionActive && run.hitl?.kind === 'grid'
       ? 'full'
       : interventionActive && run.hitl?.kind === 'chat'
         ? 'live'
@@ -324,6 +330,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
           ) : null}
           {isLive ? (
             <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
+          ) : SimulationPanel ? (
+            <SimulationPanel agent={agent} />
           ) : PreRunForm ? (
             // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
             <PreRunForm

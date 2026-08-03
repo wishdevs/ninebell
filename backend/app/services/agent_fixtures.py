@@ -717,12 +717,44 @@ _VOUCHER_CARD_FIXTURE: dict = {
 }
 
 
+# ── 세금계산서 — 화면 시뮬레이션 단계(자동화 그래프 미구축) ──────────────────
+# workflow_id 없음 = 실행 컨트롤 비활성(프론트 게이트). 프론트가 agent id 로 화면 시뮬레이션
+# 패널(src/components/live/simulation)을 렌더해 질문→리스트→입력→분할→요약 흐름만 확정한다.
+# steps/flow_graph 는 비운다 — 그래프가 없어 계획을 그리면 거짓이 된다. 그래프 구축 시
+# workflow_id·steps·flow_graph·handoff_note 를 채워 실동작으로 승격한다(경조금·학자금 관례).
+_TAX_INVOICE_FIXTURE: dict = {
+    "id": "tax-invoice",
+    "workflow_id": None,
+    "group_id": "resolution",
+    "hidden": False,
+    "name": "세금계산서",
+    "description": "세금계산서 결의서를 대신 작성합니다. 현재는 화면 흐름만 확인하는 시뮬레이션이며, 실제 옴니솔 조회·저장은 하지 않습니다.",
+    "drive": "browser",
+    "interaction": "conversational",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    "timeout_seconds": 240,
+    "elapsed_seconds": 0,
+    "current_action": "화면 시뮬레이션 — 자동화는 아직 연결되지 않았습니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": None,
+    "steps": [],
+    "logs": [],
+}
+
+
 AGENT_FIXTURES.extend(
     [
         _TRIP_DOMESTIC_FIXTURE,
         _TRIP_OVERSEAS_FIXTURE,
         _GYEONGJO_GRANT_FIXTURE,  # family-event 더미 → 실동작 승격(gyeongjo-grant).
         _HAKJAGUM_GRANT_FIXTURE,  # scholarship 더미 → 실동작 승격(hakjagum-grant, 노출).
+        _TAX_INVOICE_FIXTURE,  # 결의서입력 — 프론트 화면 시뮬레이션(실행 비활성).
         # 회계전표 그룹 — 표시 순서: 외상매입금 → 외상매출금 → 미지급금 법인카드(사용자 지정 2026-07-21).
         _VOUCHER_PAYABLE_FIXTURE,  # voucher-trade-payable → voucher-payable(내수구매)
         _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable

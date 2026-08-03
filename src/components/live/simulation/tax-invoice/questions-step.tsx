@@ -1,0 +1,208 @@
+'use client';
+
+import { RiArrowRightLine, RiInformationLine } from '@remixicon/react';
+import { Button } from '@/components/ui/button';
+import { DatePicker } from '@/components/ui/date-picker';
+import { ChoiceOption, QuestionBlock, SimStepHeader } from './ui';
+import {
+  INVOICE_DATE_MAX,
+  INVOICE_DATE_MIN,
+  ISSUE_LABEL,
+  NONDEDUCT_LABEL,
+  SPLIT_LABEL,
+  TAX_LABEL,
+  type IssueState,
+  type NondeductReason,
+  type SplitChoice,
+  type TaxKind,
+} from './model';
+
+/** 1단계에서 모으는 답 — 이후 모든 화면의 분기 근거. */
+export interface QuestionAnswers {
+  issue: IssueState | null;
+  /** 세금계산서일 조회기간 — 발행 후에만 사용(리스트 필터). */
+  invoiceFrom: string;
+  invoiceTo: string;
+  split: SplitChoice | null;
+  tax: TaxKind | null;
+  nondeduct: NondeductReason | null;
+}
+
+export function emptyAnswers(): QuestionAnswers {
+  return { issue: null, invoiceFrom: '', invoiceTo: '', split: null, tax: null, nondeduct: null };
+}
+
+/** 다음 단계로 갈 수 있는가 — 점진적 노출의 마지막 질문까지 답이 채워졌는지. */
+export function answersComplete(a: QuestionAnswers): boolean {
+  if (!a.issue || !a.split || !a.tax) return false;
+  if (a.issue === 'after') {
+    if (!a.invoiceFrom || !a.invoiceTo || a.invoiceFrom > a.invoiceTo) return false;
+    if (a.tax === 'nondeduct' && !a.nondeduct) return false;
+  }
+  return true;
+}
+
+interface QuestionsStepProps {
+  value: QuestionAnswers;
+  onChange: (next: QuestionAnswers) => void;
+  onNext: () => void;
+}
+
+/**
+ * 1단계 — 점진적 노출 질문. 앞 질문에 답해야 다음 질문이 나타난다.
+ *
+ * 분할↔불공 상호배제: 불공은 분할할 수 없다. 분할 질문이 과세여부 질문보다 **앞**에 있으므로
+ * 자연스러운 방향은 "분할을 켜면 과세여부 목록에서 불공이 사라지는" 쪽이다. 이미 불공을 고른
+ * 뒤에 되돌아와 분할을 켜면 과세여부 선택을 해제해 다시 고르게 한다(잘못된 조합이 남지 않게).
+ */
+export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
+  const set = (patch: Partial<QuestionAnswers>) => onChange({ ...value, ...patch });
+
+  const pickIssue = (issue: IssueState) => {
+    if (value.issue === issue) return;
+    // 경로가 바뀌면 뒤 질문은 무효 — 전부 비운다(발행 전은 기간 자체가 없다).
+    onChange({ ...emptyAnswers(), issue });
+  };
+
+  const pickSplit = (split: SplitChoice) => {
+    // 분할을 켜면 불공 조합은 성립하지 않는다 → 과세여부를 해제해 다시 고르게 한다.
+    const invalidates = split === 'split' && value.tax === 'nondeduct';
+    set({ split, ...(invalidates ? { tax: null, nondeduct: null } : {}) });
+  };
+
+  const pickTax = (tax: TaxKind) => {
+    set({ tax, nondeduct: tax === 'nondeduct' ? value.nondeduct : null });
+  };
+
+  // 과세여부 선택지 — 분할이면 불공을 목록에서 제외한다(미노출).
+  const taxOptions: TaxKind[] =
+    value.split === 'split' ? ['taxable', 'exempt'] : ['taxable', 'exempt', 'nondeduct'];
+
+  const rangeInvalid =
+    !!value.invoiceFrom && !!value.invoiceTo && value.invoiceFrom > value.invoiceTo;
+  const showSplitQuestion =
+    value.issue === 'before' ||
+    (value.issue === 'after' && !!value.invoiceFrom && !!value.invoiceTo && !rangeInvalid);
+  const showTaxQuestion = showSplitQuestion && value.split !== null;
+  const showNondeductQuestion =
+    showTaxQuestion && value.issue === 'after' && value.tax === 'nondeduct';
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <SimStepHeader
+        title="세금계산서 결의서 — 어떤 건인가요?"
+        prompt="답을 고르면 다음 질문이 나타납니다. 모든 질문에 답해야 입력 단계로 넘어갑니다."
+      />
+
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pr-1">
+        <QuestionBlock step={1} label="세금계산서 발행 전인가요?">
+          <ChoiceOption
+            label={ISSUE_LABEL.before}
+            description="아직 발행되지 않아 리스트가 없습니다 — 바로 입력항목을 채웁니다."
+            active={value.issue === 'before'}
+            onClick={() => pickIssue('before')}
+          />
+          <ChoiceOption
+            label={ISSUE_LABEL.after}
+            description="이미 발행되어 조회됩니다 — 리스트에서 처리할 항목을 고릅니다."
+            active={value.issue === 'after'}
+            onClick={() => pickIssue('after')}
+          />
+        </QuestionBlock>
+
+        {value.issue === 'after' ? (
+          <QuestionBlock
+            step={2}
+            label="세금계산서일을 선택하세요"
+            hint={`선택한 기간의 (세금)계산서만 리스트에 나타납니다. 더미 데이터는 ${INVOICE_DATE_MIN} ~ ${INVOICE_DATE_MAX} 범위입니다.`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <DatePicker
+                ariaLabel="세금계산서일 시작"
+                value={value.invoiceFrom}
+                onChange={(v) => set({ invoiceFrom: v })}
+              />
+              <span className="text-foreground-tertiary text-xs">~</span>
+              <DatePicker
+                ariaLabel="세금계산서일 종료"
+                value={value.invoiceTo}
+                onChange={(v) => set({ invoiceTo: v })}
+              />
+            </div>
+            {rangeInvalid ? (
+              <p role="alert" className="text-danger text-[11px]">
+                시작일이 종료일보다 늦을 수 없습니다.
+              </p>
+            ) : null}
+          </QuestionBlock>
+        ) : null}
+
+        {showSplitQuestion ? (
+          <QuestionBlock step={value.issue === 'after' ? 3 : 2} label="비용분할이 필요한가요?">
+            <ChoiceOption
+              label={SPLIT_LABEL.single}
+              description="한 건으로 전액 처리합니다."
+              active={value.split === 'single'}
+              onClick={() => pickSplit('single')}
+            />
+            <ChoiceOption
+              label={SPLIT_LABEL.split}
+              description="예산단위·프로젝트·비용센터별로 금액을 나눠 담습니다."
+              active={value.split === 'split'}
+              onClick={() => pickSplit('split')}
+            />
+          </QuestionBlock>
+        ) : null}
+
+        {showTaxQuestion ? (
+          <QuestionBlock
+            step={value.issue === 'after' ? 4 : 3}
+            label="과세 / 비과세 / 불공 중 어떤 것인가요?"
+            hint={
+              value.split === 'split' ? (
+                <span className="inline-flex items-center gap-1">
+                  <RiInformationLine size={12} aria-hidden />
+                  불공은 분할할 수 없어 목록에서 제외했습니다.
+                </span>
+              ) : undefined
+            }
+          >
+            {taxOptions.map((t) => (
+              <ChoiceOption
+                key={t}
+                label={TAX_LABEL[t]}
+                active={value.tax === t}
+                onClick={() => pickTax(t)}
+              />
+            ))}
+          </QuestionBlock>
+        ) : null}
+
+        {showNondeductQuestion ? (
+          <QuestionBlock step={5} label="불공 사유를 선택하세요">
+            {(Object.keys(NONDEDUCT_LABEL) as NondeductReason[]).map((r) => (
+              <ChoiceOption
+                key={r}
+                label={NONDEDUCT_LABEL[r]}
+                active={value.nondeduct === r}
+                onClick={() => set({ nondeduct: r })}
+              />
+            ))}
+          </QuestionBlock>
+        ) : null}
+      </div>
+
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        <Button
+          size="sm"
+          onClick={onNext}
+          disabled={!answersComplete(value)}
+          title={answersComplete(value) ? undefined : '모든 질문에 답하면 다음으로 넘어갑니다.'}
+        >
+          {value.issue === 'after' ? '리스트 보기' : '입력항목 채우기'}
+          <RiArrowRightLine size={14} aria-hidden />
+        </Button>
+      </div>
+    </div>
+  );
+}
