@@ -162,6 +162,14 @@
   .kv dt { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
   .kv dd { margin: 0; color: var(--ink); }
 
+  /* 증빙유형 배지 — 코드가 주인공이라 모노 대문자로 크게 세운다. */
+  .ev { display: flex; align-items: baseline; gap: 10px; }
+  .ev-code { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+             color: var(--accent-ink); font-variant-numeric: tabular-nums; line-height: 1; }
+  .ev-name { font-size: 13.5px; color: var(--ink); font-weight: 600; }
+  .ev-none { font-size: 13px; color: var(--ink-3); }
+  .ev-note { font-size: 12.5px; line-height: 1.5; }
+
   /* ── 분기도 ───────────────────────────────────────────────────────────── */
   .flow { display: grid; gap: 10px; }
   .lane { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 14px; align-items: stretch; }
@@ -297,6 +305,13 @@
             <dl class="kv" id="answers"></dl>
           </div>
         </div>
+
+        <div class="panel" id="evPanel">
+          <div class="panel-hd"><h3>선택되는 증빙유형</h3></div>
+          <div class="panel-bd" style="padding-top:14px;padding-bottom:16px;gap:10px">
+            <div id="evBody"></div>
+          </div>
+        </div>
       </aside>
     </div>
   </section>
@@ -372,9 +387,51 @@
     </div>
   </section>
 
+  <!-- ══ 3.5 증빙유형 ═══════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>어떤 증빙유형이 되는가</h2></div>
+    <p class="sec-sub">
+      질문의 답이 곧 ERP 증빙유형 코드입니다. <b>발행 여부 × 과세성격</b>(불공이면 <b>× 사유</b>)이
+      코드 하나로 접힙니다 — 위 시뮬레이터에서 답을 바꾸면 오른쪽에 실시간으로 표시됩니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th class="num" style="width:60px">코드</th><th>증빙유형</th><th style="width:22%">발행</th><th style="width:26%">선택 조합</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num fld">03</td><td>세금계산서</td><td>발행 후</td><td>과세</td></tr>
+          <tr><td class="num fld">04</td><td>계산서</td><td>발행 후</td><td>비과세</td></tr>
+          <tr><td class="num fld">05</td><td>세금계산서(불공) 사업과 관련없는 지출</td><td>발행 후</td><td>불공 · 사업과 관련없는 지출</td></tr>
+          <tr><td class="num fld">06</td><td>세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차</td><td>발행 후</td><td>불공 · 비영업용 소형승용차</td></tr>
+          <tr><td class="num fld">07</td><td>세금계산서(불공) 면세사업과 관련된분</td><td>발행 후</td><td>불공 · 면세사업 관련</td></tr>
+          <tr><td class="num fld">22</td><td>세금계산서 발행 전 입력(과세)</td><td>발행 전</td><td>과세</td></tr>
+          <tr><td class="num fld">23</td><td>세금계산서 발행 전 입력(비과세)</td><td>발행 전</td><td>비과세</td></tr>
+          <tr><td class="num fld">24</td><td>세금계산서 발행 전 (과세)불공 차량용</td><td>발행 전</td><td>불공 <span class="chip chip-warn">차량용만</span></td></tr>
+          <tr><td class="num fld muted">11</td><td class="muted">세금계산서(원증빙)</td><td class="muted">—</td><td class="muted">이 플로우에서 미사용</td></tr>
+          <tr><td class="num fld muted">13</td><td class="muted">계산서(원증빙)</td><td class="muted">—</td><td class="muted">이 플로우에서 미사용</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="cards" style="margin-top:16px">
+      <div class="card stripe-warn">
+        <h3>확인 필요 — 발행 전 불공</h3>
+        <p>발행 후에는 불공 사유 세 가지가 각각 코드(05·06·07)를 갖는데, <b>발행 전에는 24(차량용) 하나뿐</b>입니다.
+           차량 외 사유를 담을 자리가 없으니, 발행 전 불공은 <b>차량용만 가능한지</b> 확인이 필요합니다.
+           차량용만 가능하다면 발행 전 경로에서 불공을 고를 때 사유를 묻지 말고 차량용으로 고정하는 편이 명확합니다.</p>
+      </div>
+      <div class="card stripe">
+        <h3>원증빙 코드 11 · 13</h3>
+        <p>이 플로우의 어떤 조합으로도 선택되지 않습니다. 별도 업무(원증빙 첨부 건)에서 쓰이는 것으로 보이며,
+           필요하다면 질문을 하나 더 두어야 합니다.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ══ 4. 입력 항목 ═══════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">04</span><h2>무엇을 입력받는가</h2></div>
+    <div class="sec-head"><span class="sec-num">05</span><h2>무엇을 입력받는가</h2></div>
     <p class="sec-sub">
       공통 일곱 항목은 어느 경로에서나 받습니다. 거래처·공급가액은 발행 전에만 직접 입력하고,
       발행 후에는 선택한 리스트 행에서 따라옵니다.
@@ -403,7 +460,7 @@
 
   <!-- ══ 5. 분할 ════════════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">05</span><h2>비용분할</h2></div>
+    <div class="sec-head"><span class="sec-num">06</span><h2>비용분할</h2></div>
     <p class="sec-sub">
       공통 항목을 모두 채운 뒤 추가로 받습니다. 행마다 예산단위 · 적요 · 프로젝트 · 공급가액 ·
       <b>비용센터</b>를 입력하고, <b>남은 금액이 0이 되어야</b> 확정할 수 있습니다.
@@ -465,7 +522,7 @@
 
   <!-- ══ 6. 리스트 ══════════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">06</span><h2>세금계산서 리스트</h2></div>
+    <div class="sec-head"><span class="sec-num">07</span><h2>세금계산서 리스트</h2></div>
     <p class="sec-sub">
       발행 후 경로에서 처리할 건을 고르는 화면입니다. 기간 기본값은 <b>한 달 전 ~ 오늘</b>이며,
       음수 행은 취소분으로 구분해 표시하되 정상적으로 선택할 수 있습니다.
@@ -491,7 +548,7 @@
 
   <!-- ══ 7. 다음 단계 ═══════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">07</span><h2>백엔드를 붙일 때</h2></div>
+    <div class="sec-head"><span class="sec-num">08</span><h2>백엔드를 붙일 때</h2></div>
     <p class="sec-sub">지금은 프론트 안에서만 도는 시뮬레이션입니다. 실동작으로 승격할 때 채워야 할 지점입니다.</p>
     <div class="tbl-wrap">
       <table>
@@ -686,6 +743,64 @@
       dl.appendChild(el('dt', null, p[0]));
       dl.appendChild(el('dd', null, p[1]));
     });
+
+    paintEvidence();
+  }
+
+  /* ── 증빙유형 ─────────────────────────────────────────────────────────
+     질문의 답이 곧 ERP 증빙유형 코드다. 발행 여부 × 과세성격(× 불공사유)이
+     코드 하나로 접힌다 — 사용자가 고른 것이 무엇으로 저장되는지 여기서 보인다. */
+  var EV = {
+    '03': '세금계산서',
+    '04': '계산서',
+    '05': '세금계산서(불공) 사업과 관련없는 지출',
+    '06': '세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차',
+    '07': '세금계산서(불공) 면세사업과 관련된분',
+    '11': '세금계산서(원증빙)',
+    '13': '계산서(원증빙)',
+    '22': '세금계산서 발행 전 입력(과세)',
+    '23': '세금계산서 발행 전 입력(비과세)',
+    '24': '세금계산서 발행 전 (과세)불공 차량용'
+  };
+  var ND_TO_EV = { unrelated: '05', car: '06', exemptbiz: '07' };
+
+  function evidenceCode(a) {
+    if (!a.issue || !a.tax) return null;
+    if (a.issue === 'before') {
+      if (a.tax === 'taxable') return '22';
+      if (a.tax === 'exempt') return '23';
+      return '24';                       // 발행 전 불공 — 코드가 차량용 하나뿐(아래 주의)
+    }
+    if (a.tax === 'taxable') return '03';
+    if (a.tax === 'exempt') return '04';
+    return a.nd ? ND_TO_EV[a.nd] : null; // 불공은 사유까지 골라야 코드가 정해진다
+  }
+
+  function paintEvidence() {
+    var box = document.getElementById('evBody');
+    box.textContent = '';
+    var code = evidenceCode(A);
+
+    if (!code) {
+      var why = !A.issue ? '발행 여부를 고르면'
+        : !A.tax ? '과세여부를 고르면'
+        : '불공 사유를 고르면';
+      box.appendChild(el('p', 'ev-none', why + ' 증빙유형이 정해집니다.'));
+      return;
+    }
+
+    var row = el('div', 'ev');
+    row.appendChild(el('span', 'ev-code', code));
+    row.appendChild(el('span', 'ev-name', EV[code]));
+    box.appendChild(row);
+
+    // 발행 전 불공은 코드가 '차량용' 하나뿐 — 다른 사유를 담을 자리가 없다.
+    if (A.issue === 'before' && A.tax === 'nondeduct') {
+      var w = el('div', 'rule-fire ev-note');
+      w.innerHTML = '<b>확인 필요</b> — 발행 전 불공 코드는 <b>24 (차량용)</b> 하나뿐입니다. '
+        + '차량 외 사유(사업 무관·면세사업)는 담을 코드가 없습니다.';
+      box.appendChild(w);
+    }
   }
 
   document.getElementById('reset').addEventListener('click', function () {

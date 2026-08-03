@@ -43,6 +43,65 @@ export const NONDEDUCT_LABEL: Record<NondeductReason, string> = {
   'exempt-business': '면세사업과 관련된분',
 };
 
+// ── 증빙유형 ────────────────────────────────────────────────────────────────
+// 1단계 질문의 답이 곧 ERP 증빙유형 코드다(발행 여부 × 과세성격 × 불공사유 → 코드 1개).
+// 요약 화면이 params 스키마의 출발점이므로 여기서 코드를 확정해 보여준다.
+
+export const EVIDENCE_LABEL: Record<string, string> = {
+  '03': '세금계산서',
+  '04': '계산서',
+  '05': '세금계산서(불공) 사업과 관련없는 지출',
+  '06': '세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차',
+  '07': '세금계산서(불공) 면세사업과 관련된분',
+  '11': '세금계산서(원증빙)',
+  '13': '계산서(원증빙)',
+  '22': '세금계산서 발행 전 입력(과세)',
+  '23': '세금계산서 발행 전 입력(비과세)',
+  '24': '세금계산서 발행 전 (과세)불공 차량용',
+};
+
+const NONDEDUCT_EVIDENCE: Record<NondeductReason, string> = {
+  'no-business': '05',
+  'small-car': '06',
+  'exempt-business': '07',
+};
+
+export interface EvidenceType {
+  code: string;
+  label: string;
+  /** 표시할 주의 문구(없으면 undefined) — 코드 체계가 조합을 다 담지 못하는 자리. */
+  caution?: string;
+}
+
+/**
+ * 답 조합 → 증빙유형. 아직 못 정하면 null(질문이 덜 끝났다는 뜻).
+ *
+ * ⚠ 발행 전 불공은 코드가 **24(차량용) 하나뿐**이라 차량 외 사유를 담을 자리가 없다.
+ *   업무 확인 전까지 코드는 24 로 두되 그 사실을 화면에 드러낸다(조용히 뭉개지 않는다).
+ *   11·13(원증빙)은 이 플로우의 어떤 조합으로도 선택되지 않는다.
+ */
+export function evidenceFor(
+  issue: IssueState | null,
+  tax: TaxKind | null,
+  nondeduct: NondeductReason | null,
+): EvidenceType | null {
+  if (!issue || !tax) return null;
+  if (issue === 'before') {
+    if (tax === 'taxable') return { code: '22', label: EVIDENCE_LABEL['22'] };
+    if (tax === 'exempt') return { code: '23', label: EVIDENCE_LABEL['23'] };
+    return {
+      code: '24',
+      label: EVIDENCE_LABEL['24'],
+      caution: '발행 전 불공 코드는 24(차량용) 하나뿐입니다 — 차량 외 사유는 담을 코드가 없습니다.',
+    };
+  }
+  if (tax === 'taxable') return { code: '03', label: EVIDENCE_LABEL['03'] };
+  if (tax === 'exempt') return { code: '04', label: EVIDENCE_LABEL['04'] };
+  if (!nondeduct) return null; // 불공은 사유까지 골라야 코드가 정해진다
+  const code = NONDEDUCT_EVIDENCE[nondeduct];
+  return { code, label: EVIDENCE_LABEL[code] };
+}
+
 // ── 세금계산서 리스트(더미) ──────────────────────────────────────────────────
 
 export interface TaxInvoiceRow {

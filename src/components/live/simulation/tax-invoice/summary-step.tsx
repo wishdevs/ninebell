@@ -10,6 +10,7 @@ import {
   NONDEDUCT_LABEL,
   SPLIT_LABEL,
   TAX_LABEL,
+  evidenceFor,
   formatWon,
   parseAmount,
   type EntryValues,
@@ -86,6 +87,24 @@ export function SummaryStep({
               {answers.tax ? TAX_LABEL[answers.tax] : '—'}
               {answers.nondeduct ? ` · ${NONDEDUCT_LABEL[answers.nondeduct]}` : ''}
             </Row>
+            {/* 답 조합이 접혀 들어가는 최종 값 — ERP 에 실제로 넣는 코드라 굵게 세운다. */}
+            {(() => {
+              const ev = evidenceFor(answers.issue, answers.tax, answers.nondeduct);
+              if (!ev) return null;
+              return (
+                <>
+                  <Row label="증빙유형">
+                    <span className="font-mono font-semibold tabular-nums">{ev.code}</span>
+                    <span className="text-foreground-secondary"> · {ev.label}</span>
+                  </Row>
+                  {ev.caution ? (
+                    <p className="text-warning bg-warning/10 border-warning/25 rounded border px-2 py-1.5 text-[11px] leading-relaxed">
+                      확인 필요 — {ev.caution}
+                    </p>
+                  ) : null}
+                </>
+              );
+            })()}
           </section>
 
           {selection ? (
