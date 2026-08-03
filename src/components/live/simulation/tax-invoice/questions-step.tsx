@@ -34,11 +34,11 @@ export function emptyAnswers(): QuestionAnswers {
 
 /** 다음 단계로 갈 수 있는가 — 점진적 노출의 마지막 질문까지 답이 채워졌는지. */
 export function answersComplete(a: QuestionAnswers): boolean {
-  if (!a.issue || !a.split || !a.tax) return false;
-  if (a.issue === 'after') {
-    if (!a.invoiceFrom || !a.invoiceTo || a.invoiceFrom > a.invoiceTo) return false;
-    if (a.tax === 'nondeduct' && !a.nondeduct) return false;
-  }
+  if (!a.issue || !a.tax) return false;
+  if (a.issue === 'before') return true; // 발행 전은 분할 질문 자체가 없다(아래 주석).
+  if (!a.split) return false;
+  if (!a.invoiceFrom || !a.invoiceTo || a.invoiceFrom > a.invoiceTo) return false;
+  if (a.tax === 'nondeduct' && !a.nondeduct) return false;
   return true;
 }
 
@@ -61,7 +61,9 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
   const pickIssue = (issue: IssueState) => {
     if (value.issue === issue) return;
     // 경로가 바뀌면 뒤 질문은 무효 — 전부 비운다(발행 전은 기간 자체가 없다).
-    onChange({ ...emptyAnswers(), issue });
+    // 발행 전은 **비용분할이 불가**(사용자 확정 2026-08-03)라 split 을 'single' 로 고정한다
+    // — 질문을 숨기기만 하고 null 로 두면 뒤 단계가 '미답' 으로 막힌다.
+    onChange({ ...emptyAnswers(), issue, split: issue === 'before' ? 'single' : null });
   };
 
   const pickSplit = (split: SplitChoice) => {
@@ -80,10 +82,12 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
 
   const rangeInvalid =
     !!value.invoiceFrom && !!value.invoiceTo && value.invoiceFrom > value.invoiceTo;
+  // 비용분할은 **발행 후 전용**(사용자 확정 2026-08-03: "세금발행전일때는 비용분할이 안됩니다").
+  // 발행 전은 이 질문을 건너뛰고 과세여부로 바로 간다(split 은 pickIssue 가 'single' 로 고정).
   const showSplitQuestion =
-    value.issue === 'before' ||
-    (value.issue === 'after' && !!value.invoiceFrom && !!value.invoiceTo && !rangeInvalid);
-  const showTaxQuestion = showSplitQuestion && value.split !== null;
+    value.issue === 'after' && !!value.invoiceFrom && !!value.invoiceTo && !rangeInvalid;
+  const showTaxQuestion =
+    value.issue === 'before' || (showSplitQuestion && value.split !== null);
   const showNondeductQuestion =
     showTaxQuestion && value.issue === 'after' && value.tax === 'nondeduct';
 
@@ -156,7 +160,7 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
 
         {showTaxQuestion ? (
           <QuestionBlock
-            step={value.issue === 'after' ? 4 : 3}
+            step={value.issue === 'after' ? 4 : 2}
             label="과세 / 비과세 / 불공 중 어떤 것인가요?"
             hint={
               value.split === 'split' ? (
