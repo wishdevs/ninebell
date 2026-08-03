@@ -103,18 +103,33 @@ Phase2(삭제): deleted=True post_delete_count=0
 소스를 고친 뒤 다시 `smoke_cycle.py` 를 돌려 델타를 비교하면 6단계 루프가 짧아진다.
 
 
-## 결의서입력 그룹 실저장 사이클
+## 결의서입력 그룹 실저장 사이클 — **제품 경로**(2026-08-03 전환)
 
-에이전트 그래프를 직접 몰아 **F7 실저장 → 검증 → F6 삭제**를 N회 반복한다(대시보드 UI 경유 없음).
-결의구분별로 스크립트가 하나씩 있고, 삭제 가드레일이 **자기 결의구분만** 대상으로 삼으므로 서로
-동시에 돌려도 남의 전표를 건드리지 않는다.
+**우리 시스템(대시보드 UI)에서 작성하고 ERP 에서 삭제**한다. 종전에는 스크립트가
+`build_*_graph()` 를 직접 `ainvoke` 해서 ERP 에서 작성하고 ERP 에서 지웠고, 그래서 프론트
+pre-run 폼 → `runs.py` collect 의 서버 권위 params 주입(`department`·`cost_type`·`fuel_*`) →
+러너(세마포어·SSE·스크린캐스트·시간예산 워치독) → `agent_runs` 기록이 **전부 미검증**이었다.
+지금은 법인카드 `e2e_smoke.py` 와 같은 2페이즈다(공통 모듈 `product_cycle.py`).
 
-| 스크립트 | 결의구분 | 사이클 수 env |
-|---|---|---|
-| `trip_smoke_cycle.py` | 출장(국내·자차) 53 | `TRIP_SMOKE_CYCLES` |
-| `trip_overseas_smoke_cycle.py` | 출장(해외·정산서) 54 | `TRIP_OVERSEAS_SMOKE_CYCLES` |
-| `gyeongjo_smoke_cycle.py` | 경조금신청서 55 | `GYEONGJO_SMOKE_CYCLES` |
-| `hakjagum_smoke_cycle.py` | 학자금신청서 56 | `HAKJAGUM_SMOKE_CYCLES` |
+- **phase1(제품)** — 대시보드(:3101) 로그인 → `/agents/<id>` → **실행 전 입력 폼을 실제 위젯으로
+  조작**(행 추가·유형 셀렉트·달력 팝오버·거래처/프로젝트 콤보박스 검색) → 실행 → 종료 대기 →
+  `agent_runs` 행 생성 확인(**제품 경로를 탔다는 증거**).
+  ⚠ params 를 코드로 주입하지 않는다. 서버 권위 키는 `runs.py` 가 채운다.
+- **phase2(ERP)** — 별도 브라우저로 ERP 직접 로그인 → GLDDOC00300 → 결의구분 필터 → 조회 →
+  **3중 가드** → 상세 대조(행수·행별 금액·거래처·적요·합계) → F6 → 잔존 0.
+
+결의구분별로 스크립트가 하나씩 있고, 삭제 가드레일이 **자기 결의구분만** 대상으로 삼는다.
+단, 제품 경로는 같은 계정의 러너 슬롯·ERP 세션을 공유하므로 **하나씩 순차로** 돌린다.
+
+| 스크립트 | 대시보드 에이전트 | 결의구분 | 사이클 수 env | 리포트 |
+|---|---|---|---|---|
+| `trip_smoke_cycle.py` | `/agents/trip-domestic` | 출장(국내·자차) 53 | `TRIP_SMOKE_CYCLES` | `artifacts/trip_product_cycle.json` |
+| `trip_overseas_smoke_cycle.py` | `/agents/trip-overseas` | 출장(해외·정산서) 54 | `TRIP_OVERSEAS_SMOKE_CYCLES` | `artifacts/trip_overseas_product_cycle.json` |
+| `gyeongjo_smoke_cycle.py` | `/agents/family-event` | 경조금신청서 55 | `GYEONGJO_SMOKE_CYCLES` | `artifacts/gyeongjo_product_cycle.json` |
+| `hakjagum_smoke_cycle.py` | `/agents/scholarship` | 학자금신청서 56 | `HAKJAGUM_SMOKE_CYCLES` | `artifacts/hakjagum_product_cycle.json` |
+
+공통 env: `E2E_FRONTEND`(기본 `http://localhost:3101`) · `E2E_USERID` · `E2E_PASSWORD` ·
+`E2E_HEADLESS=0` 이면 브라우저 창 표시 · `E2E_RUN_TIMEOUT_S`(종료 대기 상한, 기본 600).
 
 ### 해외출장 — `trip_overseas_smoke_cycle.py`
 
@@ -124,8 +139,9 @@ TRIP_OVERSEAS_SMOKE_CYCLES=1 .venv/bin/python e2e/trip_overseas_smoke_cycle.py  
 TRIP_OVERSEAS_SMOKE_CYCLES=10 .venv/bin/python e2e/trip_overseas_smoke_cycle.py  # 10사이클
 ```
 
-국내(`trip_smoke_cycle.py`) 포팅 + 해외 델타 검증. 사이클마다 1~3행을 F3 반복으로 채워 저장한 뒤
-아래를 대조하고, 전부 맞아야 PASS 다.
+국내(`trip_smoke_cycle.py`) 포팅 + 해외 델타 검증. 사이클마다 폼에 1~3행을 넣어 저장한 뒤
+아래를 대조하고, **여기에 더해** `agent_runs` 기록(제품 경로 증거)·DB 최종 상태 `succeeded`·
+삭제 잔존 0 까지 전부 맞아야 PASS 다.
 
 - `amount_match` — 입력 공급가액이 detail `SPPRC_AMT2` 로 **행 순서까지** 그대로 저장(해외는 국내
   유류비 같은 금액 계산 규칙이 없어, 불일치는 곧 채움 회귀다).
@@ -140,9 +156,9 @@ TRIP_OVERSEAS_SMOKE_CYCLES=10 .venv/bin/python e2e/trip_overseas_smoke_cycle.py 
 
 안전 수칙은 형제 스크립트와 동일하다. **삭제까지가 한 사이클**(잔존 0 확인 전 다음 사이클 금지),
 **상신 절대 금지**(F7·F6 만), 삭제 가드레일 = 결의자 = 로그인 계정 + 결의구분 54 + 미결(전표번호
-공백). 하나라도 어긋나면 삭제를 중단하고 덤프를 남긴다. **cycle 1 안전 게이트**로 첫 사이클에서
-금액 불일치·스트레이 빈 행이 보이면 나머지 사이클을 돌리지 않는다. 단계별 ms 와 전체 진단은
-`artifacts/trip_overseas_smoke_cycle.json` 에 남는다.
+공백). 하나라도 어긋나면 삭제를 중단하고 덤프를 남긴다. **cycle 1 안전 게이트**로 첫 사이클이
+PASS 가 아니면 나머지 사이클을 돌리지 않는다(회귀 상태에서 전표 양산 방지). 전체 진단은
+`artifacts/trip_overseas_product_cycle.json` 에 남는다.
 
 ---
 

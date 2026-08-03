@@ -1,302 +1,229 @@
-"""출장(국내/자차) 실저장 사이클 스모크 — 그래프 완주(F7 실저장)→검증→삭제 N회 반복.
+"""출장(국내/자차) 실저장 사이클 스모크 — **제품 경로**(대시보드 폼→실행)로 작성 → ERP 에서 삭제.
 
-정책 변경(사용자 지시 2026-07-07): 저장 없는 반복은 무의미 → card e2e 처럼 **실저장(F7)→검증→
-삭제** 사이클로 테스트한다. F7 실저장이 테스트에서 명시 승인됨(단 반드시 F6 삭제로 정리, 상신 금지).
+전환(사용자 지시 2026-08-03): 종전에는 스크립트가 `build_trip_domestic_graph()` 를 직접
+`ainvoke` 해서 **ERP 에서 작성하고 ERP 에서 지웠다** — 프론트 pre-run 폼·`runs.py` collect 의
+서버 권위 params 주입(department·cost_type·fuel_*)·러너(세마포어·SSE·스크린캐스트·시간예산
+워치독)·agent_runs 기록이 전부 미검증이었다. 게다가 스크립트가 params 를 손으로 조립하다
+프로덕션 계약과 어긋나 **3주간 로그인조차 못 했다**(행별 invoiceDate 누락).
+
+이제 법인카드 e2e(`e2e/e2e_smoke.py`)와 같은 2페이즈다:
+  phase1 — 대시보드(:3101) 로그인 → /agents/trip-domestic → **실행 전 입력 폼을 실제 DOM 으로
+           채우고**(행 추가·유형 셀렉트·달력·거래처/프로젝트 콤보박스) 실행 → 종료 대기.
+           ⚠ params 를 코드로 주입하지 않는다. department·cost_type·fuel_unit_price·
+           fuel_classes 는 **서버(runs.py)가 채우는 권위 키**라 스크립트가 넘기지 않는다.
+  phase2 — 별도 브라우저로 ERP 직접 로그인 → GLDDOC00300 → 결의구분 '출장(국내·자차)' 조회 →
+           3중 가드 → 상세 대조 → F6 → 잔존 0.
+
+폼이 넣는 값은 종전 `_cycle_params` 와 업무적으로 동등하다(통행료 1~2행 + 유류비 1행,
+거래처 한국도로공사, 프로젝트 포장개선, 적요 기본 문구).
 
 ⚠ 안전 수칙
   - **삭제까지가 한 사이클** — 삭제 검증(잔존 0) 없이는 다음 사이클 진행 금지.
-  - **상신(결재) 절대 금지** — 삭제 불가 상태를 만들지 않는다. F7(저장)·F6(삭제)만.
-  - 삭제 가드레일: 결의자(WRT_EMP_NM)=로그인계정 + 결의구분(ABDOCU_FG_CD)=53(출장 국내·자차) +
-    미결(DOCU_NO 공백). 하나라도 안 맞으면 **삭제 중단·보고**(테스트 계정 외 전표 보호).
-  - 삭제가 한 번이라도 실패하면 사이클 중단하고 전표번호와 함께 즉시 보고.
+  - **상신(결재) 절대 금지** — F7(저장)·F6(삭제)만.
+  - 삭제 3중 가드: 결의자(WRT_EMP_NM)=로그인계정 + 결의구분(ABDOCU_FG_CD)=53 + 미결(DOCU_NO 공백).
+    **완화 금지** — 하나라도 안 맞으면 삭제 중단·보고.
 
-Usage: cd backend && .venv/bin/python e2e/trip_smoke_cycle.py   (TRIP_SMOKE_CYCLES=1 로 1회 검증 먼저)
+Usage: cd backend && TRIP_SMOKE_CYCLES=1 .venv/bin/python e2e/trip_smoke_cycle.py
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
 import time
-from datetime import date as _date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend 루트
 
-# ⚠ 진단 로그 가시화(2026-08-01): app/core/logging_setup 은 app.main 부팅 경로에서만 불려서,
-#   독립 실행 e2e 는 root 기본값(WARNING)으로 돌아 사용자유형 해석·적응형 대기 배율 같은
-#   INFO 진단이 통째로 유실됐다. 스모크는 진단이 목적이므로 여기서 직접 켠다.
+# 진단 로그 가시화 — 독립 실행 e2e 는 root 기본값(WARNING)이라 INFO 진단이 통째로 유실된다.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
-from playwright.async_api import async_playwright  # noqa: E402
+from app.agents.trip_domestic.params import fuel_support_amount  # noqa: E402
+from app.services.agent_settings import effective_settings  # noqa: E402
+from e2e.product_cycle import (  # noqa: E402
+    TODAY,
+    USERID,
+    add_row,
+    as_int,
+    erp_verify_and_delete,
+    pick_combo,
+    row_scope,
+    run_cycles,
+    run_product,
+    set_date,
+    set_select,
+    summarize_run,
+)
 
-from app.agents import build_trip_domestic_graph  # noqa: E402
-from app.agents.card_collect import js as cc_js  # noqa: E402 — MODAL_* JS
-from app.live.runner import LIVE_VIEWPORT  # noqa: E402
-from app.services.agent_settings import effective_settings  # noqa: E402 — 실효 설정 미러
-from nbkit.omnisol import selectors  # noqa: E402
-# card e2e 검증 JS 재사용(마스터 조회·덤프·전체선택).
-from e2e.e2e_smoke import BTN_BOX_JS, MASTER_DUMP_JS, MASTER_ROWCOUNT_JS, SELECT_MASTER_JS  # noqa: E402
-
-USERID = os.environ.get("E2E_USERID", "이트라이브2")
-PASSWORD = os.environ.get("E2E_PASSWORD", "1111")
+AGENT_ID = "trip-domestic"  # 대시보드 에이전트 상세 URL(/agents/<id>)
+WORKFLOW_ID = "trip-domestic"  # agent_runs.agent_id (제품 경로 증거 조회 키)
+TAG = "trip_product_cycle"
 CYCLES = int(os.environ.get("TRIP_SMOKE_CYCLES", "10"))
-ART = Path(__file__).resolve().parent / "artifacts"
-ART.mkdir(exist_ok=True)
-TODAY = _date.today().isoformat()
 
-TRIP_FG = "53"  # 결의구분 출장(국내·자차) 코드(P1 실측).
+TRIP_FG = "53"  # 결의구분 출장(국내·자차) 코드(P1 실측)
+GUBUN_LABEL = "출장(국내·자차)"  # 가운뎃점 `·` — 슬래시 아님
 
-_TOLL_PARTNER = {"partnerCode": "10512", "partnerName": "한국도로공사"}
-_PROJECT = {"code": "1310|1310", "name": "포장개선"}
-_DEPARTMENT = "인사/기획팀"
-_COST_TYPE = "판관비"
+PROJECT_NAME = "포장개선"  # 1310|1310 — 코드피커 검색이 라이브 검증된 유일 코드(사이클 공용)
+PARTNER_NAME = "한국도로공사"  # 10512 — 이 계정 '자주쓰는' 거래처
+TOLL_NOTE = "통행료(현금)"
+FUEL_NOTE = "국내출장 자차 유류비 지원"
 
-# ⚠ 에이전트 세부설정 미러(2026-08-01 수정) — runs.py 는 effective_settings(agent, stored) 가
-#   돌려준 실효 설정을 **params 로 평탄화**해 깔고(runs.py:218~225), validate 노드는 params
-#   자체를 settings Mapping 으로 parse_trip_params 에 넘긴다. 2026-07-08 '기준연비 동적화'
-#   이후 유효 키는 fuel_unit_price + fuel_classes[{id,label,kmPerL}] 뿐이고, 옛 스칼라
-#   fuel_eff_under_1000/1600/2000/over_2000 은 **죽은 키**다(effective_settings 가 만들지도,
-#   params.py 가 읽지도 않는다). 그 죽은 키만 넘긴 탓에 fuel_classes 가 통째로 비어
-#   "알 수 없는 차량종류입니다: under1600" 으로 매 사이클 저장이 거부됐다.
-#   DB 미의존(stored=None)이라 서버 설정 상태와 무관하게 자족적으로 유효한 params 가 된다.
-_AGENT_SETTINGS: dict = effective_settings("trip-domestic", None)
-# 차량종류 id 도 설정 목록에서 파생 — 기본 목록이 바뀌어도 하네스가 따라간다(하드코딩 금지).
-_CAR_CLASSES = [str(c["id"]) for c in _AGENT_SETTINGS["fuel_classes"]]
+# 차량종류·유류단가는 **서버 권위 키**라 params 로 넘기지 않는다. 다만 기대 금액을 계산해야 하므로
+# 서버와 동일한 실효 설정(DB 저장값 없음 → 스키마 기본값)을 미러로 읽는다(주입 아님, 대조용).
+_SETTINGS: dict = effective_settings(WORKFLOW_ID, None)
+_CAR_CLASSES = [(str(c["id"]), str(c["label"])) for c in _SETTINGS["fuel_classes"]]
 
 
-def _cycle_params(cycle: int) -> dict:
-    # ⚠ 행별 invoiceDate(계산서일) 필수 — 909ec32(2026-07-09)가 회계일을 '행별 계산서일의
-    #   최댓값 파생'으로 바꾸면서 params.parse_trip_params 가 행마다 invoiceDate 를 요구하게 됐다.
-    #   이 스크립트는 그 전(66b0d9d) 형태로 멈춰 있어 **2026-07-09 이후 항상 로그인 전에**
-    #   "1번째 행에 계산서일(증빙일)이 없습니다" 로 즉시 실패했다(라이브 커버리지 3주 공백,
-    #   2026-08-01 실측 확인). 프로덕션 FE 폼은 행별 증빙일을 보내므로 하네스만의 부패였다.
+def _plan(cycle: int) -> dict:
+    """사이클별 입력 계획 — 종전 `_cycle_params` 와 업무적으로 동등(통행료 1~2행 + 유류비 1행)."""
     toll_n = 1 + (cycle % 2)
-    rows: list[dict] = []
-    for j in range(toll_n):
-        rows.append({"type": "toll", **_TOLL_PARTNER, "amount": 12000 + cycle * 500 + j * 3300,
-                     "invoiceDate": TODAY,
-                     "project": dict(_PROJECT), "note": "통행료(현금)"})
-    car_class = _CAR_CLASSES[cycle % len(_CAR_CLASSES)]
+    tolls = [
+        {"amount": 12000 + cycle * 500 + j * 3300, "note": TOLL_NOTE} for j in range(toll_n)
+    ]
+    car_id, car_label = _CAR_CLASSES[cycle % len(_CAR_CLASSES)]
     km = 50 + (cycle * 25) % 251
-    rows.append({"type": "fuel", "km": km, "carClass": car_class, "invoiceDate": TODAY,
-                 "project": dict(_PROJECT), "note": "국내출장 자차 유류비 지원"})
+    fuel_amount = fuel_support_amount(km, car_id, _SETTINGS)
+    amounts = [t["amount"] for t in tolls] + [fuel_amount]
     return {
-        # acctDate 는 하위호환으로 남기되 실제 회계일은 행별 invoiceDate 최댓값에서 파생된다.
-        "trip": {"acctDate": TODAY, "rows": rows},
-        "department": _DEPARTMENT, "cost_type": _COST_TYPE,
-        **_AGENT_SETTINGS,  # fuel_unit_price + fuel_classes[{id,label,kmPerL}]
-        "_summary": {"toll_rows": toll_n, "fuel_km": km, "fuel_car_class": car_class},
+        "date": TODAY,
+        "toll_n": toll_n,
+        "tolls": tolls,
+        "car_id": car_id,
+        "car_label": car_label,
+        "km": km,
+        "fuel_amount": fuel_amount,
+        "rows": toll_n + 1,
+        "amounts": amounts,
+        "notes": [t["note"] for t in tolls] + [FUEL_NOTE],
+        # 통행료 행은 카탈로그 거래처, 유류비 행은 작성자 본인(런타임 본인이름 검색).
+        "partners": [PARTNER_NAME] * toll_n + [USERID],
+        "total": sum(amounts),
     }
 
 
-def _row_is_ours(row: dict) -> bool:
-    """삭제 안전 가드 — 결의자=USERID + 결의구분=53(출장 국내·자차) + 미결(DOCU_NO 공백)."""
-    writer_ok = str(row.get("WRT_EMP_NM") or "").strip() == USERID
-    fg_ok = str(row.get("ABDOCU_FG_CD") or "") == TRIP_FG
-    not_posted = not str(row.get("DOCU_NO") or "").strip()
-    return writer_ok and fg_ok and not_posted
+async def _fill(page, plan: dict) -> None:
+    """실행 전 입력 폼을 **실제 위젯 조작**으로 채운다(코드 주입 없음)."""
+    rows = plan["rows"]
+    for _ in range(rows - 1):
+        await add_row(page)  # 새 행은 직전 행과 같은 유형(통행료)으로 추가된다
+    # 유형 전환은 금액·적요·거래처를 초기화하므로 **채우기 전에** 마지막 행을 유류비로 바꾼다.
+    await set_select(page, row_scope(page, rows), "행 유형", "유류비 지원")
+
+    for i, toll in enumerate(plan["tolls"], start=1):
+        scope = row_scope(page, i)
+        await set_date(page, f"{i}행 계산서일", plan["date"])
+        await pick_combo(page, scope, 0, PROJECT_NAME, PROJECT_NAME)  # 프로젝트
+        await pick_combo(page, scope, 1, PARTNER_NAME, PARTNER_NAME)  # 거래처
+        await scope.get_by_label(f"{i}행 금액(공급가액)").fill(str(toll["amount"]))
+        await scope.get_by_label(f"{i}행 적요").fill(toll["note"])
+        print(f"[P1] {i}행(통행료) amount={toll['amount']}", flush=True)
+
+    i = plan["rows"]
+    scope = row_scope(page, i)
+    await set_date(page, f"{i}행 계산서일", plan["date"])
+    await pick_combo(page, scope, 0, PROJECT_NAME, PROJECT_NAME)
+    await set_select(page, scope, "차량종류", plan["car_label"])
+    await scope.get_by_label(f"{i}행 주행거리").fill(str(plan["km"]))
+    await scope.get_by_label(f"{i}행 적요").fill(FUEL_NOTE)
+    print(f"[P1] {i}행(유류비) {plan['car_label']}/{plan['km']}km → 기대 {plan['fuel_amount']}원", flush=True)
 
 
-async def _drive_graph(page, params: dict) -> dict:
-    """runner state 주입 미러 + 그래프 ainvoke(실저장 F7 — 몽키패치 없음). 이벤트 수집."""
-    events: asyncio.Queue = asyncio.Queue()
-    state = {"page": page, "browser": None, "events": events, "userid": USERID,
-             "password": PASSWORD, "params": params, "owner": None, "run_id": None}
-    graph = build_trip_domestic_graph()
-    steps_ms: dict[str, int] = {}
-    steps_failed: list[str] = []
-    errors: list[str] = []
-    task = asyncio.create_task(graph.ainvoke(state))
-    while not task.done() or not events.empty():
-        try:
-            ev = await asyncio.wait_for(events.get(), timeout=0.2)
-        except asyncio.TimeoutError:
-            continue
-        if "step" in ev:
-            if ev.get("status") in ("done", "failed") and isinstance(ev.get("ms"), int):
-                steps_ms[ev["step"]] = ev["ms"]
-            if ev.get("status") == "failed":
-                steps_failed.append(ev["step"])
-        elif ev.get("level") == "error":
-            errors.append(ev.get("log") or "")
-    final = await task
-    return {"steps_ms": steps_ms, "steps_failed": steps_failed, "errors": errors,
-            "result": (final or {}).get("result"), "error": (final or {}).get("error")}
+def _verify(plan: dict, vd: dict) -> dict:
+    """저장 결과 대조 — 행수·행별 금액·거래처·적요·합계(기존 스크립트 검증 수준 유지·강화)."""
+    det = (vd.get("detail") or {})
+    rows = det.get("rows") or []
+    actual_amounts = [as_int(r.get("SPPRC_AMT2")) for r in rows]
+    actual_notes = [str(r.get("NOTE_DC") or "").strip() for r in rows]
+    actual_partners = [str(r.get("PARTNER_NM") or "").strip() for r in rows]
+    total = as_int((vd.get("master") or {}).get("DETAIL_SUM_AMT"))
+    rows_clean = det.get("n") == plan["rows"]
+    return {
+        "detail_rowcount": det.get("n"),
+        "rows_clean": rows_clean,
+        "expected_amounts": plan["amounts"], "actual_amounts": actual_amounts,
+        "amount_match": rows_clean and actual_amounts == plan["amounts"],
+        "expected_notes": plan["notes"], "actual_notes": actual_notes,
+        "note_match": rows_clean and actual_notes == plan["notes"],
+        "expected_partners": plan["partners"], "actual_partners": actual_partners,
+        "partner_match": rows_clean and actual_partners == plan["partners"],
+        "expected_total": plan["total"], "actual_total": total,
+        "total_match": total == plan["total"],
+    }
 
 
-async def _query_master(page) -> int:
-    """조회(F2) 클릭 후 마스터 rowcount 안정화까지 폴링. 반환 행수(-1=실패)."""
-    box = await page.evaluate(BTN_BOX_JS, selectors.BTN_LOOKUP)
-    if box:
-        await page.mouse.click(box["x"], box["y"])
-    else:
-        await page.keyboard.press("F2")
-    prev, stable, rc = -2, 0, -1
-    for _ in range(25):
-        await page.wait_for_timeout(800)
-        rc = await page.evaluate(MASTER_ROWCOUNT_JS)
-        if isinstance(rc, int) and rc >= 0 and rc == prev:
-            stable += 1
-            if stable >= 2:
-                break
-        else:
-            stable = 0
-        prev = rc
-    return rc if isinstance(rc, int) else -1
-
-
-async def _verify_and_delete(page, cycle: int) -> dict:
-    """저장된 출장 결의를 조회→가드레일 검증→F6 삭제→잔존 0 확인. 반환 진단 dict."""
-    out: dict = {"before": None, "all_ours": None, "deleted": False, "after": None,
-                 "abdocu_nos": [], "error": None}
-    await _query_master(page)
-    dump = await page.evaluate(MASTER_DUMP_JS, 0)
-    before = dump.get("n", -1)
-    out["before"] = before
-    rows = dump.get("rows") or []
-    out["abdocu_nos"] = [str(r.get("ABDOCU_NO") or "") for r in rows]
-    if before <= 0:
-        out["error"] = "삭제 대상 0건 — 저장이 안 됐을 수 있음(팬텀 저장?)"
-        return out
-    all_ours = all(_row_is_ours(r) for r in rows)
-    out["all_ours"] = all_ours
-    if not all_ours:
-        out["error"] = "가드레일 불일치 — 우리 전표가 아닌 행 존재. 삭제 중단."
-        out["dump"] = dump
-        await page.screenshot(path=str(ART / f"trip_save_c{cycle}_guardrail.png"))
-        return out
-    await page.evaluate(SELECT_MASTER_JS, 0)
-    dbox = await page.evaluate(BTN_BOX_JS, selectors.BTN_DELETE)
-    if dbox:
-        await page.mouse.click(dbox["x"], dbox["y"])
-    else:
-        await page.keyboard.press("F6")
-    for _ in range(8):
-        await page.wait_for_timeout(1_200)
-        modals = await page.evaluate(cc_js.MODALS_SNAPSHOT_JS)
-        if not modals:
-            break
-        clicked = False
-        for label in ("예", "확인", "삭제"):
-            btn = await page.evaluate(cc_js.MODAL_BTN_BOX_JS, label)
-            if btn:
-                await page.mouse.click(btn["x"], btn["y"])
-                clicked = True
-                break
-        if not clicked:
-            break
-    await page.wait_for_timeout(1_000)
-    after = await _query_master(page)
-    out["after"] = after
-    out["deleted"] = after == 0
-    if after != 0:
-        out["error"] = f"삭제 후 잔존 {after}건 — 수동 정리 필요(전표번호 {out['abdocu_nos']})"
-        await page.screenshot(path=str(ART / f"trip_save_c{cycle}_leftover.png"))
-    return out
-
-
-async def _run_one_cycle(browser, cycle: int, warm_state: dict | None) -> dict:
-    params = _cycle_params(cycle)
-    summary = params.pop("_summary")
-    ctx_kwargs = {"viewport": LIVE_VIEWPORT}
-    if warm_state is not None:
-        ctx_kwargs["storage_state"] = warm_state
-    ctx = await browser.new_context(**ctx_kwargs)
-    page = await ctx.new_page()
+async def _run_one(cycle: int) -> dict:
+    plan = _plan(cycle)
     t0 = time.monotonic()
-    saved_state = None
-    try:
-        r = await _drive_graph(page, params)
-        run_ms = int((time.monotonic() - t0) * 1000)
-        save_ok = r["error"] is None and "save_doc" in r["steps_ms"] and "save_doc" not in r["steps_failed"]
-        post_save = None
-        if save_ok:
-            await page.wait_for_timeout(800)
-            md = await page.evaluate(MASTER_DUMP_JS, 0)
-            r0 = (md.get("rows") or [{}])[-1] if md.get("rows") else {}
-            # detail 각 행의 금액 필드 덤프(합계 정합 실측 — 거래금액/공급가액/합계).
-            detail = await page.evaluate("""() => {
-              try { const ds = window.jQuery(document.querySelectorAll('.dews-ui-grid')[1]).data('dewsControl')._grid.getDataSource();
-                const n = ds.getRowCount(); const rows = n>0 ? ds.getJsonRows(0,n-1) : [];
-                return { n, rows: rows.map(r => ({ SPPRC_AMT2: String(r.SPPRC_AMT2==null?'':r.SPPRC_AMT2),
-                  SPPRC_AMT: String(r.SPPRC_AMT==null?'':r.SPPRC_AMT), TOTAL_AMT: String(r.TOTAL_AMT==null?'':r.TOTAL_AMT),
-                  PARTNER_NM: String(r.PARTNER_NM==null?'':r.PARTNER_NM),
-                  BFC_PARTNER_CD: String(r.BFC_PARTNER_CD==null?'':r.BFC_PARTNER_CD) })) };
-              } catch(e){ return { err: String(e).slice(0,80) }; }
-            }""")
-            post_save = {"n": md.get("n"), "ABDOCU_NO": str(r0.get("ABDOCU_NO") or ""),
-                         "DETAIL_SUM_AMT": str(r0.get("DETAIL_SUM_AMT") or ""),
-                         "DETAIL_SUM_AMT3": str(r0.get("DETAIL_SUM_AMT3") or ""),
-                         "detail_amounts": detail}
-        vd = await _verify_and_delete(page, cycle)
-        try:
-            saved_state = await ctx.storage_state()
-        except Exception:  # noqa: BLE001
-            saved_state = None
-        ok = save_ok and vd.get("deleted") is True
-        return {"cycle": cycle, "ok": ok, "run_ms": run_ms, "params_summary": summary,
-                "save_ok": save_ok, "post_save": post_save, "result": r["result"], "error": r["error"],
-                "steps_ms": r["steps_ms"], "errors": r["errors"], "delete": vd, "_warm_state": saved_state}
-    finally:
-        await ctx.close()
+    run = await run_product(
+        agent_id=AGENT_ID,
+        workflow_id=WORKFLOW_ID,
+        fill=lambda page: _fill(page, plan),
+        tag=f"{TAG}_c{cycle}",
+    )
+    run_ms = int((time.monotonic() - t0) * 1000)
+    saved = bool(run.get("terminal") and run.get("ui_status") == "succeeded")
+    # 실패해도 phase2 는 반드시 돈다 — 반쯤 저장된 전표가 남지 않았는지 확인해야 한다.
+    vd = await erp_verify_and_delete(
+        gubun_label=GUBUN_LABEL,
+        fg_code=TRIP_FG,
+        tag=f"{TAG}_c{cycle}",
+        pick_master=lambda rows: _pick_master(rows, plan["total"]),
+        want_detail=saved,
+    )
+    checks = _verify(plan, vd) if saved else {}
+    ok = bool(
+        saved
+        and run.get("run_recorded")
+        and run.get("db_status") == "succeeded"
+        and vd.get("deleted")
+        and checks.get("rows_clean")
+        and checks.get("amount_match")
+        and checks.get("note_match")
+        and checks.get("partner_match")
+        and checks.get("total_match")
+    )
+    return {"cycle": cycle, "ok": ok, "run_ms": run_ms, "plan": plan,
+            "run": run, "delete": vd, "checks": checks}
+
+
+def _pick_master(rows: list[dict], expected_total: int) -> int:
+    """방금 저장한 문서의 마스터 인덱스 — 합계가 일치하는 행 우선, 없으면 마지막 행."""
+    for i, r in enumerate(rows):
+        if as_int(r.get("DETAIL_SUM_AMT")) == expected_total:
+            return i
+    return len(rows) - 1
+
+
+def _report(i: int, c: dict) -> None:
+    p = c.get("plan") or {}
+    k = c.get("checks") or {}
+    mark = "PASS" if c.get("ok") else "FAIL"
+    print(f"[CYCLE {i}] {mark} run={c.get('run_ms', 0) / 1000:.1f}s | 통행료{p.get('toll_n')}행"
+          f"+유류비({p.get('car_id')}/{p.get('km')}km) 합계={p.get('total')}", flush=True)
+    print(f"  {summarize_run(c)}", flush=True)
+    if k:
+        print(f"  checks: rows={k.get('detail_rowcount')}/{p.get('rows')} clean={k.get('rows_clean')} "
+              f"amount={k.get('amount_match')} note={k.get('note_match')} partner={k.get('partner_match')} "
+              f"total={k.get('total_match')}(기대 {k.get('expected_total')}·실제 {k.get('actual_total')})", flush=True)
+        print(f"  amounts expected={k.get('expected_amounts')} actual={k.get('actual_amounts')}", flush=True)
+        print(f"  partners actual={k.get('actual_partners')} notes actual={k.get('actual_notes')}", flush=True)
+    if (c.get("run") or {}).get("error"):
+        print(f"  run error: {c['run']['error']}", flush=True)
+    if (c.get("run") or {}).get("fail_reason"):
+        print(f"  fail reason: {c['run']['fail_reason']}", flush=True)
 
 
 async def main() -> None:
-    print(f"[SMOKE] 실저장 사이클(F7→검증→삭제) 시작. cycles={CYCLES}. ⚠ 상신 금지·삭제 필수.", flush=True)
-    pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True)
-    cycles: list[dict] = []
-    warm_state = None
-    aborted = False
-    try:
-        for i in range(1, CYCLES + 1):
-            print(f"\n===== CYCLE {i}/{CYCLES} =====", flush=True)
-            try:
-                c = await _run_one_cycle(browser, i, warm_state)
-            except Exception as exc:  # noqa: BLE001
-                c = {"cycle": i, "ok": False, "run_ms": 0, "params_summary": {}, "save_ok": False,
-                     "post_save": None, "result": None, "error": f"cycle exception: {exc!r}",
-                     "steps_ms": {}, "errors": [], "delete": {}, "_warm_state": None}
-            if c.get("_warm_state"):
-                warm_state = c["_warm_state"]
-            c.pop("_warm_state", None)
-            cycles.append(c)
-            vd = c.get("delete") or {}
-            mark = "PASS" if c["ok"] else "FAIL"
-            ps = c["params_summary"]
-            print(f"[CYCLE {i}] {mark} run={c['run_ms']/1000:.1f}s | 통행료{ps.get('toll_rows')}행+유류비({ps.get('fuel_car_class')}/{ps.get('fuel_km')}km)", flush=True)
-            print(f"[CYCLE {i}] save_ok={c['save_ok']} result={c.get('result')}", flush=True)
-            print(f"[CYCLE {i}] post_save={c.get('post_save')}", flush=True)
-            print(f"[CYCLE {i}] delete: before={vd.get('before')} all_ours={vd.get('all_ours')} deleted={vd.get('deleted')} after={vd.get('after')} 전표={vd.get('abdocu_nos')}", flush=True)
-            if c.get("error"):
-                print(f"[CYCLE {i}] run error: {c['error']}", flush=True)
-            if vd.get("error") or (c["save_ok"] and not vd.get("deleted")):
-                print(f"[CYCLE {i}][ABORT] 삭제 문제 → 사이클 중단. {vd.get('error')}", flush=True)
-                aborted = True
-                break
-    finally:
-        await browser.close()
-        await pw.stop()
-
-    passed = sum(1 for c in cycles if c["ok"])
-    times = [c["run_ms"]/1000 for c in cycles if c["run_ms"] > 0]
-    avg = sum(times)/len(times) if times else 0
-    print("\n" + "=" * 60, flush=True)
-    print(f"TRIP SAVE-CYCLE SUMMARY — {passed}/{len(cycles)} PASS · avg run {avg:.1f}s · aborted={aborted}", flush=True)
-    print("=" * 60, flush=True)
-    leftover = [c for c in cycles if (c.get('delete') or {}).get('after') not in (0, None)]
-    if leftover:
-        print("⚠ 잔존 전표 있음:", flush=True)
-        for c in leftover:
-            print(f"  cycle {c['cycle']}: after={(c['delete'] or {}).get('after')} 전표={(c['delete'] or {}).get('abdocu_nos')}", flush=True)
-    else:
-        print("잔존 전표 0 확인(모든 사이클 삭제 완료).", flush=True)
-    (ART / "trip_smoke_cycle.json").write_text(json.dumps({"cycles": cycles, "aborted": aborted}, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\n리포트: {ART / 'trip_smoke_cycle.json'}", flush=True)
+    code = await run_cycles(
+        title="TRIP(국내·자차) PRODUCT SAVE-CYCLE",
+        cycles=CYCLES,
+        tag=TAG,
+        run_one=_run_one,
+        report_line=_report,
+    )
+    sys.exit(code)
 
 
 if __name__ == "__main__":
