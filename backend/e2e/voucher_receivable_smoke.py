@@ -58,7 +58,9 @@ ARTIFACTS.mkdir(exist_ok=True)
 _SUBMIT_RE = re.compile(r"^가상 상신: 전표 (\S+)$")
 # 배치 결재(2026-07-27~) 로그에는 묶음 단위로 전표번호가 '결재창 확인 중…' 줄에 실린다.
 # 처리 건수는 그래프 result/state 로 확인하고, 여기서는 화면에 오른 전표번호를 모두 수집한다.
-_DOCU_RE = re.compile(r"\bFI\d{8,}\b")
+# ⚠ 전표번호 접두사는 FI 만이 아니다(2026-08-03 라이브 실측: 매입 대상이 'TEST2026053100198').
+#   FI 고정이면 그런 전표를 놓쳐 정상 런이 FAIL 로 잡힌다 — 접두사를 일반화한다.
+_DOCU_RE = re.compile(r"\b[A-Z]{2,8}\d{8,}\b")
 
 
 def _save_data_url_png(data_url: str, path: Path) -> None:

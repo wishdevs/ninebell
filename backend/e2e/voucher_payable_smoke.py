@@ -52,7 +52,11 @@ _SUBMIT_RE = re.compile(r"^가상 상신: 전표 (\S+)$")  # 구 문구(하위�
 # ⚠ 현재 그래프 문구(approvals.py): "[1/1] 가상 상신 완료 — 전표 FI2026… (누적 1/1건 실행)."
 #   구 정규식만 쓰면 processed_docu_nos 가 비어 정상 런이 FAIL 로 오판된다(2026-08-01 실측).
 #   매출 스크립트가 이미 쓰는 전표번호 추출 방식을 동일 적용한다.
-_DOCU_RE = re.compile(r"\bFI\d{8,}\b")
+# ⚠ 전표번호 접두사는 FI 만이 아니다(2026-08-03 라이브 실측: 매입 대상이 'TEST2026053100198').
+#   FI 고정 정규식은 그런 전표를 통째로 놓쳐 processed_docu_nos 가 비고 정상 런이 FAIL 로 잡힌다.
+#   문구에서 '전표 <번호>' 를 직접 캡처하는 것이 1순위, 접두사 일반형은 목록 파싱용 폴백이다.
+_SUBMIT_DONE_RE = re.compile(r"가상 상신 완료 — 전표 (\S+)")
+_DOCU_RE = re.compile(r"\b[A-Z]{2,8}\d{8,}\b")
 _ROWCOUNT_RE = re.compile(r"조회 완료 — 대상 전표 (\d+)건\.")
 
 
@@ -134,8 +138,12 @@ async def main() -> None:
                         m = _SUBMIT_RE.match(msg)
                         if m:
                             processed_docu_nos.append(m.group(1))
-                        elif "가상 상신 완료 — 전표 " in msg:
-                            processed_docu_nos.extend(_DOCU_RE.findall(msg))
+                        else:
+                            # 현재 그래프 문구: "[1/1] 가상 상신 완료 — 전표 <번호> (누적 1/1건 실행)."
+                            # 접두사 가정 없이 '전표 ' 뒤 토큰을 직접 캡처한다(FI·TEST 등 무관).
+                            done_m = _SUBMIT_DONE_RE.search(msg)
+                            if done_m:
+                                processed_docu_nos.append(done_m.group(1))
                         rc_m = _ROWCOUNT_RE.search(msg)
                         if rc_m:
                             rowcount = int(rc_m.group(1))
