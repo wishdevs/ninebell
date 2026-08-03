@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>세금계산서 결의서 — 프로세스 명세</title>
+<style>
+  /* ── 토큰 ─────────────────────────────────────────────────────────────────
+     회계 장부의 세계에서 가져온 팔레트. 액센트는 결재 인장의 딥틸, 취소분(음수)은
+     장부의 붉은 잉크. 뉴트럴은 순회색이 아니라 틸 쪽으로 미세하게 기울여 둔다. */
+  :root {
+    --paper:      #f6f7f9;
+    --surface:    #ffffff;
+    --surface-2:  #eef1f3;
+    --line:       #d8dee1;
+    --line-soft:  #e6eaec;
+    --ink:        #16202b;
+    --ink-2:      #47555f;
+    --ink-3:      #6f7d87;
+    --accent:     #0e6f72;
+    --accent-ink: #0a5457;
+    --accent-bg:  #e3f0f0;
+    --danger:     #b3392c;
+    --danger-bg:  #fbe9e7;
+    --warn:       #a8700f;
+    --warn-bg:    #fbf1de;
+    --ok:         #2f6d3f;
+    --ok-bg:      #e6f1e8;
+
+    --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
+            "Malgun Gothic", system-ui, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", monospace;
+
+    --w: 1120px;
+    --r: 4px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:     #101720;
+      --surface:   #16202b;
+      --surface-2: #1d2936;
+      --line:      #2b3846;
+      --line-soft: #223040;
+      --ink:       #e6ecf1;
+      --ink-2:     #a8b6c1;
+      --ink-3:     #7d8c98;
+      --accent:    #4bb4b6;
+      --accent-ink:#7fd0d1;
+      --accent-bg: #113034;
+      --danger:    #e08278;
+      --danger-bg: #37201d;
+      --warn:      #d9a441;
+      --warn-bg:   #332715;
+      --ok:        #7dbb8c;
+      --ok-bg:     #1b2c20;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#101720; --surface:#16202b; --surface-2:#1d2936; --line:#2b3846;
+    --line-soft:#223040; --ink:#e6ecf1; --ink-2:#a8b6c1; --ink-3:#7d8c98;
+    --accent:#4bb4b6; --accent-ink:#7fd0d1; --accent-bg:#113034;
+    --danger:#e08278; --danger-bg:#37201d; --warn:#d9a441; --warn-bg:#332715;
+    --ok:#7dbb8c; --ok-bg:#1b2c20;
+  }
+  :root[data-theme="light"] {
+    --paper:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f3; --line:#d8dee1;
+    --line-soft:#e6eaec; --ink:#16202b; --ink-2:#47555f; --ink-3:#6f7d87;
+    --accent:#0e6f72; --accent-ink:#0a5457; --accent-bg:#e3f0f0;
+    --danger:#b3392c; --danger-bg:#fbe9e7; --warn:#a8700f; --warn-bg:#fbf1de;
+    --ok:#2f6d3f; --ok-bg:#e6f1e8;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  .wrap { max-width: var(--w); margin: 0 auto; padding: 0 24px; }
+
+  /* ── 헤더 ─────────────────────────────────────────────────────────────── */
+  header.top { border-bottom: 1px solid var(--line); background: var(--surface); }
+  .top-in { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+            padding: 34px 0 28px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+             color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; letter-spacing: -.02em;
+       margin: 0 0 12px; text-wrap: balance; font-weight: 660; }
+  .lede { margin: 0; max-width: 62ch; color: var(--ink-2); font-size: 15.5px; }
+  .status { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+  .theme-btn { font: inherit; font-size: 12px; padding: 6px 12px; cursor: pointer;
+               background: var(--surface-2); color: var(--ink-2);
+               border: 1px solid var(--line); border-radius: var(--r); }
+  .theme-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono);
+          font-size: 11px; padding: 4px 9px; border-radius: 3px; white-space: nowrap;
+          border: 1px solid transparent; }
+  .chip-warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+  .chip-accent { background: var(--accent-bg); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .chip-danger { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
+  .chip-ok { background: var(--ok-bg); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
+
+  /* ── 섹션 ─────────────────────────────────────────────────────────────── */
+  section { padding: 46px 0; border-bottom: 1px solid var(--line-soft); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .sec-num { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .08em; }
+  h2 { font-size: 21px; letter-spacing: -.01em; margin: 0; font-weight: 640; }
+  .sec-sub { color: var(--ink-2); margin: 0 0 24px; max-width: 68ch; font-size: 14.5px; }
+  h3 { font-size: 15px; margin: 0 0 12px; font-weight: 640; letter-spacing: -.005em; }
+
+  /* ── 시뮬레이터 ───────────────────────────────────────────────────────── */
+  .sim { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .sim { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .panel-hd { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+              display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .panel-hd h3 { margin: 0; }
+  .panel-bd { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+
+  .q { display: flex; flex-direction: column; gap: 9px; }
+  .q-label { display: flex; align-items: baseline; gap: 9px; }
+  .q-step { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+            border: 1px solid var(--line); border-radius: 2px; padding: 1px 5px; flex-shrink: 0; }
+  .q-title { font-weight: 600; font-size: 14.5px; }
+  .q-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 0; }
+  .opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opt { font: inherit; font-size: 13.5px; cursor: pointer; padding: 8px 14px; text-align: left;
+         background: var(--surface); color: var(--ink-2);
+         border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
+  .opt:hover { border-color: var(--accent); color: var(--ink); }
+  .opt[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
+                              color: var(--accent-ink); font-weight: 600; }
+  .opt small { display: block; font-size: 11.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; }
+  .opt[aria-pressed="true"] small { color: color-mix(in srgb, var(--accent-ink) 78%, transparent); }
+
+  .rule-fire { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px;
+               background: var(--warn-bg); color: var(--warn); padding: 8px 11px; border-radius: 3px;
+               border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent); }
+  .rule-fire b { color: inherit; }
+
+  /* 우측 경로 요약 */
+  .side { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .path-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+  .path-list li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0;
+                  font-size: 13px; color: var(--ink-3); border-bottom: 1px dashed var(--line-soft); }
+  .path-list li:last-child { border-bottom: 0; }
+  .path-list li.on { color: var(--ink); }
+  .path-list li.cur { color: var(--accent-ink); font-weight: 640; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex-shrink: 0;
+         background: var(--line); }
+  li.on .dot { background: var(--accent); }
+  li.cur .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; }
+  .kv dt { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
+  .kv dd { margin: 0; color: var(--ink); }
+
+  /* ── 분기도 ───────────────────────────────────────────────────────────── */
+  .flow { display: grid; gap: 10px; }
+  .lane { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 14px; align-items: stretch; }
+  @media (max-width: 760px) { .lane { grid-template-columns: 1fr; } }
+  .lane-name { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); padding-top: 12px;
+               letter-spacing: .04em; }
+  .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+           background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+           padding: 12px 14px; }
+  .node { font-size: 13px; padding: 6px 11px; border-radius: 3px; background: var(--surface-2);
+          border: 1px solid var(--line); white-space: nowrap; }
+  .node.q { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+            color: var(--accent-ink); }
+  .node.skip { background: transparent; border-style: dashed; color: var(--ink-3);
+               text-decoration: line-through; text-decoration-color: var(--ink-3); }
+  .arrow { color: var(--ink-3); font-size: 12px; flex-shrink: 0; }
+
+  /* ── 표 ───────────────────────────────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r);
+              background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  thead th { position: sticky; top: 0; background: var(--surface-2); text-align: left;
+             font-weight: 620; font-size: 12px; letter-spacing: .02em; color: var(--ink-2);
+             padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.neg { color: var(--danger); }
+  .fld { font-family: var(--mono); font-size: 12.5px; }
+  .muted { color: var(--ink-3); }
+  .req::after { content: "필수"; font-family: var(--mono); font-size: 10px; color: var(--accent);
+                border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+                border-radius: 2px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ── 규칙 카드 ────────────────────────────────────────────────────────── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+          padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card.stripe { border-left: 3px solid var(--accent); }
+  .card.stripe-warn { border-left: 3px solid var(--warn); }
+  .card.stripe-danger { border-left: 3px solid var(--danger); }
+  .card h3 { margin: 0; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+
+  /* ── 분할 계산기 ──────────────────────────────────────────────────────── */
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 620px) { .tiles { grid-template-columns: 1fr; } }
+  .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+          padding: 11px 13px; }
+  .tile dt { font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); }
+  .tile dd { margin: 3px 0 0; font-family: var(--mono); font-variant-numeric: tabular-nums;
+             font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+  .tile.ok  { background: var(--ok-bg);    border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .tile.ok dd { color: var(--ok); }
+  .tile.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .tile.warn dd { color: var(--warn); }
+  .tile.bad { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+  .tile.bad dd { color: var(--danger); }
+
+  input[type="text"], input[type="number"] {
+    font: inherit; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums;
+    text-align: right; width: 100%; padding: 6px 9px; background: var(--surface);
+    color: var(--ink); border: 1px solid var(--line); border-radius: 3px;
+  }
+  input:focus { border-color: var(--accent); }
+  .btn { font: inherit; font-size: 12.5px; cursor: pointer; padding: 6px 11px; background: var(--surface-2);
+         color: var(--ink-2); border: 1px solid var(--line); border-radius: 3px; white-space: nowrap; }
+  .btn:hover { color: var(--ink); border-color: var(--ink-3); }
+  .btn-accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn-accent:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 12.5px; cursor: pointer; padding: 5px 12px; border: 0;
+                background: var(--surface); color: var(--ink-3); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+
+  footer { padding: 34px 0 60px; color: var(--ink-3); font-size: 13px; }
+  footer p { margin: 0 0 6px; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2);
+         padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-in">
+    <div>
+      <p class="eyebrow">결의서입력 · 에이전트 명세</p>
+      <h1>세금계산서 결의서 프로세스</h1>
+      <p class="lede">
+        발행 전인지 후인지, 비용을 나눌지, 과세 성격이 무엇인지 — 세 갈래 질문이
+        이후 화면에서 무엇을 묻고 무엇을 감출지 결정합니다. 아래에서 직접 눌러
+        경로를 따라가 보세요.
+      </p>
+    </div>
+    <div class="status">
+      <button class="theme-btn" id="theme" type="button">테마 전환</button>
+      <span class="chip chip-warn">프론트 시뮬레이션 · 백엔드 미구축</span>
+      <span class="chip chip-accent">실제 ERP 저장 없음</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ══ 1. 인터랙티브 ══════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>직접 따라가 보기</h2></div>
+    <p class="sec-sub">
+      실제 화면과 같은 순서로 묻습니다. 답을 고르면 다음 질문이 나타나고, 규칙이 걸리면
+      오른쪽에 그 사실이 표시됩니다.
+    </p>
+
+    <div class="sim">
+      <div class="panel">
+        <div class="panel-hd">
+          <h3>1단계 — 질문</h3>
+          <button class="btn" id="reset" type="button">처음부터</button>
+        </div>
+        <div class="panel-bd" id="qs"></div>
+      </div>
+
+      <aside class="side">
+        <div class="panel">
+          <div class="panel-hd"><h3>진행 경로</h3></div>
+          <div class="panel-bd" style="padding-top:10px;padding-bottom:10px">
+            <ul class="path-list" id="path"></ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-hd"><h3>현재 답</h3></div>
+          <div class="panel-bd" style="padding-top:12px;padding-bottom:14px">
+            <dl class="kv" id="answers"></dl>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══ 2. 전체 분기도 ═════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>세 갈래 경로</h2></div>
+    <p class="sec-sub">
+      같은 에이전트지만 첫 질문의 답에 따라 거치는 단계 수가 달라집니다. 점선으로 지워진
+      단계는 그 경로에서 <b>아예 나타나지 않는</b> 질문입니다.
+    </p>
+
+    <div class="flow">
+      <div class="lane">
+        <div class="lane-name">발행 전</div>
+        <div class="steps">
+          <span class="node q">발행 전/후</span><span class="arrow">→</span>
+          <span class="node skip">계산서일</span><span class="arrow">→</span>
+          <span class="node skip">비용분할</span><span class="arrow">→</span>
+          <span class="node q">과세여부</span><span class="arrow">→</span>
+          <span class="node">입력항목<small></small></span><span class="arrow">→</span>
+          <span class="node">요약</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-name">발행 후 · 단건</div>
+        <div class="steps">
+          <span class="node q">발행 전/후</span><span class="arrow">→</span>
+          <span class="node q">계산서일</span><span class="arrow">→</span>
+          <span class="node q">비용분할</span><span class="arrow">→</span>
+          <span class="node q">과세여부</span><span class="arrow">→</span>
+          <span class="node">리스트 선택</span><span class="arrow">→</span>
+          <span class="node">입력항목</span><span class="arrow">→</span>
+          <span class="node">요약</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-name">발행 후 · 분할</div>
+        <div class="steps">
+          <span class="node q">발행 전/후</span><span class="arrow">→</span>
+          <span class="node q">계산서일</span><span class="arrow">→</span>
+          <span class="node q">비용분할</span><span class="arrow">→</span>
+          <span class="node q">과세여부<small></small></span><span class="arrow">→</span>
+          <span class="node">리스트 선택</span><span class="arrow">→</span>
+          <span class="node">입력항목</span><span class="arrow">→</span>
+          <span class="node">비용분할 입력</span><span class="arrow">→</span>
+          <span class="node">요약</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 3. 제약 ════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>지켜야 하는 제약</h2></div>
+    <p class="sec-sub">화면이 선택지를 숨기는 방식으로 강제합니다 — 고를 수 없으니 잘못된 조합이 만들어지지 않습니다.</p>
+    <div class="cards">
+      <div class="card stripe-warn">
+        <h3>불공은 나눌 수 없다</h3>
+        <p>비용분할을 고르면 과세여부 목록에서 <b>불공 항목 자체가 사라집니다</b>. 이미 불공을 고른 뒤
+           되돌아와 분할을 켜면 과세여부 선택이 해제되어 다시 고르게 됩니다.</p>
+      </div>
+      <div class="card stripe-warn">
+        <h3>발행 전에는 나눌 수 없다</h3>
+        <p>발행 전을 고르면 <b>비용분할 질문이 나타나지 않고</b> 곧바로 과세여부로 넘어갑니다.
+           단계 표시줄도 세 단계로 줄어듭니다.</p>
+      </div>
+      <div class="card stripe">
+        <h3>불공 사유는 발행 후에만</h3>
+        <p>사업 무관 지출 · 비영업용 소형승용차 · 면세사업 관련 중 하나를 추가로 받습니다.
+           발행 전 경로에서는 묻지 않습니다.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4. 입력 항목 ═══════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>무엇을 입력받는가</h2></div>
+    <p class="sec-sub">
+      공통 일곱 항목은 어느 경로에서나 받습니다. 거래처·공급가액은 발행 전에만 직접 입력하고,
+      발행 후에는 선택한 리스트 행에서 따라옵니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>항목</th><th>발행 전</th><th>발행 후</th><th>기본값 · 비고</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="req">거래처</td><td>직접 입력</td><td class="muted">선택 행에서</td><td class="muted">발행 전 전용 입력</td></tr>
+          <tr><td class="req">공급가액</td><td>직접 입력</td><td class="muted">선택 행에서</td><td class="muted">발행 전 전용 입력</td></tr>
+          <tr><td class="req">예산단위</td><td>입력</td><td>입력</td><td class="muted">코드 선택</td></tr>
+          <tr><td class="req">적요</td><td>입력</td><td>입력</td><td class="muted">자유 입력</td></tr>
+          <tr><td class="req">프로젝트</td><td>입력</td><td>입력</td><td>500 / 800 또는 프로젝트 선택</td></tr>
+          <tr><td class="req">회계일</td><td>입력</td><td>자동</td><td>선택 행의 (세금)계산서일 — 수정 가능</td></tr>
+          <tr><td class="req">자금과목</td><td>입력</td><td>입력</td><td><b>일반경비</b></td></tr>
+          <tr><td class="req">결제조건</td><td>입력</td><td>입력</td><td><b>당월결제</b></td></tr>
+          <tr><td class="req">자금예정일</td><td>입력</td><td>입력</td><td>커스텀</td></tr>
+          <tr><td>사유구분</td><td colspan="2"><b>비과세</b>일 때만</td><td>일반면세</td></tr>
+          <tr><td>불공 사유</td><td class="muted">해당 없음</td><td><b>불공</b>일 때만</td><td>1단계에서 고른 값이 따라옴</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══ 5. 분할 ════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>비용분할</h2></div>
+    <p class="sec-sub">
+      공통 항목을 모두 채운 뒤 추가로 받습니다. 행마다 예산단위 · 적요 · 프로젝트 · 공급가액 ·
+      <b>비용센터</b>를 입력하고, <b>남은 금액이 0이 되어야</b> 확정할 수 있습니다.
+      아래 계산기로 직접 나눠 보세요.
+    </p>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <h3>분할 계산기</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="muted" style="font-size:12.5px">총액</span>
+          <input type="text" id="total" value="5,476,039" style="width:130px" aria-label="총 공급가액" />
+          <div class="seg" role="group" aria-label="입력 방식">
+            <button type="button" id="mAmt" aria-pressed="true">금액</button>
+            <button type="button" id="mPct" aria-pressed="false">비율 %</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel-bd">
+        <dl class="tiles" id="tiles"></dl>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:44px">행</th>
+                <th class="num" style="width:150px" id="inCol">공급가액</th>
+                <th class="num" style="width:150px" id="deriveCol">비율</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="addRow" type="button">행 추가</button>
+          <button class="btn btn-accent" id="confirm" type="button" disabled>분할 확정</button>
+          <span class="muted" style="font-size:12.5px" id="confirmHint"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cards" style="margin-top:16px">
+      <div class="card stripe">
+        <h3>금액이 기준, 비율은 파생</h3>
+        <p>비율로 입력해도 검증은 항상 금액으로 합니다. 어느 방식으로 넣든 반대편 값이 함께 보입니다.</p>
+      </div>
+      <div class="card stripe-warn">
+        <h3>잔돈을 숨기지 않는다</h3>
+        <p>60/40처럼 나누다 1원이 남으면 마지막 행에 몰래 더하지 않고 <b>남은 금액에 그대로 드러냅니다</b>.
+           각 행의 <code>잔액</code> 버튼으로 한 번에 흡수할 수 있습니다.</p>
+      </div>
+      <div class="card stripe-danger">
+        <h3>취소분(음수)도 나눈다</h3>
+        <p>총액이 음수면 "남았다 / 초과했다"를 <b>총액 부호 기준</b>으로 판정합니다.
+           −214,000원을 −150,000 + −64,000으로 나누는 식입니다.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 6. 리스트 ══════════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>세금계산서 리스트</h2></div>
+    <p class="sec-sub">
+      발행 후 경로에서 처리할 건을 고르는 화면입니다. 기간 기본값은 <b>한 달 전 ~ 오늘</b>이며,
+      음수 행은 취소분으로 구분해 표시하되 정상적으로 선택할 수 있습니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="num">No</th><th>선택</th><th>(세금)계산서일</th><th>사업자번호</th>
+            <th>사업장명</th><th>종사업장번호</th><th class="num">거래처코드</th>
+            <th>거래처사업자번호</th><th>거래처명</th><th>거래처종사업장번호</th>
+            <th class="num">공급가액</th><th class="num">세액</th>
+          </tr>
+        </thead>
+        <tbody id="invRows"></tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">
+      더미 11행 — 3·4번은 같은 거래처의 원거래와 취소분입니다. 둘을 함께 고르면 총액이 0원이 되어
+      비율 분할이 막힙니다(0을 나눌 수 없으므로).
+    </p>
+  </section>
+
+  <!-- ══ 7. 다음 단계 ═══════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><h2>백엔드를 붙일 때</h2></div>
+    <p class="sec-sub">지금은 프론트 안에서만 도는 시뮬레이션입니다. 실동작으로 승격할 때 채워야 할 지점입니다.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th style="width:34%">채울 것</th><th>내용</th></tr></thead>
+        <tbody>
+          <tr><td class="fld">워크플로우 등록</td><td>에이전트 픽스처에 <code>workflow_id</code>·단계 목록·플로우 그래프를 채워 실행 컨트롤을 활성화합니다(경조금·학자금 승격과 같은 방식).</td></tr>
+          <tr><td class="fld">코드 카탈로그</td><td>예산단위·프로젝트·자금과목·결제조건·비용센터·거래처를 더미 배열에서 실제 ERP 코드 조회로 교체합니다.</td></tr>
+          <tr><td class="fld">리스트</td><td>더미 11행을 옴니솔 세금계산서 조회 결과로 바꾸고, 선택 단계를 법인카드와 같은 <b>라이브 그리드 개입</b>으로 옮깁니다.</td></tr>
+          <tr><td class="fld">질문·입력 폼</td><td>실행 전 폼 레지스트리로 승격하고 시뮬레이션 등록을 해제합니다.</td></tr>
+          <tr><td class="fld">요약 화면</td><td>지금 요약에 나오는 필드 묶음이 곧 <b>파라미터 스키마의 출발점</b>입니다 — 무엇을 ERP에 넣을지의 계약서 역할을 합니다.</td></tr>
+          <tr><td class="fld">회계일 정책</td><td>여러 날짜를 한 번에 고른 경우를 확정해야 합니다. 현재는 마지막 계산서일을 넣고 수정 가능하게 두었는데, 날짜별로 결의서를 나눠야 한다면 선택 단계에서 날짜를 하나로 묶어야 합니다.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p>세금계산서 결의서 에이전트 — 프로세스 명세 · 나인벨 자동화 대시보드</p>
+  <p>이 문서는 프론트 시뮬레이션(<code>src/components/live/simulation/tax-invoice/</code>)의 동작을 그대로 옮긴 것입니다.</p>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── 테마 ─────────────────────────────────────────────────────────── */
+  var root = document.documentElement;
+  document.getElementById('theme').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme');
+    if (!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+
+  /* ── 시뮬레이터 ───────────────────────────────────────────────────── */
+  var A = { issue: null, split: null, tax: null, nd: null };
+
+  var ISSUE = { before: '발행 전', after: '발행 후' };
+  var SPLIT = { single: '분할 없음', split: '비용분할' };
+  var TAX   = { taxable: '과세', exempt: '비과세', nondeduct: '불공' };
+  var ND    = {
+    unrelated: '사업과 관련없는 지출',
+    car: '비영업용소형승용차구입, 유지 및 임차',
+    exemptbiz: '면세사업과 관련된분'
+  };
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+
+  function question(step, title, hint) {
+    var box = el('div', 'q');
+    var lab = el('div', 'q-label');
+    lab.appendChild(el('span', 'q-step', String(step)));
+    lab.appendChild(el('span', 'q-title', title));
+    box.appendChild(lab);
+    if (hint) box.appendChild(el('p', 'q-hint', hint));
+    var opts = el('div', 'opts');
+    box.appendChild(opts);
+    box._opts = opts;
+    return box;
+  }
+
+  function option(label, desc, active, onClick) {
+    var b = el('button', 'opt');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    b.appendChild(document.createTextNode(label));
+    if (desc) b.appendChild(el('small', null, desc));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function monthAgoRange() {
+    var t = new Date(), f = new Date(t), d = f.getDate();
+    f.setMonth(f.getMonth() - 1);
+    if (f.getDate() !== d) f.setDate(0);
+    var iso = function (x) {
+      return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
+        + '-' + String(x.getDate()).padStart(2, '0');
+    };
+    return iso(f) + ' ~ ' + iso(t);
+  }
+
+  function render() {
+    var qs = document.getElementById('qs');
+    qs.textContent = '';
+
+    /* Q1 — 항상 */
+    var q1 = question(1, '세금계산서 발행 전인가요?');
+    q1._opts.appendChild(option(ISSUE.before, '리스트가 없어 바로 입력합니다', A.issue === 'before', function () {
+      // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
+      A = { issue: 'before', split: 'single', tax: null, nd: null }; render();
+    }));
+    q1._opts.appendChild(option(ISSUE.after, '조회된 목록에서 고릅니다', A.issue === 'after', function () {
+      A = { issue: 'after', split: null, tax: null, nd: null }; render();
+    }));
+    qs.appendChild(q1);
+
+    if (!A.issue) { paint(); return; }
+
+    var n = 2;
+
+    /* Q2 — 발행 후에만: 계산서일 */
+    if (A.issue === 'after') {
+      var q2 = question(n++, '세금계산서일을 선택하세요', '기본값은 최근 한 달 — ' + monthAgoRange());
+      var pill = el('span', 'chip chip-accent', monthAgoRange());
+      q2._opts.appendChild(pill);
+      qs.appendChild(q2);
+    }
+
+    /* Q3 — 발행 후에만: 비용분할 */
+    if (A.issue === 'after') {
+      var q3 = question(n++, '비용분할이 필요한가요?');
+      q3._opts.appendChild(option(SPLIT.single, '한 건으로 전액 처리', A.split === 'single', function () {
+        A.split = 'single'; render();
+      }));
+      q3._opts.appendChild(option(SPLIT.split, '예산단위·프로젝트·비용센터별로 나눠 담기', A.split === 'split', function () {
+        // 분할과 불공은 공존할 수 없다 — 이미 불공이면 과세여부를 해제해 다시 고르게 한다.
+        if (A.tax === 'nondeduct') { A.tax = null; A.nd = null; }
+        A.split = 'split'; render();
+      }));
+      qs.appendChild(q3);
+      if (!A.split) { paint(); return; }
+    }
+
+    /* Q4 — 과세여부 (분할이면 불공 제외) */
+    var kinds = A.split === 'split' ? ['taxable', 'exempt'] : ['taxable', 'exempt', 'nondeduct'];
+    var q4 = question(n++, '과세 / 비과세 / 불공 중 어떤 것인가요?');
+    kinds.forEach(function (k) {
+      q4._opts.appendChild(option(TAX[k], null, A.tax === k, function () {
+        A.tax = k; if (k !== 'nondeduct') A.nd = null; render();
+      }));
+    });
+    qs.appendChild(q4);
+    if (A.split === 'split') {
+      var warn = el('div', 'rule-fire');
+      warn.innerHTML = '<b>규칙 발동</b> — 비용분할을 골라 <b>불공</b>을 목록에서 제외했습니다.';
+      qs.appendChild(warn);
+    }
+    if (!A.tax) { paint(); return; }
+
+    /* Q5 — 발행 후 + 불공 */
+    if (A.issue === 'after' && A.tax === 'nondeduct') {
+      var q5 = question(n++, '불공 사유를 선택하세요');
+      Object.keys(ND).forEach(function (r) {
+        q5._opts.appendChild(option(ND[r], null, A.nd === r, function () { A.nd = r; render(); }));
+      });
+      qs.appendChild(q5);
+    }
+    paint();
+  }
+
+  function done() {
+    if (!A.issue || !A.tax) return false;
+    if (A.issue === 'before') return true;
+    if (!A.split) return false;
+    if (A.tax === 'nondeduct' && !A.nd) return false;
+    return true;
+  }
+
+  /* 오른쪽 — 진행 경로 + 현재 답 */
+  function paint() {
+    var steps = A.issue === 'before'
+      ? ['질문', '입력항목', '요약']
+      : (A.split === 'split'
+        ? ['질문', '리스트 선택', '입력항목', '비용분할', '요약']
+        : ['질문', '리스트 선택', '입력항목', '요약']);
+
+    var ul = document.getElementById('path');
+    ul.textContent = '';
+    steps.forEach(function (s, i) {
+      var li = el('li', i === 0 ? (done() ? 'on' : 'cur') : (i === 1 && done() ? 'cur' : ''));
+      li.appendChild(el('span', 'dot'));
+      li.appendChild(el('span', null, s));
+      ul.appendChild(li);
+    });
+
+    var dl = document.getElementById('answers');
+    dl.textContent = '';
+    var pairs = [['발행', A.issue ? ISSUE[A.issue] : '—']];
+    if (A.issue === 'after') pairs.push(['계산서일', monthAgoRange()]);
+    pairs.push(['분할', A.issue === 'before' ? '불가(발행 전)' : (A.split ? SPLIT[A.split] : '—')]);
+    pairs.push(['과세여부', A.tax ? TAX[A.tax] : '—']);
+    if (A.tax === 'nondeduct') pairs.push(['불공 사유', A.nd ? ND[A.nd] : '—']);
+    pairs.push(['다음 화면', !done() ? '질문에 더 답해 주세요'
+      : (A.issue === 'after' ? '리스트에서 항목 선택' : '입력항목 채우기')]);
+    pairs.forEach(function (p) {
+      dl.appendChild(el('dt', null, p[0]));
+      dl.appendChild(el('dd', null, p[1]));
+    });
+  }
+
+  document.getElementById('reset').addEventListener('click', function () {
+    A = { issue: null, split: null, tax: null, nd: null }; render();
+  });
+  render();
+
+  /* ── 분할 계산기 ──────────────────────────────────────────────────── */
+  var mode = 'amount';              // 'amount' | 'percent'
+  var rows = [{ amt: 3285623 }, { amt: 2190416 }];
+
+  function won(n) {
+    var neg = n < 0, s = Math.abs(Math.round(n)).toLocaleString('ko-KR');
+    return (neg ? '-' : '') + s + '원';
+  }
+  function parseNum(s) {
+    var v = parseFloat(String(s).replace(/[^0-9.-]/g, ''));
+    return isFinite(v) ? v : 0;
+  }
+  function total() { return parseNum(document.getElementById('total').value); }
+
+  function renderSplit() {
+    var T = total();
+    var sum = rows.reduce(function (a, r) { return a + (r.amt || 0); }, 0);
+    var rest = T - sum;
+
+    /* 남았다/초과다는 총액 부호 기준 — 음수 총액(취소분)에서도 옳게 판정된다. */
+    var state = rest === 0 ? 'ok' : (T === 0 ? 'bad' : ((rest > 0) === (T > 0) ? 'warn' : 'bad'));
+    var label = rest === 0 ? '분할 완료' : (state === 'warn' ? '남은 금액' : '총액 초과');
+
+    var tiles = document.getElementById('tiles');
+    tiles.textContent = '';
+    [['총 공급가액', won(T), ''],
+     ['배분 금액', won(sum) + (T !== 0 ? ' · ' + Math.round(sum / T * 1000) / 10 + '%' : ''), ''],
+     [label, won(rest), state]].forEach(function (t) {
+      var d = el('div', 'tile' + (t[2] ? ' ' + t[2] : ''));
+      d.appendChild(el('dt', null, t[0]));
+      d.appendChild(el('dd', null, t[1]));
+      tiles.appendChild(d);
+    });
+
+    document.getElementById('inCol').textContent = mode === 'amount' ? '공급가액' : '비율 %';
+    document.getElementById('deriveCol').textContent = mode === 'amount' ? '비율' : '공급가액';
+
+    var tb = document.getElementById('rows');
+    tb.textContent = '';
+    rows.forEach(function (r, i) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'num muted', String(i + 1)));
+
+      var tdIn = el('td', 'num');
+      var inp = document.createElement('input');
+      inp.type = 'text';
+      inp.setAttribute('aria-label', (i + 1) + '행 ' + (mode === 'amount' ? '공급가액' : '비율'));
+      inp.value = mode === 'amount'
+        ? (r.amt || 0).toLocaleString('ko-KR')
+        : (T ? String(Math.round(r.amt / T * 1000) / 10) : '0');
+      inp.addEventListener('change', function () {
+        var v = parseNum(inp.value);
+        r.amt = mode === 'amount' ? v : Math.round(T * v / 100);
+        renderSplit();
+      });
+      tdIn.appendChild(inp);
+      tr.appendChild(tdIn);
+
+      var derived = mode === 'amount'
+        ? (T ? (Math.round(r.amt / T * 1000) / 10) + '%' : '—')
+        : won(r.amt);
+      tr.appendChild(el('td', 'num muted', derived));
+
+      var tdAct = el('td');
+      var wrapA = el('div');
+      wrapA.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
+      var fill = el('button', 'btn', '잔액');
+      fill.type = 'button';
+      fill.title = '남은 금액을 이 행에 흡수';
+      fill.addEventListener('click', function () { r.amt += rest; renderSplit(); });
+      wrapA.appendChild(fill);
+      if (rows.length > 1) {
+        var del = el('button', 'btn', '삭제');
+        del.type = 'button';
+        del.addEventListener('click', function () { rows.splice(i, 1); renderSplit(); });
+        wrapA.appendChild(del);
+      }
+      tdAct.appendChild(wrapA);
+      tr.appendChild(tdAct);
+      tb.appendChild(tr);
+    });
+
+    var okBtn = document.getElementById('confirm');
+    okBtn.disabled = rest !== 0;
+    document.getElementById('confirmHint').textContent = rest === 0
+      ? '남은 금액이 0원 — 확정할 수 있습니다.'
+      : '남은 금액이 0원이 되어야 확정할 수 있습니다.';
+
+    document.getElementById('mAmt').setAttribute('aria-pressed', mode === 'amount' ? 'true' : 'false');
+    document.getElementById('mPct').setAttribute('aria-pressed', mode === 'percent' ? 'true' : 'false');
+    document.getElementById('mPct').disabled = T === 0;
+    document.getElementById('mPct').title = T === 0 ? '총액이 0원이면 비율을 계산할 수 없습니다' : '';
+  }
+
+  document.getElementById('addRow').addEventListener('click', function () {
+    if (rows.length < 20) { rows.push({ amt: 0 }); renderSplit(); }
+  });
+  document.getElementById('mAmt').addEventListener('click', function () { mode = 'amount'; renderSplit(); });
+  document.getElementById('mPct').addEventListener('click', function () {
+    if (total() !== 0) { mode = 'percent'; renderSplit(); }
+  });
+  document.getElementById('total').addEventListener('change', renderSplit);
+  document.getElementById('confirm').addEventListener('click', function () {
+    alert('시뮬레이션입니다 — 실제 ERP 저장은 일어나지 않습니다.');
+  });
+  renderSplit();
+
+  /* ── 리스트 더미 ──────────────────────────────────────────────────── */
+  var INV = [
+    ['2026-07-01', '15745', '543-86-02659', '노무법인 좋은', 400000, 40000],
+    ['2026-07-01', '20326', '143-81-32507', '법무법인 비트', 1000000, 100000],
+    ['2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', 214000, 21400],
+    ['2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', -214000, -21400],
+    ['2026-07-03', '15311', '109-83-02763', '인천공항세관', 5476039, 547600],
+    ['2026-07-03', '10042', '129-29-40129', '유앤아이관세사무소', 103830, 10383],
+    ['2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 537554, 53755],
+    ['2026-07-06', '30140', '220-05-53810', '특허사무소 시선', 1500000, 150000],
+    ['2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 34000, 3400],
+    ['2026-07-09', '15892', '222-82-75825', '르네상스대표자회', 145990, 14600],
+    ['2026-07-10', '10168', '202-81-00978', '중소기업은행', 136363, 13637]
+  ];
+  var tb = document.getElementById('invRows');
+  INV.forEach(function (r, i) {
+    var neg = r[4] < 0;
+    var tr = el('tr');
+    var cells = [
+      ['num muted', String(i + 1)],
+      [null, '☐'],
+      [null, r[0]],
+      ['fld', '123-81-44708'],
+      [null, '(주)나인벨'],
+      ['muted', '—'],
+      ['num fld', r[1]],
+      ['fld', r[2]],
+      [null, r[3]],
+      ['muted', '—'],
+      ['num' + (neg ? ' neg' : ''), r[4].toLocaleString('ko-KR')],
+      ['num' + (neg ? ' neg' : ''), r[5].toLocaleString('ko-KR')]
+    ];
+    cells.forEach(function (c) { tr.appendChild(el('td', c[0], c[1])); });
+    if (neg) {
+      var last = tr.children[8];
+      var badge = el('span', 'chip chip-danger', '취소');
+      badge.style.marginLeft = '6px';
+      last.appendChild(badge);
+    }
+    tb.appendChild(tr);
+  });
+})();
+</script>
+</body>
+</html>
