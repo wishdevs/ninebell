@@ -91,6 +91,10 @@
   .q-title { font-weight: 600; font-size: 14.5px; }
   .q-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 0; }
   .opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .date-in { font: inherit; font-family: var(--mono); font-size: 13px; padding: 6px 9px;
+             background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+             border-radius: var(--r); }
+  .date-in:focus { border-color: var(--accent); }
   .opt { font: inherit; font-size: 13.5px; cursor: pointer; padding: 8px 14px; text-align: left;
          background: var(--surface); color: var(--ink-2);
          border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
@@ -350,7 +354,7 @@
 
 
   /* ── 시뮬레이터 ───────────────────────────────────────────────────── */
-  var A = { issue: null, months: 1, split: null, tax: null, nd: null };
+  var A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
 
   var ISSUE = { before: '발행 전', after: '발행 후' };
   var SPLIT = { single: '분할 없음', split: '비용분할' };
@@ -391,21 +395,26 @@
     return b;
   }
 
-  /* N개월 전 달의 1일~말일(n=0 이면 이번 달). 세금계산서는 월 단위로 발행·집계한다.
-     Date(y, m+1, 0) = 다음 달 0일 = 그 달 말일이라 2월·윤년도 알아서 맞는다. */
-  function monthRange(n) {
-    var t = new Date(), y = t.getFullYear(), m = t.getMonth() - n;
-    var iso = function (x) {
-      return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
-        + '-' + String(x.getDate()).padStart(2, '0');
-    };
-    var from = iso(new Date(y, m, 1)), to = iso(new Date(y, m + 1, 0));
-    return { from: from, to: to, text: from + ' ~ ' + to };
+  function isoOf(x) {
+    return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
+      + '-' + String(x.getDate()).padStart(2, '0');
+  }
+  /* 이번 달 1일 ~ 오늘. */
+  function thisMonthToToday() {
+    var t = new Date();
+    return { from: isoOf(new Date(t.getFullYear(), t.getMonth(), 1)), to: isoOf(t) };
+  }
+  /* 오늘 기준 N개월 전 ~ 오늘(롤링). 말일 보정: 3/31→2/31 은 없으니 그 달 말일로 당긴다. */
+  function monthsAgoToToday(n) {
+    var t = new Date(), f = new Date(t), d = f.getDate();
+    f.setMonth(f.getMonth() - n);
+    if (f.getDate() !== d) f.setDate(0);
+    return { from: isoOf(f), to: isoOf(t) };
   }
   var RANGE_PRESETS = [
-    { months: 0, label: '이번 달' },
-    { months: 1, label: '한 달 전' },
-    { months: 2, label: '두 달 전' }
+    { id: 'this-month', label: '이번 달', range: thisMonthToToday },
+    { id: 'months-1', label: '한 달 전', range: function () { return monthsAgoToToday(1); } },
+    { id: 'months-2', label: '두 달 전', range: function () { return monthsAgoToToday(2); } }
   ];
 
   function render() {
@@ -416,10 +425,11 @@
     var q1 = question(1, '세금계산서 발행 전인가요?');
     q1._opts.appendChild(option(ISSUE.before, '리스트가 없어 바로 입력합니다', A.issue === 'before', function () {
       // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
-      A = { issue: 'before', months: 1, split: 'single', tax: null, nd: null }; render();
+      A = { issue: 'before', from: '', to: '', split: 'single', tax: null, nd: null }; render();
     }));
     q1._opts.appendChild(option(ISSUE.after, '조회된 목록에서 고릅니다', A.issue === 'after', function () {
-      A = { issue: 'after', months: 1, split: null, tax: null, nd: null }; render();
+      var d = monthsAgoToToday(1);
+      A = { issue: 'after', from: d.from, to: d.to, split: null, tax: null, nd: null }; render();
     }));
     qs.appendChild(q1);
 
@@ -430,26 +440,49 @@
     /* Q2 — 발행 후에만: 계산서일 */
     if (A.issue === 'after') {
       var q2 = question(n++, '세금계산서일을 선택하세요',
-        '직접 기간을 고를 수도 있고, 아래 버튼으로 해당 달 전체를 한 번에 넣을 수도 있습니다(기본 지난달).');
-      q2._opts.appendChild(el('span', 'chip chip-accent', monthRange(A.months).text));
+        '날짜를 직접 고르거나, 아래 버튼으로 흔히 쓰는 기간을 한 번에 넣습니다(기본 한 달 전).');
+      var range = el('div', 'opts');
+      range.style.cssText = 'gap:6px;align-items:center';
+      ['from', 'to'].forEach(function (key, idx) {
+        if (idx) range.appendChild(el('span', 'q-hint', '~'));
+        var d = document.createElement('input');
+        d.type = 'date';
+        d.className = 'date-in';
+        d.value = A[key] || '';
+        d.setAttribute('aria-label', '세금계산서일 ' + (idx ? '종료' : '시작'));
+        d.addEventListener('change', function () { A[key] = d.value; render(); });
+        range.appendChild(d);
+      });
+      q2.appendChild(range);
+
       var quick = el('div', 'opts');
-      quick.style.cssText = 'gap:6px;margin-top:2px';
+      quick.style.cssText = 'gap:6px;margin-top:2px;align-items:center';
       quick.appendChild(el('span', 'q-hint', '빠른 선택'));
       RANGE_PRESETS.forEach(function (p) {
+        var r = p.range();
         var b = el('button', 'opt');
         b.type = 'button';
         b.style.cssText = 'padding:5px 10px;font-size:12.5px';
         b.textContent = p.label;
-        b.setAttribute('aria-pressed', A.months === p.months ? 'true' : 'false');
-        b.addEventListener('click', function () { A.months = p.months; render(); });
+        b.setAttribute('aria-pressed', (A.from === r.from && A.to === r.to) ? 'true' : 'false');
+        b.addEventListener('click', function () { A.from = r.from; A.to = r.to; render(); });
         quick.appendChild(b);
       });
       q2.appendChild(quick);
+
+      if (A.from && A.to && A.from > A.to) {
+        var err = el('p', 'q-hint');
+        err.setAttribute('role', 'alert');
+        err.style.color = 'var(--danger)';
+        err.textContent = '시작일이 종료일보다 늦을 수 없습니다.';
+        q2.appendChild(err);
+      }
       qs.appendChild(q2);
     }
 
-    /* Q3 — 발행 후에만: 비용분할 */
+    /* Q3 — 발행 후에만: 비용분할(기간이 유효할 때) */
     if (A.issue === 'after') {
+      if (!A.from || !A.to || A.from > A.to) { paint(); return; }
       var q3 = question(n++, '비용분할이 필요한가요?');
       q3._opts.appendChild(option(SPLIT.single, '한 건으로 전액 처리', A.split === 'single', function () {
         A.split = 'single'; render();
@@ -488,6 +521,7 @@
   function done() {
     if (!A.issue || !A.tax) return false;
     if (A.issue === 'before') return true;
+    if (!A.from || !A.to || A.from > A.to) return false;
     if (!A.split) return false;
     if (A.tax === 'nondeduct' && !A.nd) return false;
     return true;
@@ -513,7 +547,7 @@
     var dl = document.getElementById('answers');
     dl.textContent = '';
     var pairs = [['발행', A.issue ? ISSUE[A.issue] : '—']];
-    if (A.issue === 'after') pairs.push(['계산서일', monthRange(A.months).text]);
+    if (A.issue === 'after') pairs.push(['계산서일', (A.from && A.to) ? (A.from + ' ~ ' + A.to) : '—']);
     pairs.push(['분할', A.issue === 'before' ? '불가(발행 전)' : (A.split ? SPLIT[A.split] : '—')]);
     pairs.push(['과세여부', A.tax ? TAX[A.tax] : '—']);
     if (A.tax === 'nondeduct') pairs.push(['불공 사유', A.nd ? ND[A.nd] : '—']);
@@ -591,7 +625,7 @@
   }
 
   document.getElementById('reset').addEventListener('click', function () {
-    A = { issue: null, months: 1, split: null, tax: null, nd: null }; render();
+    A = { issue: null, from: '', to: '', split: null, tax: null, nd: null }; render();
   });
   render();
 
