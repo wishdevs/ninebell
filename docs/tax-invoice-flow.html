@@ -6,8 +6,8 @@
 <title>세금계산서 결의서 — 프로세스 명세</title>
 <style>
   /* ── 토큰 ─────────────────────────────────────────────────────────────────
-     회계 장부의 세계에서 가져온 팔레트. 액센트는 결재 인장의 딥틸, 취소분(음수)은
-     장부의 붉은 잉크. 뉴트럴은 순회색이 아니라 틸 쪽으로 미세하게 기울여 둔다. */
+     회계 장부의 세계에서 가져온 팔레트. 액센트는 결재 인장의 딥틸, 경고는 장부의 붉은 잉크.
+     뉴트럴은 순회색이 아니라 틸 쪽으로 미세하게 기울여 둔다. 밝은 테마 고정. */
   :root {
     --paper:      #f6f7f9;
     --surface:    #ffffff;
@@ -34,41 +34,6 @@
     --w: 1120px;
     --r: 4px;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --paper:     #101720;
-      --surface:   #16202b;
-      --surface-2: #1d2936;
-      --line:      #2b3846;
-      --line-soft: #223040;
-      --ink:       #e6ecf1;
-      --ink-2:     #a8b6c1;
-      --ink-3:     #7d8c98;
-      --accent:    #4bb4b6;
-      --accent-ink:#7fd0d1;
-      --accent-bg: #113034;
-      --danger:    #e08278;
-      --danger-bg: #37201d;
-      --warn:      #d9a441;
-      --warn-bg:   #332715;
-      --ok:        #7dbb8c;
-      --ok-bg:     #1b2c20;
-    }
-  }
-  :root[data-theme="dark"] {
-    --paper:#101720; --surface:#16202b; --surface-2:#1d2936; --line:#2b3846;
-    --line-soft:#223040; --ink:#e6ecf1; --ink-2:#a8b6c1; --ink-3:#7d8c98;
-    --accent:#4bb4b6; --accent-ink:#7fd0d1; --accent-bg:#113034;
-    --danger:#e08278; --danger-bg:#37201d; --warn:#d9a441; --warn-bg:#332715;
-    --ok:#7dbb8c; --ok-bg:#1b2c20;
-  }
-  :root[data-theme="light"] {
-    --paper:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f3; --line:#d8dee1;
-    --line-soft:#e6eaec; --ink:#16202b; --ink-2:#47555f; --ink-3:#6f7d87;
-    --accent:#0e6f72; --accent-ink:#0a5457; --accent-bg:#e3f0f0;
-    --danger:#b3392c; --danger-bg:#fbe9e7; --warn:#a8700f; --warn-bg:#fbf1de;
-    --ok:#2f6d3f; --ok-bg:#e6f1e8;
-  }
 
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -93,10 +58,6 @@
        margin: 0 0 12px; text-wrap: balance; font-weight: 660; }
   .lede { margin: 0; max-width: 62ch; color: var(--ink-2); font-size: 15.5px; }
   .status { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
-  .theme-btn { font: inherit; font-size: 12px; padding: 6px 12px; cursor: pointer;
-               background: var(--surface-2); color: var(--ink-2);
-               border: 1px solid var(--line); border-radius: var(--r); }
-  .theme-btn:hover { color: var(--ink); border-color: var(--ink-3); }
 
   .chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono);
           font-size: 11px; padding: 4px 9px; border-radius: 3px; white-space: nowrap;
@@ -242,7 +203,6 @@
       </p>
     </div>
     <div class="status">
-      <button class="theme-btn" id="theme" type="button">테마 전환</button>
       <span class="chip chip-warn">프론트 시뮬레이션 · 백엔드 미구축</span>
       <span class="chip chip-accent">실제 ERP 저장 없음</span>
     </div>
@@ -369,15 +329,6 @@
     </div>
 
     <div class="cards" style="margin-top:16px">
-      <div class="card stripe">
-        <h3>금액이 기준, 비율은 파생</h3>
-        <p>비율로 입력해도 검증은 항상 금액으로 합니다. 어느 방식으로 넣든 반대편 값이 함께 보입니다.</p>
-      </div>
-      <div class="card stripe-danger">
-        <h3>취소분(음수)도 나눈다</h3>
-        <p>총액이 음수면 "남았다 / 초과했다"를 <b>총액 부호 기준</b>으로 판정합니다.
-           −214,000원을 −150,000 + −64,000으로 나누는 식입니다.</p>
-      </div>
       <div class="card stripe-warn">
         <h3>잔돈은 마지막 행에 몰아준다</h3>
         <p>비율로 나누다 원 단위 반올림으로 1원이 남으면 <b>마지막 행이 흡수</b>합니다
@@ -398,13 +349,6 @@
 (function () {
   'use strict';
 
-  /* ── 테마 ─────────────────────────────────────────────────────────── */
-  var root = document.documentElement;
-  document.getElementById('theme').addEventListener('click', function () {
-    var cur = root.getAttribute('data-theme');
-    if (!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
-  });
 
   /* ── 시뮬레이터 ───────────────────────────────────────────────────── */
   var A = { issue: null, months: 1, split: null, tax: null, nd: null };
