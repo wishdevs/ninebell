@@ -141,11 +141,6 @@
   .opt small { display: block; font-size: 11.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; }
   .opt[aria-pressed="true"] small { color: color-mix(in srgb, var(--accent-ink) 78%, transparent); }
 
-  .rule-fire { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px;
-               background: var(--warn-bg); color: var(--warn); padding: 8px 11px; border-radius: 3px;
-               border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent); }
-  .rule-fire b { color: inherit; }
-
   /* 우측 경로 요약 */
   .side { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; }
   .path-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
@@ -690,11 +685,6 @@
       }));
     });
     qs.appendChild(q4);
-    if (A.split === 'split') {
-      var warn = el('div', 'rule-fire');
-      warn.innerHTML = '<b>규칙 발동</b> — 비용분할을 골라 <b>불공</b>을 목록에서 제외했습니다.';
-      qs.appendChild(warn);
-    }
     if (!A.tax) { paint(); return; }
 
     /* Q5 — 발행 후 + 불공 */
