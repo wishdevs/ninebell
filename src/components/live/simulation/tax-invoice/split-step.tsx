@@ -126,7 +126,11 @@ export function SplitStep({
     const pct = parsePercent(raw);
     const nextRows = rows.map((row) =>
       row.id === r.id
-        ? { ...row, percent: raw, amount: pct === null ? '' : String(amountFromPercent(total, pct)) }
+        ? {
+            ...row,
+            percent: raw,
+            amount: pct === null ? '' : String(amountFromPercent(total, pct)),
+          }
         : row,
     );
     const lastId = nextRows[nextRows.length - 1]?.id;

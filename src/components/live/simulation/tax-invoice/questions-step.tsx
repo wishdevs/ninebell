@@ -1,11 +1,12 @@
 'use client';
 
-import { RiArrowRightLine, RiInformationLine } from '@remixicon/react';
+import { RiArrowRightLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import { ChoiceOption, QuestionBlock, SimStepHeader } from './ui';
 import {
   defaultInvoiceRange,
+  evidenceFor,
   RANGE_PRESETS,
   INVOICE_DATE_MAX,
   INVOICE_DATE_MIN,
@@ -195,14 +196,6 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
           <QuestionBlock
             step={value.issue === 'after' ? 4 : 2}
             label="과세 / 비과세 / 불공 중 어떤 것인가요?"
-            hint={
-              value.split === 'split' ? (
-                <span className="inline-flex items-center gap-1">
-                  <RiInformationLine size={12} aria-hidden />
-                  불공은 분할할 수 없어 목록에서 제외했습니다.
-                </span>
-              ) : undefined
-            }
           >
             {taxOptions.map((t) => (
               <ChoiceOption
@@ -228,6 +221,37 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
           </QuestionBlock>
         ) : null}
       </div>
+
+      {/* 선택되는 증빙유형 — 요약까지 가지 않아도 지금 답이 어떤 코드가 되는지 바로 보인다
+          (문서 시뮬레이터 docs/tax-invoice-flow.html 과 같은 규칙). */}
+      {(() => {
+        const ev = evidenceFor(value.issue, value.split, value.tax, value.nondeduct);
+        // 아직 코드가 정해지지 않았으면 무엇을 더 골라야 하는지 알린다 — 자리를 비우지 않아야
+        // 답을 채우는 동안 화면이 흔들리지 않는다.
+        const pending = !value.issue ? '발행 여부' : !value.tax ? '과세여부' : '불공 사유';
+        return (
+          <div className="border-border-subtle bg-muted/40 flex shrink-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-[var(--radius-md)] border px-3 py-2">
+            <span className="text-foreground-tertiary text-[10px] font-semibold tracking-wider uppercase">
+              증빙유형
+            </span>
+            {ev ? (
+              <>
+                <span className="text-accent font-mono text-lg leading-none font-bold tabular-nums">
+                  {ev.code}
+                </span>
+                <span className="text-foreground text-[11px] font-semibold">{ev.label}</span>
+                {ev.note ? (
+                  <span className="text-foreground-tertiary w-full text-[11px]">{ev.note}</span>
+                ) : null}
+              </>
+            ) : (
+              <span className="text-foreground-tertiary text-[11px]">
+                {pending}를 고르면 증빙유형이 정해집니다.
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="flex shrink-0 items-center justify-end gap-2">
         <Button

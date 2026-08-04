@@ -82,7 +82,15 @@ export function SummaryStep({
                 {answers.invoiceFrom} ~ {answers.invoiceTo}
               </Row>
             ) : null}
-            <Row label="비용분할">{answers.split ? SPLIT_LABEL[answers.split] : '—'}</Row>
+            {/* 발행 전은 사용자가 '분할 없음'을 고른 게 아니라 분할 자체가 불가하다 —
+                내부적으로 split='single' 로 고정되어 있어도 그대로 노출하지 않는다. */}
+            <Row label="비용분할">
+              {answers.issue === 'before'
+                ? '불가(발행 전)'
+                : answers.split
+                  ? SPLIT_LABEL[answers.split]
+                  : '—'}
+            </Row>
             <Row label="과세여부">
               {answers.tax ? TAX_LABEL[answers.tax] : '—'}
               {answers.nondeduct ? ` · ${NONDEDUCT_LABEL[answers.nondeduct]}` : ''}
@@ -98,7 +106,9 @@ export function SummaryStep({
                     <span className="text-foreground-secondary"> · {ev.label}</span>
                   </Row>
                   {ev.note ? (
-                    <p className="text-foreground-tertiary text-[11px] leading-relaxed">{ev.note}</p>
+                    <p className="text-foreground-tertiary text-[11px] leading-relaxed">
+                      {ev.note}
+                    </p>
                   ) : null}
                 </>
               );
