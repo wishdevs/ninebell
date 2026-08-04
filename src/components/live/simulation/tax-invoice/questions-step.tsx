@@ -6,7 +6,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ChoiceOption, QuestionBlock, SimStepHeader } from './ui';
 import {
   defaultInvoiceRange,
-  monthsAgoRange,
+  monthRange,
   RANGE_PRESETS,
   INVOICE_DATE_MAX,
   INVOICE_DATE_MIN,
@@ -66,8 +66,8 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
     // 경로가 바뀌면 뒤 질문은 무효 — 전부 비운다(발행 전은 기간 자체가 없다).
     // 발행 전은 **비용분할이 불가**(사용자 확정 2026-08-03)라 split 을 'single' 로 고정한다
     // — 질문을 숨기기만 하고 null 로 두면 뒤 단계가 '미답' 으로 막힌다.
-    // 발행 후는 기간을 **한 달 전~오늘**로 미리 채운다(사용자 확정 2026-08-03) — 실무 조회
-    // 기본값이라 바로 다음 질문으로 넘어갈 수 있고, 필요하면 사용자가 바꾼다.
+    // 발행 후는 기간을 **지난달 전체**로 미리 채운다(사용자 확정 2026-08-04) — 세금계산서는
+    // 월 단위로 발행·집계하므로 실무 기본값이다. 필요하면 달력이나 빠른 선택으로 바꾼다.
     const range = issue === 'after' ? defaultInvoiceRange() : { from: '', to: '' };
     onChange({
       ...emptyAnswers(),
@@ -129,7 +129,7 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
           <QuestionBlock
             step={2}
             label="세금계산서일을 선택하세요"
-            hint={`기본값은 최근 한 달(한 달 전~오늘)입니다. 선택한 기간의 (세금)계산서만 리스트에 나타납니다 — 더미 데이터는 ${INVOICE_DATE_MIN} ~ ${INVOICE_DATE_MAX} 범위입니다.`}
+            hint={`기본값은 지난달 전체입니다. 선택한 기간의 (세금)계산서만 리스트에 나타납니다 — 더미 데이터는 ${INVOICE_DATE_MIN} ~ ${INVOICE_DATE_MAX} 범위입니다.`}
           >
             <div className="flex flex-wrap items-center gap-2">
               <DatePicker
@@ -144,11 +144,11 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
                 onChange={(v) => set({ invoiceTo: v })}
               />
             </div>
-            {/* 빠른 선택 — 달력을 열지 않고 흔히 쓰는 기간을 한 번에 넣는다(기본 한 달 전). */}
+            {/* 빠른 선택 — 달력을 열지 않고 해당 달 전체(1일~말일)를 한 번에 넣는다. */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-foreground-tertiary text-[11px]">빠른 선택</span>
               {RANGE_PRESETS.map((p) => {
-                const r = monthsAgoRange(p.months);
+                const r = monthRange(p.months);
                 const active = value.invoiceFrom === r.from && value.invoiceTo === r.to;
                 return (
                   <button

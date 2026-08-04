@@ -182,30 +182,27 @@ function isoDate(d: Date): string {
 }
 
 /**
- * N개월 전 ~ 오늘 기간.
+ * N개월 전 달의 **1일 ~ 말일**(monthsAgo=0 이면 이번 달).
  *
- * 말일 보정: setMonth 는 3/31→2/31 같은 없는 날짜를 다음 달로 넘기므로, 넘어갔으면 그 달의
- * 말일로 당긴다(3/31 → 2/28).
+ * 세금계산서는 월 단위로 발행·집계하므로 빠른 선택도 달 전체를 넣는다(사용자 확정 2026-08-04).
+ * Date(y, m+1, 0) 은 다음 달 0일 = 그 달 말일이라 2월·윤년도 알아서 맞는다.
  */
-export function monthsAgoRange(months: number): { from: string; to: string } {
-  const today = new Date();
-  const from = new Date(today);
-  const day = from.getDate();
-  from.setMonth(from.getMonth() - months);
-  if (from.getDate() !== day) from.setDate(0);
-  return { from: isoDate(from), to: isoDate(today) };
+export function monthRange(monthsAgo: number): { from: string; to: string } {
+  const t = new Date();
+  const m = t.getMonth() - monthsAgo;
+  return { from: isoDate(new Date(t.getFullYear(), m, 1)), to: isoDate(new Date(t.getFullYear(), m + 1, 0)) };
 }
 
 /** 기간 빠른 선택 — 기본은 한 달 전(사용자 확정 2026-08-04). */
 export const RANGE_PRESETS: readonly { months: number; label: string }[] = [
+  { months: 0, label: '이번 달' },
   { months: 1, label: '한 달 전' },
   { months: 2, label: '두 달 전' },
-  { months: 3, label: '세 달 전' },
 ];
 
-/** 기간 기본값 — 한 달 전부터 오늘까지. 필요하면 사용자가 달력으로 바꾼다. */
+/** 기간 기본값 — 지난달 전체. 필요하면 사용자가 달력으로 바꾼다. */
 export function defaultInvoiceRange(): { from: string; to: string } {
-  return monthsAgoRange(1);
+  return monthRange(1);
 }
 
 // ── 입력항목 선택지(더미) ────────────────────────────────────────────────────
