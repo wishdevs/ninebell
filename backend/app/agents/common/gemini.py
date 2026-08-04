@@ -48,12 +48,14 @@ async def gemini_chat_decide(
     shot_b64: str | None,
     tools: list[dict],
     thinking_budget: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> tuple[str | None, dict]:
     """대화형 에이전트 한 턴 — 대화 기록+컨텍스트 데이터(+화면)로 `tools` 중 도구 1개를 결정.
 
     반환: (tool_name, args). 도구 호출이 없으면 (None, {}). 일시 오류는 재시도, 소진 시 raise.
     thinking_budget: 사고 토큰 예산(-1=동적, 0=끔, None=모델 기본) — gemini_generate_text 와
     동일 규약(thinkingConfig).
+    max_output_tokens: 출력 토큰 예산(None=모델 기본) — 대량 배치 판단에서만 명시.
     """
     user_text = (
         f"## 대화/행동 기록\n{history or '(없음)'}\n\n"
@@ -66,6 +68,8 @@ async def gemini_chat_decide(
     gen_config: dict = {"temperature": 0.1}
     if thinking_budget is not None:
         gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    if max_output_tokens is not None:
+        gen_config["maxOutputTokens"] = max_output_tokens
     body = {
         "contents": [{"role": "user", "parts": parts}],
         "system_instruction": {"parts": [{"text": system}]},

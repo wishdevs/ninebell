@@ -363,7 +363,7 @@ async def test_recommend_excludes_entertainment_candidates_for_lowest_rank(monke
     """user_job_title='팀원'이면 접대비·회식 후보가 LLM 컨텍스트·검증 화이트리스트에서 빠진다."""
     captured: dict = {}
 
-    async def _fake_chat_decide(http, *, system, history, context, shot_b64, tools, settings):
+    async def _fake_chat_decide(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         captured["context"] = context
         return "submit_recommendations", {
             # 후보에서 빠진 접대비 code 를 돌려줘도 화이트리스트 검증에서 걸러져야 한다.
@@ -403,7 +403,7 @@ async def test_recommend_context_slims_budget_fields_and_filters_bucket(monkeypa
     """LLM 컨텍스트: 예산 후보에서 name·bizplanNm 제외 + 반대 버킷((제)) 제외."""
     seen = {}
 
-    async def _decide(http, *, system, history, context, shot_b64, tools, settings):
+    async def _decide(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         seen["ctx"] = context
         return "submit_recommendations", {"recommendations": []}
 
@@ -439,10 +439,12 @@ _CANDS = ([{"code": "B1", "bgacctNm": "판매비"}], [{"code": "P1", "name": "�
 
 async def test_recommend_splits_large_input_into_chunks(monkeypatch):
     seen: list[int] = []
+    budgets: list[int | None] = []
 
-    async def _fake_decide(http, *, system, history, context, shot_b64, tools, settings):
+    async def _fake_decide(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         rows = context["rows"]
         seen.append(len(rows))
+        budgets.append(max_output_tokens)
         return "submit_recommendations", {
             "recommendations": [
                 {"no": r["no"], "budgetUnitCode": "B1", "projectCode": "P1", "confidence": 0.9}
@@ -454,17 +456,19 @@ async def test_recommend_splits_large_input_into_chunks(monkeypatch):
     out = await recommend.recommend_selections(
         _rows(400), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
     )
-    # 400행 → 30행씩 14청크, 각 청크는 상한(30) 이하.
-    assert len(seen) == 14 and max(seen) <= recommend.RECOMMEND_CHUNK_SIZE
+    # 400행 → 100행씩 4청크, 각 청크는 상한(100) 이하.
+    assert len(seen) == 4 and max(seen) <= recommend.RECOMMEND_CHUNK_SIZE
     assert sum(seen) == 400
     assert len(out) == 400  # 전 행 추천 수신
+    # 배치 호출은 결정 기본 상한(4096) 대신 전용 출력 예산을 명시한다.
+    assert set(budgets) == {recommend.RECOMMEND_MAX_OUTPUT_TOKENS}
 
 
 async def test_recommend_isolates_failing_chunk(monkeypatch):
     """한 청크가 실패해도 나머지 청크의 추천은 살아야 한다(종전엔 전량 손실)."""
     calls = {"n": 0}
 
-    async def _flaky(http, *, system, history, context, shot_b64, tools, settings):
+    async def _flaky(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("응답이 잘렸습니다(finish_reason=length)")
@@ -477,15 +481,15 @@ async def test_recommend_isolates_failing_chunk(monkeypatch):
 
     monkeypatch.setattr(recommend, "chat_decide", _flaky)
     out = await recommend.recommend_selections(
-        _rows(90), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
+        _rows(300), _CANDS[0], _CANDS[1], http=None, settings=_fake_settings()
     )
-    assert 0 < len(out) == 60  # 3청크 중 1개만 실패 → 60행 생존
+    assert 0 < len(out) == 200  # 3청크 중 1개만 실패 → 200행 생존
 
 
 async def test_recommend_rejects_row_numbers_from_other_chunks(monkeypatch):
     """청크 검증은 **그 청크의 no** 만 허용한다 — 다른 청크 행 번호 오염을 차단."""
 
-    async def _cross(http, *, system, history, context, shot_b64, tools, settings):
+    async def _cross(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         return "submit_recommendations", {
             "recommendations": [
                 {"no": 999, "budgetUnitCode": "B1", "projectCode": "P1", "confidence": 0.9}
@@ -503,7 +507,7 @@ async def test_recommend_single_chunk_when_small(monkeypatch):
     """작은 입력은 종전대로 1회 호출(불필요한 분할 없음)."""
     calls = {"n": 0}
 
-    async def _once(http, *, system, history, context, shot_b64, tools, settings):
+    async def _once(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         calls["n"] += 1
         return "submit_recommendations", {"recommendations": []}
 
@@ -518,7 +522,7 @@ async def test_recommend_respects_concurrency_cap(monkeypatch):
     """동시 실행 상한을 지킨다 — 무제한 병렬은 LLM 레이트리밋·타임아웃을 부른다."""
     live = {"now": 0, "peak": 0}
 
-    async def _slow(http, *, system, history, context, shot_b64, tools, settings):
+    async def _slow(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         live["now"] += 1
         live["peak"] = max(live["peak"], live["now"])
         await asyncio.sleep(0)  # 다른 태스크에 양보
@@ -540,7 +544,7 @@ async def test_recommend_respects_concurrency_cap(monkeypatch):
 async def test_recommend_context_includes_transaction_datetime(monkeypatch):
     seen: dict = {}
 
-    async def _capture(http, *, system, history, context, shot_b64, tools, settings):
+    async def _capture(http, *, system, history, context, shot_b64, tools, settings, max_output_tokens=None):
         seen["rows"] = context["rows"]
         seen["system"] = system
         return "submit_recommendations", {"recommendations": []}

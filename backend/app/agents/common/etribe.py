@@ -166,7 +166,13 @@ def _parse_tool_json(text: str, tools: list[dict]) -> tuple[str | None, dict]:
 
 
 async def _decide_via_json_mode(
-    http: Any, model: str, base: str, system: str, content: Any, tools: list[dict]
+    http: Any,
+    model: str,
+    base: str,
+    system: str,
+    content: Any,
+    tools: list[dict],
+    max_tokens: int = _DECIDE_MAX_TOKENS,
 ) -> tuple[str | None, dict]:
     """네이티브 툴콜 미지원 서버용 폴백 — response_format json_object 로 도구 선택 강제.
 
@@ -188,7 +194,7 @@ async def _decide_via_json_mode(
             {"role": "user", "content": content},
         ],
         "temperature": 0.1,
-        "max_tokens": _DECIDE_MAX_TOKENS,  # 사고 무제한 생성 방지(네이티브 경로와 동일).
+        "max_tokens": max_tokens,  # 사고 무제한 생성 방지(네이티브 경로와 동일).
         "response_format": {"type": "json_object"},
     }
     data = await _post_chat(http, base, body, tag="decide-json")
@@ -206,8 +212,13 @@ async def etribe_chat_decide(
     context: dict,
     shot_b64: str | None,
     tools: list[dict],
+    *,
+    max_output_tokens: int | None = None,
 ) -> tuple[str | None, dict]:
     """`gemini_chat_decide` 와 동일 계약 — `tools` 중 도구 1개를 강제 호출시켜 (name, args) 반환.
+
+    max_output_tokens 가 주어지면 결정 호출 상한 _DECIDE_MAX_TOKENS(4096) 대신 그 값을
+    max_tokens 로 쓴다(대량 배치 판단용 — JSON 폴백 경로에도 동일 적용).
 
     1차는 네이티브 tools+tool_choice='required'(gemini toolConfig mode=ANY 동치 — 다른
     ETRIBE 서버 호환 유지). 서버가 400 "--tool-call-parser" 로 거부하면 JSON 모드 폴백으로
@@ -228,9 +239,12 @@ async def etribe_chat_decide(
         ]
     oa_tools = gemini_decls_to_openai_tools(tools)
     base_key = base.rstrip("/")
+    max_tokens = _DECIDE_MAX_TOKENS if max_output_tokens is None else max_output_tokens
     if oa_tools and base_key in _JSON_FALLBACK_BASES:
         # 네이티브 툴콜 미지원으로 이미 판명된 서버 — 400 왕복 없이 폴백 직행.
-        return await _decide_via_json_mode(http, model, base, system, content, tools)
+        return await _decide_via_json_mode(
+            http, model, base, system, content, tools, max_tokens=max_tokens
+        )
 
     body: dict = {
         "model": model,
@@ -239,7 +253,7 @@ async def etribe_chat_decide(
             {"role": "user", "content": content},
         ],
         "temperature": 0.1,
-        "max_tokens": _DECIDE_MAX_TOKENS,  # 사고 무제한 생성 방지(타임아웃 회피).
+        "max_tokens": max_tokens,  # 사고 무제한 생성 방지(타임아웃 회피).
         # thinking 서버 기본 ON 유지(가이드 §4 — 미전송 시 ON). 사고과정(reasoning_content)은
         # 파싱에서 무시하고 tool_calls 만 읽는다. (2026-07-23 무사고→사고 전환, 사용자 지시)
     }
@@ -260,7 +274,9 @@ async def etribe_chat_decide(
             # 서버가 네이티브 툴콜 파서 미설정(현행 ETRIBE-VLM 실측) — JSON 폴백으로 흡수.
             _JSON_FALLBACK_BASES.add(base_key)
             logger.info("etribe 네이티브 툴콜 미지원(%s) — JSON 모드 폴백 전환", base_key)
-            return await _decide_via_json_mode(http, model, base, system, content, tools)
+            return await _decide_via_json_mode(
+                http, model, base, system, content, tools, max_tokens=max_tokens
+            )
         raise
     msg = ((data.get("choices") or [{}])[0].get("message")) or {}
     for call in msg.get("tool_calls") or []:
