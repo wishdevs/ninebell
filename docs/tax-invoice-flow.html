@@ -103,8 +103,6 @@
           border: 1px solid transparent; }
   .chip-warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
   .chip-accent { background: var(--accent-bg); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-  .chip-danger { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
-  .chip-ok { background: var(--ok-bg); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
 
   /* ── 섹션 ─────────────────────────────────────────────────────────────── */
   section { padding: 46px 0; border-bottom: 1px solid var(--line-soft); }
@@ -165,22 +163,6 @@
   .ev-none { font-size: 13px; color: var(--ink-3); }
   .ev-note { font-size: 12.5px; line-height: 1.5; }
 
-  /* ── 분기도 ───────────────────────────────────────────────────────────── */
-  .flow { display: grid; gap: 10px; }
-  .lane { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 14px; align-items: stretch; }
-  @media (max-width: 760px) { .lane { grid-template-columns: 1fr; } }
-  .lane-name { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); padding-top: 12px;
-               letter-spacing: .04em; }
-  .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-           background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
-           padding: 12px 14px; }
-  .node { font-size: 13px; padding: 6px 11px; border-radius: 3px; background: var(--surface-2);
-          border: 1px solid var(--line); white-space: nowrap; }
-  .node.q { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-            color: var(--accent-ink); }
-  .node.skip { background: transparent; border-style: dashed; color: var(--ink-3);
-               text-decoration: line-through; text-decoration-color: var(--ink-3); }
-  .arrow { color: var(--ink-3); font-size: 12px; flex-shrink: 0; }
 
   /* ── 표 ───────────────────────────────────────────────────────────────── */
   .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r);
@@ -192,7 +174,6 @@
   td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
   tbody tr:last-child td { border-bottom: 0; }
   td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  td.neg { color: var(--danger); }
   .fld { font-family: var(--mono); font-size: 12.5px; }
   .muted { color: var(--ink-3); }
   .req::after { content: "필수"; font-family: var(--mono); font-size: 10px; color: var(--accent);
@@ -311,80 +292,11 @@
     </div>
   </section>
 
-  <!-- ══ 2. 전체 분기도 ═════════════════════════════════════════════════ -->
-  <section>
-    <div class="sec-head"><span class="sec-num">02</span><h2>세 갈래 경로</h2></div>
-    <p class="sec-sub">
-      같은 에이전트지만 첫 질문의 답에 따라 거치는 단계 수가 달라집니다. 점선으로 지워진
-      단계는 그 경로에서 <b>아예 나타나지 않는</b> 질문입니다.
-    </p>
 
-    <div class="flow">
-      <div class="lane">
-        <div class="lane-name">발행 전</div>
-        <div class="steps">
-          <span class="node q">발행 전/후</span><span class="arrow">→</span>
-          <span class="node skip">계산서일</span><span class="arrow">→</span>
-          <span class="node skip">비용분할</span><span class="arrow">→</span>
-          <span class="node q">과세여부</span><span class="arrow">→</span>
-          <span class="node">입력항목<small></small></span><span class="arrow">→</span>
-          <span class="node">요약</span>
-        </div>
-      </div>
-      <div class="lane">
-        <div class="lane-name">발행 후 · 단건</div>
-        <div class="steps">
-          <span class="node q">발행 전/후</span><span class="arrow">→</span>
-          <span class="node q">계산서일</span><span class="arrow">→</span>
-          <span class="node q">비용분할</span><span class="arrow">→</span>
-          <span class="node q">과세여부</span><span class="arrow">→</span>
-          <span class="node">리스트 선택</span><span class="arrow">→</span>
-          <span class="node">입력항목</span><span class="arrow">→</span>
-          <span class="node">요약</span>
-        </div>
-      </div>
-      <div class="lane">
-        <div class="lane-name">발행 후 · 분할</div>
-        <div class="steps">
-          <span class="node q">발행 전/후</span><span class="arrow">→</span>
-          <span class="node q">계산서일</span><span class="arrow">→</span>
-          <span class="node q">비용분할</span><span class="arrow">→</span>
-          <span class="node q">과세여부<small></small></span><span class="arrow">→</span>
-          <span class="node">리스트 선택</span><span class="arrow">→</span>
-          <span class="node">입력항목</span><span class="arrow">→</span>
-          <span class="node">비용분할 입력</span><span class="arrow">→</span>
-          <span class="node">요약</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ══ 3. 제약 ════════════════════════════════════════════════════════ -->
-  <section>
-    <div class="sec-head"><span class="sec-num">03</span><h2>지켜야 하는 제약</h2></div>
-    <p class="sec-sub">화면이 선택지를 숨기는 방식으로 강제합니다 — 고를 수 없으니 잘못된 조합이 만들어지지 않습니다.</p>
-    <div class="cards">
-      <div class="card stripe-warn">
-        <h3>불공은 나눌 수 없다</h3>
-        <p>비용분할을 고르면 과세여부 목록에서 <b>불공 항목 자체가 사라집니다</b>. 이미 불공을 고른 뒤
-           되돌아와 분할을 켜면 과세여부 선택이 해제되어 다시 고르게 됩니다.</p>
-      </div>
-      <div class="card stripe-warn">
-        <h3>발행 전에는 나눌 수 없다</h3>
-        <p>발행 전을 고르면 <b>비용분할 질문이 나타나지 않고</b> 곧바로 과세여부로 넘어갑니다.
-           단계 표시줄도 세 단계로 줄어듭니다.</p>
-      </div>
-      <div class="card stripe">
-        <h3>불공 사유는 발행 후에만</h3>
-        <p>사업 무관 지출 · 비영업용 소형승용차 · 면세사업 관련 중 하나를 추가로 받습니다.
-           발행 전 경로에서는 묻지 않습니다.</p>
-      </div>
-    </div>
-  </section>
 
   <!-- ══ 3.5 증빙유형 ═══════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">04</span><h2>어떤 증빙유형이 되는가</h2></div>
+    <div class="sec-head"><span class="sec-num">02</span><h2>어떤 증빙유형이 되는가</h2></div>
     <p class="sec-sub">
       질문의 답이 곧 ERP 증빙유형 코드입니다. <b>발행 여부 × 비용분할 × 과세성격</b>(불공이면
       <b>× 사유</b>)이 코드 하나로 접힙니다 — 위 시뮬레이터에서 답을 바꾸면 오른쪽에 실시간으로
@@ -429,7 +341,7 @@
 
   <!-- ══ 4. 입력 항목 ═══════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">05</span><h2>무엇을 입력받는가</h2></div>
+    <div class="sec-head"><span class="sec-num">03</span><h2>무엇을 입력받는가</h2></div>
     <p class="sec-sub">
       공통 일곱 항목은 어느 경로에서나 받습니다. 거래처·공급가액은 발행 전에만 직접 입력하고,
       발행 후에는 선택한 리스트 행에서 따라옵니다.
@@ -458,7 +370,7 @@
 
   <!-- ══ 5. 분할 ════════════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">06</span><h2>비용분할</h2></div>
+    <div class="sec-head"><span class="sec-num">04</span><h2>비용분할</h2></div>
     <p class="sec-sub">
       공통 항목을 모두 채운 뒤 추가로 받습니다. 행마다 예산단위 · 적요 · 프로젝트 · 공급가액 ·
       <b>비용센터</b>를 입력하고, <b>남은 금액이 0이 되어야</b> 확정할 수 있습니다.
@@ -518,50 +430,7 @@
     </div>
   </section>
 
-  <!-- ══ 6. 리스트 ══════════════════════════════════════════════════════ -->
-  <section>
-    <div class="sec-head"><span class="sec-num">07</span><h2>세금계산서 리스트</h2></div>
-    <p class="sec-sub">
-      발행 후 경로에서 처리할 건을 고르는 화면입니다. 기간 기본값은 <b>한 달 전 ~ 오늘</b>이며,
-      음수 행은 취소분으로 구분해 표시하되 정상적으로 선택할 수 있습니다.
-    </p>
-    <div class="tbl-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th class="num">No</th><th>선택</th><th>(세금)계산서일</th><th>사업자번호</th>
-            <th>사업장명</th><th>종사업장번호</th><th class="num">거래처코드</th>
-            <th>거래처사업자번호</th><th>거래처명</th><th>거래처종사업장번호</th>
-            <th class="num">공급가액</th><th class="num">세액</th>
-          </tr>
-        </thead>
-        <tbody id="invRows"></tbody>
-      </table>
-    </div>
-    <p class="muted" style="font-size:12.5px;margin-top:10px">
-      더미 11행 — 3·4번은 같은 거래처의 원거래와 취소분입니다. 둘을 함께 고르면 총액이 0원이 되어
-      비율 분할이 막힙니다(0을 나눌 수 없으므로).
-    </p>
-  </section>
 
-  <!-- ══ 7. 다음 단계 ═══════════════════════════════════════════════════ -->
-  <section>
-    <div class="sec-head"><span class="sec-num">08</span><h2>백엔드를 붙일 때</h2></div>
-    <p class="sec-sub">지금은 프론트 안에서만 도는 시뮬레이션입니다. 실동작으로 승격할 때 채워야 할 지점입니다.</p>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th style="width:34%">채울 것</th><th>내용</th></tr></thead>
-        <tbody>
-          <tr><td class="fld">워크플로우 등록</td><td>에이전트 픽스처에 <code>workflow_id</code>·단계 목록·플로우 그래프를 채워 실행 컨트롤을 활성화합니다(경조금·학자금 승격과 같은 방식).</td></tr>
-          <tr><td class="fld">코드 카탈로그</td><td>예산단위·프로젝트·자금과목·결제조건·비용센터·거래처를 더미 배열에서 실제 ERP 코드 조회로 교체합니다.</td></tr>
-          <tr><td class="fld">리스트</td><td>더미 11행을 옴니솔 세금계산서 조회 결과로 바꾸고, 선택 단계를 법인카드와 같은 <b>라이브 그리드 개입</b>으로 옮깁니다.</td></tr>
-          <tr><td class="fld">질문·입력 폼</td><td>실행 전 폼 레지스트리로 승격하고 시뮬레이션 등록을 해제합니다.</td></tr>
-          <tr><td class="fld">요약 화면</td><td>지금 요약에 나오는 필드 묶음이 곧 <b>파라미터 스키마의 출발점</b>입니다 — 무엇을 ERP에 넣을지의 계약서 역할을 합니다.</td></tr>
-          <tr><td class="fld">회계일 정책</td><td>여러 날짜를 한 번에 고른 경우를 확정해야 합니다. 현재는 마지막 계산서일을 넣고 수정 가능하게 두었는데, 날짜별로 결의서를 나눠야 한다면 선택 단계에서 날짜를 하나로 묶어야 합니다.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
 </main>
 
 <footer class="wrap">
@@ -915,47 +784,6 @@
   });
   renderSplit();
 
-  /* ── 리스트 더미 ──────────────────────────────────────────────────── */
-  var INV = [
-    ['2026-07-01', '15745', '543-86-02659', '노무법인 좋은', 400000, 40000],
-    ['2026-07-01', '20326', '143-81-32507', '법무법인 비트', 1000000, 100000],
-    ['2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', 214000, 21400],
-    ['2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', -214000, -21400],
-    ['2026-07-03', '15311', '109-83-02763', '인천공항세관', 5476039, 547600],
-    ['2026-07-03', '10042', '129-29-40129', '유앤아이관세사무소', 103830, 10383],
-    ['2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 537554, 53755],
-    ['2026-07-06', '30140', '220-05-53810', '특허사무소 시선', 1500000, 150000],
-    ['2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 34000, 3400],
-    ['2026-07-09', '15892', '222-82-75825', '르네상스대표자회', 145990, 14600],
-    ['2026-07-10', '10168', '202-81-00978', '중소기업은행', 136363, 13637]
-  ];
-  var tb = document.getElementById('invRows');
-  INV.forEach(function (r, i) {
-    var neg = r[4] < 0;
-    var tr = el('tr');
-    var cells = [
-      ['num muted', String(i + 1)],
-      [null, '☐'],
-      [null, r[0]],
-      ['fld', '123-81-44708'],
-      [null, '(주)나인벨'],
-      ['muted', '—'],
-      ['num fld', r[1]],
-      ['fld', r[2]],
-      [null, r[3]],
-      ['muted', '—'],
-      ['num' + (neg ? ' neg' : ''), r[4].toLocaleString('ko-KR')],
-      ['num' + (neg ? ' neg' : ''), r[5].toLocaleString('ko-KR')]
-    ];
-    cells.forEach(function (c) { tr.appendChild(el('td', c[0], c[1])); });
-    if (neg) {
-      var last = tr.children[8];
-      var badge = el('span', 'chip chip-danger', '취소');
-      badge.style.marginLeft = '6px';
-      last.appendChild(badge);
-    }
-    tb.appendChild(tr);
-  });
 })();
 </script>
 </body>
