@@ -69,8 +69,8 @@ const NONDEDUCT_EVIDENCE: Record<NondeductReason, string> = {
 export interface EvidenceType {
   code: string;
   label: string;
-  /** 표시할 주의 문구(없으면 undefined) — 코드 체계가 조합을 다 담지 못하는 자리. */
-  caution?: string;
+  /** 코드 선택 근거를 덧붙일 때(없으면 undefined) — 조합이 한 코드로 접히는 자리 등. */
+  note?: string;
 }
 
 /**
@@ -79,8 +79,8 @@ export interface EvidenceType {
  * **비용분할은 원증빙으로 넣는다**(사용자 확정 2026-08-03) — 분할이면 과세 11 · 비과세 13.
  * 불공은 애초에 분할할 수 없으므로 분할 × 불공 조합은 존재하지 않는다.
  *
- * ⚠ 발행 전 불공은 코드가 **24(차량용) 하나뿐**이라 차량 외 사유를 담을 자리가 없다.
- *   업무 확인 전까지 코드는 24 로 두되 그 사실을 화면에 드러낸다(조용히 뭉개지 않는다).
+ * 발행 전 불공은 코드 **24 하나**다(사용자 확정 2026-08-04) — 발행 후는 사유별로 05·06·07 로
+ * 갈리지만 발행 전은 사유를 나누지 않는다. 그래서 발행 전 경로는 불공 사유를 묻지 않는다.
  */
 export function evidenceFor(
   issue: IssueState | null,
@@ -95,7 +95,7 @@ export function evidenceFor(
     return {
       code: '24',
       label: EVIDENCE_LABEL['24'],
-      caution: '발행 전 불공 코드는 24(차량용) 하나뿐입니다 — 차량 외 사유는 담을 코드가 없습니다.',
+      note: '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.',
     };
   }
   // 발행 후 — 분할이면 원증빙 계열로 갈린다.

@@ -97,10 +97,8 @@ export function SummaryStep({
                     <span className="font-mono font-semibold tabular-nums">{ev.code}</span>
                     <span className="text-foreground-secondary"> · {ev.label}</span>
                   </Row>
-                  {ev.caution ? (
-                    <p className="text-warning bg-warning/10 border-warning/25 rounded border px-2 py-1.5 text-[11px] leading-relaxed">
-                      확인 필요 — {ev.caution}
-                    </p>
+                  {ev.note ? (
+                    <p className="text-foreground-tertiary text-[11px] leading-relaxed">{ev.note}</p>
                   ) : null}
                 </>
               );
