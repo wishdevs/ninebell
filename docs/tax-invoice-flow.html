@@ -260,8 +260,41 @@
 
 
   <!-- ══ 4. 입력 항목 ═══════════════════════════════════════════════════ -->
+
+  <!-- ══ 증빙유형 ═══════════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">02</span><h2>무엇을 입력받는가</h2></div>
+    <div class="sec-head"><span class="sec-num">02</span><h2>증빙유형</h2></div>
+    <p class="sec-sub">
+      질문의 답이 곧 ERP 증빙유형 코드입니다. <b>발행 여부 × 비용분할 × 과세성격</b>(불공이면
+      <b>× 사유</b>)이 코드 하나로 접힙니다 — 위 시뮬레이터에서 답을 바꾸면 오른쪽에 실시간으로
+      표시됩니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="num" style="width:60px">코드</th><th>증빙유형</th>
+            <th style="width:15%">발행</th><th style="width:13%">분할</th><th style="width:24%">과세성격</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="num fld">03</td><td>세금계산서</td><td>발행 후</td><td>분할 없음</td><td>과세</td></tr>
+          <tr><td class="num fld">04</td><td>계산서</td><td>발행 후</td><td>분할 없음</td><td>비과세</td></tr>
+          <tr><td class="num fld">05</td><td>세금계산서(불공) 사업과 관련없는 지출</td><td>발행 후</td><td>분할 없음</td><td>불공 · 사업과 관련없는 지출</td></tr>
+          <tr><td class="num fld">06</td><td>세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차</td><td>발행 후</td><td>분할 없음</td><td>불공 · 비영업용 소형승용차</td></tr>
+          <tr><td class="num fld">07</td><td>세금계산서(불공) 면세사업과 관련된분</td><td>발행 후</td><td>분할 없음</td><td>불공 · 면세사업 관련</td></tr>
+          <tr><td class="num fld">11</td><td>세금계산서(원증빙)</td><td>발행 후</td><td><b>비용분할</b></td><td>과세</td></tr>
+          <tr><td class="num fld">13</td><td>계산서(원증빙)</td><td>발행 후</td><td><b>비용분할</b></td><td>비과세</td></tr>
+          <tr><td class="num fld">22</td><td>세금계산서 발행 전 입력(과세)</td><td>발행 전</td><td class="muted">불가</td><td>과세</td></tr>
+          <tr><td class="num fld">23</td><td>세금계산서 발행 전 입력(비과세)</td><td>발행 전</td><td class="muted">불가</td><td>비과세</td></tr>
+          <tr><td class="num fld">24</td><td>세금계산서 발행 전 (과세)불공 차량용</td><td>발행 전</td><td class="muted">불가</td><td>불공</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>무엇을 입력받는가</h2></div>
     <p class="sec-sub">
       공통 일곱 항목은 어느 경로에서나 받습니다. 거래처·공급가액은 발행 전에만 직접 입력하고,
       발행 후에는 선택한 리스트 행에서 따라옵니다.
@@ -290,7 +323,7 @@
 
   <!-- ══ 5. 분할 ════════════════════════════════════════════════════════ -->
   <section>
-    <div class="sec-head"><span class="sec-num">03</span><h2>비용분할</h2></div>
+    <div class="sec-head"><span class="sec-num">04</span><h2>비용분할</h2></div>
     <p class="sec-sub">
       공통 항목을 모두 채운 뒤 추가로 받습니다. 행마다 예산단위 · 적요 · 프로젝트 · 공급가액 ·
       <b>비용센터</b>를 입력하고, <b>남은 금액이 0이 되어야</b> 확정할 수 있습니다.
