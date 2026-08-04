@@ -53,12 +53,16 @@ async def chat_decide(
     tools: list[dict],
     settings: Any | None = None,
     thinking_budget: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> tuple[str | None, dict]:
     """function-calling 한 턴 — 활성 프로바이더로 `tools` 중 1개 강제 호출, (name, args) 반환.
 
     반환 계약은 gemini_chat_decide 와 동일(도구 없으면 (None, {}), 일시 오류 재시도 후 raise).
     thinking_budget 은 gemini 전용(-1=동적 사고 ON, generate_text 와 동일 규약) — etribe 는
     서버 기본(thinking ON)이라 무시.
+    max_output_tokens 는 출력 토큰 예산 — None 이면 프로바이더 기본(etribe 는
+    _DECIDE_MAX_TOKENS=4096, gemini 는 모델 기본). 대량 배치 판단(card_collect 추천 등)만
+    큰 값을 명시한다.
     """
     s = settings if settings is not None else get_settings()
     if _is_etribe(s):
@@ -67,7 +71,8 @@ async def chat_decide(
         # ETRIBE-VLM(멀티모달 실측 OK)은 스크린샷을 그대로 통과시킨다.
         shot = shot_b64 if getattr(s, "etribe_multimodal", True) else None
         return await etribe_chat_decide(
-            http, s.etribe_model, s.etribe_base_url, system, history, context, shot, tools
+            http, s.etribe_model, s.etribe_base_url, system, history, context, shot, tools,
+            max_output_tokens=max_output_tokens,
         )
     return await gemini_chat_decide(
         http,
@@ -82,6 +87,7 @@ async def chat_decide(
         shot_b64,
         tools,
         thinking_budget=thinking_budget,
+        max_output_tokens=max_output_tokens,
     )
 
 

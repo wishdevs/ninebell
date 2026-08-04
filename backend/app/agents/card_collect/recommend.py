@@ -28,14 +28,18 @@ RECOMMEND_CONFIDENCE_THRESHOLD = 0.6
 
 # 프롬프트/컨텍스트 비대 방지 캡(nodes 후보 캡과 별개, 여기서 한 번 더 조인다).
 # ── 배치 분할(2026-07-27 사용자 리포트: 400행에서 추천이 통째로 실패) ─────────────
-# 근본원인은 "LLM 이 헷갈린다"가 아니라 **출력 토큰 상한 초과**다:
-#   결정 호출 상한 _DECIDE_MAX_TOKENS=4096(사고 토큰과 공유, 헤드룸 1024) 인데
-#   행당 추천 JSON 이 약 45~60 토큰 → 400행이면 약 20,000 토큰이 필요하다.
+# 근본원인은 "LLM 이 헷갈린다"가 아니라 **출력 토큰 상한 초과**였다:
+#   당시 결정 호출 상한 _DECIDE_MAX_TOKENS=4096(사고 토큰과 공유, 헤드룸 1024) 에
+#   행당 추천 JSON 약 45~60 토큰 → 400행이면 약 20,000 토큰이 필요했다.
 #   응답이 잘리면(finish_reason=length) 툴콜 JSON 이 깨져 파싱 실패 → 전 행이 추천 없이 진행.
-# 사고를 빼면 실제 가용 출력이 2,000~3,000 토큰이므로 30행(≈1,650 토큰)이 안전 마진을 포함한
-# 적정값이다(사용자 확정). 25~40 사이면 무난하다.
-RECOMMEND_CHUNK_SIZE = 30
-# 청크 동시 실행 수 — 400행이면 14청크라 순차 처리 시 지연이 14배가 된다. 후보 목록은 청크마다
+# 지금은 이 배치 호출만 출력 예산을 RECOMMEND_MAX_OUTPUT_TOKENS(16,384)로 올려
+#   100행(≈6,000 토큰)도 사고 토큰 포함 안전 마진 안이다 — 청크를 30→100 으로 키워
+#   청크마다 재전송되는 후보 목록(≈3~4K 토큰) 입력 낭비를 줄인다. 실패 격리는 청크 단위 유지.
+RECOMMEND_CHUNK_SIZE = 100
+# 배치 추천 호출 전용 출력 토큰 예산 — chat_decide(max_output_tokens=)로 전달돼 etribe 는
+# _DECIDE_MAX_TOKENS(4096) 대신, gemini 는 generationConfig.maxOutputTokens 로 쓴다.
+RECOMMEND_MAX_OUTPUT_TOKENS = 16_384
+# 청크 동시 실행 수 — 다청크 시 순차 처리 지연을 줄인다. 후보 목록은 청크마다
 # 재전송되므로 입력 토큰은 늘지만(후보 180건 ≈ 3~4K) 정확도·복원력 대비 감수한다.
 RECOMMEND_CHUNK_CONCURRENCY = 3
 
@@ -315,6 +319,8 @@ async def _recommend_chunk(
         shot_b64=None,  # 스크린샷 불필요.
         tools=_TOOLS,
         settings=settings,
+        # 대량 배치 응답(청크당 최대 100행)이 잘리지 않게 결정 호출 기본 상한(4096) 대신 사용.
+        max_output_tokens=RECOMMEND_MAX_OUTPUT_TOKENS,
     )
 
     if name != "submit_recommendations":
