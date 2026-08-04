@@ -407,7 +407,7 @@
   });
 
   /* ── 시뮬레이터 ───────────────────────────────────────────────────── */
-  var A = { issue: null, split: null, tax: null, nd: null };
+  var A = { issue: null, months: 1, split: null, tax: null, nd: null };
 
   var ISSUE = { before: '발행 전', after: '발행 후' };
   var SPLIT = { single: '분할 없음', split: '비용분할' };
@@ -448,16 +448,22 @@
     return b;
   }
 
-  function monthAgoRange() {
+  /* N개월 전 ~ 오늘. 말일 보정: 3/31→2/31 은 없으니 그 달 말일(2/28)로 당긴다. */
+  function monthsAgoRange(n) {
     var t = new Date(), f = new Date(t), d = f.getDate();
-    f.setMonth(f.getMonth() - 1);
+    f.setMonth(f.getMonth() - n);
     if (f.getDate() !== d) f.setDate(0);
     var iso = function (x) {
       return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
         + '-' + String(x.getDate()).padStart(2, '0');
     };
-    return iso(f) + ' ~ ' + iso(t);
+    return { from: iso(f), to: iso(t), text: iso(f) + ' ~ ' + iso(t) };
   }
+  var RANGE_PRESETS = [
+    { months: 1, label: '한 달 전' },
+    { months: 2, label: '두 달 전' },
+    { months: 3, label: '세 달 전' }
+  ];
 
   function render() {
     var qs = document.getElementById('qs');
@@ -467,10 +473,10 @@
     var q1 = question(1, '세금계산서 발행 전인가요?');
     q1._opts.appendChild(option(ISSUE.before, '리스트가 없어 바로 입력합니다', A.issue === 'before', function () {
       // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
-      A = { issue: 'before', split: 'single', tax: null, nd: null }; render();
+      A = { issue: 'before', months: 1, split: 'single', tax: null, nd: null }; render();
     }));
     q1._opts.appendChild(option(ISSUE.after, '조회된 목록에서 고릅니다', A.issue === 'after', function () {
-      A = { issue: 'after', split: null, tax: null, nd: null }; render();
+      A = { issue: 'after', months: 1, split: null, tax: null, nd: null }; render();
     }));
     qs.appendChild(q1);
 
@@ -480,9 +486,22 @@
 
     /* Q2 — 발행 후에만: 계산서일 */
     if (A.issue === 'after') {
-      var q2 = question(n++, '세금계산서일을 선택하세요', '기본값은 최근 한 달 — ' + monthAgoRange());
-      var pill = el('span', 'chip chip-accent', monthAgoRange());
-      q2._opts.appendChild(pill);
+      var q2 = question(n++, '세금계산서일을 선택하세요',
+        '직접 기간을 고를 수도 있고, 아래 버튼으로 한 번에 넣을 수도 있습니다(기본 한 달 전).');
+      q2._opts.appendChild(el('span', 'chip chip-accent', monthsAgoRange(A.months).text));
+      var quick = el('div', 'opts');
+      quick.style.cssText = 'gap:6px;margin-top:2px';
+      quick.appendChild(el('span', 'q-hint', '빠른 선택'));
+      RANGE_PRESETS.forEach(function (p) {
+        var b = el('button', 'opt');
+        b.type = 'button';
+        b.style.cssText = 'padding:5px 10px;font-size:12.5px';
+        b.textContent = p.label;
+        b.setAttribute('aria-pressed', A.months === p.months ? 'true' : 'false');
+        b.addEventListener('click', function () { A.months = p.months; render(); });
+        quick.appendChild(b);
+      });
+      q2.appendChild(quick);
       qs.appendChild(q2);
     }
 
@@ -551,7 +570,7 @@
     var dl = document.getElementById('answers');
     dl.textContent = '';
     var pairs = [['발행', A.issue ? ISSUE[A.issue] : '—']];
-    if (A.issue === 'after') pairs.push(['계산서일', monthAgoRange()]);
+    if (A.issue === 'after') pairs.push(['계산서일', monthsAgoRange(A.months).text]);
     pairs.push(['분할', A.issue === 'before' ? '불가(발행 전)' : (A.split ? SPLIT[A.split] : '—')]);
     pairs.push(['과세여부', A.tax ? TAX[A.tax] : '—']);
     if (A.tax === 'nondeduct') pairs.push(['불공 사유', A.nd ? ND[A.nd] : '—']);
@@ -629,7 +648,7 @@
   }
 
   document.getElementById('reset').addEventListener('click', function () {
-    A = { issue: null, split: null, tax: null, nd: null }; render();
+    A = { issue: null, months: 1, split: null, tax: null, nd: null }; render();
   });
   render();
 

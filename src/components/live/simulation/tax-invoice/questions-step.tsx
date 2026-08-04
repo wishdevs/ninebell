@@ -6,6 +6,8 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ChoiceOption, QuestionBlock, SimStepHeader } from './ui';
 import {
   defaultInvoiceRange,
+  monthsAgoRange,
+  RANGE_PRESETS,
   INVOICE_DATE_MAX,
   INVOICE_DATE_MIN,
   ISSUE_LABEL,
@@ -141,6 +143,29 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
                 value={value.invoiceTo}
                 onChange={(v) => set({ invoiceTo: v })}
               />
+            </div>
+            {/* 빠른 선택 — 달력을 열지 않고 흔히 쓰는 기간을 한 번에 넣는다(기본 한 달 전). */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-foreground-tertiary text-[11px]">빠른 선택</span>
+              {RANGE_PRESETS.map((p) => {
+                const r = monthsAgoRange(p.months);
+                const active = value.invoiceFrom === r.from && value.invoiceTo === r.to;
+                return (
+                  <button
+                    key={p.months}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => set({ invoiceFrom: r.from, invoiceTo: r.to })}
+                    className={
+                      active
+                        ? 'border-accent bg-accent/10 text-accent rounded-[var(--radius-sm)] border px-2 py-1 text-[11px] font-semibold'
+                        : 'border-border text-foreground-secondary hover:border-accent hover:text-foreground rounded-[var(--radius-sm)] border px-2 py-1 text-[11px] transition-colors'
+                    }
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
             </div>
             {rangeInvalid ? (
               <p role="alert" className="text-danger text-[11px]">

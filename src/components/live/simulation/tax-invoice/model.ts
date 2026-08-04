@@ -182,19 +182,30 @@ function isoDate(d: Date): string {
 }
 
 /**
- * 기간 기본값 — **한 달 전부터 오늘까지**(사용자 확정 2026-08-03).
+ * N개월 전 ~ 오늘 기간.
  *
- * 실무 조회는 대개 최근 한 달이라 발행 후를 고르는 즉시 채워 두고, 필요하면 사용자가 바꾼다.
  * 말일 보정: setMonth 는 3/31→2/31 같은 없는 날짜를 다음 달로 넘기므로, 넘어갔으면 그 달의
  * 말일로 당긴다(3/31 → 2/28).
  */
-export function defaultInvoiceRange(): { from: string; to: string } {
+export function monthsAgoRange(months: number): { from: string; to: string } {
   const today = new Date();
   const from = new Date(today);
   const day = from.getDate();
-  from.setMonth(from.getMonth() - 1);
+  from.setMonth(from.getMonth() - months);
   if (from.getDate() !== day) from.setDate(0);
   return { from: isoDate(from), to: isoDate(today) };
+}
+
+/** 기간 빠른 선택 — 기본은 한 달 전(사용자 확정 2026-08-04). */
+export const RANGE_PRESETS: readonly { months: number; label: string }[] = [
+  { months: 1, label: '한 달 전' },
+  { months: 2, label: '두 달 전' },
+  { months: 3, label: '세 달 전' },
+];
+
+/** 기간 기본값 — 한 달 전부터 오늘까지. 필요하면 사용자가 달력으로 바꾼다. */
+export function defaultInvoiceRange(): { from: string; to: string } {
+  return monthsAgoRange(1);
 }
 
 // ── 입력항목 선택지(더미) ────────────────────────────────────────────────────
