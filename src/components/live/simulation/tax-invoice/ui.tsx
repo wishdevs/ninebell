@@ -35,33 +35,6 @@ export function SimStepHeader({ title, prompt }: { title: string; prompt?: React
   );
 }
 
-// ── 질문 한 덩어리(라벨 + 선택지) ────────────────────────────────────────────
-
-export function QuestionBlock({
-  step,
-  label,
-  hint,
-  children,
-}: {
-  step: number;
-  label: string;
-  hint?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline gap-2">
-        <span className="bg-accent/10 text-accent inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold tabular-nums">
-          {step}
-        </span>
-        <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">{label}</p>
-      </div>
-      {hint ? <p className="text-foreground-tertiary pl-7 text-[11px]">{hint}</p> : null}
-      <div className="flex flex-col gap-2 pl-7">{children}</div>
-    </div>
-  );
-}
-
 // ── 선택지 버튼(라디오형) ────────────────────────────────────────────────────
 
 export function ChoiceOption({
