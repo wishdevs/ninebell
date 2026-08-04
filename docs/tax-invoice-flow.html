@@ -373,15 +373,15 @@
         <h3>금액이 기준, 비율은 파생</h3>
         <p>비율로 입력해도 검증은 항상 금액으로 합니다. 어느 방식으로 넣든 반대편 값이 함께 보입니다.</p>
       </div>
-      <div class="card stripe-warn">
-        <h3>잔돈을 숨기지 않는다</h3>
-        <p>60/40처럼 나누다 1원이 남으면 마지막 행에 몰래 더하지 않고 <b>남은 금액에 그대로 드러냅니다</b>.
-           각 행의 <code>잔액</code> 버튼으로 한 번에 흡수할 수 있습니다.</p>
-      </div>
       <div class="card stripe-danger">
         <h3>취소분(음수)도 나눈다</h3>
         <p>총액이 음수면 "남았다 / 초과했다"를 <b>총액 부호 기준</b>으로 판정합니다.
            −214,000원을 −150,000 + −64,000으로 나누는 식입니다.</p>
+      </div>
+      <div class="card stripe-warn">
+        <h3>잔돈은 마지막 행에 몰아준다</h3>
+        <p>비율로 나누다 원 단위 반올림으로 1원이 남으면 <b>마지막 행이 흡수</b>합니다
+           (마지막 행 = 총액 − 앞 행들의 합). 60/40으로 나눠도 남은 금액이 정확히 0원이 됩니다.</p>
       </div>
     </div>
   </section>
@@ -686,6 +686,13 @@
       inp.addEventListener('change', function () {
         var v = parseNum(inp.value);
         r.amt = mode === 'amount' ? v : Math.round(T * v / 100);
+        // 비율로 넣을 때 생기는 반올림 잔돈은 **마지막 행이 흡수**한다
+        // (마지막 행 = 총액 − 앞 행들의 합). 자기 자신을 입력 중이면 보정하지 않는다.
+        if (mode === 'percent' && rows.length > 1 && i !== rows.length - 1) {
+          var head = 0;
+          for (var k = 0; k < rows.length - 1; k++) head += rows[k].amt || 0;
+          rows[rows.length - 1].amt = T - head;
+        }
         renderSplit();
       });
       tdIn.appendChild(inp);

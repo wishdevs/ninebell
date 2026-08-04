@@ -88,9 +88,9 @@ interface SplitStepProps {
 /**
  * 비용분할 단계 — 남은 금액이 0이 될 때까지 행을 나눈다.
  *
- * 금액이 항상 검증의 원천이다. 퍼센트 모드에선 비율을 입력하면 금액을 반올림해 파생시키므로
- * 반올림 잔돈이 '남은 금액'에 그대로 드러난다 — 행마다 있는 '잔액' 버튼으로 한 번에 흡수한다.
- * (마지막 행을 자동 보정하지 않는 이유: 사용자가 모르는 사이 금액이 바뀌면 안 된다.)
+ * 금액이 항상 검증의 원천이다. 비율 모드에선 비율 → 금액을 원 단위로 반올림하는데, 그때 생기는
+ * **잔돈은 마지막 행에 몰아준다**(사용자 확정 2026-08-04) — 60/40 처럼 나눌 때 1원 때문에
+ * 확정이 막히지 않게 한다. 마지막 행 금액 = 총액 − 앞 행들의 합.
  */
 export function SplitStep({
   total,
@@ -117,13 +117,30 @@ export function SplitStep({
     setRow(r.id, { amount: raw, percent: pct === null ? '' : String(pct) });
   };
 
-  /** 비율 입력 → 금액 파생(원 단위 반올림). */
+  /**
+   * 비율 입력 → 금액 파생(원 단위 반올림). 반올림 잔돈은 **마지막 행이 흡수**한다 —
+   * 마지막 행 금액 = 총액 − 앞 행들의 합. 그래서 비율 합이 100%면 남은 금액이 정확히 0이 된다.
+   * (마지막 행 자신을 입력 중일 때는 그 값을 존중하고 보정하지 않는다.)
+   */
   const setPercent = (r: SplitRow, raw: string) => {
     const pct = parsePercent(raw);
-    setRow(r.id, {
-      percent: raw,
-      amount: pct === null ? '' : String(amountFromPercent(total, pct)),
-    });
+    const nextRows = rows.map((row) =>
+      row.id === r.id
+        ? { ...row, percent: raw, amount: pct === null ? '' : String(amountFromPercent(total, pct)) }
+        : row,
+    );
+    const lastId = nextRows[nextRows.length - 1]?.id;
+    if (lastId && lastId !== r.id) {
+      const headSum = nextRows.slice(0, -1).reduce((a, row) => a + rowAmount(row), 0);
+      const tail = total - headSum;
+      const tailPct = percentFromAmount(total, tail);
+      nextRows[nextRows.length - 1] = {
+        ...nextRows[nextRows.length - 1],
+        amount: String(tail),
+        percent: tailPct === null ? '' : String(tailPct),
+      };
+    }
+    onRowsChange(nextRows);
   };
 
   /** 남은 금액 전액을 이 행에 더한다(반올림 잔돈 흡수). */
