@@ -82,19 +82,39 @@
               display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .panel-hd h3 { margin: 0; }
 
-  /* 상단 — 무엇을 묻고 어디로 가는지 + 지금 몇 번째 질문인지 */
+  /* 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
+     예전에는 여기에 프로세스 설명 한 줄과 질문 이름 5개(11.5px)가 함께 들어 있었다.
+     읽히지도 않으면서 바로 아래 진짜 질문과 경쟁하기만 해서, 위치 정보(n/N + 막대)만
+     남기고 설명은 [?] 토글팁 안으로 옮겼다. */
   .wiz-top { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
-             display: flex; flex-direction: column; gap: 7px; }
-  .wiz-lede { margin: 0; font-size: 13px; color: var(--ink-2); }
-  .wiz-strip { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-  .wiz-strip .n { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
-                  font-variant-numeric: tabular-nums; }
-  .wiz-strip .sep { color: var(--line); font-size: 11px; }
-  .wiz-strip .s { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; color: var(--ink-3); }
-  .wiz-strip .s.done { color: var(--ink-2); }
-  .wiz-strip .s.cur { background: var(--accent-bg); color: var(--accent-ink); font-weight: 640; }
-  .stage-path { margin: 0; font-size: 11.5px; color: var(--ink-3); }
+             display: flex; flex-direction: column; gap: 8px; }
+  .wiz-strip { margin: 0; display: flex; align-items: center; gap: 12px; }
+  .wiz-count { font-size: 14px; font-weight: 640; color: var(--ink); white-space: nowrap; }
+  .wiz-count span { color: var(--ink-2); font-weight: 400;
+                    font-variant-numeric: tabular-nums; }
+  .wiz-bar { display: flex; align-items: center; gap: 4px; flex: 1; max-width: 260px; }
+  .wiz-bar i { display: block; height: 6px; flex: 1; border-radius: 999px; background: var(--line); }
+  .wiz-bar i.done { background: var(--accent); }
+  .wiz-bar i.cur { background: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
+  .stage-path { margin: 0; font-size: 13px; color: var(--ink-2); }
   .stage-path b { color: var(--accent-ink); font-weight: 640; }
+
+  /* 도움말 토글팁 — 호버가 아니라 **클릭/Enter**로 연다. 호버 전용 툴팁은 터치 기기에서
+     아예 열 수 없고 확대경 사용자가 내용 위로 포인터를 옮기면 닫혀버린다.
+     **답하는 데 꼭 필요한 정보는 여기 넣지 않는다** — 열어야만 보이면 못 본 사람이 생긴다. */
+  .tip { position: relative; display: inline-flex; }
+  .tip > button { width: 28px; height: 28px; flex-shrink: 0; cursor: pointer; padding: 0;
+                  display: inline-flex; align-items: center; justify-content: center;
+                  font: inherit; font-size: 14px; font-weight: 700; line-height: 1;
+                  background: var(--surface); color: var(--ink-3);
+                  border: 1px solid var(--line); border-radius: 999px; }
+  .tip > button:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .tip > div { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 300px;
+               padding: 12px; font-size: 13px; line-height: 1.6; color: var(--ink-2);
+               background: var(--surface); border: 1px solid var(--line);
+               border-radius: var(--r); box-shadow: 0 12px 32px rgba(0,0,0,.14); }
+  .tip > div b { color: var(--ink); }
+  .tip[hidden], .tip > div[hidden] { display: none; }
 
   /* 본문 — 왼쪽 요약 레일 + 오른쪽 현재 질문 */
   .wiz { display: grid; grid-template-columns: 212px minmax(0,1fr); gap: 16px;
@@ -107,32 +127,51 @@
                 border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
   }
   .wiz-side-hd { margin: 0; font-size: 11px; letter-spacing: .04em; font-weight: 640;
-                 color: var(--ink-3); }
-  .ans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-  .ans-list li { padding: 3px 5px; border-radius: 3px; }
-  .ans-list li.cur { background: var(--accent-bg); }
+                 color: var(--ink-2); }
+  .ans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  /* 줄 전체가 그 질문으로 돌아가는 버튼이다 — 예전 '수정' 버튼만 눌리던 시절엔 실측
+     39×17px 로 최소 타깃(24×24)에 못 미쳤다. 줄로 만들면 210×44px 가 나온다. */
+  .ans-row { display: flex; flex-direction: column; gap: 1px; width: 100%; min-height: 44px;
+             justify-content: center; padding: 4px 6px; border-radius: 3px; text-align: left;
+             font: inherit; background: none; border: 0; }
+  button.ans-row { cursor: pointer; }
+  button.ans-row:hover { background: var(--surface-2); }
+  .ans-list li.cur .ans-row { background: var(--accent-bg); }
   .ans-hd { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .ans-k { font-size: 11px; letter-spacing: .02em; color: var(--ink-3); }
-  .ans-k i { font-style: normal; letter-spacing: 0; text-transform: none; color: var(--accent-ink); }
-  .ans-v { font-size: 12.5px; line-height: 1.35; color: var(--ink); font-weight: 560; }
-  .ans-edit { font: inherit; font-size: 10.5px; cursor: pointer; padding: 0 5px; white-space: nowrap;
-              background: var(--surface); color: var(--ink-3);
-              border: 1px solid var(--line); border-radius: 3px; }
-  .ans-edit:hover { border-color: var(--accent); color: var(--accent-ink); }
-  .ans-empty { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+  .ans-k { font-size: 11px; letter-spacing: .02em; color: var(--ink-2); font-weight: 620; }
+  .ans-k i { font-style: normal; letter-spacing: 0; text-transform: none; color: var(--ink);
+             font-weight: 700; }
+  .ans-v { font-size: 13px; line-height: 1.35; color: var(--ink); font-weight: 620; }
+  .ans-edit { font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+  button.ans-row:hover .ans-edit { color: var(--accent-ink); }
+  .ans-empty { margin: 0; font-size: 13px; color: var(--ink-2); }
 
-  .wiz-main { display: flex; flex-direction: column; gap: 10px; min-height: 168px; }
-  .q-title { margin: 0; font-weight: 640; font-size: 15px; }
+  .wiz-main { display: flex; flex-direction: column; gap: 12px; min-height: 168px; }
+  /* 질문 문구 — 화면에서 가장 큰 글자. 이게 13~15px 이라 보조 설명과 구분되지 않던 것이
+     가독성 문제의 핵심이었다(한 화면 한 결정을 크기로 드러낸다). */
+  .q-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .q-title { margin: 0; font-weight: 700; font-size: 20px; letter-spacing: -.01em; line-height: 1.3; }
   .q-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-  .q-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 0; }
+  .q-hint { font-size: 13px; color: var(--ink-2); margin: 0; }
+  /* 모르면 막히는 안내(예: 오류)는 토글팁으로 숨기지 않고 오히려 크게 세운다. */
+  .q-alert { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px;
+             font-weight: 620; color: var(--danger); }
   .opts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .opt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
   @media (max-width: 620px) { .opt-grid { grid-template-columns: 1fr; } }
-  .done-box { display: flex; gap: 9px; align-items: flex-start; padding: 10px 12px;
+  /* 마지막 화면 — 질문들이 결국 정한 것은 증빙유형 코드 하나다. 비어 있던 오른쪽 열에
+     그 결과를 크게 세운다(예전엔 12.5px 안내 문구 한 덩어리뿐이었다). */
+  .done-box { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
               border-radius: var(--r); background: var(--accent-bg);
               border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
-  .done-box p { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+  .done-box p { margin: 0; font-size: 13px; color: var(--ink-2); line-height: 1.6; }
   .done-box b { color: var(--ink); }
+  .done-k { font-size: 11px; font-weight: 640; color: var(--ink-2); letter-spacing: .02em; }
+  .done-ev { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+  .done-ev .c { font-family: var(--mono); font-size: 34px; font-weight: 700; line-height: 1;
+                letter-spacing: -.02em; color: var(--accent-ink);
+                font-variant-numeric: tabular-nums; }
+  .done-ev .n { font-size: 16px; font-weight: 640; color: var(--ink); }
 
   /* 하단 — 증빙유형 실시간 표시 + 진행 버튼 */
   .wiz-foot { border-top: 1px solid var(--line-soft); padding: 12px 16px;
@@ -140,26 +179,31 @@
               gap: 14px; flex-wrap: wrap; }
   .wiz-nav { display: flex; gap: 8px; margin-left: auto; }
 
-  .date-in { font: inherit; font-family: var(--mono); font-size: 13px; padding: 6px 9px;
+  .date-in { font: inherit; font-family: var(--mono); font-size: 14px; padding: 9px 10px;
              background: var(--surface); color: var(--ink); border: 1px solid var(--line);
              border-radius: var(--r); }
   .date-in:focus { border-color: var(--accent); }
-  .opt { font: inherit; font-size: 13.5px; cursor: pointer; padding: 8px 14px; text-align: left;
-         background: var(--surface); color: var(--ink-2);
+  /* 선택지 — 결정에 직접 쓰는 텍스트라 본문보다 크게. 세로 여백까지 더해 카드 자체가
+     48px 이상이 되어 터치 타깃 권장치(44×44)를 만족한다. */
+  .opt { font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; padding: 11px 14px;
+         min-height: 48px; text-align: left;
+         background: var(--surface); color: var(--ink);
          border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
-  .opt:hover { border-color: var(--accent); color: var(--ink); }
+  .opt:hover { border-color: var(--accent); }
   .opt[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
-                              color: var(--accent-ink); font-weight: 600; }
-  .opt small { display: block; font-size: 11.5px; font-weight: 400; color: var(--ink-3); margin-top: 2px; }
-  .opt[aria-pressed="true"] small { color: color-mix(in srgb, var(--accent-ink) 78%, transparent); }
+                              color: var(--accent-ink); }
+  .opt small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); margin-top: 3px; }
+  .opt[aria-pressed="true"] small { color: var(--accent-ink); }
+  /* 기간 빠른 선택 칩 — 예전 12.5px/26px 높이는 최소 타깃에 아슬아슬했다. */
+  .opt.opt-sm { font-size: 13px; font-weight: 500; padding: 8px 12px; min-height: 36px; }
 
   /* 증빙유형 배지 — 코드가 주인공이라 모노 대문자로 크게 세운다. */
   .ev { display: flex; align-items: baseline; gap: 10px; }
   .ev-code { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -.02em;
              color: var(--accent-ink); font-variant-numeric: tabular-nums; line-height: 1; }
-  .ev-name { font-size: 13.5px; color: var(--ink); font-weight: 600; }
-  .ev-none { font-size: 13px; color: var(--ink-3); }
-  .ev-note { font-size: 12.5px; line-height: 1.5; }
+  .ev-name { font-size: 14px; color: var(--ink); font-weight: 600; }
+  .ev-none { font-size: 13px; color: var(--ink-2); }
+  .ev-note { font-size: 13px; line-height: 1.55; }
 
 
   /* ── 표 ───────────────────────────────────────────────────────────────── */
@@ -262,11 +306,22 @@
         <button class="btn" id="reset" type="button">처음부터</button>
       </div>
 
-      <!-- 상단 — 프로세스 안내(무엇을 묻고 어디로 가는지 + 지금 어디쯤인지) -->
+      <!-- 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
+           프로세스 설명("한 번에 한 질문씩 묻습니다…")은 답하는 데 필요 없어 [?] 안으로 옮겼다. -->
       <div class="wiz-top">
-        <p class="wiz-lede" id="lede"></p>
-        <p class="wiz-strip" id="strip"></p>
         <p class="stage-path" id="path"></p>
+        <div class="wiz-strip">
+          <p class="wiz-count" id="count"></p>
+          <div class="wiz-bar" id="bar" role="progressbar" aria-label="질문 진행"></div>
+          <span class="tip" id="tipHow">
+            <button type="button" aria-expanded="false" aria-label="이 화면 사용법">?</button>
+            <div hidden>
+              한 번에 한 질문씩 묻습니다. 선택지를 고르면 곧바로 다음 질문으로 넘어가고,
+              고른 답은 왼쪽에 쌓입니다. 왼쪽 답을 누르면 그 질문으로 돌아가 고칠 수 있습니다.
+              <span id="tipHowExtra"></span>
+            </div>
+          </span>
+        </div>
       </div>
 
       <!-- 본문 — 왼쪽 고른 답(수정) + 오른쪽 현재 질문 하나 -->
@@ -461,6 +516,54 @@
     return b;
   }
 
+  /* ── 도움말 토글팁 ────────────────────────────────────────────────────
+     클릭/Enter 로 열고 Escape·바깥 클릭으로 닫는다. 호버 전용 툴팁과 달리 터치·키보드가
+     같은 방법으로 열 수 있다. **답하는 데 꼭 필요한 정보는 넣지 않는다.** */
+  var openTip = null;
+  function wireTip(span) {
+    var btn = span.querySelector('button');
+    var body = span.querySelector('div');
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var willOpen = body.hidden;
+      if (openTip && openTip !== span) closeTip(openTip);
+      body.hidden = !willOpen;
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      openTip = willOpen ? span : null;
+    });
+    return span;
+  }
+  function closeTip(span) {
+    if (!span) return;
+    span.querySelector('div').hidden = true;
+    span.querySelector('button').setAttribute('aria-expanded', 'false');
+    if (openTip === span) openTip = null;
+  }
+  document.addEventListener('click', function () { closeTip(openTip); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && openTip) {
+      var b = openTip.querySelector('button');
+      closeTip(openTip);
+      b.focus();
+    }
+  });
+  /** 질문 옆에 붙이는 용어 풀이 팁을 만든다(내용은 HTML 조각 배열). */
+  function makeTip(label, nodes) {
+    var span = el('span', 'tip');
+    var btn = el('button', null, '?');
+    btn.type = 'button';
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-label', label);
+    var body = el('div');
+    body.hidden = true;
+    nodes.forEach(function (n) {
+      body.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
+    });
+    span.appendChild(btn);
+    span.appendChild(body);
+    return wireTip(span);
+  }
+
   function isoOf(x) {
     return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
       + '-' + String(x.getDate()).padStart(2, '0');
@@ -541,10 +644,33 @@
     var qs = document.getElementById('qs');
     qs.textContent = '';
 
+    // 질문 문구 + (필요하면) 용어 풀이 [?]. 팁은 문구 바로 뒤에 붙인다 — 오른쪽 끝으로
+    // 밀면 위 진행줄의 [?]와 세로로 겹쳐 같은 버튼처럼 읽힌다.
+    var head = el('div', 'q-head');
     var title = el('p', 'q-title', step === 'done' ? '질문이 모두 끝났습니다' : TITLE[step]);
     title.tabIndex = -1;
     title.id = 'qTitle';
-    qs.appendChild(title);
+    head.appendChild(title);
+    if (step === 'tax') {
+      head.appendChild(makeTip('과세 · 비과세 · 불공 용어 설명', [
+        el('b', null, '과세'), '는 부가세가 붙는 일반 거래, ',
+        el('b', null, '비과세'), '는 부가세가 없는 거래입니다. ',
+        el('b', null, '불공'), '은 불공제 — 세금계산서는 받았지만 매입세액을 공제받지 못하는 거래입니다.'
+      ]));
+    }
+    if (step === 'split') {
+      head.appendChild(makeTip('비용분할 설명', [
+        '한 장의 세금계산서를 예산단위·프로젝트·비용센터별로 나눠 다는 것입니다. ',
+        '분할하면 증빙유형이 원증빙 계열(과세 11 · 비과세 13)로 바뀝니다.'
+      ]));
+    }
+    if (step === 'period') {
+      head.appendChild(makeTip('세금계산서일 기간 설명', [
+        '여기서 고른 기간에 발행된 (세금)계산서만 다음 리스트 화면에 나타납니다. ',
+        '기본값은 한 달 전부터 오늘까지이고, 아래 버튼으로 흔히 쓰는 기간을 한 번에 넣을 수 있습니다.'
+      ]));
+    }
+    qs.appendChild(head);
 
     if (step === 'issue') {
       var g1 = el('div', 'opt-grid');
@@ -565,8 +691,7 @@
     }
 
     if (step === 'period') {
-      qs.appendChild(el('p', 'q-hint',
-        '날짜를 직접 고르거나, 아래 버튼으로 흔히 쓰는 기간을 한 번에 넣습니다(기본 한 달 전).'));
+      // 예전의 '날짜를 직접 고르거나 …' 안내는 화면을 보면 아는 내용이라 [?] 안으로 옮겼다.
       var range = el('div', 'opts');
       ['from', 'to'].forEach(function (key, idx) {
         if (idx) range.appendChild(el('span', 'q-hint', '~'));
@@ -580,26 +705,26 @@
       });
       qs.appendChild(range);
 
+      // 오류는 원인이 되는 입력 **바로 아래**에 둔다 — 떨어뜨려 놓으면 무엇을 고쳐야
+      // 할지 다시 찾아야 한다.
+      if (A.from && A.to && A.from > A.to) {
+        var err = el('p', 'q-alert', '시작일이 종료일보다 늦을 수 없습니다.');
+        err.setAttribute('role', 'alert');
+        qs.appendChild(err);
+      }
+
       var quick = el('div', 'opts');
       quick.appendChild(el('span', 'q-hint', '빠른 선택'));
       RANGE_PRESETS.forEach(function (p) {
         var r = p.range();
-        var b = el('button', 'opt');
+        var b = el('button', 'opt opt-sm');
         b.type = 'button';
-        b.style.cssText = 'padding:5px 10px;font-size:12.5px';
         b.textContent = p.label;
         b.setAttribute('aria-pressed', (A.from === r.from && A.to === r.to) ? 'true' : 'false');
         b.addEventListener('click', function () { A.from = r.from; A.to = r.to; render(); });
         quick.appendChild(b);
       });
       qs.appendChild(quick);
-
-      if (A.from && A.to && A.from > A.to) {
-        var err = el('p', 'q-hint', '시작일이 종료일보다 늦을 수 없습니다.');
-        err.setAttribute('role', 'alert');
-        err.style.color = 'var(--danger)';
-        qs.appendChild(err);
-      }
     }
 
     if (step === 'split') {
@@ -638,13 +763,25 @@
     }
 
     if (step === 'done') {
+      // 마지막 화면의 오른쪽 열은 통째로 비어 있었다. 질문들이 결국 정한 것 —
+      // 증빙유형 코드 — 을 그 자리에 크게 세운다.
       var box = el('div', 'done-box');
+      var code = evidenceCode(A);
+      box.appendChild(el('p', 'done-k', '이 답으로 정해진 증빙유형'));
+      if (code) {
+        var evLine = el('div', 'done-ev');
+        evLine.appendChild(el('span', 'c', code));
+        evLine.appendChild(el('span', 'n', EV[code]));
+        box.appendChild(evLine);
+        if (code === '24') {
+          box.appendChild(el('p', null,
+            '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.'));
+        }
+      }
       var p = el('p');
-      p.appendChild(document.createTextNode('왼쪽 답과 아래 증빙유형을 확인한 뒤 '));
+      p.appendChild(document.createTextNode('확인했으면 '));
       p.appendChild(el('b', null, A.issue === 'after' ? '리스트 보기' : '입력항목 채우기'));
-      p.appendChild(document.createTextNode('로 넘어갑니다. 고칠 답이 있으면 그 줄의 '));
-      p.appendChild(el('b', null, '수정'));
-      p.appendChild(document.createTextNode('을 누르면 해당 질문으로 돌아갑니다.'));
+      p.appendChild(document.createTextNode('로 넘어가세요. 고칠 답은 왼쪽에서 그 줄을 누르면 됩니다.'));
       box.appendChild(p);
       qs.appendChild(box);
     }
@@ -664,20 +801,23 @@
     var ul = el('ul', 'ans-list');
     keys.forEach(function (k) {
       var li = el('li', step === k ? 'cur' : null);
+      var cur = step === k;
+      // 지금 보고 있는 질문은 버튼이 아니다 — 이미 그 질문 화면이라 누를 곳이 없다.
+      // 나머지는 **줄 전체**가 그 질문으로 돌아가는 버튼이다(작은 '수정' 버튼 대신).
+      var row = el(cur ? 'div' : 'button', 'ans-row');
+      if (!cur) {
+        row.type = 'button';
+        row.setAttribute('aria-label', SHORT[k] + ' 수정 — 현재 답: ' + text(k));
+        row.addEventListener('click', function () { go(k); });
+      }
       var hd = el('div', 'ans-hd');
       var kk = el('span', 'ans-k', SHORT[k]);
-      if (step === k) kk.appendChild(el('i', null, ' · 지금'));
+      if (cur) kk.appendChild(el('i', null, ' · 지금'));
       hd.appendChild(kk);
-      // 지금 보고 있는 질문에는 '수정'을 두지 않는다 — 이미 그 질문 화면이다.
-      if (step !== k) {
-        var b = el('button', 'ans-edit', '✎ 수정');
-        b.type = 'button';
-        b.setAttribute('aria-label', SHORT[k] + ' 수정 — 현재 답: ' + text(k));
-        b.addEventListener('click', function () { go(k); });
-        hd.appendChild(b);
-      }
-      li.appendChild(hd);
-      li.appendChild(el('div', 'ans-v', text(k)));
+      if (!cur) hd.appendChild(el('span', 'ans-edit', '✎ 수정'));
+      row.appendChild(hd);
+      row.appendChild(el('div', 'ans-v', text(k)));
+      li.appendChild(row);
       ul.appendChild(li);
     });
     host.appendChild(ul);
@@ -687,25 +827,42 @@
   function renderChrome() {
     var p = path();
 
-    document.getElementById('lede').textContent =
-      '한 번에 한 질문씩 묻습니다. 답이 모이면 증빙유형이 정해지고 '
-      + (A.issue === 'before' ? '입력항목' : '리스트') + ' 화면으로 넘어갑니다.';
-
-    var strip = document.getElementById('strip');
-    strip.textContent = '';
-    // 발행 여부를 고르기 전에는 총 질문 수가 정해지지 않는다 — 1/1 로 단정하지 않는다.
+    // 질문 위치 — 이름 5개를 늘어놓던 11.5px 체인 대신 "질문 n / N" + 칸 막대만 둔다.
+    // 지나온 질문의 이름과 답은 왼쪽 레일이 이미 더 크게 보여준다.
     var pos = step === 'done' ? p.length : p.indexOf(step) + 1;
-    strip.appendChild(el('span', 'n',
-      step === 'done' ? (p.length + '/' + p.length + ' 완료') : (pos + '/' + (A.issue ? p.length : '?'))));
-    p.forEach(function (k, i) {
-      strip.appendChild(el('span', 'sep', '›'));
-      var s = el('span', 's ' + (step === k ? 'cur' : (answered(k) ? 'done' : '')), (i + 1) + '. ' + SHORT[k]);
-      if (step === k) s.setAttribute('aria-current', 'step');
-      strip.appendChild(s);
-    });
-    if (!A.issue) {
-      strip.appendChild(el('span', 's', '… 발행 전이면 질문 2개, 발행 후면 4~5개입니다.'));
+    var count = document.getElementById('count');
+    count.textContent = '';
+    if (step === 'done') {
+      count.appendChild(document.createTextNode('질문 완료'));
+    } else {
+      // 발행 여부를 고르기 전에는 총 질문 수가 정해지지 않는다 — 1/1 로 단정하지 않는다.
+      count.appendChild(document.createTextNode('질문 ' + pos));
+      count.appendChild(el('span', null, ' / ' + (A.issue ? p.length : '?')));
     }
+
+    var bar = document.getElementById('bar');
+    bar.textContent = '';
+    bar.setAttribute('aria-valuemin', '0');
+    if (A.issue) {
+      bar.setAttribute('aria-valuemax', String(p.length));
+      bar.setAttribute('aria-valuenow', String(pos));
+    } else {
+      bar.removeAttribute('aria-valuemax');
+      bar.removeAttribute('aria-valuenow');
+    }
+    // 화면에는 질문 이름을 적지 않지만 스크린리더에는 경로 전체를 읽어 준다.
+    bar.setAttribute('aria-valuetext', step === 'done'
+      ? ('질문 ' + p.length + '개 모두 완료')
+      : (p.length + '개 중 ' + pos + '번째 — ' + SHORT[step] + '. 전체 순서: '
+         + p.map(function (k, i) { return (i + 1) + '. ' + SHORT[k]; }).join(', ')));
+    p.forEach(function (k, i) {
+      bar.appendChild(el('i', step === 'done' || i < pos - 1 ? 'done' : (i === pos - 1 ? 'cur' : null)));
+    });
+    if (!A.issue) bar.appendChild(el('i'));
+
+    // 질문 수가 경로마다 다르다는 사실은 첫 질문에서만 궁금하다 — 팁 안에서만 덧붙인다.
+    document.getElementById('tipHowExtra').textContent =
+      A.issue ? '' : ' 발행 전이면 질문 2개, 발행 후면 4~5개입니다.';
 
     // 전체 화면 흐름 — 질문이 끝난 뒤 어디로 가는지(경로에 따라 화면 수가 달라진다).
     var stages = A.issue === 'before'
@@ -818,6 +975,7 @@
     A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
     go('issue');
   });
+  wireTip(document.getElementById('tipHow'));   // 상단 '이 화면 사용법' 토글팁
   render();
 
   /* ── 분할 계산기 ──────────────────────────────────────────────────── */

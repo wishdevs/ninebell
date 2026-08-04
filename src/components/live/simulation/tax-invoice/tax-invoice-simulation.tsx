@@ -119,31 +119,39 @@ export function TaxInvoiceSimulation({ agent }: SimulationPanelProps) {
   ];
 
   return (
+    // caption('화면 시뮬레이션')은 오른쪽 '시뮬레이션' 배지와 같은 말이라 뺐다 — 같은 사실을
+    // 두 번 적으면 읽을 것만 늘고 세로 자리도 그만큼 줄어든다. description 도 한 줄로 줄였다.
     <SectionCard
-      caption="화면 시뮬레이션"
       title={`${agent.name} — 결의서 입력 흐름`}
-      description="백엔드 자동화는 아직 연결되지 않았습니다. 실제 옴니솔 조회·저장 없이 화면 흐름만 확인하는 더미 시뮬레이션입니다."
+      description="백엔드 자동화 미연결 — 실제 옴니솔 조회·저장 없이 화면 흐름만 확인합니다."
       density="comfortable"
       className="lg:h-full lg:min-h-0 lg:overflow-hidden"
       action={
-        <span className="border-warning/30 bg-warning/10 text-warning inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase">
-          <RiFlaskLine size={11} aria-hidden />
+        // 배지 글자를 text-warning 으로 두면 warning 색이 밝아(oklch 68%) 흰 배경에서 2.67:1
+        // 밖에 안 나와 4.5:1 에 미달한다. 톤(테두리·배경)은 warning 으로 두고 글자만 올린다.
+        <span className="border-warning/40 bg-warning/10 text-foreground-secondary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold tracking-wide">
+          <RiFlaskLine size={12} aria-hidden className="text-warning" />
           시뮬레이션
         </span>
       }
     >
-      {/* 단계 표시 — 발행 전/후·분할 여부에 따라 단계 수 자체가 달라진다. */}
-      <ol className="text-foreground-tertiary flex shrink-0 flex-wrap items-center gap-1.5 text-[11px]">
+      {/* 단계 표시 — 발행 전/후·분할 여부에 따라 단계 수 자체가 달라진다.
+          질문 화면 안의 '질문 n/N' 과는 층위가 다르다(이건 화면 단위, 저건 질문 단위). */}
+      <ol className="text-foreground-secondary flex shrink-0 flex-wrap items-center gap-1.5 text-[length:var(--text-body-sm)]">
         {stages.map((s, i) => (
           <li key={s.key} className="flex items-center gap-1.5">
-            {i > 0 ? <span aria-hidden>›</span> : null}
+            {i > 0 ? (
+              <span aria-hidden className="text-foreground-tertiary">
+                ›
+              </span>
+            ) : null}
             <span
               aria-current={stage === s.key ? 'step' : undefined}
               className={cn(
                 'rounded-full px-2 py-0.5',
                 stage === s.key
-                  ? 'bg-accent/10 text-accent font-semibold'
-                  : 'text-foreground-tertiary',
+                  ? 'bg-accent/15 text-foreground font-semibold'
+                  : 'text-foreground-secondary',
               )}
             >
               {s.label}

@@ -68,14 +68,16 @@ export function InvoiceListStep({
             <thead className="bg-muted/70 text-foreground-tertiary sticky top-0 z-10">
               <tr>
                 <Th className="w-10 text-center">No</Th>
-                <Th className="w-10 text-center">
+                {/* 체크박스는 24×24 — 예전 16×16 은 최소 타깃(24×24)에 미달했다.
+                    셀 세로 여백을 0 으로 낮춰 행 높이는 그대로 둔다(글자 셀이 더 높다). */}
+                <Th className="w-10 py-0 text-center">
                   <input
                     ref={allRef}
                     type="checkbox"
                     checked={allChecked}
                     onChange={(e) => onToggleAll(nos, e.target.checked)}
                     aria-label="전체 선택"
-                    className="accent-accent size-4 cursor-pointer align-middle"
+                    className="accent-accent size-6 cursor-pointer align-middle"
                   />
                 </Th>
                 <Th>(세금)계산서일</Th>
@@ -104,14 +106,14 @@ export function InvoiceListStep({
                     onClick={() => onToggle(r.no)}
                   >
                     <Td className="text-foreground-tertiary text-center tabular-nums">{r.no}</Td>
-                    <Td className="text-center">
+                    <Td className="py-0 text-center">
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={() => onToggle(r.no)}
                         onClick={(e) => e.stopPropagation()}
                         aria-label={`${r.no}행 선택 — ${r.partnerName}`}
-                        className="accent-accent size-4 cursor-pointer"
+                        className="accent-accent size-6 cursor-pointer align-middle"
                       />
                     </Td>
                     <Td className="text-foreground-secondary whitespace-nowrap tabular-nums">

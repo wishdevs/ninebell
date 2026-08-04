@@ -191,7 +191,7 @@ export function SplitStep({
 
       {/* 입력 방식 전환 — 어느 쪽을 고르든 금액이 최종 값이다(반대편은 파생 표시). */}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <span className="text-foreground-tertiary text-[10px] font-semibold tracking-wider uppercase">
+        <span className="text-foreground-secondary text-[11px] font-semibold tracking-wide">
           입력 방식
         </span>
         <div className="border-border-subtle bg-muted/40 inline-flex gap-1 rounded-[var(--radius-md)] border p-0.5">
@@ -203,7 +203,8 @@ export function SplitStep({
               disabled={m === 'percent' && percentDisabled}
               onClick={() => onModeChange(m)}
               className={cn(
-                'cursor-pointer rounded-[var(--radius-sm)] px-2.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                // h-7(28px) — 예전 py-1 은 실측 23.99px 로 최소 타깃 24×24 를 아슬아슬하게 밑돌았다.
+                'h-7 cursor-pointer rounded-[var(--radius-sm)] px-3 text-[length:var(--text-body-sm)] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
                 mode === m
                   ? 'bg-accent text-accent-foreground'
                   : 'text-foreground-secondary hover:bg-muted',
