@@ -39,7 +39,7 @@ from playwright.async_api import async_playwright  # noqa: E402
 # ── 재사용(신규 작성 아님) ────────────────────────────────────────────────────────
 from app.agents.voucher_receivable import steps  # noqa: E402
 from app.config import get_settings  # noqa: E402
-from app.live.runner import LIVE_VIEWPORT, _maybe_scale_page  # noqa: E402
+from app.live.runner import LIVE_VIEWPORT, _maybe_scale_page, _resolve_scale  # noqa: E402
 from nbkit.omnisol.menu_schemas import VOUCHER_RECEIVABLE  # noqa: E402
 from nbkit.patterns.login_flow import ensure_logged_in  # noqa: E402
 from nbkit.patterns.menu_navigate_flow import navigate_schema  # noqa: E402
@@ -52,7 +52,10 @@ N = int(os.environ.get("GATE_N", "20"))
 DOCU = os.environ.get("GATE_DOCU", "payable")  # payable | receivable
 TAG = os.environ.get("GATE_TAG", "run")
 # 프로덕션 voucher 계열 등록값과 동일(app/agents/__init__.py delay_scale=0.4).
+# 실효 배율은 러너와 동일 규칙(env CARD_DELAY_SCALE 우선)로 해석해 요약에 그대로 기록한다 —
+# 스트레스 런(CARD_DELAY_SCALE=0.2)의 아티팩트가 기본값으로 잘못 라벨링되지 않게.
 PROD_DELAY_SCALE = float(os.environ.get("GATE_DELAY_SCALE", "0.4"))
+EFFECTIVE_DELAY_SCALE = _resolve_scale(PROD_DELAY_SCALE)
 # 실패 런(08-03·08-06)과 동일한 '당월 아님' 임의 기간 — set_period range 분기를 지나게 한다.
 PERIOD_FROM = os.environ.get("GATE_PERIOD_FROM", "20260701")
 PERIOD_TO = os.environ.get("GATE_PERIOD_TO", "20260831")
@@ -134,7 +137,7 @@ async def run() -> None:
     base = settings.erp_base
     results: list[dict] = []
     print(f"[gate] tag={TAG} N={N} docu={DOCU}{DOCU_TYPES} period={PERIOD_FROM}~{PERIOD_TO} "
-          f"delay_scale={PROD_DELAY_SCALE} headless={HEADLESS}")
+          f"delay_scale={EFFECTIVE_DELAY_SCALE} headless={HEADLESS}")
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=HEADLESS)
         try:
@@ -167,7 +170,7 @@ async def run() -> None:
                 warn_by_step[k] = warn_by_step.get(k, 0) + 1
     summary = {
         "tag": TAG, "n": N, "docu": DOCU, "docu_types": list(DOCU_TYPES),
-        "period": f"{PERIOD_FROM}~{PERIOD_TO}", "delay_scale": PROD_DELAY_SCALE,
+        "period": f"{PERIOD_FROM}~{PERIOD_TO}", "delay_scale": EFFECTIVE_DELAY_SCALE,
         "ok": n_ok, "fail": N - n_ok, "fail_rate": round((N - n_ok) / N, 3) if N else None,
         "fail_by_step": fail_by_step, "warn_by_step": warn_by_step,
     }
