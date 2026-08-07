@@ -25,7 +25,7 @@ import {
   type MemberStatus,
   type WorkspaceMember,
 } from '@/lib/data/members';
-import { buildOrgUnitTree, orgUnitLabel, type OrgUnit } from '@/lib/data/org-units';
+import { buildOrgUnitOptionGroups, orgUnitLabel, type OrgUnit } from '@/lib/data/org-units';
 import { cn } from '@/lib/utils';
 import type { MemberCaps } from './members-client';
 
@@ -175,7 +175,7 @@ function AccessSection({
   onOrgUnitChange,
   onSetStatus,
 }: AccessSectionProps) {
-  const orgTree = buildOrgUnitTree(orgUnits);
+  const orgGroups = buildOrgUnitOptionGroups(orgUnits);
   const canEditRole = caps.canAssignRole && !isSelf;
   const canEditStatus = caps.canWrite && !isSelf;
 
@@ -222,13 +222,17 @@ function AccessSection({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ORG_NONE}>미지정</SelectItem>
-              {orgTree.map(({ parent, children }) =>
-                children.length === 0 ? null : (
+              {orgGroups.map(({ parent, options }) =>
+                options.length === 0 ? null : (
                   <SelectGroup key={parent.id}>
                     <SelectLabel>{parent.label}</SelectLabel>
-                    {children.map((child) => (
-                      <SelectItem key={child.id} value={child.id}>
-                        {child.label}
+                    {options.map(({ unit, depth }) => (
+                      <SelectItem
+                        key={unit.id}
+                        value={unit.id}
+                        style={{ paddingLeft: `${1.75 + depth * 0.75}rem` }}
+                      >
+                        {unit.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>

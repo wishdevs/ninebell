@@ -17,7 +17,7 @@ import {
   ORG_NONE,
   type MemberStatus,
 } from '@/lib/data/members';
-import { buildOrgUnitTree, type OrgUnit } from '@/lib/data/org-units';
+import { buildOrgUnitOptionGroups, type OrgUnit } from '@/lib/data/org-units';
 import type { MemberCaps } from './members-client';
 
 interface MembersBulkBarProps {
@@ -45,7 +45,7 @@ export function MembersBulkBar({
   onSetStatus,
   onClearSelection,
 }: MembersBulkBarProps) {
-  const orgTree = buildOrgUnitTree(orgUnits);
+  const orgGroups = buildOrgUnitOptionGroups(orgUnits);
 
   return (
     <div className="border-accent/30 bg-accent/5 flex flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border px-4 py-2.5">
@@ -62,13 +62,17 @@ export function MembersBulkBar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ORG_NONE}>미지정</SelectItem>
-            {orgTree.map(({ parent, children }) =>
-              children.length === 0 ? null : (
+            {orgGroups.map(({ parent, options }) =>
+              options.length === 0 ? null : (
                 <SelectGroup key={parent.id}>
                   <SelectLabel>{parent.label}</SelectLabel>
-                  {children.map((child) => (
-                    <SelectItem key={child.id} value={child.id}>
-                      {child.label}
+                  {options.map(({ unit, depth }) => (
+                    <SelectItem
+                      key={unit.id}
+                      value={unit.id}
+                      style={{ paddingLeft: `${1.75 + depth * 0.75}rem` }}
+                    >
+                      {unit.label}
                     </SelectItem>
                   ))}
                 </SelectGroup>
