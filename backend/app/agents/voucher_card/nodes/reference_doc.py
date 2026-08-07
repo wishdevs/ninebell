@@ -15,9 +15,17 @@ loop_approvals(공유)가 결제창을 열고 렌더+D7 을 통과한 뒤, **가
 
 from __future__ import annotations
 
+from nbkit.omnisol import verify
+from nbkit.patterns import emit_shot
+
 from app.live.events import emit_log
 
 from .. import steps
+
+# 첨부 확인 화면 표시 시간(사용자 확정 2026-08-07) — 첨부 완료 프레임을 송출한 뒤 이 시간만큼
+# 유지해 대시보드 스크린캐스트에서 '선택된 문서 목록 1건'이 눈으로 확인되게 한다.
+# ⚠ 실시간 sleep(verify.DEFAULT_SLEEP) — 표시 시간이 delay_scale 로 줄면 프레임이 스쳐 지나간다.
+REFDOC_ATTACH_SHOW_S = 0.5
 
 
 def make_reference_doc_hook(*, allow_confirm: bool = False):
@@ -156,6 +164,11 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 f"(기대 {want_count}건) · 문서번호 {gwdocu_no} 포함 확인 ✅.",
                 "ok",
             )
+            # 사용자 확정(2026-08-07): 첨부 결과를 **화면으로도** 보여준다 — 결제창의 참조문서
+            # dialog('선택된 문서 목록'에 대상 1건이 담긴 상태)를 프레임으로 송출하고 0.5초
+            # 유지한 뒤 진행한다(로그만으로는 스쳐 지나가던 첨부 증거의 시각 확인).
+            await emit_shot(events.put, child, window="child")
+            await verify.DEFAULT_SLEEP(REFDOC_ATTACH_SHOW_S)
         else:
             await emit_log(
                 events,

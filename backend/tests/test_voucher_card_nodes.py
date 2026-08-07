@@ -271,6 +271,10 @@ class _RefChild:
     async def wait_for_timeout(self, ms):
         return None
 
+    async def screenshot(self, **kw):
+        # 첨부 확인 프레임 송출(emit_shot → screenshot_data_url) 지원 — 최소 jpeg 바이트 흉내.
+        return b"attach-evidence"
+
     async def click(self, selector, timeout=None):
         self.clicked_selectors.append(selector)
         if selector.startswith("[data-nb-refdoc="):
@@ -1083,6 +1087,30 @@ async def test_on_popup_fails_when_selected_list_ends_up_empty(monkeypatch):
     assert not any("첨부 완료" in m for m in logs)
     assert isinstance(res, dict) and res.get("fatal") is True  # 격상 — 런 중단 신호.
     assert "첨부 실패" in res.get("outcome", "")
+
+
+async def test_on_popup_attach_success_emits_child_shot_and_holds(monkeypatch):
+    """사용자 확정(2026-08-07): 첨부 확인 후 **결제창 화면**(선택된 문서 목록 1건이 보이는
+    상태)을 스크린샷 프레임으로 송출하고 0.5초 유지한다 — 로그만으로 스쳐 지나가던 첨부
+    증거를 대시보드 스크린캐스트에서 눈으로 확인 가능하게."""
+    naps: list[float] = []
+
+    async def _nap(s):
+        naps.append(s)
+
+    monkeypatch.setattr(rd_mod.verify, "DEFAULT_SLEEP", _nap)
+    hook = make_reference_doc_hook()
+    child = _RefChild(total_before=2714, total=1)
+    q = _q()
+    await hook(child, "GW1", q)
+    frames = _drain(q)
+    shots = [f for f in frames if "screenshot" in f]
+    assert shots and shots[0].get("window") == "child"  # 결제창(child) 프레임이 송출됐다.
+    idx_ok = next(i for i, f in enumerate(frames) if "첨부 완료" in str(f.get("log", "")))
+    idx_shot = next(i for i, f in enumerate(frames) if "screenshot" in f)
+    idx_virtual = next(i for i, f in enumerate(frames) if "가상: 참조문서" in str(f.get("log", "")))
+    assert idx_ok < idx_shot < idx_virtual  # 첨부 확인 직후·dialog 정리 전에 보여준다.
+    assert 0.5 in naps  # 표시 유지 0.5초(실시간 sleep — 테스트에선 기록만).
 
 
 async def test_on_popup_select_fail_after_match_is_fatal(monkeypatch):
