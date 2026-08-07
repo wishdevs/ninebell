@@ -19,10 +19,14 @@ from __future__ import annotations
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
+# 확산(2026-08-07): steps.py 한정 → 에이전트 전 파일 + nbkit patterns/grid 로 확대.
+# (doc_steps.py·expense_card/tools.py 등 steps.py 밖에서 명목 카운터가 재발견된 실측 근거.)
 TARGETS = [
-    *sorted((BACKEND / "app" / "agents").glob("**/steps.py")),
+    *sorted((BACKEND / "app" / "agents").glob("**/*.py")),
     *sorted((BACKEND / "nbkit" / "omnisol").glob("*.py")),
     *sorted((BACKEND / "nbkit" / "browser").glob("*.py")),
+    *sorted((BACKEND / "nbkit" / "patterns").glob("*.py")),
+    *sorted((BACKEND / "nbkit" / "grid").glob("*.py")),
 ]
 
 _LOOKBACK_LINES = 8  # 누산 줄 위로 이만큼 안에서 wait_for_timeout 을 찾는다.
