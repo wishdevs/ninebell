@@ -21,7 +21,7 @@ from typing import Any
 
 from nbkit.browser.actions import mouse_click, safe_evaluate
 from nbkit.browser.detection import is_authenticated, selector_present
-from nbkit.omnisol import js_lib, latency, selectors
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.errors import AuthError, LoginPageError, UserTypeError
 from nbkit.omnisol.modals import dismiss_notice_popup
 
@@ -189,10 +189,12 @@ async def open_user_panel(page: Any) -> None:
         await page.evaluate(js_lib.AVATAR_CLICK_JS)
     # 고정 1.5s 대신 유형 선택기가 읽히는(패널 렌더 완료) 즉시 진행 — 폴링(상한 1.5s 기준,
     # ERP 지연 시 배율 ≤×4 로만 확대 — latency.budget_ms).
+    # ⚠ 시간축 규율(2026-08-07): 관찰창 폴 대기는 실시간 sleep — page.wait_for_timeout 은
+    #   delay_scale(voucher 0.4/card 0.15)로 축소돼 명목 카운터 상한이 실효 40%/15%로 붕괴한다.
     waited = 0
     cap_ms = latency.budget_ms(1_500)
     while waited < cap_ms:
-        await page.wait_for_timeout(150)
+        await verify.DEFAULT_SLEEP(0.15)
         waited += 150
         if await safe_evaluate(page, js_lib.USER_TYPE_READ_JS, default="?") not in ("", "?"):
             return

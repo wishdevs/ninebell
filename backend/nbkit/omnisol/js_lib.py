@@ -809,15 +809,22 @@ FIELD_DISPLAY_JS = r"""(label) => {
   return inp ? inp.value : null;
 }"""
 
-# 현재 화면에 떠 있는(visible) k-window 팝업 개수. 반환 int.
+# 현재 화면에 떠 있는(visible) **업무** k-window 팝업 개수. 반환 int.
 # ⚠ 팝업 생명주기 검증용(2026-07-24 실측): 조회조건 피커(부서·전자결재상태·전표유형)들은 전부
 #   '최상단 k-window'를 대상으로 조작한다(POPUP_CHECK_ROWS/APPLY 등). 앞 피커의 '적용' 후
 #   팝업이 실제로 닫혔는지 검증하지 않으면(고정대기만) 느린 세션에서 부서 팝업(46개)이 남고,
 #   다음 피커(전자결재상태) 돋보기 클릭이 그 팝업 뒤라 먹혀 새 팝업이 안 뜨는데도 최상단(=부서)
 #   그리드가 ready 라 오판 → 46행 부서 팝업을 읽어 '저장' 못 찾는 오류가 났다. 열기=개수 증가,
 #   닫기=개수 감소를 검증해 스테일 팝업 오독을 차단한다.
+# ⚠ 공지 팝업 제외(2026-08-07 무결성 감사): 공지 레이어도 .k-window 인데 **화면 로드 ~1.5s 뒤
+#   비동기 렌더**라(NOTICE_POPUP_BOXES_JS 참조) 피커 개수 관찰 도중에 떠 '열림/닫힘' 델타를
+#   오염시킨다(공지 출현을 피커 열림으로, 공지 잔존을 피커 미닫힘으로 오판). 고유 앵커
+#   #close-today-chk 로만 식별해 제외한다(광범위 매칭 금지 규율 동일).
 POPUP_COUNT_JS = r"""() => {
-  return [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null).length;
+  return [...document.querySelectorAll('.k-window')]
+    .filter(w => w.offsetParent !== null)
+    .filter(w => !w.querySelector('#close-today-chk'))
+    .length;
 }"""
 
 # 화면에 지정 텍스트가 **보이는지** — 화면/탭 전환·다이얼로그 렌더 확인용. arg = text.

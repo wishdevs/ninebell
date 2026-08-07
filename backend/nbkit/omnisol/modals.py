@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any
 
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, verify
 
 __all__ = ["dismiss_blocking_modals", "dismiss_notice_popup", "watch_notice_popup"]
 
@@ -49,7 +49,10 @@ async def dismiss_blocking_modals(page: Any, *, rounds: int = 6) -> list[dict]:
             break
         if waited >= cap_ms:
             break
-        await page.wait_for_timeout(interval)
+        # ⚠ 시간축 규율(2026-08-07): '2초 연속 조용' 관찰창은 실시간이어야 한다 —
+        #   page.wait_for_timeout 은 delay_scale 로 축소돼(card 0.15 = 실 300ms) 지연 출현
+        #   모달을 놓친다. 실패-경로 관찰 대기이므로 실시간 sleep 을 쓴다.
+        await verify.DEFAULT_SLEEP(interval / 1000)
         waited += interval
         if not modals:
             quiet += interval
