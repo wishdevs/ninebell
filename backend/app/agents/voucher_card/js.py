@@ -350,7 +350,14 @@ REFDOC_MARK_JS = r"""({ kind, index }) => {
       if (!/OBTButton_root/.test(cls)) return false;
       const r = b.getBoundingClientRect();
       return r.top >= gapTop && r.bottom <= gapBottom && r.width <= 40 && r.height <= 40;
-    }).sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
+    }).sort((a, b) => {
+      // ⚠ 실측 확정(2026-08-07 refdoc_move 프로브): 아래(추가) 버튼은 **arrBtnDown**,
+      //   위(제거)는 arrBtnUp 클래스를 갖는다 — '라벨 없는 버튼 2개 좌→우 추정'을 결정적
+      //   식별로 대체한다(index 0 = 아래 확정). 클래스가 없으면 종전 x 정렬 폴백.
+      const ad = /arrBtnDown/.test(String(a.className)), bd = /arrBtnDown/.test(String(b.className));
+      if (ad !== bd) return ad ? -1 : 1;
+      return a.getBoundingClientRect().x - b.getBoundingClientRect().x;
+    });
     if (!cands.length) return { ok: false, reason: 'no-move-button' };
     const i = Math.min(Math.max(index || 0, 0), cands.length - 1);
     cands[i].setAttribute('data-nb-refdoc', 'move');

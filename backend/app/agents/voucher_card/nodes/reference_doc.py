@@ -27,10 +27,13 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
     True 로 승격하는 것은 시스템 승인 이슈 해소 후 비영속 검증을 마친 뒤에만(코드 게이트).
     """
 
-    async def on_popup(child, gwdocu_no, events) -> str:
-        # 반환 = 이 전표의 참조문서 결과 한 마디('첨부' 또는 미첨부 사유) — loop_approvals 가
-        # 최종 요약에 집계한다(2026-08-06 포렌식: 누락이 중간 warn 한 줄로만 스쳐 사용자가
-        # 요약만 보면 전 건 성공으로 읽히던 보고 갭).
+    async def on_popup(child, gwdocu_no, events):
+        # 반환 = 이 전표의 참조문서 결과 — str('첨부' 또는 미첨부 사유, loop 가 요약에 집계)
+        # 또는 {outcome, fatal:True, reason}(격상 — 사용자 확정 2026-08-07: 검색이 대상을
+        # **특정한 뒤의** 선택/이동/최종 1건 확인 실패는 런 중단. 데이터/환경 사정(결재번호
+        # 미상·0건·다건)은 종전대로 str 우아 경로다).
+        # (2026-08-06 포렌식: 누락이 중간 warn 한 줄로만 스쳐 사용자가 요약만 보면 전 건
+        # 성공으로 읽히던 보고 갭 → 건별 집계 도입.)
         # 결재번호(GWDOCU_NO)가 없으면(payment_map 누락 — Phase A 행에 ABDOCU_NO 없거나 미매핑)
         # 검색할 값이 없다 — 우아하게 로그하고 넘어간다.
         if not gwdocu_no:
@@ -120,35 +123,48 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
             return "다건(특정 불가)"
 
         await emit_log(events, f"참조문서 검색 {total}건 확인({gwdocu_no}) — 선택 후 이동합니다.", "info")
+        # ⚠ 격상(사용자 확정 2026-08-07): 여기부터는 **대상이 특정된** 상태다 — 선택/이동/최종
+        #   확인 실패는 warn 진행이 아니라 fatal 로 반환해 런을 중단한다("첨부가 잘 안 되는 것"이
+        #   조용히 가상 상신 성공으로 묻히지 않게). 데이터/환경 사정(결재번호 미상·0건·다건)은
+        #   위의 우아한 경로 그대로다.
         if not await steps.select_refdoc_first_row(child):
-            await emit_log(events, "참조문서 목록 행을 선택하지 못했습니다 — 가상 상신으로 진행.", "warn")
+            await emit_log(events, f"참조문서 목록 행을 선택하지 못했습니다({gwdocu_no}).", "error")
             await steps.close_refdoc_dialog(child)
-            return "행 선택 실패"
+            return {"outcome": "행 선택 실패", "fatal": True,
+                    "reason": f"참조문서 행 선택 실패({gwdocu_no}) — 체크 반영을 확인하지 못했습니다."}
 
         moved = await steps.move_refdoc_down(child, gwdocu_no)
-        # 최종 성공 판정(사용자 확정 2026-07-27): **첨부 후 참조문서 1건 이상**.
-        # move 내부 확인과 별개로, dialog 를 닫기 직전 상태를 한 번 더 독립 확인한다.
+        # 최종 성공 판정(사용자 확정 2026-08-07): 처음 결제창을 열었을 때(0건)와 달리 **선택된
+        # 문서 목록이 정확히 pre+1(신규 결제창 기준 1건)** 이고 그 문서번호가 실제로 담겨 있어야
+        # 한다. move 내부 확인과 별개로 dialog 를 닫기 직전 상태를 한 번 더 독립 확인한다.
+        want_count = (moved.get("pre_count") or 0) + 1
+        final_count = await steps.selected_list_count(child)
         final_ok = await steps.selected_list_has_doc(child, gwdocu_no)
-        if moved.get("verified") and final_ok is False:
+        if moved.get("verified") and (final_ok is False or (final_count is not None and final_count != want_count)):
             await emit_log(
                 events,
-                f"참조문서 첨부 직후엔 담겼으나 최종 확인에서 목록에 없습니다({gwdocu_no}) — 실패로 처리합니다.",
+                f"참조문서 첨부 직후엔 담겼으나 최종 확인이 어긋납니다({gwdocu_no}) — "
+                f"목록 {final_count}건(기대 {want_count}건)/문서 포함={final_ok}. 실패로 처리합니다.",
                 "warn",
             )
-            moved = {**moved, "verified": False, "reason": "최종 확인에서 0건"}
+            moved = {**moved, "verified": False,
+                     "reason": f"최종 확인 불일치(목록 {final_count}건, 기대 {want_count}건)"}
         if moved.get("verified"):
             await emit_log(
                 events,
-                f"참조문서 첨부 완료 — 선택된 문서 목록 {moved.get('count')}건, "
-                f"문서번호 {gwdocu_no} 포함 확인 ✅.",
+                f"참조문서 첨부 완료 — 선택된 문서 목록 {final_count if final_count is not None else moved.get('count')}건"
+                f"(기대 {want_count}건) · 문서번호 {gwdocu_no} 포함 확인 ✅.",
                 "ok",
             )
         else:
             await emit_log(
                 events,
-                f"참조문서 첨부 실패({gwdocu_no}) — {moved.get('reason')} 가상 상신으로 진행.",
-                "warn",
+                f"참조문서 첨부 실패({gwdocu_no}) — {moved.get('reason')}",
+                "error",
             )
+            await steps.close_refdoc_dialog(child)
+            return {"outcome": "첨부 실패", "fatal": True,
+                    "reason": f"참조문서 첨부 실패({gwdocu_no}) — {moved.get('reason')}"}
 
         if allow_confirm:
             # ⚠ 게이트 개방(비영속 검증 완료 후에만) — 실제 확인 클릭 + 적용(dialog 소멸) 확인.
@@ -167,8 +183,9 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 await steps.close_refdoc_dialog(child)
         else:
             # 기본 — 확인·상신은 로그만(비영속). dialog 는 취소(X)로 정리.
+            # (실측 2026-08-07: 선택 목록은 dialog 재오픈에도 유지 — 닫기가 선택을 잃지 않는다.)
             await emit_log(events, "가상: 참조문서 확인·상신 (미클릭 — 비영속).", "info")
             await steps.close_refdoc_dialog(child)
-        return "첨부" if moved.get("verified") else "첨부 확인 실패"
+        return "첨부"
 
     return on_popup

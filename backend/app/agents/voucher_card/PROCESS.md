@@ -146,7 +146,7 @@
 | loop_approvals | 행 선택 / 결제창 대조 | D7(체크행수=1, 전표번호 대조) | 하드(기존) |
 | reference_doc | dialog 열림 | 제목 '참조문서' 가시 | 행 skip(warn) |
 | reference_doc | 문서번호 입력 | input readback 일치 | 조회는 시도(warn) |
-| reference_doc | **아래(↓) 이동** | ❓ **미확인** — '선택된 문서 목록' 리더 미확정 | '완료' 아닌 '미확인'으로 로그 |
+| reference_doc | **아래(↓) 이동** | ✅ **실측 확정**(2026-08-07 refdoc_move 프로브, 결제창 6가설) — 아래=`arrBtnDown`·위=`arrBtnUp` 클래스, 체크박스 **좌표 클릭** 체크만 유효(gridView checkItem/checkRow API 체크는 리더에 1로 읽혀도 이동 불성립 — API 체크 금지·리더 전용), 행중앙/dblclick 무효. 이동 시 선택 목록 pre+1, dialog 재오픈에도 유지. '선택된 문서 목록' 리더 = REFDOC_GRID_ROWS_JS(gridView) 실측 일치 | 대상 특정 후 실패는 fatal(런 중단 — 2026-08-07 격상) |
 
 **하드/소프트 기준**: 그 값이 **대상 집합을 정의**하면 하드(잘못된 대상 결재 차단), 범위만
 넓히는 보조 조건이면 warn 후 진행. 리더가 값을 **못 읽는 경우**(확인 불가)는 값 불일치와 구분해

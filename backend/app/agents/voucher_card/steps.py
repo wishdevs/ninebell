@@ -678,8 +678,14 @@ async def move_refdoc_down(child: Any, docu_no: str | None = None) -> dict:
       버튼 2개인데, 기존 리더는 class/aria 에 down|아래|arrow-down 이 있는 요소를 찾아 **어느
       것도 해당되지 않았고** 폴백 좌표(477,412 — 페이지네이션 위 빈 공간)를 눌렀다. 그 구간에는
       **페이지네이션**도 있어 후보를 좁히지 않으면 페이지만 넘어간다.
-    두 버튼 중 어느 쪽이 '아래(추가)'인지 DOM 으로 알 수 없어(둘 다 라벨 없음) **결과검증형**으로
-    왼쪽부터 눌러보고 목록이 실제로 늘어나면 확정한다.
+    ⚠ 실측 확정(2026-08-07 refdoc_move 프로브, 결제창 실기기 6가설 검증):
+      - 아래(추가) 버튼 = **arrBtnDown** 클래스(x=477), 위(제거) = arrBtnUp(x=506) —
+        REFDOC_MARK_JS 가 arrBtnDown 을 우선 정렬하므로 index 0 이 곧 '아래'다(결정적).
+      - 이동 전제는 **체크박스 열 좌표 클릭으로 실제 체크**된 상태다. gridView API
+        (checkItem/checkRow)로 체크하면 리더(getCheckedRows)에는 1로 읽혀도 **이동이 성립하지
+        않는다**(React 상태와 불일치 — API 체크 금지, 리더 전용). 행 중앙 클릭·dblclick 도 무효.
+      - 이동 성립 시 선택 목록은 pre+1 건이 되고, dialog 를 닫았다 재열어도 유지된다.
+    결과검증형 후보 순회는 폴백으로 유지한다(클래스 부재 세션 대비).
     """
     pre_count = await selected_list_count(child)
     if pre_count is None:

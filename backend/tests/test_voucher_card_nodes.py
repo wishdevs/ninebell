@@ -1054,25 +1054,78 @@ async def test_move_verification_claims_only_what_it_checked():
 
 
 async def test_on_popup_fails_when_selected_list_ends_up_empty(monkeypatch):
-    """⚠ 성공 조건(사용자 확정 2026-07-27): **첨부 후 참조문서 1건 이상**.
+    """⚠ 성공 조건(사용자 확정 2026-08-07): 처음 결제창(0건)과 달리 **선택된 문서 목록이
+    정확히 1건(pre+1)** 이고 그 문서가 담겨 있어야 한다.
 
-    이동 직후엔 담겼다고 보고돼도 dialog 를 닫기 직전 확인에서 0건이면 **실패**로 처리한다
-    (담겼다고 믿고 넘어가면 참조문서 없는 결재가 조용히 진행된다).
+    이동 직후엔 담겼다고 보고돼도 dialog 를 닫기 직전 최종 확인이 어긋나면 **fatal**(런 중단)
+    이다 — 담겼다고 믿고 넘어가면 참조문서 없는 결재가 조용히 진행된다(격상 2026-08-07).
     """
     hook = make_reference_doc_hook()
     child = _RefChild(total_before=2714, total=1)
 
     async def _moved_then_lost(c, docu_no=None):
-        return {"ok": True, "verified": True, "count": 1}
+        return {"ok": True, "verified": True, "count": 1, "pre_count": 0}
+
+    async def _final_count_zero(c):
+        return 0
 
     async def _final_missing(c, docu_no):
         return False  # 최종 확인에서 목록에 없음
 
     monkeypatch.setattr(rd_mod.steps, "move_refdoc_down", _moved_then_lost)
+    monkeypatch.setattr(rd_mod.steps, "selected_list_count", _final_count_zero)
     monkeypatch.setattr(rd_mod.steps, "selected_list_has_doc", _final_missing)
     q = _q()
-    await hook(child, "GW1", q)
+    res = await hook(child, "GW1", q)
     logs = _logs(_drain(q))
-    assert any("최종 확인에서 목록에 없" in m for m in logs)
+    assert any("최종 확인이 어긋납니다" in m for m in logs)
     assert any("참조문서 첨부 실패" in m for m in logs)
     assert not any("첨부 완료" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True  # 격상 — 런 중단 신호.
+    assert "첨부 실패" in res.get("outcome", "")
+
+
+async def test_on_popup_select_fail_after_match_is_fatal(monkeypatch):
+    """⚠ 격상(2026-08-07): 검색이 대상 1건을 **특정한 뒤의** 행 선택 실패는 warn 진행이 아니라
+    fatal — '첨부가 잘 안 되는' 상태가 가상 상신 성공으로 묻히지 않는다."""
+    hook = make_reference_doc_hook()
+    child = _RefChild(total_before=2714, total=1)
+
+    async def _select_fail(c):
+        return False
+
+    monkeypatch.setattr(rd_mod.steps, "select_refdoc_first_row", _select_fail)
+    q = _q()
+    res = await hook(child, "GW1", q)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "행 선택" in res.get("reason", "")
+    assert cjs.REFDOC_CLOSE_BTN_RECT_JS in child.evaluated  # 실패 정리로 dialog 닫음.
+
+
+async def test_on_popup_environment_paths_stay_graceful():
+    """격상 범위 확인 — 데이터/환경 사정(결재번호 미상·검색 0건)은 종전대로 str 우아 경로다."""
+    hook = make_reference_doc_hook()
+    assert await hook(_RefChild(), None, _q()) == "결재번호 미상"
+    res = await hook(_RefChild(total=0, no_data=True), "GW1", _q())
+    assert res == "검색 0건"  # fatal 아님 — 가상 상신으로 진행하는 기존 계약 유지.
+
+
+async def test_loop_refdoc_fatal_outcome_stops_run(monkeypatch):
+    """⚠ 격상 배선(2026-08-07): 훅이 {fatal:True} 를 반환하면 그 전표를 '가상 상신 완료'로
+    처리하지 않고 런을 중단한다(결제창 정리는 finally 가 보장)."""
+    child = _LoopChild()
+    _patch_loop_for_card(monkeypatch, child, {0: "RN-A"})
+
+    async def _on_popup(c, gwdocu_no, events):
+        return {"outcome": "첨부 실패", "fatal": True,
+                "reason": f"참조문서 첨부 실패({gwdocu_no}) — 이동 미성립"}
+
+    node = make_loop_approvals_node(on_popup=_on_popup)
+    q = _q()
+    out = await node(
+        {"events": q, "page": object(), "master_rowcount": 1, "max_rows": 1,
+         "payment_map": {"RN-A": "GW-A"}}
+    )
+    assert "error" in out and "참조문서 첨부 실패" in out["error"]
+    logs = _logs(_drain(q))
+    assert not any("가상 상신 완료" in m for m in logs)  # 실패 전표를 성공으로 세지 않는다.

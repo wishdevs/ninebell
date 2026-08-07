@@ -235,6 +235,7 @@ def make_loop_approvals_node(on_popup=None):
                 return await fail(idx, "결재창(별도 팝업 Page)이 열리지 않았습니다.")
 
             mismatch: str | None = None
+            refdoc_fatal: str | None = None  # 참조문서 훅 격상(2026-08-07) — 사유 담기면 런 중단.
             try:
                 # 렌더 완료 판정(상단 버튼 텍스트 표출까지 조건 폴링) — 읽기 전용.
                 top = await steps.poll_child_ready(child)
@@ -269,36 +270,44 @@ def make_loop_approvals_node(on_popup=None):
                 if mismatch is None:
                     # 카드 고유(on_popup): 결제창 안 참조문서 선택 — 가상 상신 로그 **전에** 수행.
                     # 이 행의 결의서번호(ABDOCU_NO)로 payment_map 에서 GWDOCU_NO 를 구해 넘긴다.
-                    # 훅은 확인·상신을 절대 클릭하지 않으며 0건/오류를 우아하게 로그한다 —
-                    # 참조문서 이슈로 배치가 중단되지 않게 여기서 예외를 삼킨다(best-effort).
+                    # 훅은 확인·상신을 절대 클릭하지 않는다. 데이터/환경 사정(결재번호 미상·0건·
+                    # 다건)은 훅이 우아하게 로그하고 str 로 집계되지만, **대상이 특정된 뒤의
+                    # 선택/이동/최종확인 실패**는 훅이 {fatal:True} 로 반환하고 여기서 런을
+                    # 중단한다(격상 — 사용자 확정 2026-08-07: 첨부 실패가 가상 상신 성공으로
+                    # 묻히지 않게). 예외는 여전히 삼킨다(훅 코드 결함이 결제창 방치로 안 이어지게).
                     if on_popup is not None:
                         # gwdocu_no 는 이 행의 결의서번호로 위에서 이미 해소(없으면 이 행은 스킵됐다).
                         try:
                             outcome = await on_popup(child, gwdocu_no, events)
-                        except Exception as exc:  # noqa: BLE001 — 참조문서 훅은 비크리티컬.
+                        except Exception as exc:  # noqa: BLE001 — 훅 예외는 오류 집계로.
                             outcome = "오류"
                             await emit_log(
                                 events,
                                 f"참조문서 처리 중 경고(무시하고 진행) — 전표 {key_label}: {exc}",
                                 "warn",
                             )
-                        if isinstance(outcome, str):
+                        if isinstance(outcome, dict):
+                            refdoc_results.append((key_label, outcome.get("outcome") or "실패"))
+                            if outcome.get("fatal"):
+                                refdoc_fatal = outcome.get("reason") or f"참조문서 첨부 실패({key_label})"
+                        elif isinstance(outcome, str):
                             refdoc_results.append((key_label, outcome))
-                    # ⚠ 상신(~922,30)·보관(~860,30) 절대 클릭 금지 — 가상 상신 로그만 남긴다.
-                    processed_docu_nos.append(key_label)
-                    await emit_log(
-                        events,
-                        f"[{seq}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
-                        f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
-                        "ok",
-                    )
-                    # 워크플로우 노드 진행 카운트 갱신(누적 완료/전체).
-                    await emit_step(
-                        events,
-                        "loop_approvals",
-                        "running",
-                        progress={"done": len(processed_docu_nos), "total": process_count},
-                    )
+                    if refdoc_fatal is None:
+                        # ⚠ 상신(~922,30)·보관(~860,30) 절대 클릭 금지 — 가상 상신 로그만 남긴다.
+                        processed_docu_nos.append(key_label)
+                        await emit_log(
+                            events,
+                            f"[{seq}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
+                            f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
+                            "ok",
+                        )
+                        # 워크플로우 노드 진행 카운트 갱신(누적 완료/전체).
+                        await emit_step(
+                            events,
+                            "loop_approvals",
+                            "running",
+                            progress={"done": len(processed_docu_nos), "total": process_count},
+                        )
             finally:
                 # 성공/실패 무관하게 결제창은 반드시 닫는다(상신/보관 미클릭 = 비영속).
                 await steps.close_child(child)
@@ -312,6 +321,9 @@ def make_loop_approvals_node(on_popup=None):
                 return await fail(
                     idx, f"결제창 전표번호 불일치(예상 {key_label} / 실제 {mismatch}) — 배치 즉시 중단"
                 )
+            if refdoc_fatal is not None:
+                # 참조문서 격상(2026-08-07) — 대상 특정 후 첨부 실패는 조용한 진행 금지.
+                return await fail(idx, refdoc_fatal)
 
             await emit_shot(events.put, page)
 
