@@ -24,7 +24,7 @@ import {
   ORG_NONE,
   type WorkspaceMember,
 } from '@/lib/data/members';
-import { buildOrgUnitTree, orgUnitLabel, type OrgUnit } from '@/lib/data/org-units';
+import { buildOrgUnitOptionGroups, orgUnitLabel, type OrgUnit } from '@/lib/data/org-units';
 import { formatDate, formatRelativeKorean } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
 import { MemberRowActions } from './member-row-actions';
@@ -76,8 +76,8 @@ export function MembersTable({
   onToggleStatus,
   onRequestRemove,
 }: MembersTableProps) {
-  // 조직구분 셀렉트는 본부▸팀 그룹으로 묶는다 — 멤버는 팀에만 배정 가능.
-  const orgTree = buildOrgUnitTree(orgUnits);
+  // 조직구분 셀렉트는 본부 그룹 아래 전 깊이 노드를 들여쓰기로 나열한다 — 본부(루트)만 배정 불가.
+  const orgGroups = buildOrgUnitOptionGroups(orgUnits);
   const rangeStart = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = Math.min(page * pageSize, totalCount);
 
@@ -195,13 +195,17 @@ export function MembersTable({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={ORG_NONE}>미지정</SelectItem>
-                      {orgTree.map(({ parent, children }) =>
-                        children.length === 0 ? null : (
+                      {orgGroups.map(({ parent, options }) =>
+                        options.length === 0 ? null : (
                           <SelectGroup key={parent.id}>
                             <SelectLabel>{parent.label}</SelectLabel>
-                            {children.map((child) => (
-                              <SelectItem key={child.id} value={child.id}>
-                                {child.label}
+                            {options.map(({ unit, depth }) => (
+                              <SelectItem
+                                key={unit.id}
+                                value={unit.id}
+                                style={{ paddingLeft: `${1.75 + depth * 0.75}rem` }}
+                              >
+                                {unit.label}
                               </SelectItem>
                             ))}
                           </SelectGroup>

@@ -33,29 +33,36 @@ export function orgUnitLabel(orgUnits: readonly OrgUnit[], id: string | null): s
   return (id && orgUnits.find((o) => o.id === id)?.label) || '미지정';
 }
 
-/** 본부 1개 + 그 아래 팀 목록(sortOrder 정렬됨). */
-export interface OrgUnitGroup {
+/** 조직구분 셀렉트 옵션 1개 — depth 는 들여쓰기용(본부 직계=0). */
+export interface OrgUnitOption {
+  unit: OrgUnit;
+  depth: number;
+}
+
+/** 본부(루트) 1개 + 하위 전 깊이 노드 옵션 목록(pre-order). */
+export interface OrgUnitOptionGroup {
   parent: OrgUnit;
-  children: OrgUnit[];
+  options: OrgUnitOption[];
 }
 
 /**
- * 평탄한 `GET /org-units` 응답을 본부▸팀 트리로 구성한다.
- * 본부·팀 각각 sortOrder 기준으로 정렬된다.
+ * 조직구분 셀렉트용 옵션 그룹 — 본부(루트)별로 하위 노드를 **전 깊이** pre-order 평탄화한다.
+ * 백엔드(users PATCH)가 루트 배정을 거부하므로 루트 자신은 옵션에 넣지 않는다.
+ * 2단계만 만들면 깊이 3 팀(예: 경영본부▸재무자원관리그룹▸회계팀)이 누락되어
+ * 배정된 값이 셀렉트에 공백으로 보인다 — 반드시 전 깊이를 포함할 것.
  */
-export function buildOrgUnitTree(orgUnits: readonly OrgUnit[]): OrgUnitGroup[] {
-  const parents = orgUnits
-    .filter((o) => o.parentId === null)
-    .slice()
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-
-  return parents.map((parent) => ({
-    parent,
-    children: orgUnits
-      .filter((o) => o.parentId === parent.id)
-      .slice()
-      .sort((a, b) => a.sortOrder - b.sortOrder),
-  }));
+export function buildOrgUnitOptionGroups(orgUnits: readonly OrgUnit[]): OrgUnitOptionGroup[] {
+  return buildOrgUnitForest(orgUnits).map((root) => {
+    const options: OrgUnitOption[] = [];
+    const walk = (nodes: readonly OrgUnitNode[], depth: number): void => {
+      for (const node of nodes) {
+        options.push({ unit: node.unit, depth });
+        walk(node.children, depth + 1);
+      }
+    };
+    walk(root.children, 0);
+    return { parent: root.unit, options };
+  });
 }
 
 /**
