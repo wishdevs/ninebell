@@ -81,12 +81,12 @@ def build_voucher_graph(
       pre_loop_node  run_query 와 loop_approvals **사이**에 삽입할 노드(카드=collect_payments,
                      결의서조회승인 다중탭에서 ABDOCU_NO→GWDOCU_NO 맵 수집). None=미삽입.
       on_popup       loop_approvals 결제창 훅(카드=참조문서 선택). None=미호출.
-      batch_limit    **배치 결재 모드**(외상매출금 전용, 사용자 요구 2026-07-27). 지정하면
-                     run_query 뒤에 count_details 노드를 넣어 전표별 하위(계정정보) 건수를
-                     파악하고, 하위 단독 batch_limit 이상은 단독으로 먼저, 나머지는 합계가
-                     batch_limit 미만이 되도록 묶어 **한 번에** 결재창을 연다(실측: 다중 체크
-                     후 결재 1회 → 자식창 1개에 대상 전부 표시).
-                     None(기본)=건별 순회(매입/카드 기존 동작 그대로).
+      batch_limit    **배치 결재 모드**(매출 2026-07-27 → 매입 확대 2026-08-07 사용자 확정).
+                     지정하면 run_query 뒤에 count_details 노드를 넣어 전표별 하위(계정정보)
+                     건수를 파악하고, 하위 단독 batch_limit 이상은 단독으로 먼저, 나머지는
+                     합계가 batch_limit 미만이 되도록 묶어 **한 번에** 결재창을 연다(실측:
+                     다중 체크 후 결재 1회 → 자식창 1개에 대상 전부 표시).
+                     None(기본)=건별 순회(카드 기존 동작 그대로 — 결제창마다 행별 참조문서).
     """
     g = StateGraph(state_cls)
     # 진입 앞단: validate_params(브라우저 앞) → 공유 프리미티브(login/user_type/menu_nav).
@@ -131,13 +131,15 @@ def build_voucher_graph(
 
 
 def build_voucher_receivable_graph():
-    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출 + **배치 결재**.
-
-    ⚠ 배치 결재는 매출금만(사용자 요구 2026-07-27) — 매입금은 기존 건별 순회를 유지한다.
-    """
+    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출 + **배치 결재**."""
     return build_voucher_graph(steps.DOCU_TYPES_RECEIVABLE, batch_limit=DETAIL_BATCH_LIMIT)
 
 
 def build_voucher_payable_graph():
-    """외상매입금(voucher-payable) — 전표유형 내수구매. 나머지 전부 공유."""
-    return build_voucher_graph(steps.DOCU_TYPES_PAYABLE)
+    """외상매입금(voucher-payable) — 전표유형 내수구매 + **배치 결재**. 나머지 전부 공유.
+
+    배치 확대(2026-08-07 사용자 확정): 매출금과 동일 규율 — 하위(계정정보) 200건 이상 전표는
+    단독으로 먼저, 나머지는 합계가 200 미만이 되도록 묶어 결재창을 묶음당 1회 연다.
+    (종전 건별 순회는 배치 도입 이전의 원형 백본이었다.)
+    """
+    return build_voucher_graph(steps.DOCU_TYPES_PAYABLE, batch_limit=DETAIL_BATCH_LIMIT)

@@ -513,36 +513,10 @@ _HAKJAGUM_GRANT_FIXTURE: dict = {
 }
 
 
-# ── 전표조회승인 결재 플로우 그래프 (voucher-receivable 그래프의 사람용 요약) ──────
+# ── 전표조회승인 배치 결재 플로우 그래프 (매출 2026-07-27 → 매입 확대 2026-08-07) ──
 # 결의서입력(문서 생성) 계열과 다른 '조회+결재' 아키타입 — 결제창을 열어 가상 상신 로그만
-# 남기고 닫는다(실제 상신 없음). 단일행 기본(max_rows=1) — 다음 건 반복은 배치 게이트 안에서만.
-VOUCHER_RECEIVABLE_FLOW: dict = {
-    "nodes": [
-        {"id": "access", "kind": "start", "status": "done", "title": "전표조회승인 접속", "sub": "전사공통(회계)", **_col(0)},
-        {"id": "setq", "kind": "step", "status": "done", "title": "조회 조건 세팅", "sub": "미결·전자결재저장·국내/해외매출", **_col(1)},
-        {"id": "query", "kind": "step", "status": "active", "title": "조회(F2)", "sub": "대상 전표 목록", **_col(2)},
-        {"id": "pick", "kind": "step", "status": "pending", "title": "행 선택(checkRow)", "sub": "결재 대상 지정", **_col(3)},
-        {"id": "pay", "kind": "step", "status": "pending", "title": "결제창 열기", "sub": "별도 전자결재 창(EAP)", **_col(4)},
-        {"id": "virtual", "kind": "step", "status": "pending", "title": "가상 상신", "sub": "상신·보관 미클릭 — 로그만", **_col(5)},
-        {"id": "close", "kind": "step", "status": "pending", "title": "결제창 닫기", "sub": "비영속(다음 건)", **_col(6)},
-        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 건?", "sub": "max_rows 내 반복(기본 1건)", **_col(7)},
-        {"id": "submit", "kind": "end", "status": "pending", "title": "실제 상신", "sub": "사용자가 직접(EAP)", **_col(8)},
-    ],
-    "edges": [
-        {"id": "e-access-setq", "source": "access", "target": "setq"},
-        {"id": "e-setq-query", "source": "setq", "target": "query"},
-        {"id": "e-query-pick", "source": "query", "target": "pick"},
-        {"id": "e-pick-pay", "source": "pick", "target": "pay"},
-        {"id": "e-pay-virtual", "source": "pay", "target": "virtual"},
-        {"id": "e-virtual-close", "source": "virtual", "target": "close"},
-        {"id": "e-close-more", "source": "close", "target": "more"},
-        {"id": "e-more-pick", "source": "more", "target": "pick", "label": "다음 건 ↩", "kind": "loop"},
-        {"id": "e-more-submit", "source": "more", "target": "submit", "label": "마지막 건", "kind": "branch"},
-    ],
-}
-
-
-# ── 외상매출금 배치 결재 플로우 그래프 (2026-07-27 사용자 요구 반영) ─────────────
+# 남기고 닫는다(실제 상신 없음). (건별 순회 원형 플로우 VOUCHER_RECEIVABLE_FLOW 는 매입금의
+# 배치 확대(2026-08-07)로 마지막 사용처가 사라져 제거 — 필요 시 git 이력 참조.)
 # 건별 순회 대신 **하위(계정정보) 건수 기준 배치**: 단독 200 이상은 먼저 단독으로, 나머지는
 # 합계가 200 미만이 되도록 묶어 한 번에 결재창을 연다. 매입금은 기존 건별 플로우를 유지한다.
 VOUCHER_RECEIVABLE_BATCH_FLOW: dict = {
@@ -616,29 +590,19 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
 
 # 외상매입금 — 외상매출금과 전부 공유, 전표유형만 내수구매(build_voucher_payable_graph).
 # 픽스처도 receivable 를 스프레드로 재사용하고 id/workflow_id/name/설명·set_query detail 만 덮는다.
+# 배치 결재도 매출금과 동일(2026-08-07 사용자 확정 — 하위 200건 기준 단독/묶음): flow_graph
+# (VOUCHER_RECEIVABLE_BATCH_FLOW)·count_details 포함 steps 를 그대로 상속한다.
 _VOUCHER_PAYABLE_FIXTURE: dict = {
     **_VOUCHER_RECEIVABLE_FIXTURE,
     "id": "voucher-trade-payable",
     "workflow_id": "voucher-payable",
     "name": "외상매입금",
-    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 건별로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
-    # ⚠ 매입금은 **건별 순회 유지**(배치 결재는 매출금 전용 — 사용자 요구 2026-07-27) —
-    #   그래프에 count_details 노드가 없으므로 그 스텝을 빼고, 결재 스텝 문구도 건별로 되돌린다.
-    "flow_graph": VOUCHER_RECEIVABLE_FLOW,
+    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
     "steps": [
         {**s, "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
         if s["key"] == "set_query"
-        else (
-            {
-                **s,
-                "label": "결재창 순회(가상 상신)",
-                "detail": "대상 전표를 건별로 결제창까지 열어 '가상 상신' 로그만 남기고 닫음(상신·보관 미클릭, 실제 상신 없음)",
-            }
-            if s["key"] == "loop_approvals"
-            else s
-        )
+        else s
         for s in _VOUCHER_RECEIVABLE_FIXTURE["steps"]
-        if s["key"] != "count_details"
     ],
 }
 

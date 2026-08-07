@@ -2,8 +2,8 @@
 
 형제 스모크 `e2e/voucher_receivable_smoke.py` 와 동일 구조이며 전표유형만 **내수구매**
 (SYSDEF_CD=31, `DOCU_TYPES_PAYABLE`)로 다르다 — 공유 백본(`build_voucher_graph`)이 매입에도
-제품 경로로 종단 동작하는지 확인한다. 매출과 달리 **건별 순회**(묶음 결재 미사용)라 결제창
-개봉 수 = 처리 건수다.
+제품 경로로 종단 동작하는지 확인한다. 매출과 동일한 **배치 결재**(2026-08-07 확대: 하위
+200건 기준 단독/묶음)라 결제창 개봉 수 = 묶음 수(≤ 처리 건수)다.
 
 전환 배경·관측 경로(agent_runs.logs + SSE 탭)·기간 선별(phase0)은 `e2e/voucher_product.py`
 모듈 docstring 참조. ERP 삭제 단계는 없다(전표 미생성 아키타입).
@@ -145,7 +145,7 @@ async def main() -> int:
         checks["child_screenshot_emitted"] = child_shot_in_loop >= 1
         checks["child_closed_frame_emitted"] = child_closed_in_loop >= 1
         checks["virtual_submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
-        # 건별 순회 — 처리 건수 = 조회 건수(제품 폼엔 max_rows 노브가 없어 전체 진행이 기본).
+        # 배치 결재 — 묶음 수와 무관하게 **처리 전표 수** = 조회 건수(전량 커버).
         checks["processed_matches_rowcount"] = len(processed) == rowcount
         checks["processed_docu_nos_distinct"] = len(set(processed)) == len(processed)
         checks["closed_child_matches_opens"] = child_closed_in_loop == obs["approval_opens"]
