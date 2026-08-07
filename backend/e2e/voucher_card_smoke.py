@@ -16,7 +16,7 @@
 스모크는 `ACTIONS.md` 기준 **`확정`·`발신` 등급 동사를 한 번도 실행하지 않는 지점**에서 멈춘다.
 카드 `FLOW.md` 의 `금지` 둘 —
 
-  금지  [문서반영]  참조문서 확인 — 미클릭 (기록만)
+  허용  [문서반영]  참조문서 확인 — 클릭 + 첨부 1건 검증 의무(사용자 확정 2026-08-07, 비영속 실측)
   금지  [상신]      미클릭 — '가상 상신' 기록만
 
 — 은 그래프 코드가 보장하고(`make_reference_doc_hook(allow_confirm=False)` + `loop_approvals`
@@ -105,8 +105,10 @@ _REFDOC_DIAG = (
     ("attach_lost", "참조문서 첨부 직후엔 담겼으나"),
     ("hook_exception", "참조문서 처리 중 경고(무시하고 진행)"),
     ("virtual_confirm", "가상: 참조문서 확인·상신"),
-    # ⚠ 절대 안전 감시 — 0이어야 한다. 1 이상이면 게이트가 열린 채 실행된 것이다.
-    ("confirm_clicked", "참조문서 확인 클릭(allow_confirm=True)"),
+    # 게이트 개방(사용자 확정 2026-08-07) — 확인 클릭은 이제 허용/의무. 감시 대상은
+    # '클릭이 있었다면 첨부 1건 확인이 짝으로 있었는가'(아래 V7 페어 검증).
+    ("confirm_clicked", "참조문서 확인 클릭 ✅"),
+    ("attach_verified", "첨부 1건 확인 ✅"),
 )
 
 
@@ -168,7 +170,7 @@ def parse_card(msgs: list[str]) -> dict:
 async def main() -> int:
     print("[SMOKE] 미지급금 법인카드 — 제품 경로(대시보드 폼 → 실행). ERP 삭제 단계 없음(전표 미생성).",
           flush=True)
-    print("[SMOKE] ⚠ 상신·보관·참조문서 확인 절대 미클릭 — 관찰만 한다.", flush=True)
+    print("[SMOKE] ⚠ 상신·보관 절대 미클릭(참조문서 확인 클릭은 허용 — 비영속 실측) — 관찰만 한다.", flush=True)
 
     # ── phase0 — 읽기 전용 기간 선별(결재 버튼 미클릭 → EAP draft 0건) ──────────────
     scan = await pick_period(DOCU_TYPES, tag=TAG)
@@ -262,8 +264,12 @@ async def main() -> int:
         result_text and ("실제 상신 없음" in result_text or "진행하지 않았습니다" in result_text
                          or "대상 전표가 없어" in result_text)
     )
-    # V7(절대 안전) — 참조문서 '확인' 게이트가 열린 흔적이 0이어야 한다. **완화 금지**.
-    checks["refdoc_confirm_never_clicked"] = card["refdoc_diag"].get("confirm_clicked", 0) == 0
+    # V7 — 게이트 개방(2026-08-07): 확인 클릭은 허용/의무. 클릭이 있었다면 결제창 첨부 1건
+    # 확인 로그가 **짝으로** 있어야 한다(0건 경로처럼 클릭 자체가 없으면 둘 다 0 = 정상).
+    _confirms = card["refdoc_diag"].get("confirm_clicked", 0)
+    checks["refdoc_confirm_paired_with_attach_check"] = (
+        _confirms == 0 or card["refdoc_diag"].get("attach_verified", 0) >= _confirms
+    )
     # V7b(절대 안전) — 상신/보관 클릭 흔적도 0.
     checks["no_real_submit_logged"] = not any(
         ("상신 클릭" in m) or ("보관 클릭" in m) for m in msgs

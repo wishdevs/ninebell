@@ -44,5 +44,8 @@ def build_voucher_card_graph():
         state_cls=VoucherCardState,
         validate_node=make_validate_params_node(),
         pre_loop_node=make_collect_payments_node(),
-        on_popup=make_reference_doc_hook(allow_confirm=False),  # 확인 미클릭(게이트)
+        # 게이트 개방(사용자 확정 2026-08-07): 선택 1건 확인 → **확인 클릭** → 결제창 '참조문서'
+        # 필드 첨부 1건 검증까지 통과해야 그 결제건 완료. 상신·보관은 여전히 절대 미클릭이며,
+        # 확인 효과는 상신 없이는 비영속임을 실측 확정(refdoc confirm 프로브).
+        on_popup=make_reference_doc_hook(allow_confirm=True),
     )

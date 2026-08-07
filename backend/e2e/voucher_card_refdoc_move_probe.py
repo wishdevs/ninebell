@@ -1,4 +1,5 @@
-"""프로브 — 참조문서 dialog **'아래(↓) 이동'** 성립 조건 실측(H1~H6).
+"""프로브 — 참조문서 dialog **'아래(↓) 이동'** 성립 조건 실측(H1~H6) + **'확인' 클릭·첨부표시**
+실측(P1~P5, E2E_REFDOC_CONFIRM=1 일 때만).
 
 오케스트레이터 지시(2026-08-07): 문서번호 검색까지는 되는데 '아래' 버튼으로 '참조문서 목록'
 →'선택된 문서 목록' 이동이 실기기에서 안 된다는 사용자 리포트를 실측으로 확정한다.
@@ -14,13 +15,26 @@
   H6. 이동 성립 조합을 찾으면: (a) count==1 + 문서번호 일치, (b) dialog 닫았다 다시 열어도
       선택 목록 유지되는지, (c) 반대 버튼으로 원복 가능한지 확인 후 원복.
 
-⚠ 절대 안전: 참조문서 '확인' 버튼 클릭 금지(게이트 유지). 상신·보관 클릭 금지. 결제창은
-  정확히 1건만 연다(모든 가설을 그 안에서 검증 — dialog 재오픈은 popup 오픈이 아니므로 예산과
-  무관). '선택된 문서 목록'에 무엇이 담기든 '확인'을 누르지 않는 한 비영속이라(팝업 close 로
-  discard) 여러 행을 시험해도 실 전표에 영향 없음.
+후속 임무(2026-08-07, 사용자 명시 승인 — E2E_REFDOC_CONFIRM=1 일 때만 활성화. 이 모드에서는
+H3~H6(대조군·원복)을 건너뛰고 H1+H2(성공) 직후 곧장 P1~P5 로 진행한다 — 이미 확정된 가설을
+재검증하며 결제창을 더 열 필요가 없다):
+  P1. 확정 시퀀스(체크박스 → arrBtnDown)로 선택 목록 1건을 만든 뒤 **확인** 클릭
+      (`csteps.click_refdoc_confirm` 재사용) → dialog 소멸 확인.
+  P2. 확인 직후 **EAP 본문**(dialog 밖)에서 첨부 표시가 어떻게 바뀌는지 — 확인 전/후 비교.
+  P3. 확인 후 참조문서 dialog 를 다시 열면 '선택된 문서 목록'이 어떻게 보이는지.
+  P4. 결제창을 상신 없이 close 했다가 **같은 전표의 결제창을 다시 열어** P2 리더로 재확인 —
+      첨부 표시가 남아 있는지(영속성). 남아 있어도 지우려 시도하지 않는다(사실만 보고).
+  P5. 확인 클릭이 거절되는 케이스(필수값 경고 등)가 있으면 기록.
+
+⚠ 절대 안전: 기본 모드(H1~H6)는 참조문서 '확인' 버튼 클릭 금지(게이트 유지) — 상신·보관도
+  항상 금지. E2E_REFDOC_CONFIRM=1 일 때만 '확인' 클릭이 허용된다(사용자 명시 승인, 상신·보관은
+  이 모드에서도 여전히 금지). 결제창은 필요한 만큼만 열되 6회를 넘기지 않는다. 기본 모드에서는
+  '선택된 문서 목록'에 무엇이 담기든 확인을 누르지 않는 한 비영속이라(팝업 close 로 discard)
+  여러 행을 시험해도 실 전표에 영향 없음.
 
 Usage:
     cd backend && .venv/bin/python e2e/voucher_card_refdoc_move_probe.py
+    cd backend && E2E_REFDOC_CONFIRM=1 .venv/bin/python e2e/voucher_card_refdoc_move_probe.py
 """
 
 from __future__ import annotations
@@ -57,6 +71,9 @@ ARTIFACTS.mkdir(exist_ok=True)
 # 결제창 도달 가능성을 위해 최근 수개월로 넓힌다(가설 검증 목적, 실 업무 조회기간과 무관).
 PERIOD_START = os.environ.get("E2E_REFDOC_PERIOD_START", "20260201")
 PERIOD_END = os.environ.get("E2E_REFDOC_PERIOD_END", "20260807")
+
+# 2026-08-07 후속 임무 — 사용자가 명시 승인한 경우에만 '확인' 클릭을 허용한다(기본 OFF).
+CONFIRM_MODE = os.environ.get("E2E_REFDOC_CONFIRM", "0") == "1"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,6 +208,39 @@ BOTTOM_CHECKED_JS = r"""() => {""" + _DLG_FIND + r"""
 }"""
 
 
+# P2 — EAP 본문(dialog 밖)의 '참조문서' 행 + '첨부파일' 행 상태를 읽는다. dialog 가 닫혀 있어도
+# 동작해야 하므로 REFDOC_SELECT_BTN_RECT_JS 와 같은 **문서 전체 탐색**(dialog 스코프 아님)을
+# 쓴다 — 확인 클릭 전/후 비교로 '첨부됨' 표시 방식을 실측 확정하는 것이 목적.
+# 반환 스키마(js.py 이식 후보): {ok, count, docNos, refdocRowText, attachText, noneMarker}.
+#   count    : 행 텍스트에서 찾은 건수 후보(정규식 매치, 없으면 null — 표시 방식에 따라 다를 수 있음)
+#   docNos   : 행 텍스트에 포함된 문서번호 패턴('(주)나인벨-YYYY-NNNNN') 전량
+#   noneMarker: '선택된 문서가 없습니다' 문구 포함 여부(미확인 상태의 확실한 앵커)
+EAP_BODY_STATE_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const btn = [...document.querySelectorAll('button')].find(b => {
+    const row = b.closest('tr') || b.closest('li') || (b.parentElement && b.parentElement.parentElement);
+    return row && c(row.innerText).replace(/\s+/g,'').includes('참조문서');
+  });
+  const row = btn ? (btn.closest('tr') || btn.closest('li') || (btn.parentElement && btn.parentElement.parentElement)) : null;
+  const refdocRowText = row ? c(row.innerText) : null;
+  const re = /\(주\)나인벨-\d{4}-\d+/g;
+  const docNos = refdocRowText ? [...new Set(refdocRowText.match(re) || [])] : [];
+  let count = null;
+  if (refdocRowText) {
+    const m = refdocRowText.match(/(\d+)\s*건/) || refdocRowText.match(/\((\d+)\)/);
+    if (m) count = parseInt(m[1], 10);
+  }
+  const attachLabel = [...document.querySelectorAll('*')].find(
+    el => el.children.length === 0 && /^첨부파일/.test(c(el.innerText)));
+  const attachRow = attachLabel ? (attachLabel.closest('div') || attachLabel.parentElement) : null;
+  const attachText = attachRow ? c(attachRow.innerText).slice(0, 150) : (attachLabel ? c(attachLabel.innerText) : null);
+  return {
+    ok: !!row, refdocRowText, docNos, count, attachText,
+    noneMarker: refdocRowText ? refdocRowText.includes('선택된 문서가 없습니다') : null,
+  };
+}"""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 파이썬 헬퍼
 # ══════════════════════════════════════════════════════════════════════════════
@@ -305,6 +355,179 @@ async def try_move(child: Any, index: int, method: str) -> dict:
         "ok": True, "index": index, "method": method, "pre": pre, "after": after, "grew": grew,
         "before_state": item, "after_state": dump_after,
     }
+
+
+async def run_h3_h6(child: Any, methods: Any, n_candidates: int, h2_success: dict | None) -> None:
+    """H3(행 포커스 대조군)~H6(영속성·재오픈·원복) — 기본 모드 전용(CONFIRM_MODE 에서는 건너뜀)."""
+    # ══════════════════════ H3 — 체크 대신 행 포커스(중앙 클릭)만 ══════════════════════
+    st3 = await csteps.read_refdoc_state(child)
+    box3 = st3.get("topGrid") if isinstance(st3, dict) else None
+    if box3 and n_candidates:
+        pre3 = await selected_count(child)
+        await click_row_center(child, box3, row=2)  # 새 행(row0/1 은 이미 선택 목록에 있음).
+        await asyncio.sleep(0.3)
+        chk3 = await child.evaluate(cjs.REFDOC_TOP_CHECKED_JS)
+        use_idx = h2_success["index"] if h2_success else 0
+        res3 = await try_move(child, use_idx, "mouse")
+        log_attempt(
+            "H3", f"행 중앙 클릭(체크박스 미클릭, checked={chk3}) 후 버튼 index={use_idx}",
+            f"pre={res3.get('pre')} after={res3.get('after')} grew={res3.get('grew')}",
+            "체크없이는 미이동(예상대로)" if not res3.get("grew") else "⚠ 체크 없이도 이동됨(가설 위반)",
+        )
+        await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h3_row_center.png"))
+        REPORT["h3"] = {"checked_state": chk3, "pre": pre3, "move_result": res3}
+    else:
+        log_attempt("H3", "topGrid/버튼 후보 없음", "스킵", "선행조건 미충족")
+
+    # ══════════════════════ H4 — gridView API 직접 체크 ══════════════════════
+    candidate_apis = ["checkItem", "setCheck", "checkRow", "setChecked", "setRowChecked", "toggleCheck"]
+    if isinstance(methods, dict) and methods.get("ok"):
+        # H1 덤프에서 발견된 실제 존재 메서드를 우선순위에 추가(중복 제거, 발견분 먼저).
+        found = [m for m in methods.get("methods", []) if m in candidate_apis]
+        candidate_apis = found + [m for m in candidate_apis if m not in found]
+    h4_api_result = await child.evaluate(
+        # 새 행(row3) — row0~2 는 이미 선택 목록에 있거나(0) 체크 시도로 손댔다(2).
+        GRIDVIEW_TRY_CHECK_JS, {"which": "top", "itemIndex": 3, "apiNames": candidate_apis}
+    )
+    REPORT["h4_api_tried"] = h4_api_result
+    existing_apis = [t for t in (h4_api_result.get("tried") or []) if t.get("exists")]
+    print(f"[H4] 시도한 API: {json.dumps(h4_api_result, ensure_ascii=False)[:500]}", flush=True)
+    if existing_apis:
+        await asyncio.sleep(0.3)
+        chk4 = await child.evaluate(cjs.REFDOC_TOP_CHECKED_JS)
+        use_idx = h2_success["index"] if h2_success else 0
+        res4 = await try_move(child, use_idx, "mouse")
+        log_attempt(
+            "H4", f"gridView API({[t['name'] for t in existing_apis]}) 로 행0 체크 후 버튼",
+            f"checked후={chk4} pre={res4.get('pre')} after={res4.get('after')} grew={res4.get('grew')}",
+        )
+        REPORT["h4"] = {"checked_state": chk4, "move_result": res4}
+        await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h4_api_check.png"))
+    else:
+        log_attempt("H4", "체크 API 미존재(top grid gridView)", "스킵", "API부재")
+
+    # ══════════════════════ H5 — 행 dblclick ══════════════════════
+    st5 = await csteps.read_refdoc_state(child)
+    box5 = st5.get("topGrid") if isinstance(st5, dict) else None
+    if box5:
+        pre5a = await selected_count(child)
+        await dblclick_row_center(child, box5, row=4)  # 새 행 — 앞선 가설이 손댄 0~3 회피.
+        await asyncio.sleep(0.4)
+        after5a = await selected_count(child)
+        log_attempt(
+            "H5", f"행 dblclick 단독 pre={pre5a} after={after5a}",
+            f"grew={after5a is not None and pre5a is not None and after5a > pre5a}",
+        )
+        if not (after5a is not None and pre5a is not None and after5a > pre5a) and n_candidates:
+            use_idx = h2_success["index"] if h2_success else 0
+            res5 = await try_move(child, use_idx, "mouse")
+            log_attempt(
+                "H5", f"행 dblclick 후 버튼 index={use_idx}",
+                f"pre={res5.get('pre')} after={res5.get('after')} grew={res5.get('grew')}",
+            )
+            REPORT["h5_after_button"] = res5
+        REPORT["h5_dblclick_alone"] = {"pre": pre5a, "after": after5a}
+        await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h5_dblclick.png"))
+    else:
+        log_attempt("H5", "topGrid box 없음", "스킵", "선행조건 미충족")
+
+    # ══════════════════════ H6 — 이동 성립 시: 영속성·재오픈·원복 ══════════════════════
+    if h2_success:
+        g = await csteps.read_refdoc_grids(child)
+        REPORT["h6_grid_after_h2"] = g
+        sel = (g.get("selected") or {}) if isinstance(g, dict) and g.get("ok") else {}
+        log_attempt("H6a", "선택 목록 count/문서번호", f"count={sel.get('count')} docNos={sel.get('docNos')}")
+
+        closed = await csteps.close_refdoc_dialog(child)
+        await asyncio.sleep(0.4)
+        reopened = await csteps.open_refdoc_dialog(child)
+        log_attempt("H6b", f"dialog 닫기({closed})→재오픈", reopened)
+        if reopened == "opened":
+            g2 = await csteps.read_refdoc_grids(child)
+            REPORT["h6_grid_after_reopen"] = g2
+            sel2 = (g2.get("selected") or {}) if isinstance(g2, dict) and g2.get("ok") else {}
+            persisted = (sel2.get("count") or 0) >= (sel.get("count") or 0) and (sel.get("count") or 0) > 0
+            log_attempt(
+                "H6b", f"재오픈 후 선택 목록 count={sel2.get('count')} docNos={sel2.get('docNos')}",
+                "유지됨" if persisted else "소멸/불일치",
+            )
+            await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h6_reopened.png"))
+
+            # 원복 — 다른 버튼 인덱스로 하단 행 체크 후 이동 시도.
+            other_idx = 1 - h2_success["index"] if n_candidates >= 2 else None
+            if other_idx is not None:
+                st6 = await csteps.read_refdoc_state(child)
+                bbox = st6.get("bottomGrid") if isinstance(st6, dict) else None
+                if bbox:
+                    await click_checkbox(child, bbox, row=0)
+                    await asyncio.sleep(0.3)
+                    chk6 = await child.evaluate(BOTTOM_CHECKED_JS)
+                    pre6 = await selected_count(child)
+                    res6 = await try_move(child, other_idx, "mouse")
+                    reverted = (res6.get("after") or 0) < (pre6 or 0) if res6.get("after") is not None else False
+                    log_attempt(
+                        "H6c", f"하단 체크({chk6}) 후 반대버튼 index={other_idx}",
+                        f"pre={pre6} after={res6.get('after')} reverted={reverted}",
+                    )
+                    REPORT["h6_revert"] = {"checked": chk6, "pre": pre6, "result": res6, "reverted": reverted}
+                    await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h6_revert.png"))
+                else:
+                    log_attempt("H6c", "bottomGrid box 없음", "스킵")
+            else:
+                log_attempt("H6c", "반대 버튼 인덱스 없음(후보 1개뿐)", "스킵")
+    else:
+        log_attempt("H6", "H2 미성공 — 원복 대상 없음", "스킵")
+
+    await csteps.close_refdoc_dialog(child)
+
+
+async def run_p1_p5(child: Any) -> None:
+    """P1~P5 — '확인' 클릭 + EAP 본문 첨부표시 실측(CONFIRM_MODE 전용, 사용자 명시 승인 2026-08-07).
+
+    ⚠ 이 함수만 참조문서 '확인'을 클릭한다(csteps.click_refdoc_confirm 재사용). 상신·보관은
+      여전히 어디서도 클릭하지 않는다. P4(영속성 재확인)는 호출부(main)가 결제창을 close 했다가
+      **같은 전표로 다시 열어** 이 함수의 EAP_BODY_STATE_JS 리더로 재확인한다.
+    """
+    # ══════════════════════ P2(baseline) — 확인 전 EAP 본문 상태 ══════════════════════
+    baseline = await child.evaluate(EAP_BODY_STATE_JS)
+    REPORT["p2_baseline"] = baseline
+    log_attempt("P2", "확인 전 EAP 본문 상태", json.dumps(baseline, ensure_ascii=False))
+    await child.screenshot(path=str(ARTIFACTS / "refdoc_confirm_probe_p0_before_confirm.png"))
+
+    # ══════════════════════ P1 — 확인 클릭 → dialog 소멸 확인(프로덕션 재사용) ══════════════════════
+    confirmed = await csteps.click_refdoc_confirm(child)
+    REPORT["p1_confirm_result"] = confirmed
+    log_attempt(
+        "P1", "참조문서 '확인' 클릭(csteps.click_refdoc_confirm)", json.dumps(confirmed, ensure_ascii=False),
+        None if (isinstance(confirmed, dict) and confirmed.get("ok")) else "확인 클릭 실패/거절(P5 참조)",
+    )
+    await child.screenshot(path=str(ARTIFACTS / "refdoc_confirm_probe_p1_after_confirm.png"))
+    if not (isinstance(confirmed, dict) and confirmed.get("ok")):
+        # P5 — 거절 케이스: dialog 잔존 상태를 기록하고 종료(더 진행할 것이 없다).
+        state_after_fail = await csteps.read_refdoc_state(child)
+        REPORT["p5_confirm_rejected"] = state_after_fail
+        log_attempt("P5", "확인 실패 후 dialog 상태", json.dumps(state_after_fail, ensure_ascii=False))
+        return
+
+    # ══════════════════════ P2 — 확인 직후 EAP 본문 상태(비교) ══════════════════════
+    after_confirm = await child.evaluate(EAP_BODY_STATE_JS)
+    REPORT["p2_after_confirm"] = after_confirm
+    changed = json.dumps(baseline, ensure_ascii=False) != json.dumps(after_confirm, ensure_ascii=False)
+    log_attempt(
+        "P2", "확인 직후 EAP 본문 상태(baseline 대비 변화)", json.dumps(after_confirm, ensure_ascii=False),
+        "변화 감지" if changed else "⚠ 변화 없음(리더 재검토 필요)",
+    )
+
+    # ══════════════════════ P3 — 참조문서 dialog 재오픈 시 선택 목록 표시 ══════════════════════
+    reopened = await csteps.open_refdoc_dialog(child)
+    log_attempt("P3", "확인 후 dialog 재오픈", reopened)
+    if reopened == "opened":
+        g3 = await csteps.read_refdoc_grids(child)
+        REPORT["p3_grid_after_confirm_reopen"] = g3
+        sel3 = (g3.get("selected") or {}) if isinstance(g3, dict) and g3.get("ok") else {}
+        log_attempt("P3", "재오픈 후 선택 목록", f"count={sel3.get('count')} docNos={sel3.get('docNos')}")
+        await child.screenshot(path=str(ARTIFACTS / "refdoc_confirm_probe_p3_reopened.png"))
+        await csteps.close_refdoc_dialog(child)
 
 
 async def main() -> int:  # noqa: C901 — 진단 스크립트, 단일 흐름 유지가 가독성에 유리.
@@ -458,6 +681,10 @@ async def main() -> int:  # noqa: C901 — 진단 스크립트, 단일 흐름 �
             await child.screenshot(path=str(ARTIFACTS / f"refdoc_move_probe_h2_btn{index}_mouse.png"))
             if res.get("grew"):
                 h2_success = res
+                if CONFIRM_MODE:
+                    # P1~P5 는 '선택 목록 정확히 1건' 상태에서 확인을 눌러야 한다 — el.click()
+                    # 비교로 2건째를 더 만들지 않는다(H2 el.click() 비교는 기본 모드 전용).
+                    break
                 # el.click() 비교는 성공 버튼에 대해서만 — **새 행(row1)** 을 체크한다(row0 은
                 # 이미 선택 목록에 있어 재사용하면 중복방지와 미작동을 구분할 수 없다).
                 chk_before_el = await ensure_row_checked(child, row=1)
@@ -475,132 +702,47 @@ async def main() -> int:  # noqa: C901 — 진단 스크립트, 단일 흐름 �
         REPORT["h2_success"] = h2_success
         print(f"[H2] 성공 조합 = {h2_success and {'index': h2_success['index'], 'method': h2_success['method']}}", flush=True)
 
-        # ══════════════════════ H3 — 체크 대신 행 포커스(중앙 클릭)만 ══════════════════════
-        st3 = await csteps.read_refdoc_state(child)
-        box3 = st3.get("topGrid") if isinstance(st3, dict) else None
-        if box3 and n_candidates:
-            pre3 = await selected_count(child)
-            await click_row_center(child, box3, row=2)  # 새 행(row0/1 은 이미 선택 목록에 있음).
-            await asyncio.sleep(0.3)
-            chk3 = await child.evaluate(cjs.REFDOC_TOP_CHECKED_JS)
-            use_idx = h2_success["index"] if h2_success else 0
-            res3 = await try_move(child, use_idx, "mouse")
-            log_attempt(
-                "H3", f"행 중앙 클릭(체크박스 미클릭, checked={chk3}) 후 버튼 index={use_idx}",
-                f"pre={res3.get('pre')} after={res3.get('after')} grew={res3.get('grew')}",
-                "체크없이는 미이동(예상대로)" if not res3.get("grew") else "⚠ 체크 없이도 이동됨(가설 위반)",
-            )
-            await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h3_row_center.png"))
-            REPORT["h3"] = {"checked_state": chk3, "pre": pre3, "move_result": res3}
-        else:
-            log_attempt("H3", "topGrid/버튼 후보 없음", "스킵", "선행조건 미충족")
+        if not CONFIRM_MODE:
+            await run_h3_h6(child, methods, n_candidates, h2_success)
+        elif h2_success:
+            # ══════════════════════ P1~P3 — 확인 클릭 + EAP 본문 첨부표시(같은 팝업) ══════════
+            await run_p1_p5(child)
 
-        # ══════════════════════ H4 — gridView API 직접 체크 ══════════════════════
-        candidate_apis = ["checkItem", "setCheck", "checkRow", "setChecked", "setRowChecked", "toggleCheck"]
-        if isinstance(methods, dict) and methods.get("ok"):
-            # H1 덤프에서 발견된 실제 존재 메서드를 우선순위에 추가(중복 제거, 발견분 먼저).
-            found = [m for m in methods.get("methods", []) if m in candidate_apis]
-            candidate_apis = found + [m for m in candidate_apis if m not in found]
-        h4_api_result = await child.evaluate(
-            # 새 행(row3) — row0~2 는 이미 선택 목록에 있거나(0) 체크 시도로 손댔다(2).
-            GRIDVIEW_TRY_CHECK_JS, {"which": "top", "itemIndex": 3, "apiNames": candidate_apis}
-        )
-        REPORT["h4_api_tried"] = h4_api_result
-        existing_apis = [t for t in (h4_api_result.get("tried") or []) if t.get("exists")]
-        print(f"[H4] 시도한 API: {json.dumps(h4_api_result, ensure_ascii=False)[:500]}", flush=True)
-        if existing_apis:
-            await asyncio.sleep(0.3)
-            chk4 = await child.evaluate(cjs.REFDOC_TOP_CHECKED_JS)
-            use_idx = h2_success["index"] if h2_success else 0
-            res4 = await try_move(child, use_idx, "mouse")
-            log_attempt(
-                "H4", f"gridView API({[t['name'] for t in existing_apis]}) 로 행0 체크 후 버튼",
-                f"checked후={chk4} pre={res4.get('pre')} after={res4.get('after')} grew={res4.get('grew')}",
-            )
-            REPORT["h4"] = {"checked_state": chk4, "move_result": res4}
-            await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h4_api_check.png"))
-        else:
-            log_attempt("H4", "체크 API 미존재(top grid gridView)", "스킵", "API부재")
-
-        # ══════════════════════ H5 — 행 dblclick ══════════════════════
-        st5 = await csteps.read_refdoc_state(child)
-        box5 = st5.get("topGrid") if isinstance(st5, dict) else None
-        if box5:
-            pre5a = await selected_count(child)
-            await dblclick_row_center(child, box5, row=4)  # 새 행 — 앞선 가설이 손댄 0~3 회피.
-            await asyncio.sleep(0.4)
-            after5a = await selected_count(child)
-            log_attempt(
-                "H5", f"행 dblclick 단독 pre={pre5a} after={after5a}",
-                f"grew={after5a is not None and pre5a is not None and after5a > pre5a}",
-            )
-            if not (after5a is not None and pre5a is not None and after5a > pre5a) and n_candidates:
-                use_idx = h2_success["index"] if h2_success else 0
-                res5 = await try_move(child, use_idx, "mouse")
-                log_attempt(
-                    "H5", f"행 dblclick 후 버튼 index={use_idx}",
-                    f"pre={res5.get('pre')} after={res5.get('after')} grew={res5.get('grew')}",
-                )
-                REPORT["h5_after_button"] = res5
-            REPORT["h5_dblclick_alone"] = {"pre": pre5a, "after": after5a}
-            await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h5_dblclick.png"))
-        else:
-            log_attempt("H5", "topGrid box 없음", "스킵", "선행조건 미충족")
-
-        # ══════════════════════ H6 — 이동 성립 시: 영속성·재오픈·원복 ══════════════════════
-        if h2_success:
-            g = await csteps.read_refdoc_grids(child)
-            REPORT["h6_grid_after_h2"] = g
-            sel = (g.get("selected") or {}) if isinstance(g, dict) and g.get("ok") else {}
-            log_attempt("H6a", "선택 목록 count/문서번호", f"count={sel.get('count')} docNos={sel.get('docNos')}")
-
-            closed = await csteps.close_refdoc_dialog(child)
-            await asyncio.sleep(0.4)
-            reopened = await csteps.open_refdoc_dialog(child)
-            log_attempt("H6b", f"dialog 닫기({closed})→재오픈", reopened)
-            if reopened == "opened":
-                g2 = await csteps.read_refdoc_grids(child)
-                REPORT["h6_grid_after_reopen"] = g2
-                sel2 = (g2.get("selected") or {}) if isinstance(g2, dict) and g2.get("ok") else {}
-                persisted = (sel2.get("count") or 0) >= (sel.get("count") or 0) and (sel.get("count") or 0) > 0
-                log_attempt(
-                    "H6b", f"재오픈 후 선택 목록 count={sel2.get('count')} docNos={sel2.get('docNos')}",
-                    "유지됨" if persisted else "소멸/불일치",
-                )
-                await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h6_reopened.png"))
-
-                # 원복 — 다른 버튼 인덱스로 하단 행 체크 후 이동 시도.
-                other_idx = 1 - h2_success["index"] if n_candidates >= 2 else None
-                if other_idx is not None:
-                    st6 = await csteps.read_refdoc_state(child)
-                    bbox = st6.get("bottomGrid") if isinstance(st6, dict) else None
-                    if bbox:
-                        await click_checkbox(child, bbox, row=0)
-                        await asyncio.sleep(0.3)
-                        chk6 = await child.evaluate(BOTTOM_CHECKED_JS)
-                        pre6 = await selected_count(child)
-                        res6 = await try_move(child, other_idx, "mouse")
-                        reverted = (res6.get("after") or 0) < (pre6 or 0) if res6.get("after") is not None else False
-                        log_attempt(
-                            "H6c", f"하단 체크({chk6}) 후 반대버튼 index={other_idx}",
-                            f"pre={pre6} after={res6.get('after')} reverted={reverted}",
-                        )
-                        REPORT["h6_revert"] = {"checked": chk6, "pre": pre6, "result": res6, "reverted": reverted}
-                        await child.screenshot(path=str(ARTIFACTS / "refdoc_move_probe_h6_revert.png"))
-                    else:
-                        log_attempt("H6c", "bottomGrid box 없음", "스킵")
+            # ══════════════════════ P4 — 상신 없이 close → 같은 전표로 재오픈 → 영속성 재확인 ══
+            confirmed_ok = isinstance(REPORT.get("p1_confirm_result"), dict) and REPORT["p1_confirm_result"].get("ok")
+            if confirmed_ok:
+                await vr_steps.close_child(child)
+                print(f"[P4] 결제창 close(상신 없음) → 같은 전표(idx={idx}) 재오픈 시도", flush=True)
+                await vr_steps.settle_parent_after_child_close(page, child)
+                await vr_steps.uncheck_all_rows(page)
+                await vr_steps.check_row(page, idx)
+                child2 = await vr_steps.open_approval(page)
+                if child2 is None:
+                    log_attempt("P4", "같은 전표 재오픈", "실패(결제창 미출현)", "재오픈불가")
                 else:
-                    log_attempt("H6c", "반대 버튼 인덱스 없음(후보 1개뿐)", "스킵")
+                    popups_opened += 1
+                    await vr_steps.poll_child_ready(child2)
+                    print(f"[P4] 재오픈 결제창({popups_opened}/6) url={child2.url}", flush=True)
+                    reread = await child2.evaluate(EAP_BODY_STATE_JS)
+                    REPORT["p4_reopened_state"] = reread
+                    persisted = bool(reread.get("docNos")) or (reread.get("noneMarker") is False)
+                    log_attempt(
+                        "P4", "재오픈 결제창의 EAP 본문 상태(영속성)", json.dumps(reread, ensure_ascii=False),
+                        "첨부 표시 유지" if persisted else "첨부 표시 소멸/미확인",
+                    )
+                    await child2.screenshot(path=str(ARTIFACTS / "refdoc_confirm_probe_p4_reopened.png"))
+                    await vr_steps.close_child(child2)
+                    child = None  # 아래 finally 가 이미 닫힌 원본 child 를 재-close 하지 않도록.
         else:
-            log_attempt("H6", "H2 미성공 — 원복 대상 없음", "스킵")
-
-        await csteps.close_refdoc_dialog(child)
+            log_attempt("P1", "H2 미성공 — 확인 클릭 대상 없음", "스킵")
+            await csteps.close_refdoc_dialog(child)
 
     finally:
         if child is not None:
             try:
                 await vr_steps.close_child(child)
-                print("[정리] 결제창 닫음(상신/보관/확인 미클릭)", flush=True)
+                note = "상신/보관 미클릭" + ("" if not CONFIRM_MODE else " (확인은 CONFIRM_MODE 에서 클릭했을 수 있음)")
+                print(f"[정리] 결제창 닫음({note})", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"[경고] 결제창 닫기 실패(무시): {exc}", flush=True)
         REPORT["popups_opened"] = popups_opened

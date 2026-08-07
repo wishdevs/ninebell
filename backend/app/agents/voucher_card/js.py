@@ -366,6 +366,33 @@ REFDOC_MARK_JS = r"""({ kind, index }) => {
   return { ok: false, reason: 'unknown-kind' };
 }"""
 
+# 확인 클릭 후 결제창(EAP 본문) '참조문서' 필드 상태 리더(읽기 전용) — 실측 확정
+# (2026-08-07 confirm 프로브): 확인이 적용되면 이 필드가 "선택된 문서가 없습니다" →
+# "[문서번호]/문서분류/제목" 으로 바뀐다.
+# ⚠ 화면 하단 '첨부파일 N개' 위젯은 무관하다(확인 전후 0개 불변 — 파일 업로드 영역).
+#   첨부 반영 판정은 이 '참조문서' 필드가 유일한 근거다.
+# ⚠ 비영속(실측): 상신 없이 결제창을 닫으면 소멸(팝업 세션 한정 클라이언트 상태) —
+#   검증은 반드시 같은 결제창 세션 안에서, 확인 직후에 해야 한다.
+# 행 탐색은 REFDOC_SELECT_BTN_RECT_JS 와 동일 방식(dialog 밖 — 개폐 상태 무관 판독 실측 확인).
+# arg = docu_no(기대 문서번호/GWDOCU_NO). 반환 {ok, attached, none, text} | {ok:false, reason}.
+EAP_REFDOC_FIELD_STATE_JS = r"""(docuNo) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const btn = [...document.querySelectorAll('button')].find(b => {
+    const row = b.closest('tr') || b.closest('li') || (b.parentElement && b.parentElement.parentElement);
+    return row && c(row.innerText).replace(/\s+/g,'').includes('참조문서');
+  });
+  const row = btn ? (btn.closest('tr') || btn.closest('li') || (btn.parentElement && btn.parentElement.parentElement)) : null;
+  if (!row) return { ok: false, reason: 'no-refdoc-row' };
+  const text = c(row.innerText);
+  const want = c(docuNo);
+  return {
+    ok: true,
+    attached: !!want && text.includes(want),
+    none: text.includes('선택된 문서가 없습니다'),
+    text: text.slice(0, 200),
+  };
+}"""
+
 # dialog 상태 — 조회 결과 건수/없음 문구/선택된 목록 비어있음 + 두 그리드 박스(캔버스 클릭용).
 # 반환 {ok, total, noData, selectedEmpty, topGrid, bottomGrid}. total=null 이면 건수 표기 미발견.
 REFDOC_STATE_JS = r"""() => {

@@ -743,6 +743,29 @@ async def move_refdoc_down(child: Any, docu_no: str | None = None) -> dict:
     }
 
 
+async def verify_refdoc_attached(child: Any, docu_no: str) -> dict:
+    """확인 클릭 후 결제창(EAP 본문) '참조문서' 필드의 **첨부 1건 반영**을 독립 확인한다.
+
+    사용자 확정(2026-08-07): 선택 1건 확인 → 확인 클릭 → **이 검증까지 통과해야** 그 결제건이
+    완료다. 실측(confirm 프로브): 확인 적용 시 필드가 '선택된 문서가 없습니다' →
+    '[문서번호]/문서분류/제목' 으로 바뀐다('첨부파일 N개' 위젯은 무관·불변). **비영속**이라
+    같은 결제창 세션 안에서 즉시 확인해야 한다(닫으면 소멸 — 사후 재확인은 항상 실패로 보임).
+    '반드시 확인' 요구이므로 확인 불가(unknown 상당)도 성공으로 접지 않는다.
+    반환 {ok, text?, reason?}.
+    """
+    chk = await verify.confirm(
+        lambda: child.evaluate(js.EAP_REFDOC_FIELD_STATE_JS, docu_no),
+        lambda v: isinstance(v, dict) and bool(v.get("ok")) and bool(v.get("attached")) and not v.get("none"),
+        timing=verify.ASYNC,
+        what="결제창 참조문서 필드(첨부 반영)",
+        expected=f"{docu_no} 표시(첨부 1건)",
+    )
+    actual = chk.actual if isinstance(chk.actual, dict) else {}
+    if chk:
+        return {"ok": True, "text": actual.get("text")}
+    return {"ok": False, "reason": chk.reason, "text": actual.get("text")}
+
+
 async def click_refdoc_confirm(child: Any) -> dict:
     """⚠ 게이트 전용 — 참조문서 '확인'(파란 OBTButton) 클릭. reference_doc 훅의 allow_confirm
     (기본 False) 뒤에서만 호출된다. 기본 실행 경로에서는 절대 도달하지 않는다(절대 안전).

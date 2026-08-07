@@ -223,6 +223,7 @@ class _RefChild:
         docno_value: str = "GW1",
         panel_expanded: bool = True,
         confirm_closes_dialog: bool = True,
+        confirm_applies: bool = True,
     ) -> None:
         # 조회 **전**에는 전체 목록 건수, 조회 후에 필터 결과로 바뀐다(실물 시맨틱).
         self._total_after = total
@@ -238,6 +239,8 @@ class _RefChild:
         self._doc_no = docno_value               # 검색 대상 문서번호
         self._marked_index = 0
         self._confirm_closes_dialog = confirm_closes_dialog
+        self._confirm_applies = confirm_applies  # False = dialog 는 닫혔는데 첨부 미반영 재현.
+        self._eap_attached = False               # 확인 적용 → EAP 본문 '참조문서' 필드 반영.
         self._dialog_closed = False              # 확인 클릭 적용 시 dialog 소멸(실물 시맨틱)
         self.evaluated: list[str] = []
         self.mouse_clicks: list[tuple[int, int]] = []
@@ -257,6 +260,9 @@ class _RefChild:
             # 확인(130,230) 클릭 → 적용되면 dialog 소멸(click_refdoc_confirm 사후검증 대상).
             if (x, y) == _CONFIRM_COORD and self._c._confirm_closes_dialog:
                 self._c._dialog_closed = True
+                if self._c._confirm_applies:
+                    # 실물 시맨틱(실측 2026-08-07): 확인 적용 → EAP 본문 '참조문서' 필드 반영.
+                    self._c._eap_attached = True
 
     class _Keyboard:
         def __init__(self, c) -> None:
@@ -336,6 +342,14 @@ class _RefChild:
             return {"x": 130, "y": 230}
         if js_src == cjs.REFDOC_CLOSE_BTN_RECT_JS:
             return {"x": 140, "y": 240}
+        if js_src == cjs.EAP_REFDOC_FIELD_STATE_JS:
+            # 실물 시맨틱(실측 2026-08-07): 확인 적용 전 "선택된 문서가 없습니다", 적용 후
+            # "[문서번호]/문서분류/제목" — 대상 문서번호 포함 여부로 attached 판정.
+            if self._eap_attached:
+                return {"ok": True, "attached": str(arg) == self._doc_no, "none": False,
+                        "text": f"참 조 문 서 [{self._doc_no}]/연차휴가신청서/제목 선택"}
+            return {"ok": True, "attached": False, "none": True,
+                    "text": "참 조 문 서 선택된 문서가 없습니다. 선택"}
         raise AssertionError(f"unexpected js: {js_src[:60]!r}")
 
 
@@ -395,32 +409,50 @@ async def test_on_popup_uses_keyboard_clear_then_type_for_docno():
     assert child.typed == ["GW1"]
 
 
-async def test_on_popup_allow_confirm_gate_clicks_confirm():
-    # 게이트 개방(allow_confirm=True) 시에만 확인을 클릭한다(승인 이슈 해소 후 전용).
+async def test_on_popup_allow_confirm_clicks_confirm_and_verifies_attachment():
+    """게이트 개방 경로(프로덕션 기본 — 사용자 확정 2026-08-07): 선택 1건 확인 → 확인 클릭 →
+    **결제창 '참조문서' 필드 첨부 1건 검증**까지 통과해야 '첨부'(완료)다."""
     hook = make_reference_doc_hook(allow_confirm=True)
     child = _RefChild(total=1, docno_value="GW1")
     q = _q()
-    await hook(child, "GW1", q)
+    res = await hook(child, "GW1", q)
     logs = _logs(_drain(q))
-    assert any("참조문서 확인 클릭(allow_confirm=True)" in m for m in logs)
+    assert any("참조문서 확인 클릭 ✅" in m for m in logs)
+    assert any("첨부 1건 확인 ✅" in m and "완료 처리" in m for m in logs)
     assert _CONFIRM_COORD in child.mouse_clicks
-    assert cjs.REFDOC_CONFIRM_BTN_RECT_JS in child.evaluated
+    assert cjs.EAP_REFDOC_FIELD_STATE_JS in child.evaluated  # 첨부 반영 독립 확인(EAP 본문).
+    assert res == "첨부"
 
 
-async def test_on_popup_allow_confirm_click_failure_warns_and_closes():
-    # ⚠ 회귀 핵심(2026-08-07 감사): 종전 훅은 click_refdoc_confirm 반환을 버리고 무조건
-    # "확인 클릭" action 로그를 남겼다 — 미적용(다이얼로그 잔존)이 성공처럼 보고됐다.
-    # 이제 실패면 warn 으로 분리하고 dialog 를 닫아 정리한다.
+async def test_on_popup_allow_confirm_click_failure_is_fatal():
+    """⚠ 격상(사용자 확정 2026-08-07): '반드시 확인 클릭' 요구 — 클릭/적용 실패는 warn 진행이
+    아니라 fatal(런 중단)이다. dialog 는 취소(X)로 정리한다."""
     hook = make_reference_doc_hook(allow_confirm=True)
     child = _RefChild(total=1, docno_value="GW1", confirm_closes_dialog=False)
     q = _q()
-    await hook(child, "GW1", q)
+    res = await hook(child, "GW1", q)
     logs = _logs(_drain(q))
     assert any("참조문서 확인 클릭 실패" in m for m in logs)
-    assert not any("참조문서 확인 클릭(allow_confirm=True)" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "확인 클릭 실패" in res.get("reason", "")
     # dialog 는 취소(X)로 정리한다.
     assert cjs.REFDOC_CLOSE_BTN_RECT_JS in child.evaluated
     assert (140, 240) in child.mouse_clicks
+
+
+async def test_on_popup_confirm_ok_but_attachment_missing_is_fatal():
+    """⚠ '반드시 확인'(사용자 확정 2026-08-07): 확인은 눌렸는데 결제창 '참조문서' 필드에
+    첨부가 반영되지 않으면 완료가 아니다 — fatal. ('첨부파일 N개' 위젯이 아니라 이 필드가
+    유일한 판정 근거라는 실측 반영.)"""
+    hook = make_reference_doc_hook(allow_confirm=True)
+    child = _RefChild(total=1, docno_value="GW1", confirm_applies=False)
+    q = _q()
+    res = await hook(child, "GW1", q)
+    logs = _logs(_drain(q))
+    assert any("첨부 반영 확인 실패" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "첨부 1건 확인 실패" in res.get("reason", "")
+    assert not any("완료 처리" in m for m in logs)
 
 
 async def test_on_popup_dialog_not_found_logs_and_returns():
@@ -668,14 +700,17 @@ async def test_reference_doc_confirm_is_gated_by_allow_confirm():
     assert src.count("click_refdoc_confirm") == 1
 
 
-async def test_default_hook_factory_gate_is_closed():
-    # 그래프가 쓰는 기본 훅은 allow_confirm=False(미클릭).
+async def test_hook_factory_default_closed_but_graph_opens_gate():
+    """게이트 정책(사용자 확정 2026-08-07): 팩토리 **기본값은 여전히 False**(다른 호출부의
+    우발적 확인 클릭 방지)이되, 프로덕션 그래프는 **명시적으로 True** 로 개방한다 —
+    확인 클릭 + 결제창 첨부 1건 검증까지가 완료 조건(비영속 실측 근거는 graph 주석)."""
     sig = inspect.signature(make_reference_doc_hook)
     assert sig.parameters["allow_confirm"].default is False
-    # 그래프 조립부가 명시적으로 allow_confirm=False 로 훅을 생성한다.
     import app.agents.voucher_card.graph as cgraph
 
-    assert "make_reference_doc_hook(allow_confirm=False)" in inspect.getsource(cgraph)
+    src = inspect.getsource(cgraph)
+    assert "make_reference_doc_hook(allow_confirm=True)" in src
+    assert "사용자 확정 2026-08-07" in src  # 개방 근거가 코드에 남아 있어야 한다.
 
 
 async def test_card_sources_have_no_submit_button_click():

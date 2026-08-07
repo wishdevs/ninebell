@@ -7,8 +7,10 @@ loop_approvals(공유)가 결제창을 열고 렌더+D7 을 통과한 뒤, **가
 
 ⚠⚠ 절대 안전(엄수) ⚠⚠
   - **실제 상신 절대 클릭 금지** — 이 훅은 결제창 상신 버튼을 건드리지 않는다(로그만).
-  - **참조문서 '확인'도 게이트**(allow_confirm=False 기본 — 미클릭). 기본 경로는 선택+아래버튼
-    까지만 하고 확인·상신은 "가상" 로그만 남긴다(비영속 — 이후 결제창 close 로 정리).
+  - 참조문서 '확인' 클릭은 **게이트 개방됨**(사용자 확정 2026-08-07 — graph 가
+    allow_confirm=True 로 주입): 선택 1건 확인 → 확인 클릭 → 결제창 '참조문서' 필드
+    첨부 1건 검증까지 통과해야 그 결제건 완료다. 실측(confirm 프로브): 확인 효과는 상신
+    없이는 **비영속**(결제창 close 로 소멸 — ERP 서버 무영속) — 검증은 같은 세션 안에서.
   - **참조문서 검색 0건(현재 테스트 상태 — 시스템 승인 이슈)이면 우아하게 로그**하고 진행
     (크래시 금지). 사용자 지시(2026-07-21): "나온다고 가정하고 진행, 추후 손봄."
 """
@@ -180,20 +182,38 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                     "reason": f"참조문서 첨부 실패({gwdocu_no}) — {moved.get('reason')}"}
 
         if allow_confirm:
-            # ⚠ 게이트 개방(비영속 검증 완료 후에만) — 실제 확인 클릭 + 적용(dialog 소멸) 확인.
-            #   반환 무시 금지(2026-08-07 무결성 감사): 미클릭/미적용이 성공 action 로그로
-            #   둔갑하지 않게 실패면 warn 으로 분리하고 dialog 를 닫아 정리한다.
+            # 게이트 개방(사용자 확정 2026-08-07): 확인을 **반드시** 클릭하고, 결제창 본문
+            # '참조문서' 필드에 첨부 1건이 반영됐는지 **반드시** 확인해야 그 결제건 완료다.
+            # 둘 중 하나라도 실패하면 fatal(런 중단) — 조용한 진행 금지.
             confirmed = await steps.click_refdoc_confirm(child)
-            if confirmed.get("ok"):
-                await emit_log(events, "참조문서 확인 클릭(allow_confirm=True).", "action")
-            else:
+            if not confirmed.get("ok"):
                 await emit_log(
                     events,
-                    f"참조문서 확인 클릭 실패({gwdocu_no}) — {confirmed.get('reason')} "
-                    "dialog 를 닫아 정리합니다.",
-                    "warn",
+                    f"참조문서 확인 클릭 실패({gwdocu_no}) — {confirmed.get('reason')}",
+                    "error",
                 )
                 await steps.close_refdoc_dialog(child)
+                return {"outcome": "확인 클릭 실패", "fatal": True,
+                        "reason": f"참조문서 확인 클릭 실패({gwdocu_no}) — {confirmed.get('reason')}"}
+            await emit_log(events, "참조문서 확인 클릭 ✅ — 결제창 첨부 반영을 확인합니다.", "action")
+            # ⚠ 비영속(실측 2026-08-07): 확인 효과는 이 결제창 세션 한정 — 지금, 여기서 확인한다.
+            attached = await steps.verify_refdoc_attached(child, gwdocu_no)
+            if not attached.get("ok"):
+                await emit_log(
+                    events,
+                    f"결제창 첨부 반영 확인 실패({gwdocu_no}) — {attached.get('reason')}",
+                    "error",
+                )
+                return {"outcome": "첨부 반영 확인 실패", "fatal": True,
+                        "reason": f"확인 클릭 후 첨부 1건 확인 실패({gwdocu_no}) — {attached.get('reason')}"}
+            await emit_log(
+                events,
+                f"결제창 참조문서 첨부 1건 확인 ✅ — {attached.get('text')} · 이 결제건을 완료 처리합니다.",
+                "ok",
+            )
+            # 완료 증거 화면(첨부가 반영된 결제창 본문)도 0.5초 표시(사용자 확정 표시 규칙 동일).
+            await emit_shot(events.put, child, window="child")
+            await verify.DEFAULT_SLEEP(REFDOC_ATTACH_SHOW_S)
         else:
             # 기본 — 확인·상신은 로그만(비영속). dialog 는 취소(X)로 정리.
             # (실측 2026-08-07: 선택 목록은 dialog 재오픈에도 유지 — 닫기가 선택을 잃지 않는다.)
