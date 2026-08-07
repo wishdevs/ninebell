@@ -151,9 +151,20 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
             )
 
         if allow_confirm:
-            # ⚠ 게이트 개방(비영속 검증 완료 후에만) — 실제 확인 클릭.
-            await steps.click_refdoc_confirm(child)
-            await emit_log(events, "참조문서 확인 클릭(allow_confirm=True).", "action")
+            # ⚠ 게이트 개방(비영속 검증 완료 후에만) — 실제 확인 클릭 + 적용(dialog 소멸) 확인.
+            #   반환 무시 금지(2026-08-07 무결성 감사): 미클릭/미적용이 성공 action 로그로
+            #   둔갑하지 않게 실패면 warn 으로 분리하고 dialog 를 닫아 정리한다.
+            confirmed = await steps.click_refdoc_confirm(child)
+            if confirmed.get("ok"):
+                await emit_log(events, "참조문서 확인 클릭(allow_confirm=True).", "action")
+            else:
+                await emit_log(
+                    events,
+                    f"참조문서 확인 클릭 실패({gwdocu_no}) — {confirmed.get('reason')} "
+                    "dialog 를 닫아 정리합니다.",
+                    "warn",
+                )
+                await steps.close_refdoc_dialog(child)
         else:
             # 기본 — 확인·상신은 로그만(비영속). dialog 는 취소(X)로 정리.
             await emit_log(events, "가상: 참조문서 확인·상신 (미클릭 — 비영속).", "info")

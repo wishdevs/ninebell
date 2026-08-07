@@ -233,26 +233,62 @@ async def set_collect_gubun_card(page: Any) -> bool:
 async def run_collect_query(page: Any) -> bool:
     """결의서조회승인 조회 실행 — **가시** 조회버튼(다중탭이라 여럿) 실클릭. 폴백=BTN_LOOKUP.
 
-    ⚠ 스테일 결과 방지(2026-07-27): 종전에는 클릭 후 고정 2초만 기다리고 무조건 성공을 돌려줘,
-      느린 세션에서 read_payment_map 이 **직전 결과 그리드**를 읽을 수 있었다. 이제 매 확인
-      직전에 로딩 오버레이가 사라졌는지 정착(settle)시키고, 가시 마스터 그리드가 rowcount 를
-      낼 수 있는 상태인지 확인한다(0건도 정상 — 확인 대상은 '응답 가능 상태'이지 '결과 존재'가
-      아니다). 반환 bool(=확인된 조회 완료).
+    ⚠ 스테일 결과 방지(2026-07-27 → 2026-08-07 vr_steps.run_query 패턴 이식): 종전 확인 술어
+      (rowcount>=0)는 **클릭 이전 상태로도 즉시 충족**됐다 — 공지 팝업이 클릭을 가로채 조회가
+      아예 실행되지 않아도, 그리드가 이미 부착돼 있으면(직전 런의 스테일 결과 포함) 첫 폴에서
+      거짓 '조회 완료'가 됐고, read_payment_map 이 빈/스테일 맵을 만들어 하류 전 행이 '맵에
+      없음'으로 건너뛰어졌다(이 값은 **수집 대상 집합을 정의**한다). 규율:
+      * 클릭 **전** rowcount 를 기준값(base)으로 스냅샷 — 값이 base 와 **달라지면** 즉시 확정.
+      * 무변화(진짜 0건/동일 건수)는 verify.HEAVY 스케줄을 전부 소진한 뒤에만 인정한다.
+      * 클릭 자체를 확인한다 — 가시 rect 미발견 시 js_click 폴백의 **반환값**(False=버튼
+        미발견)을 검사해, 미클릭이 '0건 정상완료'로 위장하지 않게 한다.
+      * 그래도 못 읽으면(-1/비정수) 재조회 1회 후 실패(vr_steps.run_query 관례).
+    매 확인 직전 로딩 오버레이 소멸을 정착(settle)시킨다. 반환 bool(=확인된 조회 완료).
     """
-    rect = await page.evaluate(js.VISIBLE_LOOKUP_BTN_RECT_JS)
-    if rect:
-        await mouse_click(page, rect["x"], rect["y"])
-    else:
-        await js_click(page, selectors.BTN_LOOKUP)
-    chk = await verify.confirm(
-        lambda: page.evaluate(js.VISIBLE_MASTER_ROWCOUNT_JS),
-        lambda v: isinstance(v, int) and v >= 0,
-        timing=verify.HEAVY,
-        what="결의서조회승인 조회 결과",
-        expected="rowcount>=0",
-        settle=lambda: vr_steps.wait_loading_overlay_gone(page),
-    )
-    return bool(chk)
+    before = await page.evaluate(js.VISIBLE_MASTER_ROWCOUNT_JS)
+    # 그리드 미부착(-1)은 0 으로 본다 — 클릭 후의 0 을 '변화'로 오인하지 않기 위함(vr 동일).
+    base = before if isinstance(before, int) and before >= 0 else 0
+    clicked = {"ok": True}
+
+    async def _click_lookup() -> bool:
+        rect = await page.evaluate(js.VISIBLE_LOOKUP_BTN_RECT_JS)
+        if rect:
+            await mouse_click(page, rect["x"], rect["y"])
+            return True
+        # 가시 버튼 미발견 — 오버레이 소거를 기다렸다 셀렉터 폴백(반환 미확인 금지).
+        await vr_steps.wait_loading_overlay_gone(page)
+        return bool(await js_click(page, selectors.BTN_LOOKUP))
+
+    async def _query_once() -> Any:
+        clicked["ok"] = await _click_lookup()
+        if not clicked["ok"]:
+            return None  # 버튼을 못 눌렀다 — rowcount 폴링은 무의미.
+        reads = {"n": 0}
+
+        def settled(v: Any) -> bool:
+            if not isinstance(v, int) or v < 0:
+                return False
+            reads["n"] += 1
+            if v != base:
+                return True  # 새 결과 도착 — 즉시 확정.
+            return reads["n"] >= len(verify.HEAVY)  # 무변화는 전체 대기 소진 뒤에만 인정.
+
+        chk = await verify.confirm(
+            lambda: page.evaluate(js.VISIBLE_MASTER_ROWCOUNT_JS),
+            settled,
+            timing=verify.HEAVY,
+            what="결의서조회승인 조회 결과",
+            expected=f"기준({base}건)과 구분되는 확정값",
+            settle=lambda: vr_steps.wait_loading_overlay_gone(page),
+        )
+        return chk.actual
+
+    rc = await _query_once()
+    if not clicked["ok"]:
+        return False
+    if not (isinstance(rc, int) and rc >= 0):
+        rc = await _query_once()  # 그리드 미부착/읽기 실패 — 재조회 1회.
+    return clicked["ok"] and isinstance(rc, int) and rc >= 0
 
 
 async def read_payment_map(page: Any, limit: int = 500) -> dict:
@@ -307,12 +343,13 @@ _REFDOC_BTN_STABLE_GAP_S = 0.12
 _REFDOC_OPEN_CLICK_MAX = 3
 
 
-async def _refdoc_btn_rect_stable(child: Any) -> Any:
-    """'참조문서 선택' 버튼 rect 를 **정착 좌표**로 얻는다 — null 이면 짧게 재관찰, 얻으면 같은
-    좌표가 2회 연속 읽힐 때까지 확인해 스크롤 애니메이션 중의 이동 좌표 클릭을 막는다."""
+async def _refdoc_btn_rect_stable(child: Any, rect_js: str | None = None) -> Any:
+    """버튼 rect(기본: '참조문서 선택')를 **정착 좌표**로 얻는다 — null 이면 짧게 재관찰, 얻으면
+    같은 좌표가 2회 연속 읽힐 때까지 확인해 스크롤 애니메이션 중의 이동 좌표 클릭을 막는다."""
+    src = rect_js or js.REFDOC_SELECT_BTN_RECT_JS
     rect = None
     for _ in range(_REFDOC_BTN_RECT_TRIES):
-        rect = await child.evaluate(js.REFDOC_SELECT_BTN_RECT_JS)
+        rect = await child.evaluate(src)
         if rect:
             break
         await verify.DEFAULT_SLEEP(_REFDOC_BTN_RECT_INTERVAL_S)
@@ -320,7 +357,7 @@ async def _refdoc_btn_rect_stable(child: Any) -> Any:
         return None
     for _ in range(_REFDOC_BTN_RECT_TRIES):
         await verify.DEFAULT_SLEEP(_REFDOC_BTN_STABLE_GAP_S)
-        again = await child.evaluate(js.REFDOC_SELECT_BTN_RECT_JS)
+        again = await child.evaluate(src)
         if again == rect:
             return rect
         if not again:
@@ -413,27 +450,48 @@ async def fill_refdoc_docno(child: Any, value: str) -> bool:
       누르면 아무 데도 포커스가 가지 않고, 그런데도 '입력했다'로 진행돼 필터 없는 조회가 됐다.
       요소 클릭은 Playwright 가 스크롤·가시성을 보장한다.
     ⚠ React controlled input 이라 값 직접 대입(setValue) 금지 — End+Backspace 다회로 비우고
-      키보드로 타이핑한 뒤 **readback 으로 확인**한다(불일치 시 1회 재시도).
+      키보드로 타이핑한 뒤 **확인 커널로 readback** 한다(card_collect.set_period 패턴,
+      2026-08-07 무결성 감사). 종전의 고정 300ms 단발 비교는 React 상태 커밋이 느린 세션에서
+      거짓 불일치 → 불필요한 전체 재타이핑/False 를 냈다 — verify.confirm(ASYNC, 실시간 점증
+      관찰창)으로 교체하고, 불일치 시에만 재클릭→재클리어→재타이핑(reapply). dialog 스코프
+      리더 실패(None)는 불일치가 아니라 **확인 불가**(unknown) — warn 통과로 분리한다.
     """
-    for _attempt in range(2):
+
+    async def _type_once() -> bool:
         marked = await child.evaluate(js.REFDOC_MARK_JS, {"kind": "docno"})
         if not (isinstance(marked, dict) and marked.get("ok")):
             logger.info("문서번호 입력칸을 찾지 못했습니다: %s", (marked or {}).get("reason"))
             return False
         try:
             await child.click(_MARKED.format("docno"), timeout=5_000)
-        except Exception:  # noqa: BLE001 — 다음 시도에서 다시 잡는다.
+        except Exception:  # noqa: BLE001 — 재시도에서 다시 잡는다.
             logger.debug("문서번호 입력칸 클릭 실패", exc_info=True)
-            continue
+            return False
         await child.keyboard.press("End")
         for _ in range(REFDOC_CLEAR_BACKSPACES):
             await child.keyboard.press("Backspace")
         if value:
             await child.keyboard.type(value)
-        await child.wait_for_timeout(300)
-        actual = await child.evaluate(js.REFDOC_DOCNO_VALUE_JS)
-        if (actual or "") == value:
-            return True
+        return True
+
+    if not await _type_once():
+        # 마킹/클릭 자체가 실패한 경우 1회 재시도(종전 루프 관례 — 스크롤 직후 레이스).
+        if not await _type_once():
+            return False
+    chk = await verify.confirm(
+        lambda: child.evaluate(js.REFDOC_DOCNO_VALUE_JS),
+        lambda v: (v or "") == value,
+        timing=verify.ASYNC,
+        what="참조문서 문서번호",
+        expected=value,
+        reapply=_type_once,
+        unknown_when=lambda v: v is None,
+    )
+    if chk:
+        return True
+    if chk.unknown:
+        logger.warning("문서번호 입력값을 읽지 못했습니다(dialog 리더 불가) — 입력 수행으로 보고 진행: %s", chk.reason)
+        return True
     return False
 
 
@@ -533,6 +591,13 @@ async def select_refdoc_first_row(child: Any) -> bool:
       않았고(이동 버튼을 눌러도 반영 없음), 체크박스 열을 눌렀을 때만 이동이 성립했다.
     ⚠ 선행 조건: dialog 가 뷰포트 안에 있어야 한다(open_refdoc_dialog 가 정렬한다) — 화면 밖
       좌표(음수 y)를 누르면 아무 일도 일어나지 않는다.
+    ⚠ 사후검증(2026-08-07 무결성 감사): 종전에는 좌표 클릭 후 고정 300ms 대기하고 **무조건
+      True** 를 돌려줬다 — 클릭이 빗나가도(행 미도장·서브픽셀 오프셋·그리드 내부 스크롤)
+      move_refdoc_down 이 미선택 상태에서 이동 버튼을 헛클릭하고 실패 사유를 '이동 실패'로
+      오보고했다(선택/버튼 원인 분리 불가, 재선택 기회 없음). 이제 gridView checkBar 리더
+      (REFDOC_TOP_CHECKED_JS)로 체크 행 수를 독립 확인하고, 미반영이면 박스 좌표를 **재독**해
+      재클릭(reapply)한다. 리더 불가(checkBar API 부재 등)는 unknown — move 의 결과검증(grew)이
+      판정을 이어받으므로 warn 통과.
     """
     state = await read_refdoc_state(child)
     box = state.get("topGrid") if isinstance(state, dict) else None
@@ -541,9 +606,38 @@ async def select_refdoc_first_row(child: Any) -> bool:
     if box.get("y", -1) < 0:
         logger.info("참조문서 목록이 뷰포트 밖입니다(y=%s) — 선택을 시도하지 않습니다.", box.get("y"))
         return False
-    await child.mouse.click(box["x"] + _GRID_CHECKBOX_DX, box["y"] + _GRID_HEADER_H + _GRID_ROW_H // 2)
-    await child.wait_for_timeout(300)
-    return True
+
+    async def _click_checkbox(b: dict) -> None:
+        await child.mouse.click(b["x"] + _GRID_CHECKBOX_DX, b["y"] + _GRID_HEADER_H + _GRID_ROW_H // 2)
+
+    async def _reapply() -> None:
+        # ⚠ 상태 인지형 재클릭(2026-08-07 리뷰 확정): 체크박스는 **토글**이다 — 리더가 판독
+        #   불가(ok:false)한 세션에서 무조건 재클릭하면 1+3=4클릭 짝수 토글로 정상 체크를 도로
+        #   해제한 채 unknown 통과하는 회귀가 된다. '미반영 확정'({ok:true, checked:0})일 때만
+        #   재클릭하고, 판독 불가면 재클릭하지 않는다(단일 클릭 유지 — move 결과검증이 판정).
+        cur = await child.evaluate(js.REFDOC_TOP_CHECKED_JS)
+        if not (isinstance(cur, dict) and cur.get("ok") and (cur.get("checked") or 0) == 0):
+            return
+        # 박스 좌표 재독 후 재클릭 — 그리드가 스크롤/재배치됐을 수 있어 좌표를 캐시하지 않는다.
+        again = await read_refdoc_state(child)
+        b = again.get("topGrid") if isinstance(again, dict) else None
+        if b and b.get("y", -1) >= 0:
+            await _click_checkbox(b)
+
+    await _click_checkbox(box)
+    chk = await verify.confirm(
+        lambda: child.evaluate(js.REFDOC_TOP_CHECKED_JS),
+        lambda v: isinstance(v, dict) and bool(v.get("ok")) and (v.get("checked") or 0) >= 1,
+        timing=verify.ASYNC,
+        what="참조문서 첫 행 선택(체크)",
+        expected="체크 행 1건 이상",
+        reapply=_reapply,
+        unknown_when=lambda v: not (isinstance(v, dict) and v.get("ok")),
+    )
+    if chk.unknown:
+        logger.info("체크 반영을 읽지 못했습니다(확인 불가) — move 결과검증으로 판정을 위임: %s", chk.reason)
+        return True
+    return bool(chk)
 
 
 async def read_refdoc_grids(child: Any) -> dict:
@@ -643,15 +737,37 @@ async def move_refdoc_down(child: Any, docu_no: str | None = None) -> dict:
     }
 
 
-async def click_refdoc_confirm(child: Any) -> bool:
+async def click_refdoc_confirm(child: Any) -> dict:
     """⚠ 게이트 전용 — 참조문서 '확인'(파란 OBTButton) 클릭. reference_doc 훅의 allow_confirm
-    (기본 False) 뒤에서만 호출된다. 기본 실행 경로에서는 절대 도달하지 않는다(절대 안전)."""
-    rect = await child.evaluate(js.REFDOC_CONFIRM_BTN_RECT_JS)
+    (기본 False) 뒤에서만 호출된다. 기본 실행 경로에서는 절대 도달하지 않는다(절대 안전).
+
+    ⚠ 사후검증(2026-08-07 무결성 감사): 종전에는 rect 1회 읽기 → 좌표 클릭 → 고정 500ms →
+    무조건 True 였다 — 게이트 개방 시점에 그대로 신뢰될 상태변경 프리미티브인데 미클릭이
+    성공으로 둔갑했다. 이제 정착 rect(_refdoc_btn_rect_stable) 후 클릭하고, '확인'이 실제
+    적용됐는지를 **dialog 소멸**(REFDOC_STATE_JS 가 no-dialog 반환)로 독립 확인한다 —
+    미소멸이면 fresh 좌표로 재클릭(reapply), 소진 후 {ok:False, reason}. 반환 {ok, reason?}.
+    """
+    rect = await _refdoc_btn_rect_stable(child, rect_js=js.REFDOC_CONFIRM_BTN_RECT_JS)
     if not rect:
-        return False
+        return {"ok": False, "reason": "참조문서 '확인' 버튼을 찾지 못했습니다."}
     await child.mouse.click(rect["x"], rect["y"])
-    await child.wait_for_timeout(500)
-    return True
+
+    async def _reclick() -> None:
+        again = await child.evaluate(js.REFDOC_CONFIRM_BTN_RECT_JS)
+        if again:
+            await child.mouse.click(again["x"], again["y"])
+
+    chk = await verify.confirm(
+        lambda: read_refdoc_state(child),
+        lambda v: isinstance(v, dict) and not v.get("ok"),  # no-dialog = 확인 적용으로 소멸.
+        timing=verify.ASYNC,
+        what="참조문서 확인 적용(dialog 소멸)",
+        expected="dialog 없음",
+        reapply=_reclick,
+    )
+    if not chk:
+        return {"ok": False, "reason": f"확인 클릭 후에도 dialog 가 남아 있습니다({chk.reason})."}
+    return {"ok": True}
 
 
 async def close_refdoc_dialog(child: Any) -> bool:

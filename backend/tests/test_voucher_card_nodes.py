@@ -222,6 +222,7 @@ class _RefChild:
         dialog_visible: bool = True,
         docno_value: str = "GW1",
         panel_expanded: bool = True,
+        confirm_closes_dialog: bool = True,
     ) -> None:
         # 조회 **전**에는 전체 목록 건수, 조회 후에 필터 결과로 바뀐다(실물 시맨틱).
         self._total_after = total
@@ -236,6 +237,8 @@ class _RefChild:
         self._selected_docs: list[str] = []      # 선택된 문서 목록(gridView 로 읽히는 실제 행)
         self._doc_no = docno_value               # 검색 대상 문서번호
         self._marked_index = 0
+        self._confirm_closes_dialog = confirm_closes_dialog
+        self._dialog_closed = False              # 확인 클릭 적용 시 dialog 소멸(실물 시맨틱)
         self.evaluated: list[str] = []
         self.mouse_clicks: list[tuple[int, int]] = []
         self.element_clicks: list[str] = []
@@ -251,6 +254,9 @@ class _RefChild:
 
         async def click(self, x, y):
             self._c.mouse_clicks.append((x, y))
+            # 확인(130,230) 클릭 → 적용되면 dialog 소멸(click_refdoc_confirm 사후검증 대상).
+            if (x, y) == _CONFIRM_COORD and self._c._confirm_closes_dialog:
+                self._c._dialog_closed = True
 
     class _Keyboard:
         def __init__(self, c) -> None:
@@ -302,6 +308,8 @@ class _RefChild:
             self._marked_index = (arg or {}).get("index", 0)
             return {"ok": True, "marked": "move", "count": 2, "index": self._marked_index}
         if js_src == cjs.REFDOC_STATE_JS:
+            if self._dialog_closed:
+                return {"ok": False, "reason": "no-dialog"}
             return {
                 "ok": True,
                 "total": self._total,
@@ -310,6 +318,10 @@ class _RefChild:
                 "topGrid": {"x": 150, "y": 319, "w": 684, "h": 189},
                 "bottomGrid": {"x": 150, "y": 623, "w": 684, "h": 189},
             }
+        if js_src == cjs.REFDOC_TOP_CHECKED_JS:
+            # 체크박스 좌표(166,361) 클릭이 실제로 있었을 때만 체크 반영(실물 시맨틱).
+            checked = 1 if (166, 361) in self.mouse_clicks else 0
+            return {"ok": True, "checked": checked, "api": "getCheckedRows"}
         if js_src == cjs.REFDOC_GRID_ROWS_JS:
             return {
                 "ok": True,
@@ -389,6 +401,22 @@ async def test_on_popup_allow_confirm_gate_clicks_confirm():
     assert any("참조문서 확인 클릭(allow_confirm=True)" in m for m in logs)
     assert _CONFIRM_COORD in child.mouse_clicks
     assert cjs.REFDOC_CONFIRM_BTN_RECT_JS in child.evaluated
+
+
+async def test_on_popup_allow_confirm_click_failure_warns_and_closes():
+    # ⚠ 회귀 핵심(2026-08-07 감사): 종전 훅은 click_refdoc_confirm 반환을 버리고 무조건
+    # "확인 클릭" action 로그를 남겼다 — 미적용(다이얼로그 잔존)이 성공처럼 보고됐다.
+    # 이제 실패면 warn 으로 분리하고 dialog 를 닫아 정리한다.
+    hook = make_reference_doc_hook(allow_confirm=True)
+    child = _RefChild(total=1, docno_value="GW1", confirm_closes_dialog=False)
+    q = _q()
+    await hook(child, "GW1", q)
+    logs = _logs(_drain(q))
+    assert any("참조문서 확인 클릭 실패" in m for m in logs)
+    assert not any("참조문서 확인 클릭(allow_confirm=True)" in m for m in logs)
+    # dialog 는 취소(X)로 정리한다.
+    assert cjs.REFDOC_CLOSE_BTN_RECT_JS in child.evaluated
+    assert (140, 240) in child.mouse_clicks
 
 
 async def test_on_popup_dialog_not_found_logs_and_returns():

@@ -396,6 +396,41 @@ REFDOC_STATE_JS = r"""() => {
 }"""
 
 
+# 참조문서 상단 그리드(RealGrid)의 **체크된 행 수** — select_refdoc_first_row 좌표 클릭의
+# 독립 사후검증 리더(2026-08-07 무결성 감사: 클릭 후 무조건 True 봉합). gridView 인스턴스는
+# REFDOC_GRID_ROWS_JS 와 같은 경로([id^=grid_].gridView, y 정렬 첫 번째=상단)로 잡고,
+# checkBar API 이름이 RealGrid 버전에 따라 다를 수 있어(getCheckedRows/getCheckedItems)
+# 순서대로 시도한다. API 미존재/그리드 미준비는 {ok:false}(확인 불가 — unknown 분류)로 돌려
+# move_refdoc_down 의 결과검증(grew)이 판정을 이어받는다. 반환 {ok, checked} | {ok:false, reason}.
+REFDOC_TOP_CHECKED_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const heading = [...document.querySelectorAll('*')].find(
+    el => el.children.length === 0 && c(el.innerText) === '참조문서');
+  let dlg = heading;
+  for (let i = 0; i < 8 && dlg; i++) {
+    const r = dlg.getBoundingClientRect();
+    if (r.width > 400 && r.height > 300) break;
+    dlg = dlg.parentElement;
+  }
+  if (!dlg) return { ok: false, reason: 'no-dialog' };
+  const views = [];
+  for (const el of dlg.querySelectorAll('[id^=grid_]')) {
+    if (el.gridView) views.push({ y: Math.round(el.getBoundingClientRect().y), gv: el.gridView });
+  }
+  if (!views.length) return { ok: false, reason: 'grids-not-ready' };
+  views.sort((a, b) => a.y - b.y);
+  const gv = views[0].gv;
+  try {
+    for (const f of ['getCheckedRows', 'getCheckedItems']) {
+      if (typeof gv[f] !== 'function') continue;
+      const arr = gv[f]();
+      if (Array.isArray(arr)) return { ok: true, checked: arr.length, api: f };
+    }
+    return { ok: false, reason: 'no-check-api' };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 80) }; }
+}"""
+
+
 # 참조문서 dialog 를 **뷰포트 안으로** 스크롤하고 최종 위치를 돌려준다.
 # ⚠ 필수(2026-07-27 실측): 결제창은 참조문서 선택 버튼(y≈1635)까지 스크롤된 상태라, dialog 가
 #   열려도 그 내용이 화면 위(음수 y: 조회 버튼 -429, 문서번호 input -504)에 있는 경우가 있다.
