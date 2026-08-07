@@ -138,7 +138,7 @@ async def test_read_payment_map_grid_not_ready_graceful():
 async def test_set_collect_period_none_is_noop_true():
     page = _FakePage({})  # SET_PERIOD_RANGE_JS 를 호출하지 않아야 한다.
     ok = await csteps.set_collect_period(page, None, None)
-    assert ok is True
+    assert ok["ok"] is True
     assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args  # 미조작(폼 기본값 당월).
 
 
@@ -155,14 +155,15 @@ async def test_set_collect_period_current_month_is_still_applied():
         cjs.SET_PERIOD_RANGE_JS: True,
         js_lib.PERIOD_VALUE_JS: {"found": True, "values": [start, end], "now": start[:6]},
     })
-    assert await csteps.set_collect_period(page, start, end) is True
+    assert (await csteps.set_collect_period(page, start, end))["ok"] is True
     assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": start, "end": end}
 
 
 async def test_set_collect_period_range_sets_inputs():
     page = _FakePage({cjs.SET_PERIOD_RANGE_JS: True})
     ok = await csteps.set_collect_period(page, "20260201", "20260228")
-    assert ok is True
+    # 리더 미지원 스텁 — 반영 확인 불가는 warn 통과(하드 아님).
+    assert ok["ok"] is True and ok.get("warn")
     assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": "20260201", "end": "20260228"}
 
 
@@ -444,7 +445,7 @@ async def test_set_collect_period_confirms_target_range():
             },
         }
     )
-    assert await csteps.set_collect_period(page, "20260701", "20260705") is True
+    assert (await csteps.set_collect_period(page, "20260701", "20260705"))["ok"] is True
 
     # 같은 달이지만 기간이 다르면(말일까지) 불일치로 잡아야 한다 — ym 비교였다면 통과했을 케이스.
     wrong = _FakePage(
@@ -458,7 +459,8 @@ async def test_set_collect_period_confirms_target_range():
             },
         }
     )
-    assert await csteps.set_collect_period(wrong, "20260701", "20260705") is False
+    wrong_res = await csteps.set_collect_period(wrong, "20260701", "20260705")
+    assert wrong_res["ok"] is False and wrong_res.get("reason")  # 하드 근거(격상 2026-08-07).
 
 
 async def test_open_refdoc_dialog_requires_dialog_title_visible():
@@ -469,8 +471,9 @@ async def test_open_refdoc_dialog_requires_dialog_title_visible():
             js_lib.VISIBLE_TEXT_JS: True,
         }
     )
-    assert await csteps.open_refdoc_dialog(child) is True
+    assert await csteps.open_refdoc_dialog(child) == "opened"
 
+    # 클릭까지 했는데 dialog 미출현 — 'no-dialog'(버튼 미발견과 구분, 재클릭 상한 3회 소진).
     not_open = _FakeChild(
         {
             cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
@@ -478,7 +481,45 @@ async def test_open_refdoc_dialog_requires_dialog_title_visible():
             js_lib.VISIBLE_TEXT_JS: False,
         }
     )
-    assert await csteps.open_refdoc_dialog(not_open) is False
+    assert await csteps.open_refdoc_dialog(not_open) == "no-dialog"
+    assert len(not_open.clicks) == csteps._REFDOC_OPEN_CLICK_MAX  # fresh 좌표로 재클릭했다.
+
+    # 버튼 자체가 없음 — 'no-button'(클릭 0회).
+    no_btn = _FakeChild(
+        {
+            cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
+            cjs.REFDOC_SELECT_BTN_RECT_JS: None,
+        }
+    )
+    assert await csteps.open_refdoc_dialog(no_btn) == "no-button"
+    assert no_btn.clicks == []
+
+
+async def test_open_refdoc_dialog_reclicks_when_first_click_swallowed():
+    """첫 클릭이 스크롤 애니메이션 좌표를 눌러 먹히지 않은 레이스 — 재클릭으로 dialog 를 연다.
+
+    2026-08-06 포렌식 회귀 고정: 종전(고정 500ms + 단발 클릭)은 이 상황에서 그대로 실패해
+    같은 전표(4번째)만 참조문서가 반복 누락됐다.
+    """
+
+    class _Swallow(_FakeChild):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
+                    cjs.REFDOC_SELECT_BTN_RECT_JS: {"x": 1, "y": 2},
+                }
+            )
+
+        async def evaluate(self, js_src, arg=None):
+            if js_src == js_lib.VISIBLE_TEXT_JS:
+                # 두 번째 클릭부터 dialog 가 보인다(첫 클릭은 빗나감).
+                return len(self.clicks) >= 2
+            return await super().evaluate(js_src, arg)
+
+    child = _Swallow()
+    assert await csteps.open_refdoc_dialog(child) == "opened"
+    assert len(child.clicks) == 2  # 1회 빗나감 + 재클릭 1회
 
 
 class _RefdocPanel:

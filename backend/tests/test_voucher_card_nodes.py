@@ -71,11 +71,11 @@ def _patch_collect_ok(monkeypatch, *, mapping=None, tab_back=True, calls=None):
 
     async def _writer(page):
         calls.append("writer")
-        return True
+        return {"ok": True}
 
     async def _period(page, start, end):
         calls.append(("period", start, end))
-        return True
+        return {"ok": True}
 
     async def _gubun(page):
         calls.append("gubun")
@@ -480,6 +480,34 @@ async def test_loop_on_popup_receives_mapped_gwdocu(monkeypatch):
     assert seen == ["GW-A", "GW-B"]
 
 
+async def test_loop_summary_aggregates_refdoc_outcomes(monkeypatch):
+    """훅이 반환한 참조문서 결과가 최종 요약에 집계된다 — 누락이 요약에서 보이게(2026-08-06).
+
+    종전에는 요약이 "N건 중 N건 결제창 확인"만 말해 참조문서 미첨부가 중간 warn 한 줄로
+    스쳐 지나갔다(사용자가 "너무 빨라서 안 보였다"고 한 보고 갭).
+    """
+    child = _LoopChild()
+    _patch_loop_for_card(monkeypatch, child, {0: "RN-A", 1: "RN-B"})
+    outcomes = {"GW-A": "첨부", "GW-B": "창 열기 실패(클릭 후 미개방)"}
+
+    async def _on_popup(c, gwdocu_no, events):
+        return outcomes[gwdocu_no]
+
+    node = make_loop_approvals_node(on_popup=_on_popup)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 2,
+            "max_rows": 2,
+            "payment_map": {"RN-A": "GW-A", "RN-B": "GW-B"},
+        }
+    )
+    assert "참조문서 첨부 1건" in out["result"]
+    assert "미첨부 1건" in out["result"]
+    assert "창 열기 실패(클릭 후 미개방)" in out["result"]  # 전표별 사유까지 요약에 남는다.
+
+
 async def test_loop_skips_row_without_gwdocu_mapping(monkeypatch):
     # 카드: 결의서번호(ABDOCU_NO)가 payment_map 에 없으면(직접 전표 등) 결제창을 안 열고 건너뛴다.
     child = _LoopChild()
@@ -677,32 +705,60 @@ async def test_collect_stops_when_query_result_unconfirmed(monkeypatch):
     assert "read" not in calls  # 스테일 그리드를 맵으로 읽지 않는다.
 
 
-async def test_collect_warns_but_proceeds_on_auxiliary_condition_failures(monkeypatch):
+async def test_collect_writer_clear_failure_is_hard(monkeypatch):
+    """⚠ 격상(2026-08-07 사용자 확정): 결의자 비움 실패는 warn 진행이 아니라 **런 중단**이다 —
+    로그인 계정으로 좁혀진 채 수집된 맵은 대상과 어긋나 하류가 전 행을 조용히 건너뛴다
+    (결의부서와 동일 메커니즘)."""
     calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
 
-    async def _false(page):
-        return False
+    async def _writer_fail(page):
+        return {"ok": False, "reason": "'결의자' 비움 확인 실패(재클리어 소진)"}
 
-    async def _false_period(page, start, end):
-        return False
+    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _writer_fail)
+    out = await make_collect_payments_node()(
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 3}
+    )
+    assert "결의자" in out["error"] and "중단" in out["error"]
+    assert "read" not in calls  # 좁혀진 범위로 수집(맵 읽기)하지 않는다.
 
-    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _false)
-    monkeypatch.setattr(cp_mod.steps, "set_collect_period", _false_period)
-    q = _q()
+
+async def test_collect_period_failure_is_hard(monkeypatch):
+    """⚠ 격상(2026-08-07): 회계일 미반영도 하드 — 두 화면 기간이 어긋난 맵은 누락을 만든다."""
+    calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
+
+    async def _period_fail(page, start, end):
+        return {"ok": False, "reason": "회계일 확인 실패(재세팅 소진)"}
+
+    monkeypatch.setattr(cp_mod.steps, "set_collect_period", _period_fail)
     out = await make_collect_payments_node()(
         {
-            "events": q,
+            "events": _q(),
             "page": _StubPage(),
             "master_rowcount": 3,
             "period_from": "20260701",
             "period_to": "20260705",
         }
     )
+    assert "회계일" in out["error"] and "중단" in out["error"]
+    assert "read" not in calls
+
+
+async def test_collect_reader_unknown_warns_but_proceeds(monkeypatch):
+    """리더 확인 불가(unknown)는 격상 대상이 아니다 — warn 을 남기고 진행한다(오탐이 런을
+    끊지 않게, '정해진 단계를 벗어났을 때만 에러' 규율)."""
+    calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
+
+    async def _writer_unknown(page):
+        return {"ok": True, "warn": "'결의자' 비움 확인 불가(라벨 미발견)"}
+
+    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _writer_unknown)
+    q = _q()
+    out = await make_collect_payments_node()(
+        {"events": q, "page": _StubPage(), "master_rowcount": 3}
+    )
     assert out["payment_map"] == {"RN1": "GW1"} and "error" not in out
-    logs = _logs(_drain(q))
-    assert any("결의자" in m for m in logs)
-    assert any("회계일" in m for m in logs)
-    assert "read" in calls  # 보조 조건 실패는 수집을 막지 않는다.
+    assert any("결의자" in m for m in _logs(_drain(q)))
+    assert "read" in calls
 
 
 # ── 참조문서 훅: '조회 미실행' 과 '조회했으나 0건' 을 구분한다(2026-07-27) ──────────

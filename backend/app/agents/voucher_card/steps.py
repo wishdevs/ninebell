@@ -141,37 +141,52 @@ async def set_collect_dept_all(page: Any) -> bool:
     return bool(chk)
 
 
-async def clear_collect_writer(page: Any) -> bool:
+async def clear_collect_writer(page: Any) -> dict:
     """결의자(#WRT_EMP_NO_C) 비움 — 로그인 계정 소속으로 결과가 좁혀지지 않게.
 
-    clear() 호출 성공에 더해 **표시값이 실제로 비었는지** 확인한다(즉시 반영 계열). 라벨을
-    못 읽으면 확인 불가로 보고 통과(best-effort — 호출부가 warn). 반환 bool.
+    ⚠ 이 값은 **수집 대상 집합을 정의**한다(결의부서와 동일 메커니즘) — 비움 실패는 로그인
+    계정 결의서만 수집되는 조용한 범위 축소다. 2026-08-07 사용자 확정으로 하드 격상:
+    clear() 후 표시값 재확인 + 미비움이면 **재클리어**(reapply — 비동기 기본값 재주입 대비),
+    소진 후에도 안 비면 ok:False(호출부가 런 중단). 리더 불가(unknown)만 warn 통과.
+    반환 {ok, warn?, reason?}.
     """
     ok = await page.evaluate(js.CLEAR_WRT_EMP_JS)
     if not ok:
-        return False
-    chk = await verify.confirm_display_empty(page, COLLECT_WRITER_LABEL, timing=verify.INSTANT)
-    return bool(chk or chk.unknown)
+        return {"ok": False, "reason": "결의자 multicodepicker clear() 호출 실패."}
+    chk = await verify.confirm_display_empty(
+        page,
+        COLLECT_WRITER_LABEL,
+        timing=verify.INSTANT,
+        reapply=lambda: page.evaluate(js.CLEAR_WRT_EMP_JS),
+    )
+    if chk:
+        return {"ok": True}
+    if chk.unknown:
+        return {"ok": True, "warn": chk.reason}
+    return {"ok": False, "reason": chk.reason}
 
 
-async def set_collect_period(page: Any, start: str | None = None, end: str | None = None) -> bool:
+async def set_collect_period(page: Any, start: str | None = None, end: str | None = None) -> dict:
     """결의서조회승인 회계일 세팅 — 실행 전 폼이 고른 기간(YYYYMMDD)을 반영한다.
 
     기간이 주어지면 **당월이든 아니든 항상 세팅**한다. 미지정일 때만 미조작(화면 기본값).
-    best-effort(실패해도 화면 기본값으로 진행) — 반환 bool 은 호출부가 warn 로그에만 쓴다.
 
     ⚠ 종전에는 '당월이면 미조작'으로 단락했는데 그게 결함이었다(2026-07-28 실측·사용자 지적):
       이 화면 기본값은 **1일~오늘**(예 07-01~07-28)이라 폼에서 이번 달 전체(1일~말일)를 골라도
       말일까지가 조회되지 않았고, 전표조회승인(setMonth 로 1일~말일)과 **기간이 어긋났다**.
       미지급금 법인카드는 두 화면을 함께 쓰므로 같은 기간이어야 한다.
+    ⚠ 이 값은 **수집 대상 집합을 정의**한다 — 기간이 어긋나면 결재번호 맵이 누락돼 하류가
+      '맵에 없음'으로 조용히 건너뛴다. 2026-08-07 사용자 확정으로 하드 격상: 불일치는 재세팅
+      (reapply — 위젯 되돌림 대비) 소진 후 ok:False. 리더 불가(unknown)만 warn 통과.
+      반환 {ok, warn?, reason?}.
     """
     if not start or not end:
-        return True  # 기간 미지정 — 화면 기본값 유지(폼 없이 실행하던 구 경로).
-    ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})
+        return {"ok": True}  # 기간 미지정 — 화면 기본값 유지(폼 없이 실행하던 구 경로).
+    payload = {"start": start, "end": end}
+    ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, payload)
     if not ok:
-        return False
-    # 시작·종료 입력값이 목표 기간과 같은지 확인(즉시 반영 계열 — input 직접 세팅). 위젯 구조를
-    # 못 읽으면 확인 불가로 보고 통과(이 경로 자체가 미검증이라 하드 실패시키지 않는다).
+        return {"ok": False, "reason": "회계일 기간 입력 실패(시작/종료 input 미발견)."}
+
     def _matches(v: Any) -> bool:
         if not (isinstance(v, dict) and v.get("found") and v.get("values")):
             return False
@@ -184,9 +199,14 @@ async def set_collect_period(page: Any, start: str | None = None, end: str | Non
         timing=verify.INSTANT,
         what="결의서조회승인 회계일",
         expected=f"{start}~{end}",
+        reapply=lambda: page.evaluate(js.SET_PERIOD_RANGE_JS, payload),
         unknown_when=lambda v: not (isinstance(v, dict) and v.get("found")),
     )
-    return bool(chk or chk.unknown)
+    if chk:
+        return {"ok": True}
+    if chk.unknown:
+        return {"ok": True, "warn": chk.reason}
+    return {"ok": False, "reason": chk.reason}
 
 
 async def set_collect_gubun_card(page: Any) -> bool:
@@ -278,21 +298,66 @@ async def switch_back_to_voucher_tab(page: Any) -> bool:
 # Phase C — 결제창(EAP React) 안 참조문서 선택 sub-flow(child Page 대상)
 # ⚠ '확인'/'상신' 무조건 클릭 없음 — click_refdoc_confirm 은 게이트 뒤에서만.
 # ══════════════════════════════════════════════════════════════════════════════
-async def open_refdoc_dialog(child: Any) -> bool:
-    """결제창 하단 '참조문서 선택' 버튼(뷰포트 밖 가능) → scrollIntoView 후 좌표 재계산 클릭.
-    반환 = dialog 오픈 시도 여부(버튼 못 찾으면 False)."""
-    await child.evaluate(js.REFDOC_SELECT_BTN_SCROLL_JS)
-    await child.wait_for_timeout(500)  # smooth-scroll 정착.
-    rect = await child.evaluate(js.REFDOC_SELECT_BTN_RECT_JS)
+# '참조문서 선택' 클릭 레이스 대비 상수 — voucher_receivable 의 _search_btn_rect_stable /
+# _open_picker 재클릭 패턴 이식(2026-08-06 포렌식: 고정 500ms 뒤 단발 미검증 클릭이 smooth-scroll
+# 이동 중의 좌표를 눌러 dialog 미개방 → 두 런 연속 같은 전표만 참조문서 누락).
+_REFDOC_BTN_RECT_TRIES = 4
+_REFDOC_BTN_RECT_INTERVAL_S = 0.15
+_REFDOC_BTN_STABLE_GAP_S = 0.12
+_REFDOC_OPEN_CLICK_MAX = 3
+
+
+async def _refdoc_btn_rect_stable(child: Any) -> Any:
+    """'참조문서 선택' 버튼 rect 를 **정착 좌표**로 얻는다 — null 이면 짧게 재관찰, 얻으면 같은
+    좌표가 2회 연속 읽힐 때까지 확인해 스크롤 애니메이션 중의 이동 좌표 클릭을 막는다."""
+    rect = None
+    for _ in range(_REFDOC_BTN_RECT_TRIES):
+        rect = await child.evaluate(js.REFDOC_SELECT_BTN_RECT_JS)
+        if rect:
+            break
+        await verify.DEFAULT_SLEEP(_REFDOC_BTN_RECT_INTERVAL_S)
     if not rect:
-        return False
-    await child.mouse.click(rect["x"], rect["y"])
-    # dialog 가 실제로 떴는지 확인 — 제목 '참조문서'(리프 노드 정확일치)로 판정한다. 종전에는
-    # 고정 1.5초 뒤 무조건 True 라, 안 뜬 dialog 에 문서번호를 입력·조회하고 있었다.
-    # ('참조문서 선택' 버튼 텍스트는 DOM 상 '참 조 문 서'라 이 확인에 걸리지 않는다.)
-    chk = await verify.confirm_visible_text(child, REFDOC_DIALOG_TITLE, timing=verify.ASYNC)
-    if not chk:
-        return False
+        return None
+    for _ in range(_REFDOC_BTN_RECT_TRIES):
+        await verify.DEFAULT_SLEEP(_REFDOC_BTN_STABLE_GAP_S)
+        again = await child.evaluate(js.REFDOC_SELECT_BTN_RECT_JS)
+        if again == rect:
+            return rect
+        if not again:
+            return None
+        rect = again
+    return rect  # 계속 흔들리면 마지막 좌표로 진행 — 클릭 실패는 재클릭 루프가 흡수.
+
+
+async def open_refdoc_dialog(child: Any) -> str:
+    """결제창 하단 '참조문서 선택' 버튼(뷰포트 밖 가능) → dialog 오픈(결과검증형 클릭 재시도).
+
+    반환 상태(원인별 메시지 분리 — 2026-08-06 포렌식):
+      'opened'    dialog 확인됨(제목 '참조문서' 가시)
+      'no-button' 버튼 자체를 찾지 못함
+      'no-dialog' 버튼을 클릭했으나 dialog 미출현(재클릭 상한 소진)
+
+    종전의 고정 500ms 선대기 + 좌표 1회 읽기 + 단발 클릭은 스크롤 애니메이션 중의 좌표를 눌러
+    클릭이 빗나가면 그대로 실패했다 — 좌표 2회 연속 동일(정착) 확인 후 클릭하고, dialog 가
+    안 뜨면 fresh 좌표로 최대 3회 재클릭한다.
+    """
+    await child.evaluate(js.REFDOC_SELECT_BTN_SCROLL_JS)
+    clicked = False
+    opened = False
+    for _ in range(_REFDOC_OPEN_CLICK_MAX):
+        rect = await _refdoc_btn_rect_stable(child)
+        if not rect:
+            break  # 버튼 미발견 — 이미 클릭했었다면 'no-dialog' 로 귀결.
+        clicked = True
+        await child.mouse.click(rect["x"], rect["y"])
+        # dialog 가 실제로 떴는지 확인 — 제목 '참조문서'(리프 노드 정확일치)로 판정한다.
+        # ('참조문서 선택' 버튼 텍스트는 DOM 상 '참 조 문 서'라 이 확인에 걸리지 않는다.)
+        chk = await verify.confirm_visible_text(child, REFDOC_DIALOG_TITLE, timing=verify.ASYNC)
+        if chk:
+            opened = True
+            break
+    if not opened:
+        return "no-dialog" if clicked else "no-button"
     # dialog 를 뷰포트 안으로 정렬한다 — 결제창이 아래로 스크롤된 상태라 dialog 내용이 화면
     # 위(음수 y)에 놓이는 경우가 있고, 그러면 캔버스 행 클릭 같은 좌표 조작이 전부 허공을 친다.
     placed = await verify.confirm(
@@ -304,7 +369,7 @@ async def open_refdoc_dialog(child: Any) -> bool:
     )
     if not placed:
         logger.info("참조문서 dialog 를 뷰포트 안으로 정렬하지 못했습니다: %s", placed.reason)
-    return True
+    return "opened"
 
 
 async def expand_refdoc_filter(child: Any) -> bool:

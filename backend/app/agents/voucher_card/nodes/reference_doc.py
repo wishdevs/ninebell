@@ -27,18 +27,33 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
     True 로 승격하는 것은 시스템 승인 이슈 해소 후 비영속 검증을 마친 뒤에만(코드 게이트).
     """
 
-    async def on_popup(child, gwdocu_no, events) -> None:
+    async def on_popup(child, gwdocu_no, events) -> str:
+        # 반환 = 이 전표의 참조문서 결과 한 마디('첨부' 또는 미첨부 사유) — loop_approvals 가
+        # 최종 요약에 집계한다(2026-08-06 포렌식: 누락이 중간 warn 한 줄로만 스쳐 사용자가
+        # 요약만 보면 전 건 성공으로 읽히던 보고 갭).
         # 결재번호(GWDOCU_NO)가 없으면(payment_map 누락 — Phase A 행에 ABDOCU_NO 없거나 미매핑)
         # 검색할 값이 없다 — 우아하게 로그하고 넘어간다.
         if not gwdocu_no:
             await emit_log(
                 events, "참조문서 미검색 — 결재번호 미상(payment_map 누락). 가상 상신으로 진행.", "warn"
             )
-            return
+            return "결재번호 미상"
 
-        if not await steps.open_refdoc_dialog(child):
-            await emit_log(events, "참조문서 선택 버튼을 찾지 못했습니다 — 가상 상신으로 진행.", "warn")
-            return
+        opened = await steps.open_refdoc_dialog(child)
+        if opened != "opened":
+            # 원인별 메시지 분리 — '버튼 미발견'과 '클릭했으나 미개방'은 대응이 다르다.
+            if opened == "no-button":
+                await emit_log(
+                    events, f"참조문서 선택 버튼을 찾지 못했습니다({gwdocu_no}) — 가상 상신으로 진행.", "warn"
+                )
+                return "창 열기 실패(버튼 미발견)"
+            await emit_log(
+                events,
+                f"참조문서 선택 버튼을 눌렀지만 dialog 가 열리지 않았습니다({gwdocu_no}, 재클릭 포함) "
+                "— 가상 상신으로 진행.",
+                "warn",
+            )
+            return "창 열기 실패(클릭 후 미개방)"
 
         # 필터 패널을 '조회 버튼이 보이는 상태'로 만든다(토글이라 이미 펼쳐졌으면 누르지 않는다).
         # ⚠ 확인 실패해도 **여기서 중단하지 않는다**(2026-07-27 회귀 교훈): 종전 코드는 이 단계가
@@ -69,7 +84,7 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 "warn",
             )
             await steps.close_refdoc_dialog(child)
-            return
+            return "조회 실행 실패"
 
         # 결과 판정 — 목록이 **RealGrid 캔버스**라 DOM 행 스캔이 불가능하다(2026-07-27 실측).
         # dialog 의 텍스트 앵커('총 N개' / '조회된 데이터가 없습니다.')로 확인한다.
@@ -83,7 +98,7 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 "warn",
             )
             await steps.close_refdoc_dialog(child)
-            return
+            return "검색 0건"
         if not state.get("settled"):
             await emit_log(
                 events,
@@ -92,7 +107,7 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 "warn",
             )
             await steps.close_refdoc_dialog(child)
-            return
+            return "결과 미확정"
         if total is not None and total > 1:
             # 결재번호로 좁혔는데도 여럿이면 첫 행이 대상이라는 보장이 없다 — 붙이지 않는다.
             await emit_log(
@@ -102,13 +117,13 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
                 "warn",
             )
             await steps.close_refdoc_dialog(child)
-            return
+            return "다건(특정 불가)"
 
         await emit_log(events, f"참조문서 검색 {total}건 확인({gwdocu_no}) — 선택 후 이동합니다.", "info")
         if not await steps.select_refdoc_first_row(child):
             await emit_log(events, "참조문서 목록 행을 선택하지 못했습니다 — 가상 상신으로 진행.", "warn")
             await steps.close_refdoc_dialog(child)
-            return
+            return "행 선택 실패"
 
         moved = await steps.move_refdoc_down(child, gwdocu_no)
         # 최종 성공 판정(사용자 확정 2026-07-27): **첨부 후 참조문서 1건 이상**.
@@ -143,5 +158,6 @@ def make_reference_doc_hook(*, allow_confirm: bool = False):
             # 기본 — 확인·상신은 로그만(비영속). dialog 는 취소(X)로 정리.
             await emit_log(events, "가상: 참조문서 확인·상신 (미클릭 — 비영속).", "info")
             await steps.close_refdoc_dialog(child)
+        return "첨부" if moved.get("verified") else "첨부 확인 실패"
 
     return on_popup
