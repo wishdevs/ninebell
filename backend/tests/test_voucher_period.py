@@ -107,11 +107,16 @@ class _StubPage:
         self._range_ok = range_ok
 
     async def evaluate(self, js_src, arg=None):
+        from nbkit.omnisol import js_lib
+
         from app.agents.voucher_receivable import js as vr_js
 
         if js_src == vr_js.SET_PERIOD_THIS_MONTH_JS:
             self.calls.append(("month", arg))
             return True
+        if js_src == js_lib.PERIOD_VALUE_JS:
+            # 당월 경로의 반영 확인 리더 — 즉시 '당월 반영됨'으로 응답(첫 확인에서 성공).
+            return {"found": True, "ym": ["N", "N"], "now": "N"}
         if js_src == vr_js.SET_PERIOD_RANGE_JS:
             self.calls.append(("range", arg))
             return self._range_ok
@@ -147,11 +152,37 @@ async def test_set_period_partial_range_sets_inputs_and_verifies():
     assert page.calls[0][1] == {"start": "20260701", "end": "20260705"}
 
 
-async def test_set_period_mismatch_readback_hard_fails():
-    """반영값이 다르면 실패 — 잘못된 회계일로 엉뚱한 전표를 결재하는 것을 막는다."""
+async def test_set_period_mismatch_readback_hard_fails_after_reapply():
+    """반영값이 (재세팅 재시도 후에도) 다르면 실패 — 잘못된 회계일 결재 차단.
+
+    ⚠ 되돌림 레이스(2026-08-03·08-06 라이브 실측: end 만 붙고 start 는 위젯 기본값으로 복귀):
+    단발 readback 이 과도상태를 하드 실패로 오판하던 결함 수정 — 확인 커널 재확인 + 재시도 때
+    **재세팅**(reapply)까지 하고, 그래도 다를 때만 실패함을 고정한다."""
     page = _StubPage(values={"start": "20260701", "end": "20260731"})
     r = await steps.set_period(page, "20260701", "20260705")
-    assert not r["ok"] and "반영 불일치" in r["reason"]
+    assert not r["ok"] and "확인 실패" in r["reason"]
+    assert [c[0] for c in page.calls].count("range") >= 2  # 최초 세팅 + 재시도 재세팅.
+
+
+async def test_set_period_recovers_when_widget_reverts_once():
+    """첫 readback 에서 위젯이 값을 되돌렸어도(부분 반영) 재세팅 재시도로 회복하면 성공."""
+
+    class _RevertOncePage(_StubPage):
+        async def evaluate(self, js_src, arg=None):
+            from app.agents.voucher_receivable import js as vr_js
+
+            if js_src == vr_js.PERIOD_VALUE_JS:
+                reads = sum(1 for c in self.calls if c[0] == "read")
+                self.calls.append(("read", arg))
+                if reads == 0:  # 첫 read — start 가 위젯 기본값으로 되돌아간 상태.
+                    return {"start": "20260801", "end": "20260705"}
+                return {"start": "20260701", "end": "20260705"}
+            return await super().evaluate(js_src, arg)
+
+    page = _RevertOncePage()
+    r = await steps.set_period(page, "20260701", "20260705")
+    assert r["ok"] and r["display"] == "20260701~20260705"
+    assert [c[0] for c in page.calls].count("range") >= 2  # 재세팅이 실제로 발화했다.
 
 
 async def test_set_period_unreadable_widget_warns_but_passes():

@@ -41,14 +41,26 @@ FIELD_SEARCH_BTN_RECT_JS = r"""(label) => {
 # {x:0,y:0} 같은 값을 돌려줘 "찾음"으로 오판할 수 있다. 반환 bool.
 FIELD_LABEL_VISIBLE_JS = js_lib.FIELD_LABEL_VISIBLE_JS  # 단일소스(js_lib §C) 재수출
 
+# 업무 팝업 로케이터 프리앰블(단일소스) — 보이는 .k-window 중 **공지 팝업을 제외**하고
+# 마지막(가장 나중에 열린) 창을 조작 대상으로 잡는다. POPUP_* 조작 상수 4개가 공유한다.
+# ⚠ 공지 팝업도 .k-window 다(고유 앵커 #close-today-chk — js_lib.NOTICE_POPUP_BOXES_JS 와 동일
+#   근거, 광범위 매칭 금지 규율). 로그인 직후 1회 닫아도 **화면 로드 ~1.5s 뒤 비동기 렌더**라
+#   피커 조작 도중에 떠 wins[last] 타깃·개수 판정을 오염시키는 간헐 레이스가 있었다(2026-08-07
+#   무결성 감사: 열림/닫힘 델타 오판 + 조작 JS 가 공지창을 읽어 grid-not-ready 헛폴링).
+#   js_lib.POPUP_COUNT_JS(개수 리더)도 같은 필터를 쓴다 — 조작과 관찰이 같은 모집단을 본다.
+_POPUP_WINS = (
+    "  const wins = [...document.querySelectorAll('.k-window')]\n"
+    "    .filter(w => w.offsetParent !== null)\n"
+    "    .filter(w => !w.querySelector('#close-today-chk'));"
+)
+
 # 최상단 k-window 팝업의 RealGrid 가 **결과검증형 폴링**용으로 붙었는지 확인한다.
 # ⚠ 근본원인(2026-07-21 voucher-payable 라이브 스모크 2회 재현): 팝업 클릭 직후 고정 1200ms
 # 대기만으로 POPUP_CHECK_ALL_JS/POPUP_CHECK_ROWS_JS 를 호출하면, 서버 응답이 느린 세션에서
 # `.dews-ui-grid` 는 DOM에 있어도 dewsControl/`_grid` 바인딩이 아직 안 끝나 `Cannot read
 # properties of undefined (reading '_grid')` 로 **크래시**한다(우아한 실패가 아니라 전체
 # 그래프가 죽음). _open_picker 가 클릭 후 이 값이 true 가 될 때까지 폴링한다. 반환 bool.
-POPUP_GRID_READY_JS = r"""() => {
-  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+POPUP_GRID_READY_JS = "() => {\n" + _POPUP_WINS + r"""
   const dlg = wins[wins.length - 1];
   if (!dlg) return false;
   const el = dlg.querySelector('.dews-ui-grid');
@@ -66,8 +78,7 @@ POPUP_COUNT_JS = js_lib.POPUP_COUNT_JS
 # ⚠ 방어(위 POPUP_GRID_READY_JS 참조): 그리드가 아직 안 붙었으면 크래시 대신 {ok:false,
 # reason:'grid-not-ready'} 를 돌려준다 — 호출자가 이미 하는 `res.get('ok')` 체크로 우아하게
 # 실패 처리된다(폴링이 놓친 잔여 레이스의 최종 방어선).
-POPUP_CHECK_ROWS_JS = r"""([targets, fieldName]) => {
-  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+POPUP_CHECK_ROWS_JS = "([targets, fieldName]) => {\n" + _POPUP_WINS + r"""
   const dlg = wins[wins.length - 1];
   if (!dlg) return { ok: false, reason: 'no-popup' };
   const el = dlg.querySelector('.dews-ui-grid');
@@ -87,8 +98,7 @@ POPUP_CHECK_ROWS_JS = r"""([targets, fieldName]) => {
 
 # 팝업의 checkAll(작성부서 전체선택 전용 — checkbox 컬럼 헤더 체크와 동일 효과). 반환 {ok, n}.
 # ⚠ 방어는 POPUP_CHECK_ROWS_JS 와 동일(그리드 미부착 시 크래시 대신 {ok:false} — 아래 참조).
-POPUP_CHECK_ALL_JS = r"""() => {
-  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+POPUP_CHECK_ALL_JS = "() => {\n" + _POPUP_WINS + r"""
   const dlg = wins[wins.length - 1];
   if (!dlg) return { ok: false, reason: 'no-popup' };
   const el = dlg.querySelector('.dews-ui-grid');
@@ -100,9 +110,8 @@ POPUP_CHECK_ALL_JS = r"""() => {
 }"""
 
 # 최상단 k-window 팝업의 '적용' 버튼 좌표. 반환 {x, y} 또는 null.
-POPUP_APPLY_BTN_JS = r"""() => {
+POPUP_APPLY_BTN_JS = "() => {\n" + _POPUP_WINS + r"""
   const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
-  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
   const dlg = wins[wins.length - 1];
   if (!dlg) return null;
   const b = [...dlg.querySelectorAll('button')].find(x => c(x.innerText) === '적용');
@@ -171,6 +180,15 @@ PERIOD_VALUE_JS = r"""() => {
   if (!si || !ei) return null;
   const d = v => String(v == null ? '' : v).replace(/\D/g, '');
   return { start: d(si.value), end: d(ei.value) };
+}"""
+
+# 전표상태 select 준비 상태 리더(읽기전용) — {sel: select 존재, widget: kendo 위젯 부착}.
+# ⚠ 직전 스텝(팝업 적용·기간 세팅)이 폼 리로드를 유발하는 구간이라 select 가 순간적으로 없거나
+#   kendo dropdownlist 재바인딩 중일 수 있다 — 세팅 전에 준비를 폴링하기 위한 리더(2026-08-07).
+DOCU_ST_READY_JS = r"""(selector) => {
+  const el = document.querySelector(selector);
+  const w = el && window.jQuery ? window.jQuery(el).data('kendoDropDownList') : null;
+  return { sel: !!el, widget: !!w };
 }"""
 
 # 작성자 multicodepicker 기본선택을 비우는 앱 API(clear).

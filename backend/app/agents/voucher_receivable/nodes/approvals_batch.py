@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from app.config import get_settings
@@ -101,19 +102,41 @@ def make_batch_approvals_node():
             )
 
             # 직전 묶음의 체크가 남아 다른 문서가 함께 올라가지 않도록 전체 해제 후 대상만 체크.
-            await steps.uncheck_all_rows(page)
+            # (해제 실패 신호는 1회 재시도 — 최종 심판은 아래 D7 체크 집합 대조다.)
+            if not await steps.uncheck_all_rows(page):
+                await steps.uncheck_all_rows(page)
             for idx in indexes:
                 if not await steps.check_row(page, idx):
                     return await fail(gi, f"{idx + 1}행 선택(checkRow) 실패")
 
-            # D7-1: 체크 집합이 계획과 정확히 일치하는지(확인 가능한 경우만 하드).
+            # D7-1: 체크 집합이 계획과 정확히 일치하는지(확인 가능한 경우만 하드). 불일치 시
+            # 재체크 1회 — checkRow true 직후 getCheckedRows 가 빈 배열인 지연 재렌더 과도상태가
+            # 실측돼 있다(e2e/voucher_payable_d7_probe.py 헤더, 건별 순회와 동일 규율 2026-08-07).
             chk = await steps.checked_row_indexes(page)
             if isinstance(chk, dict) and chk.get("ok"):
                 got = sorted(chk.get("rows") or [])
                 if got != sorted(indexes):
-                    return await fail(
-                        gi, f"체크된 행이 계획과 다릅니다(D7 정합성): 계획 {sorted(indexes)} / 실제 {got}"
+                    await emit_log(
+                        events,
+                        f"D7 체크행 불일치(계획 {sorted(indexes)} / 실제 {got}) — 재체크 후 재확인합니다.",
+                        "warn",
                     )
+                    await asyncio.sleep(1.0)  # 지연 재렌더 정착 대기(실시간).
+                    if not await steps.uncheck_all_rows(page):
+                        await steps.uncheck_all_rows(page)
+                    for idx in indexes:
+                        if not await steps.check_row(page, idx):
+                            return await fail(gi, f"{idx + 1}행 선택(checkRow) 재시도 실패")
+                    await asyncio.sleep(0.5)
+                    chk = await steps.checked_row_indexes(page)
+                    if isinstance(chk, dict) and chk.get("ok"):
+                        got = sorted(chk.get("rows") or [])
+                    if got != sorted(indexes):
+                        return await fail(
+                            gi,
+                            "체크된 행이 계획과 다릅니다(D7 정합성, 재체크 후에도): "
+                            f"계획 {sorted(indexes)} / 실제 {got}",
+                        )
                 await emit_log(events, f"D7 체크행 확인 ✅ — {len(got)}행 {got}", "info")
             else:
                 await emit_log(events, f"D7 체크행 확인 불가(soft): {chk}", "warn")

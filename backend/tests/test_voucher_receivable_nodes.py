@@ -176,10 +176,28 @@ async def test_set_query_passes_docu_types(monkeypatch):
 
 
 # ── run_query ─────────────────────────────────────────────────────────────────
+def _patch_requery_gate_ok(monkeypatch, calls: list | None = None):
+    """조회 직전 재확정 게이트(작성자·회계일 — 2026-08-07) 스텁 — 기본 성공."""
+
+    async def _writer(page):
+        if calls is not None:
+            calls.append("gate_writer")
+        return {"ok": True}
+
+    async def _period(page, start=None, end=None):
+        if calls is not None:
+            calls.append("gate_period")
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer)
+    monkeypatch.setattr(query.steps, "set_period", _period)
+
+
 async def test_run_query_stores_rowcount(monkeypatch):
     async def _ok(page):
         return {"ok": True, "rowcount": 31}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _ok)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert out == {"master_rowcount": 31}
@@ -190,6 +208,7 @@ async def test_run_query_zero_is_ok(monkeypatch):
     async def _zero(page):
         return {"ok": True, "rowcount": 0}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _zero)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert out == {"master_rowcount": 0}
@@ -199,10 +218,49 @@ async def test_run_query_grid_unreadable_errors(monkeypatch):
     async def _fail(page):
         return {"ok": False, "reason": "rowcount 못 읽음", "rowcount": -1}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _fail)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert "error" in out and "못 읽" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_run_query_reconfirms_writer_and_period_before_click(monkeypatch):
+    """⚠ 재확정 게이트(2026-08-07): 작성자·회계일은 첫 검증 통과 **후** 비동기 되돌림이 가능한
+    값이라(기본값 재주입/위젯 복귀 — 08-03·08-06 라이브 실측 계열), 조회 클릭 직전에 한 번 더
+    확정한다. 게이트가 조회보다 먼저 오는 순서를 고정한다."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _ok(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "run_query", _ok)
+    out = await make_run_query_node()(
+        {"events": _q(), "page": _FakePage(), "period_from": "20260701", "period_to": "20260831"}
+    )
+    assert out == {"master_rowcount": 3}
+    assert calls == ["gate_writer", "gate_period", "query"]
+
+
+async def test_run_query_gate_failure_errors_without_querying(monkeypatch):
+    """재확정 게이트 실패(재클리어 소진 후에도 재주입 잔존 등)는 잘못된 조건 조회를 막고 에러."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _writer_fail(page):
+        return {"ok": False, "reason": "'작성자' 비움 확인 실패"}
+
+    async def _query(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer_fail)
+    monkeypatch.setattr(query.steps, "run_query", _query)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert "error" in out and "작성자 재확정" in out["error"]
+    assert "query" not in calls  # 게이트 실패 시 조회로 진행하지 않는다.
 
 
 # ── loop_approvals ────────────────────────────────────────────────────────────

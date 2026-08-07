@@ -145,6 +145,8 @@ def make_loop_approvals_node(on_popup=None):
             )
 
         processed_docu_nos: list[str] = []
+        # 참조문서 결과 집계(on_popup 훅이 str 을 반환할 때만) — (전표, '첨부'|미첨부 사유).
+        refdoc_results: list[tuple[str, str]] = []
         if process_count <= 0:
             await emit_log(events, "결재를 진행할 대상이 없습니다 — 정상 완료.", "info")
             await emit_step(events, "loop_approvals", "done", _ms(t0))
@@ -180,7 +182,9 @@ def make_loop_approvals_node(on_popup=None):
 
             # 배치 순회에서 직전 대상 행의 체크가 남아 결재가 여러 문서를 잡는 것을 막는다 —
             # 대상 행 체크 전에 전체 해제해 정확히 한 행만 체크된 상태로 결재창을 연다.
-            await steps.uncheck_all_rows(page)
+            # (해제 실패 신호는 1회 재시도 — 최종 심판은 아래 D7 체크행수 대조다.)
+            if not await steps.uncheck_all_rows(page):
+                await steps.uncheck_all_rows(page)
 
             # 행 선택 — checkRow 필수(setCurrent 만으론 결재 대상 미인식, D4 실측).
             if not await steps.check_row(page, idx):
@@ -200,7 +204,8 @@ def make_loop_approvals_node(on_popup=None):
                         "warn",
                     )
                     await asyncio.sleep(1.0)  # 지연 재렌더 정착 대기(실시간).
-                    await steps.uncheck_all_rows(page)
+                    if not await steps.uncheck_all_rows(page):
+                        await steps.uncheck_all_rows(page)
                     if not await steps.check_row(page, idx):
                         return await fail(idx, "행 선택(checkRow) 재시도 실패")
                     await asyncio.sleep(0.5)
@@ -269,13 +274,16 @@ def make_loop_approvals_node(on_popup=None):
                     if on_popup is not None:
                         # gwdocu_no 는 이 행의 결의서번호로 위에서 이미 해소(없으면 이 행은 스킵됐다).
                         try:
-                            await on_popup(child, gwdocu_no, events)
+                            outcome = await on_popup(child, gwdocu_no, events)
                         except Exception as exc:  # noqa: BLE001 — 참조문서 훅은 비크리티컬.
+                            outcome = "오류"
                             await emit_log(
                                 events,
                                 f"참조문서 처리 중 경고(무시하고 진행) — 전표 {key_label}: {exc}",
                                 "warn",
                             )
+                        if isinstance(outcome, str):
+                            refdoc_results.append((key_label, outcome))
                     # ⚠ 상신(~922,30)·보관(~860,30) 절대 클릭 금지 — 가상 상신 로그만 남긴다.
                     processed_docu_nos.append(key_label)
                     await emit_log(
@@ -309,10 +317,22 @@ def make_loop_approvals_node(on_popup=None):
 
         summary = ", ".join(processed_docu_nos)
         skip_txt = f"(결재 대상 제외 {skipped}건)" if skipped else ""
+        # 참조문서 집계(카드 전용 훅) — 누락이 요약에서 보이게 한다(2026-08-06 포렌식:
+        # 중간 warn 한 줄뿐이라 요약만 보면 전 건 성공으로 읽히던 보고 갭).
+        refdoc_txt = ""
+        if refdoc_results:
+            ok_n = sum(1 for _, o in refdoc_results if o == "첨부")
+            misses = [(k, o) for k, o in refdoc_results if o != "첨부"]
+            miss_txt = (
+                f" · 미첨부 {len(misses)}건(" + ", ".join(f"{k}: {o}" for k, o in misses) + ")"
+                if misses
+                else ""
+            )
+            refdoc_txt = f" 참조문서 첨부 {ok_n}건{miss_txt}."
         await emit_log(
             events,
             f"결재창 확인 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 가상 상신"
-            f"(실제 상신 없음). 조회 {rowcount}건 {skip_txt}. 전표: {summary}",
+            f"(실제 상신 없음). 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}",
             "ok",
         )
         await emit_step(events, "loop_approvals", "done", _ms(t0))
@@ -321,7 +341,7 @@ def make_loop_approvals_node(on_popup=None):
             "processed_docu_nos": processed_docu_nos,
             "result": (
                 f"처리 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 결제창 확인"
-                f"(가상 상신, 실제 상신 없음). 조회 {rowcount}건 {skip_txt}. 전표: {summary}. "
+                f"(가상 상신, 실제 상신 없음). 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}. "
                 "실제 상신은 옴니솔에서 직접 진행하세요."
             ),
         }
