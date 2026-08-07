@@ -508,13 +508,17 @@ async def _close_picker_verified(page: Any, before: int) -> None:
 async def _confirm_picker_closed(page: Any, before: int, label: str) -> dict:
     """'적용' 클릭 후 피커 팝업이 **닫혔는지** 개수 복귀로 확정. 반환 {ok, reason?|warn?}.
 
-    ⚠ 기존 _wait_picker_closed 는 page.wait_for_timeout 기반 명목 상한 1.5s 라 delay_scale
-    0.15 에서 실상한 ~225ms 로 붕괴했고, 미닫힘이어도 **아무 것도 보고하지 않았다**. 적용이
-    폼에 안 붙은 채 다음 피커로 넘어가면 그 창을 읽어 0건이 되므로 하드 실패로 다룬다.
+    적용이 폼에 안 붙은 채 다음 피커로 넘어가면 그 창을 읽어 0건이 되므로 하드 실패로 다룬다.
+    개수 리더 불가 세션(before<0)은 실시간 상한 폴백(_wait_picker_closed — rowcount 리더 관찰)
+    으로 관찰만 하고 '확인 불가'로 보고하되, 폴백이 미닫힘(False)을 관측하면 warn 에 병기한다
+    (2026-08-07 리뷰 — bool 신호 유실 봉합; 종전 명목 상한 붕괴 서술은 실시간 전환으로 해소됨).
     """
     if before < 0:
-        await _wait_picker_closed(page)  # 개수를 못 읽는 세션 — 기존 폴백(확인 불가).
-        return {"ok": True, "warn": f"{label} 피커 닫힘 확인 불가(팝업 개수 미확인)"}
+        closed = await _wait_picker_closed(page)  # 개수를 못 읽는 세션 — 실시간 관찰 폴백.
+        warn = f"{label} 피커 닫힘 확인 불가(팝업 개수 미확인)"
+        if not closed:
+            warn += " — rowcount 리더는 미닫힘을 관측(다음 피커 오독 주의)"
+        return {"ok": True, "warn": warn}
     gone = await verify.confirm_popup_count(
         page, less_than=before + 1, timing=verify.ASYNC, unknown_when=_not_int
     )
@@ -1031,6 +1035,11 @@ async def dismiss_modals_verified(page: Any, rounds: int = 3) -> dict:
     return out
 
 
+# '적용' 후 모달 시퀀스 관찰 창(초) — **실시간**. save_document 의 _SAVE_* 와 동일 규율.
+_APPLY_POLL_S = 0.15
+_APPLY_CAP_S = 45.0
+
+
 async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
     """처리한 행들을 체크 → 카드팝업 '적용' → 확인 모달 처리 → 팝업 닫힘·문서 반영.
 
@@ -1052,11 +1061,18 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
     await page.mouse.click(box["x"], box["y"])
 
     # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. check-first(400ms
-    # 선대기 제거) + 간격 축소 — 40행 처리 시 각 모달을 뜨는 즉시 클릭. 상한 45s(대량 행 서버
-    # 처리 여유). 계측(clicks/iters/elapsed)을 반환해 다음 런에서 병목 위치를 본다.
+    # 선대기 제거) — 각 모달을 뜨는 즉시 클릭. 상한 45s(대량 행 서버 처리 여유)는 **실시간**
+    # 단일 상한이다 — 종전 range(300)×wait_for_timeout(150) 명목 카운터는 delay_scale 0.15
+    # 에서 실관찰창이 ~12-20s 로 붕괴해, 40행 '적용'의 서버 처리·모달 시퀀스가 12s 를 넘으면
+    # '팝업 미닫힘' 조기 하드 실패가 났다(2026-08-07 감사, save_document 관찰창과 동형 교정).
+    # 폴 간격은 _real_sleep(실시간; 단위 테스트는 conftest 가 no-op 으로 치환 → 명목 폴 수가
+    # 대신 상한을 센다). 계측(clicks/iters/elapsed)을 반환해 다음 런에서 병목 위치를 본다.
     t0 = time.monotonic()
     clicks = 0
-    for it in range(300):
+    polls = 0
+    while True:
+        if max(time.monotonic() - t0, polls * _APPLY_POLL_S) > _APPLY_CAP_S:
+            break
         yes = await page.evaluate(js.MODAL_BTN_BOX_JS, "예")
         if yes:
             await page.mouse.click(yes["x"], yes["y"])
@@ -1071,10 +1087,9 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
             dismissed = await dismiss_blocking_modals(page)
             elapsed = int((time.monotonic() - t0) * 1000)
             return {"ok": True, "checked": chk.get("checked"), "late_modals": dismissed[:4],
-                    "clicks": clicks, "iters": it, "elapsed_ms": elapsed}
-        await page.wait_for_timeout(150)
-        if (time.monotonic() - t0) > 45:
-            break
+                    "clicks": clicks, "iters": polls, "elapsed_ms": elapsed}
+        await _real_sleep(_APPLY_POLL_S)
+        polls += 1
     modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
     return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals,
             "clicks": clicks, "elapsed_ms": int((time.monotonic() - t0) * 1000)}

@@ -818,6 +818,49 @@ async def test_save_final_requery_unreadable_holds_judgment(monkeypatch):
     assert "처리 완료" in out["result"] and out["retry_save"] is False
 
 
+async def test_save_final_requery_click_failure_skips_stale_grid_read(monkeypatch):
+    """재조회(F2) 클릭 실패면 confirm_grid_rows 를 아예 돌리지 않고 보류(2026-08-07 감사).
+
+    클릭이 안 됐는데 confirm 을 돌리면 F7 이전 화면의 스테일 마스터 그리드(항상 ≥1행)가
+    min_rows=1 을 통과해, 팬텀 저장(관리항목 미입력 거부)을 '재조회 문서 지속'으로 오판한다.
+    """
+    from nbkit.omnisol.verify import Confirmed
+
+    async def _ok_save(page, confirm):
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+
+    async def _click_fail(page, sel):
+        return False  # F2 버튼 미발견 — 재조회 미실행
+
+    reads: list = []
+
+    async def _stale_rows(page, **kw):
+        reads.append(kw)
+        return Confirmed(True, 3, 1, 0, None, False)  # 스테일 그리드 3행이 '통과'하는 함정
+
+    monkeypatch.setattr(save, "js_click", _click_fail)
+    monkeypatch.setattr(save.verify, "confirm_grid_rows", _stale_rows)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_final_node()(
+        {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
+    )
+    assert "처리 완료" in out["result"] and out["retry_save"] is False  # 보류 = saved 유지
+    assert reads == []  # 클릭 미실행이면 스테일 그리드를 읽지 않는다(가짜 양성 신호 차단)
+    logs = []
+    while not events.empty():
+        ev = events.get_nowait()
+        if isinstance(ev.get("log"), str):
+            logs.append(ev["log"])
+    assert any("재조회(F2) 클릭 실패" in m for m in logs)  # 보류 사유가 warn 으로 남는다
+
+
 def test_parse_save_rejections_extracts_aprvl_account_and_maps_row():
     """ERP 거부 메시지에서 승인번호·요구계정을 뽑고 rows_list APRVL_NO 로 행을 매핑한다."""
     from app.agents.card_collect.nodes import _parse_save_rejections, _save_guidance
@@ -1209,8 +1252,12 @@ def test_graph_compiles_and_channels_include_inherited_base_keys():
     assert {"page", "params", "result"} <= set(g.channels)
 
 
-async def test_prefill_cost_prefix_biases_default_budget():
-    """비용구분 접두사가 있으면 기본지정이 없어도 접두사 일치 예산단위로 폴백한다."""
+async def test_prefill_without_star_default_leaves_budget_empty():
+    """기본지정(★)이 없으면 기본값도 없다 — 빈 값으로 남겨 사용자가 개입 그리드에서 고른다.
+
+    예전엔 접두사 일치 **첫 후보**로 blind 폴백했는데, 후보 정렬상 첫 항목이 '(판)주민세'
+    같은 무관 계정이라 LLM 판단 불가 행이 주민세로 도배됐다(2026-08-05 실측 — 폴백 제거).
+    """
     from types import SimpleNamespace
 
     from app.agents.card_collect.nodes import _prefill_selections
@@ -1218,7 +1265,7 @@ async def test_prefill_cost_prefix_biases_default_budget():
     events: asyncio.Queue = asyncio.Queue()
     settings = SimpleNamespace(gemini_api_key="")  # AI 스킵 → 기본 폴백 경로.
     rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
-    # isDefault 없음. (판)/(제) 두 후보 — cost_prefix='(제)' 면 제조원가 계정이 폴백돼야 한다.
+    # isDefault 없음 — 접두사 일치 후보가 있어도 blind 로 채우지 않는다.
     budget_favs = [
         {"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
         {"code": "M1", "name": "인사기획팀", "bgacctNm": "(제)복리후생비"},
@@ -1226,8 +1273,8 @@ async def test_prefill_cost_prefix_biases_default_budget():
     out = await _prefill_selections(
         events, settings, rows_list, {0: "적요"}, budget_favs, [], [], cost_prefix="(제)"
     )
-    assert out[1]["budgetSource"] == "default"
-    assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
+    assert out[1]["budgetSource"] is None
+    assert out[1]["budgetUnit"] is None  # 빈 값 — 그리드에서 사용자가 직접 선택
 
 
 # ── 회계일(set_acct_date) — 수집 기간 월의 말일(규칙 2026-07-04) ────────────────
@@ -2128,3 +2175,129 @@ async def test_save_final_vehicle_flow_per_row_assignments(monkeypatch):
     # 내역1(grid idx 0)→차량2(카니발 4101), 내역2(grid idx 2)→차량1(1169).
     assert fills == [[(0, "4101"), (2, "1169")]]
     assert "입력·저장" in out["result"] and out["retry_save"] is False
+
+
+# ── mgmt_items 팝업 위생(검증된 닫기·실패 분기 정리 — 2026-08-07 감사) ─────────────
+from nbkit.omnisol import js_lib  # noqa: E402
+
+
+class _VehiclePopupPage:
+    """차량 팝업 fake — popups 스택으로 개수/덤프 시맨틱을 지킨다(닫힘 미동작 주입 가능)."""
+
+    def __init__(self, *, closes: bool = True, popup_open: bool = True):
+        self.popups: list[str] = ["업무용 차량"] if popup_open else []
+        self._closes = closes
+        self.close_calls = 0
+        self.mouse = self
+
+    async def click(self, x, y):
+        return None
+
+    async def dblclick(self, x, y):
+        return None  # 더블클릭이 적용에 실패하는 사고(팝업 잔존)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if script == js_lib.POPUP_COUNT_JS:
+            self.count_reads = getattr(self, "count_reads", 0) + 1
+            return len(self.popups)
+        if script == js_lib.PICKER_CLOSE_JS:
+            self.close_calls += 1
+            if self._closes and self.popups:
+                self.popups.pop()
+            return True
+        if script == mgmt_items._VEHICLE_POPUP_DUMP_JS:
+            if not self.popups:
+                return {"ok": False, "reason": "no-popup"}
+            return {"ok": False, "title": "업무용 차량", "err": "grid detach"}
+        if script == mgmt_items._POPUP_ROW_RECT_JS:
+            return {"x": 5, "y": 6}
+        return None
+
+
+async def test_close_popup_verifies_popup_count_decrease():
+    """닫기 후 팝업 개수 감소를 확인한다 — 종전(닫기 JS + 고정 0.5s + 예외 무음)은 미확인."""
+    page = _VehiclePopupPage(closes=True)
+    await mgmt_items._close_popup(page)
+    assert page.close_calls == 1 and page.popups == []
+    # ⚠ 핀(2026-08-07 리뷰): 감소 '확인'이 실제로 있었음을 개수 read 횟수로 고정 —
+    # 종전(무검증 닫기)으로 되돌리면 read 0회라 이 단언이 잡는다(스냅샷 + 확인 read ≥ 2).
+    assert getattr(page, "count_reads", 0) >= 2
+
+
+async def test_close_popup_warns_when_popup_survives(caplog):
+    """닫기가 안 먹으면 최소 warn — 잔존 팝업이 후속 덤프/상세행 클릭을 가로챈다."""
+    import logging
+
+    page = _VehiclePopupPage(closes=False)
+    with caplog.at_level(logging.WARNING, logger="app.agents.card_collect.mgmt_items"):
+        await mgmt_items._close_popup(page)
+    assert page.close_calls >= 1
+    assert any("닫히지 않았을" in r.message for r in caplog.records)
+
+
+async def test_close_popup_noop_when_no_popup():
+    """닫을 팝업이 없으면 닫기 JS 를 쏘지 않는다(최상단 창 오클릭 방지)."""
+    page = _VehiclePopupPage(popup_open=False)
+    await mgmt_items._close_popup(page)
+    assert page.close_calls == 0
+
+
+async def test_close_residual_popup_closes_leftover_and_skips_when_absent():
+    page = _VehiclePopupPage(closes=True)
+    await mgmt_items._close_residual_popup(page)
+    assert page.popups == []  # 잔존 팝업 정리됨
+    page2 = _VehiclePopupPage(popup_open=False)
+    await mgmt_items._close_residual_popup(page2)
+    assert page2.close_calls == 0  # 없는데 닫기 시도하지 않음
+
+
+async def test_fill_vehicle_readback_mismatch_closes_residual_popup(monkeypatch):
+    """더블클릭이 적용에 실패(readback 불일치)하면 잔존 팝업을 닫고 다음 배정으로 —
+    안 닫으면 다음 배정의 행 선택·돋보기 클릭이 스테일 창에 먹혀 연쇄 실패한다."""
+
+    async def _select_ok(page, idx):
+        return True
+
+    async def _popup_ok(page):
+        return {"ok": True, "n": 1, "rows": [{"code": "1169", "name": "G80", "carNo": "178노1169", "rent": "자가"}]}
+
+    async def _never_reflected(page, code, **kw):
+        return {"found": True, "code": ""}  # 적용이 안 붙음
+
+    monkeypatch.setattr(mgmt_items, "_select_detail_row", _select_ok)
+    monkeypatch.setattr(mgmt_items, "_open_vehicle_popup", _popup_ok)
+    monkeypatch.setattr(mgmt_items, "_poll_vehicle_reflected", _never_reflected)
+    page = _VehiclePopupPage(closes=True)
+    r = await mgmt_items.fill_vehicle(page, [(0, _VEHICLES[0])])
+    assert r["ok"] is False and r["failed"][0]["row"] == 1
+    assert "반영 확인 실패" in r["failed"][0]["reason"]
+    assert page.popups == []  # 실패 분기에서 잔존 팝업이 정리됐다
+
+
+async def test_open_vehicle_popup_dump_error_closes_leftover_popup(monkeypatch):
+    """돋보기로 팝업은 열렸는데 덤프가 err 로 실패하면 열린 팝업을 닫고 실패를 보고한다."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)  # 덤프 재시도 상한 축소(테스트 속도)
+
+    class _DumpErrPage(_VehiclePopupPage):
+        def __init__(self):
+            super().__init__(closes=True, popup_open=False)
+
+        async def click(self, x, y):
+            self.popups = ["업무용 차량"]  # 돋보기 클릭 → 팝업 오픈
+
+        async def evaluate(self, script, arg=None):
+            if script == mgmt_items._ROW_SCROLL_JS:
+                return True
+            if script == mgmt_items._ROW_BUTTON_JS:
+                return {"x": 1, "y": 2}
+            return await super().evaluate(script, arg)
+
+    page = _DumpErrPage()
+    r = await mgmt_items._open_vehicle_popup(page)
+    assert r["ok"] is False and "덤프 실패" in r["reason"]
+    assert page.popups == []  # 열린 팝업을 방치하지 않는다

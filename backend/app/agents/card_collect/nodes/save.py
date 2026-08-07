@@ -222,14 +222,23 @@ async def _attempt_save(state: dict, events, page) -> dict:
         )
     persisted = None
     try:
-        await js_click(page, selectors.BTN_LOOKUP)  # 조회(F2)
-        persisted = await verify.confirm_grid_rows(
-            page,
-            index=0,
-            min_rows=1,
-            timing=verify.HEAVY,
-            unknown_when=lambda v: not isinstance(v, int) or v < 0,
-        )
+        # ⚠ fire-and-forget 봉합(2026-08-07 감사): js_click False(F2 버튼 미발견)면 재조회가
+        #   실행되지 않은 것 — 그 상태에서 confirm 을 돌리면 F7 이전 화면의 스테일 마스터
+        #   그리드(항상 ≥1행)가 min_rows=1 을 통과해 팬텀 저장을 '재조회 문서 지속'으로
+        #   오판·오로그한다. 클릭 미실행이면 판독 불가(보류=saved 유지)로만 다룬다
+        #   (voucher_receivable run_query 의 js_click 반환 확인과 동형).
+        if await js_click(page, selectors.BTN_LOOKUP):  # 조회(F2)
+            persisted = await verify.confirm_grid_rows(
+                page,
+                index=0,
+                min_rows=1,
+                timing=verify.HEAVY,
+                unknown_when=lambda v: not isinstance(v, int) or v < 0,
+            )
+        else:
+            await emit_log(
+                events, "저장 재조회(F2) 클릭 실패 — 문서 지속 확인 보류(스테일 그리드 오판 방지).", "warn"
+            )
     except Exception as exc:  # noqa: BLE001 — 재조회 검증 실패는 저장 판정을 뒤집지 않는다(보류).
         await emit_log(events, f"저장 재조회 검증 보류(무시): {exc}", "warn")
     if persisted is not None and persisted.mismatch:  # 읽었는데 0건 = 서버에 문서 없음.

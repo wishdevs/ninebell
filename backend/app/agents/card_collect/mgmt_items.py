@@ -14,13 +14,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib, latency
+from nbkit.omnisol import js_lib, latency, verify
 from nbkit.omnisol.codepicker import _picker_search
+
+logger = logging.getLogger("app.agents.card_collect.mgmt_items")
 
 VEHICLE_LABEL = "업무용차량"
 
@@ -190,6 +193,8 @@ async def _open_vehicle_popup(page: Any) -> dict:
             break
         await asyncio.sleep(0.3)
     if not dump.get("ok"):
+        # 덤프 실패(err)여도 돋보기 클릭으로 팝업은 열렸을 수 있다 — 방치하면 다음 조작 오염.
+        await _close_residual_popup(page)
         return {"ok": False, "reason": f"차량 팝업 덤프 실패: {dump.get('reason') or dump.get('err')}"}
     return dump
 
@@ -215,11 +220,44 @@ async def _poll_vehicle_reflected(page: Any, code: str, *, cap_ms: int = 2_400) 
 
 
 async def _close_popup(page: Any) -> None:
+    """차량 팝업 닫기 + **팝업 개수 감소** 확인(card_collect steps._close_picker_verified 이식).
+
+    종전(닫기 JS + 고정 0.5s + 예외 무음)은 닫힘을 확인하지 않았다 — 안 닫힌 '업무용 차량'
+    팝업이 남으면 _VEHICLE_POPUP_DUMP_JS(마지막 가시 k-window)와 후속 상세행 클릭이 스테일
+    창을 읽어 조용히 오작동한다(2026-08-07 감사). 미감소는 최소 warn 으로 남긴다(soft —
+    이 닫기는 정리 조치이고 후속 스텝이 각자 자기 조건을 확인한다).
+    """
     try:
+        before = await page.evaluate(js_lib.POPUP_COUNT_JS)
+        if isinstance(before, int) and before <= 0:
+            return  # 닫을 팝업이 없다.
         await page.evaluate(js_lib.PICKER_CLOSE_JS)
-        await asyncio.sleep(0.5)
-    except Exception:  # noqa: BLE001 — 닫기 실패는 다음 오픈 시도에서 드러난다.
-        pass
+        if not isinstance(before, int):
+            await asyncio.sleep(0.5)  # 개수 미확인 세션 — 종전 정착 대기 폴백(확인 불가).
+            return
+        gone = await verify.confirm_popup_count(
+            page, less_than=before, timing=verify.ASYNC,
+            unknown_when=lambda v: not isinstance(v, int),
+        )
+        if not gone:
+            logger.warning("차량 팝업이 닫히지 않았을 수 있습니다 — %s", gone.reason)
+    except Exception:  # noqa: BLE001 — 닫기 실패는 warn 후 다음 오픈 시도에서 드러난다.
+        logger.warning("차량 팝업 닫기 실패(무시) — 다음 오픈 시도에서 드러난다", exc_info=True)
+
+
+async def _close_residual_popup(page: Any) -> None:
+    """실패 분기 정리 — 차량 팝업이 남아 있으면 검증된 닫기(voucher steps._fail_close 이식).
+
+    반영 실패(더블클릭 미적용 등)·덤프 실패 후 팝업을 열어 둔 채 다음 배정으로 넘어가면
+    잔존 팝업이 상세행 선택·돋보기 클릭을 가로채 연쇄 실패하거나 엉뚱한 행을 조작한다.
+    """
+    try:
+        dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS)
+    except Exception:  # noqa: BLE001 — 잔존 확인 실패가 원래 실패 사유를 덮지 않는다.
+        return
+    if isinstance(dump, dict) and dump.get("reason") == "no-popup":
+        return
+    await _close_popup(page)
 
 
 async def survey_vehicle_targets(page: Any) -> dict:
@@ -338,6 +376,9 @@ async def fill_vehicle(
         if rb.get("found") and (rb.get("code") or "") == (vehicle.get("code") or ""):
             done.append(row_no)
         else:
+            # 더블클릭/'적용'이 안 붙었으면 팝업이 열린 채 남았을 수 있다 — 정리하지 않으면
+            # 다음 배정의 행 선택·돋보기 클릭이 잔존 창에 먹혀 연쇄 실패한다(_fail_close 규율).
+            await _close_residual_popup(page)
             failed.append({
                 "row": row_no,
                 "reason": f"반영 확인 실패(기대 {vehicle.get('code')} / 실제 {rb.get('code')!r})",

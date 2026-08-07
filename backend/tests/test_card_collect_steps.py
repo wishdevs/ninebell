@@ -814,3 +814,135 @@ async def test_save_document_observation_loop_does_not_use_scaled_wait():
     assert r["ok"] is True
     assert page.timeouts == 0, "관찰 루프가 delay_scale 대상 대기(wait_for_timeout)를 썼다"
     assert page.snaps >= int(steps._SAVE_MIN_OBSERVE_S / steps._SAVE_POLL_S)
+
+
+# ── apply_rows_to_document 관찰 창(실시간) — 2026-08-07 감사 교정 회귀 ─────────────
+class _StuckCardWinPage(_LateModalPage):
+    """'적용' 후 카드팝업이 끝내 닫히지 않는 fake — 모달도 없다(서버 처리 장기화 흉내)."""
+
+    def __init__(self):
+        super().__init__(card_win=True)
+        self._spawned = True  # 부모의 지연 모달 스폰 비활성화(모달 없음 유지)
+        self.timeouts = 0
+
+    async def wait_for_timeout(self, ms):
+        self.timeouts += 1
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if script == js.MODALS_SNAPSHOT_JS:
+            return []
+        return await super().evaluate(script, arg)
+
+
+async def test_apply_rows_to_document_cap_loop_does_not_use_scaled_wait():
+    """미닫힘 관찰 루프가 wait_for_timeout(명목 카운터)을 쓰면 delay_scale 0.15 에서 45s
+    상한이 ~12-20s 로 붕괴한다 — _real_sleep(실시간, 테스트에선 no-op) 폴이어야 한다."""
+    page = _StuckCardWinPage()
+    r = await steps.apply_rows_to_document(page, [0, 1])
+    assert r["ok"] is False and "닫히지 않음" in r["reason"]
+    assert page.timeouts == 0, "관찰 루프가 delay_scale 대상 대기(wait_for_timeout)를 썼다"
+    # 명목 폴백 카운터로도 45s 상한(300폴)까지는 관찰했다(조기 소진 금지).
+    assert r["elapsed_ms"] >= 0 and r["clicks"] == 0
+
+
+# ── 공용 엔진 fill_codepicker — '적용' 미출현/미닫힘 가짜 성공 차단(2026-08-07 감사) ──
+class _EnginePickerPage:
+    """엔진 fill_codepicker fake — 팝업 open 상태로 오픈/선택/적용/닫힘 시맨틱을 지킨다."""
+
+    def __init__(self, *, has_apply=True, closes=True):
+        self._has_apply = has_apply
+        self._closes = closes
+        self.open = False
+        self.clicks: list[tuple] = []
+        self.close_calls = 0
+        self.mouse = self
+
+    async def click(self, x, y):
+        self.clicks.append((x, y))
+        if (x, y) == (51, 51):
+            self.open = True  # 돋보기 → 팝업 오픈
+        if (x, y) == (52, 52) and self._closes:
+            self.open = False  # '적용' → 닫힘
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if "bg_cd-wrapper" in script:
+            return {"x": 51, "y": 51}
+        if script == js_lib.PICKER_ROWCOUNT_JS:
+            return 1 if self.open else -1
+        if script == js_lib.PICKER_READ_JS:
+            return {"rows": 1, "options": [{"i": 0, "code": "2006", "name": "본사"}]}
+        if script == js_lib.PICKER_SELECT_JS:
+            return {"ok": True}
+        if script == js_lib.PICKER_APPLY_BTN_JS:
+            return {"x": 52, "y": 52} if self._has_apply else None
+        if script == js_lib.PICKER_CLOSE_JS:
+            self.close_calls += 1
+            self.open = False
+            return True
+        return None
+
+
+async def test_engine_fill_codepicker_ok_when_applied_and_closed():
+    page = _EnginePickerPage()
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is True and r["code"] == "2006"
+    assert page.open is False  # 피커가 실제로 닫혔다
+
+
+async def test_engine_fill_codepicker_fails_when_apply_button_missing(monkeypatch):
+    """'적용' 버튼 미출현이면 선택이 폼에 안 붙는다 — 예전엔 무조건 {ok:True, code, name}."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)  # 폴 상한 축소(테스트 속도)
+    page = _EnginePickerPage(has_apply=False)
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is False and "적용" in r["reason"]
+    assert page.close_calls >= 1 and page.open is False  # 실패 시 피커를 방치하지 않는다
+
+
+async def test_engine_fill_codepicker_fails_when_picker_stays_open(monkeypatch):
+    """'적용' 후에도 팝업이 남으면 하드 실패 — 다음 non-법인카드 k-window 조작 오염 차단."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)
+    page = _EnginePickerPage(closes=False)
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is False and "닫히지 않" in r["reason"]
+    assert page.open is False  # _fail 경로가 잔존 팝업을 닫았다
+
+
+# ── 공용 엔진 _open_picker — 버튼 출현 폴링 상한은 실시간(2026-08-07 감사) ─────────
+class _SlowBtnPage:
+    """코드피커 버튼이 41번째 폴에야 렌더되는 fake — 종전 명목 24폴 상한이면 미오픈 실패."""
+
+    def __init__(self, appear_on: int = 41):
+        self._appear_on = appear_on
+        self.btn_polls = 0
+        self.open = False
+        self.mouse = self
+
+    async def click(self, x, y):
+        self.open = True
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if "bg_cd-wrapper" in script:
+            self.btn_polls += 1
+            return {"x": 1, "y": 2} if self.btn_polls >= self._appear_on else None
+        if script == js_lib.PICKER_ROWCOUNT_JS:
+            return 3 if self.open else -1
+        return None
+
+
+async def test_engine_open_picker_budget_is_realtime_not_poll_count():
+    """실시간 예산(6s) 안이면 폴 횟수와 무관하게 오픈 성공 — delay_scale 0.15 에서 관찰창이
+    24×37.5ms≈0.9s 로 붕괴하던 명목 카운터 회귀 방지(2026-07-10 prod 0건 사고 재발 차단)."""
+    page = _SlowBtnPage(appear_on=41)  # 종전 range(24) 상한을 넘는 지연 출현
+    assert await steps._open_picker(page, "bg_cd") is True
+    assert page.btn_polls >= 41 and page.open is True
