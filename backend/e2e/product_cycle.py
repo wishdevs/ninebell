@@ -25,6 +25,7 @@ env: E2E_FRONTEND(기본 http://localhost:3101) · E2E_USERID · E2E_PASSWORD ·
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -136,6 +137,20 @@ def as_int(v: object) -> int | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # agent_runs 그라운드트루스 — 제품 경로를 탔다는 증거(그래프 직접 호출은 런을 남기지 않는다)
 # ─────────────────────────────────────────────────────────────────────────────
+def db_run_by_id(run_id: str) -> dict | None:
+    """agent_runs 단일 행(id 고정) — 판정을 **이 사이클이 만든 런**에 묶는다.
+
+    ⚠ latest 기반 판정은 사이클이 중첩되면 다른 사이클의 런을 집어 오염된다(2026-08-07
+    20회 배치 실측: stale-terminal 조기 이탈 → 런 중첩 → latest 오독 연쇄).
+    """
+    sql = (
+        "SELECT id || E'\\t' || status || E'\\t' || coalesce(replace(result::text, E'\\n', ' '), '')"
+        " || E'\\t' || started_at "
+        f"FROM agent_runs WHERE id = '{run_id}' LIMIT 1;"
+    )
+    return _db_run_row(sql)
+
+
 def db_latest_run(workflow_id: str) -> dict | None:
     """agent_runs 최신 1행(id·status·result·started_at). 조회 실패/미존재는 None."""
     sql = (
@@ -143,6 +158,10 @@ def db_latest_run(workflow_id: str) -> dict | None:
         " || E'\\t' || started_at "
         f"FROM agent_runs WHERE agent_id = '{workflow_id}' ORDER BY started_at DESC LIMIT 1;"
     )
+    return _db_run_row(sql)
+
+
+def _db_run_row(sql: str) -> dict | None:
     try:
         out = subprocess.run(
             ["docker", "exec", "dashboard-pg", "psql", "-U", "dashboard", "-d", "dashboard",
@@ -310,8 +329,55 @@ async def submit_pre_run(page: Page) -> None:
     raise RuntimeError(f"활성 '실행' 버튼을 찾지 못했습니다(후보 {total}개 — 필수 입력 미완료?).")
 
 
+async def wait_terminal_by_db(page: Page, run_id: str, timeout_s: int = RESULT_WAIT_TIMEOUT_S) -> dict:
+    """**이 런(run_id)의 DB 상태가 종결**될 때까지 대기 — UI '닫기' 단독 판정의 오인 차단.
+
+    ⚠ 근본원인(2026-08-07 20회 배치 실측): '닫기' 버튼은 **이전 런의 결과 패널**에도 떠 있어,
+    반복 사이클에서 새 런 제출 직후 stale 패널을 종료로 오인 → 조기 이탈 → 다음 사이클과 런
+    중첩 → 자동 취소 연쇄가 났다. 판정은 run_id 의 DB 종결 상태(succeeded/failed/cancelled)로
+    하고, UI 텍스트(결과/실패사유)는 종결 후 **보조 관측**으로만 걷는다.
+    """
+    out: dict = {"terminal": False, "ui_status": None, "result_text": None, "fail_reason": None,
+                 "db_status": None}
+    elapsed = 0
+    st = None
+    while elapsed < timeout_s:
+        row = db_run_by_id(run_id)
+        st = (row or {}).get("status")
+        if st in ("succeeded", "failed", "cancelled"):
+            out["terminal"] = True
+            out["db_status"] = st
+            break
+        await asyncio.sleep(3)
+        elapsed += 3
+        if elapsed % 30 < 3:
+            print(f"[P1] ...종료 대기 {elapsed}s (run={run_id[:8]} status={st})", flush=True)
+    if not out["terminal"]:
+        return out
+    try:
+        await page.wait_for_timeout(1_500)  # UI 렌더 유예 — 텍스트 수집은 보조 관측.
+        banner = page.get_by_text("실행 실패 — 사유")
+        if await banner.count() > 0 and await banner.first.is_visible():
+            out["ui_status"] = "failed"
+            out["fail_reason"] = (await banner.first.locator("xpath=..").inner_text()).strip()[:600]
+        else:
+            out["ui_status"] = out["db_status"]
+        done = page.get_by_text("처리 완료")
+        for i in range(await done.count()):
+            loc = done.nth(i)
+            if await loc.is_visible():
+                out["result_text"] = (await loc.inner_text()).strip()[:400]
+                break
+    except Exception:  # noqa: BLE001 — UI 수집 실패는 판정에 영향 없음(판정은 DB).
+        pass
+    return out
+
+
 async def wait_terminal(page: Page, timeout_s: int = RESULT_WAIT_TIMEOUT_S) -> dict:
-    """종료(헤더 '닫기' 노출)까지 대기하고 화면에서 읽히는 결과/실패사유를 수집."""
+    """종료(헤더 '닫기' 노출)까지 대기하고 화면에서 읽히는 결과/실패사유를 수집.
+
+    ⚠ 반복 사이클에는 쓰지 말 것 — '닫기'는 이전 런 패널에도 떠 stale-terminal 오인이 있다.
+    run_product 는 wait_terminal_by_db(런 id 고정)로 판정한다(2026-08-07)."""
     out: dict = {"terminal": False, "ui_status": None, "result_text": None, "fail_reason": None}
     close_btn = page.get_by_role("button", name="닫기", exact=True)
     elapsed = 0
@@ -365,7 +431,7 @@ async def run_product(
     report: dict = {
         "logged_in": False, "form_filled": False, "submitted": False, "terminal": False,
         "ui_status": None, "result_text": None, "fail_reason": None,
-        "run_before": None, "run_after": None, "run_recorded": False, "db_status": None,
+        "run_before": None, "run_after": None, "run_id": None, "run_recorded": False, "db_status": None,
         "screenshot": None, "error": None, "page_probe": None,
     }
     report["run_before"] = db_latest_run(workflow_id)
@@ -392,9 +458,24 @@ async def run_product(
 
         await submit_pre_run(page)
         report["submitted"] = True
-        print(f"[P1] 실행 클릭 — 종료까지 최대 {timeout_s}s 대기", flush=True)
 
-        term = await wait_terminal(page, timeout_s)
+        # 새 런 행 출현 대기 — 제출이 실제로 런을 만들었는지 확인하고 이후 모든 판정을 그 id 에
+        # 묶는다(latest 오독·stale-terminal 오염 차단, 2026-08-07).
+        before_id = (report["run_before"] or {}).get("id")
+        run_id = None
+        for _ in range(20):
+            latest = db_latest_run(workflow_id)
+            if latest and latest.get("id") and latest.get("id") != before_id:
+                run_id = latest["id"]
+                break
+            await asyncio.sleep(1)
+        report["run_id"] = run_id
+        if run_id is None:
+            report["error"] = "실행 클릭 후 20s 안에 새 agent_runs 행이 나타나지 않았습니다."
+            term = {"terminal": False, "ui_status": None, "result_text": None, "fail_reason": None}
+        else:
+            print(f"[P1] 실행 클릭 — run={run_id[:8]} 종료까지 최대 {timeout_s}s 대기", flush=True)
+            term = await wait_terminal_by_db(page, run_id, timeout_s)
         report.update({k: term[k] for k in ("terminal", "ui_status", "result_text", "fail_reason")})
         shot = str(ART / f"{tag}_p1_result.png")
         await page.screenshot(path=shot, full_page=True)
@@ -415,7 +496,8 @@ async def run_product(
         await browser.close()
         await pw.stop()
 
-    after = db_latest_run(workflow_id)
+    # 그라운드트루스는 이 사이클의 런 id 로 고정해 읽는다(중첩 사이클의 latest 오독 방지).
+    after = db_run_by_id(report["run_id"]) if report.get("run_id") else db_latest_run(workflow_id)
     report["run_after"] = after
     before_id = (report["run_before"] or {}).get("id")
     if after and after.get("id") and after.get("id") != before_id:
@@ -704,8 +786,8 @@ def summarize_run(c: dict) -> str:
 __all__ = [
     "ART", "FRONTEND_BASE", "HEADLESS", "PASSWORD", "TODAY", "USERID",
     "BTN_BOX_JS", "MASTER_DUMP_JS", "MASTER_ROWCOUNT_JS", "SELECT_MASTER_JS",
-    "add_row", "as_int", "collect_detail", "dashboard_login", "db_latest_run",
+    "add_row", "as_int", "collect_detail", "dashboard_login", "db_latest_run", "db_run_by_id",
     "detail_view", "erp_verify_and_delete", "open_agent", "pick_combo", "query_master",
     "row_is_ours", "row_scope", "run_cycles", "run_product", "set_date", "set_select",
-    "set_switch", "submit_pre_run", "summarize_run", "wait_terminal",
+    "set_switch", "submit_pre_run", "summarize_run", "wait_terminal", "wait_terminal_by_db",
 ]
