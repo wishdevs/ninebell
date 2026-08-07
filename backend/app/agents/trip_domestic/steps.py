@@ -561,6 +561,12 @@ async def set_transaction_amount(page: Any, amount: int) -> dict:
     return {"ok": True, "after": primary_after}
 
 
+# ── 예산현황 확인 모달 관찰 파라미터(실시간) — _handle_delete_modal 과 동일 규율 ─────
+_AMT_MODAL_WINDOW_S = 4.8  # 출현 관찰창(종전 명목 8×600ms 유지) — 소진 전엔 '모달 없음' break 금지.
+_AMT_MODAL_POLL_S = 0.25  # 스냅샷 폴 간격.
+_AMT_MODAL_MAX_POLLS = 40  # 폴 횟수 상한 — no-op sleep 테스트에서도 루프가 끝나는 안전판.
+
+
 async def type_amount(page: Any, amount: int) -> dict:
     """공급가액(거래금액 SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(2026-07-09 규명).
 
@@ -602,12 +608,23 @@ async def type_amount(page: Any, amount: int) -> dict:
     #   잔존 모달을 안고 다음 단계(적요·상대계정·최종 F7)로 진행했다. 잔존 k-window 는 이후
     #   피커 오독(최상단 규칙)과 F7 삼킴(팬텀 저장)의 직접 원인이다 → 클릭마다 개수 감소를
     #   확인하고, 끝까지 남아 있으면 하드 실패로 끊는다.
+    # ⚠ 출현 관찰창은 **실시간**(_handle_delete_modal 과 동일 규율, 2026-08-07) — 종전
+    #   for×8 × wait_for_timeout(600) 폴링은 delay_scale(_ScaledPage 0.4)에서 첫 폴이
+    #   600→240ms 로 붕괴해, 모달이 그보다 늦게 뜨면 미처리 break → 잔존 모달(F7 삼킴)
+    #   또는 예산확인 미완(저장 DB오류)이 됐다. 상한은 monotonic + latency.budget_ms,
+    #   폴 대기는 확인 커널과 같은 실시간 구현(verify.DEFAULT_SLEEP — 테스트는 no-op 대체).
     modals_seen: list[str] = []
-    for _ in range(8):
-        await page.wait_for_timeout(600)
+    t0 = time.monotonic()
+    window_s = latency.budget_ms(_AMT_MODAL_WINDOW_S * 1_000) / 1_000
+    for _ in range(latency.budget_polls(_AMT_MODAL_MAX_POLLS)):
         modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
         if not modals:
-            break
+            if modals_seen:
+                break  # 모달 처리 후 소멸 확인 — 완료.
+            if time.monotonic() - t0 >= window_s:
+                break  # 출현 관찰창 소진 — 모달 없이 자동계산되는 세션.
+            await verify.DEFAULT_SLEEP(_AMT_MODAL_POLL_S)
+            continue
         modals_seen.append(str((modals[0] or {}).get("title") or ""))
         before = await _popup_count(page)
         clicked = False
@@ -678,15 +695,22 @@ async def register_counter_partner(page: Any, self_name: str) -> dict:
       진행해 판정 결과를 아예 쓰지 않았다.
     """
     # 상대계정거래처 항목 존재 확인 — 문서유형에 따라 없을 수 있다(해외 정산서 gubun 54 는 관리항목에
-    # 상대계정거래처가 없음, 2026-07-09 실측). 5회 스크롤 시도해도 라벨이 없으면 이 유형은 상대계정을
+    # 상대계정거래처가 없음, 2026-07-09 실측). 관찰창 소진까지 라벨이 없으면 이 유형은 상대계정을
     # 쓰지 않는 것으로 보고 우아하게 스킵(오등록·오류 대신). 국내 자차는 첫 시도에 바로 발견됨.
-    label_present = False
-    for _ in range(5):
-        if await page.evaluate(js.COUNTER_SCROLL_JS):
-            label_present = True
-            break
-        await page.wait_for_timeout(500)
-    if not label_present:
+    # ⚠ 관찰창은 실시간이어야 한다(2026-08-07) — 종전 5×wait_for_timeout(500) 폴링은
+    #   delay_scale(0.4)에서 2s→0.8s 로 붕괴해, 하단 패널 렌더가 느린 세션에서 항목이 실제로
+    #   있는 문서유형(국내 자차)을 '항목 없음'으로 오판 → 상대계정 미등록인 채 skipped 로
+    #   진행·저장했다(이후 어떤 검증도 이 누락을 못 잡는다). 확인 커널(HEAVY, 실시간 대기)로
+    #   판정하고 **소진 후에만** 스킵한다. COUNTER_SCROLL_JS 는 스크롤 부작용이 있지만 종전
+    #   루프도 매 폴마다 실행하던 멱등 액션이라 read 로 반복해도 안전하다.
+    label_chk = await verify.confirm(
+        lambda: page.evaluate(js.COUNTER_SCROLL_JS),
+        lambda v: bool(v),
+        timing=verify.HEAVY,
+        what="상대계정거래처 항목(라벨)",
+        expected="존재",
+    )
+    if not label_chk:
         return {"ok": True, "skipped": True, "reason": "상대계정거래처 항목 없음(문서유형) — 스킵"}
 
     before = await page.evaluate(js.DETAIL_ROWS_JS)
@@ -1082,8 +1106,11 @@ async def set_row_note(page: Any, text: str) -> dict:
       금액)는 전부 after 를 기대값과 대조하는데 **적요만 대조가 없어**, 적요가 빈 채로 저장되거나
       이전 행 값이 남아도 그대로 통과했다(이 스텝은 경조금·학자금·해외출장이 그대로 import 한다).
       셀을 재독해 대조한다. 셀을 못 읽으면(그리드 미접근) 확인 불가로 분류해 warn 후 진행.
+    ⚠ setValue 는 **튕기는** 성격의 값이라 재시도 때 재세팅(reapply)한다 — 튕긴 값은 기다린다고
+      붙지 않는다(해외 쌍둥이 set_row_note 가 같은 이유로 먼저 넣은 안전판, 2026-08-07 역이식).
     """
-    r = await page.evaluate(js.SET_DETAIL_CELL_JS, {"field": "NOTE_DC", "value": text})
+    payload = {"field": "NOTE_DC", "value": text}
+    r = await page.evaluate(js.SET_DETAIL_CELL_JS, payload)
     if not r.get("ok"):
         return {"ok": False, "reason": r.get("reason") or "적요 세팅 실패"}
     want = _norm(text)
@@ -1093,6 +1120,7 @@ async def set_row_note(page: Any, text: str) -> dict:
         timing=verify.INSTANT,
         what="적요(NOTE_DC)",
         expected=text,
+        reapply=lambda: page.evaluate(js.SET_DETAIL_CELL_JS, payload),
         unknown_when=_cell_unreadable,
     )
     if chk:

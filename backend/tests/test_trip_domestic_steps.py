@@ -525,6 +525,30 @@ async def test_set_row_note_unreadable_grid_warns_and_passes():
     assert r["ok"] is True and "확인 불가" in r["warn"]
 
 
+class _BouncyNotePage(_NotePage):
+    """첫 setValue 가 튕기는 세션 — lands_at 번째 세팅부터 셀에 실제로 붙는다."""
+
+    def __init__(self, *, lands_at: int = 2) -> None:
+        super().__init__()
+        self._lands_at = lands_at
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is trip_js.SET_DETAIL_CELL_JS:
+            self.set_calls.append(arg)
+            if len(self.set_calls) >= self._lands_at:
+                self.cell = arg["value"]
+            return {"ok": True, "after": arg["value"], "display": ""}
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_set_row_note_reapplies_when_value_bounces():
+    """튕긴 적요는 대기·재확인만으로는 영영 안 붙는다 — 재시도 때 재세팅(reapply)으로 살린다
+    (해외 쌍둥이 set_row_note 와 동일한 안전판, 2026-08-07 역이식 회귀)."""
+    page = _BouncyNotePage(lands_at=2)
+    r = await steps.set_row_note(page, "유류비 지원")
+    assert r["ok"] is True and len(page.set_calls) >= 2
+
+
 # ── delete_blank_row: F6 사전 게이트(파괴적 액션) ──────────────────────────────
 class _DeleteMouse:
     """삭제 버튼(9,9) 클릭은 **현재 행**을 지운다 — 실 ERP 와 같은 규칙."""
@@ -849,11 +873,12 @@ class _CounterPage:
         self.counter_vals: list = []
         self.rows = ["한국도로공사"]
         self.popups = 0
+        self.waits: list[int] = []
         self.mouse = _CounterMouse(self)
         self.keyboard = _FakeKeyboard()
 
     async def wait_for_timeout(self, ms):  # noqa: ANN001
-        return None
+        self.waits.append(ms)
 
     async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
         if jsstr is trip_js.COUNTER_SCROLL_JS:
@@ -898,6 +923,36 @@ async def test_register_counter_partner_missing_item_skips():
     page = _CounterPage(self_name="이트라이브2", found=False)
     r = await steps.register_counter_partner(page, "이트라이브2")
     assert r["ok"] is True and r["skipped"] is True
+
+
+class _LateCounterPage(_CounterPage):
+    """상대계정거래처 라벨이 늦게 렌더되는 세션 — found_at 번째 스크롤 시도에야 발견된다.
+
+    종전 5×wait_for_timeout(500) 관찰창은 delay_scale=0.4 에서 2s→0.8s 로 붕괴 — 항목이
+    실제로 있는 문서유형을 '항목 없음' skipped 로 오판해 상대계정 미등록인 채 저장하던 자리.
+    실시간 관찰창(확인 커널 HEAVY)은 소진 전까지 폴링을 유지해야 한다.
+    """
+
+    def __init__(self, *, found_at: int, **kw) -> None:
+        super().__init__(**kw)
+        self._found_at = found_at
+        self.scroll_calls = 0
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is trip_js.COUNTER_SCROLL_JS:
+            self.scroll_calls += 1
+            return self.scroll_calls >= self._found_at
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_register_counter_partner_finds_label_after_slow_render():
+    """하단 패널 렌더가 느린 세션 — 관찰창 소진 전에는 '항목 없음' 스킵으로 오판하지 않는다."""
+    page = _LateCounterPage(self_name="이트라이브2", found_at=3)
+    r = await steps.register_counter_partner(page, "이트라이브2")
+    assert r["ok"] is True and "skipped" not in r and r["verified"] is True
+    # ⚠ 핀(2026-08-07 리뷰): 라벨 관찰이 실시간(확인 커널)임을 고정 — 종전 5×wait_for_timeout(500)
+    # 명목 관찰창(delay_scale 0.4 에서 0.8s 붕괴)으로 되돌리면 500 대기가 기록돼 잡힌다.
+    assert 500 not in page.waits
 
 
 # ── type_amount: 잔존 확인 모달 / 에디터 준비 재시도 ──────────────────────────
@@ -1006,6 +1061,35 @@ async def test_type_amount_mismatch_fails_hard():
     page = _AmountTypePage(amount=999)
     r = await steps.type_amount(page, 15400)
     assert r["ok"] is False and "금액 반영 불일치" in r["reason"]
+
+
+class _LateBudgetModalPage(_AmountTypePage):
+    """예산현황 모달이 **몇 번의 스냅샷 폴 뒤에야** 뜨는 세션(느린 예산 조회).
+
+    종전 for×8 × wait_for_timeout(600) 관찰창은 delay_scale=0.4 에서 첫 폴이 240ms — 모달이
+    그보다 늦게 뜨면 미처리 break 로 잔존 모달(F7 삼킴) 또는 예산확인 미완(저장 DB오류)이 됐다
+    (_handle_delete_modal 이 금지한 동종 패턴). 실시간 관찰창은 폴링을 유지해 처리해야 한다.
+    """
+
+    def __init__(self, *, appear_after_polls: int, **kw) -> None:
+        super().__init__(**kw)
+        self._appear_after = appear_after_polls
+        self.snapshots = 0
+
+    async def evaluate(self, jsstr, arg=None):  # noqa: ANN001
+        if jsstr is js_lib.MODALS_SNAPSHOT_JS:
+            self.snapshots += 1
+            if self.snapshots <= self._appear_after:
+                return []
+        return await super().evaluate(jsstr, arg)
+
+
+async def test_type_amount_handles_late_budget_modal():
+    """모달이 첫 스냅샷 이후 늦게 떠도(실시간 관찰창 유지) '확인'을 눌러 예산확인이 완료된다."""
+    page = _LateBudgetModalPage(amount=15400, appear_after_polls=3)
+    r = await steps.type_amount(page, 15400)
+    assert r["ok"] is True and r["modals"] == ["예산현황"]
+    assert page.modal_left == 0  # 늦게 뜬 모달을 실제로 닫았다.
 
 
 # ── _open_detail_cell_picker: 스테일 팝업을 '열렸다'로 오독하지 않는다 ──────────

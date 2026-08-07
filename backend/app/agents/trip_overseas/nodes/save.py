@@ -13,7 +13,7 @@ import time
 from app.agents.common.commit_shield import shielded_commit
 from app.live.events import emit_chat, emit_log, emit_step
 from nbkit.browser.actions import js_click
-from nbkit.omnisol import selectors, verify
+from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.patterns import emit_shot
 
 from ...card_collect import steps as card_steps
@@ -55,6 +55,28 @@ def make_save_doc_node():
         await emit_log(events, f"{filled}개 행 반영 완료 — 저장(F7)을 진행합니다.", "info")
         # F7 전 포커스를 본문으로 강제(잔존 에디터 포커스가 F7 을 삼키는 것 방지, 리뷰 반영).
         await page.evaluate(_BLUR_ACTIVE_JS)
+        # ⚠ F7 **사전 조건 검증**(국내 save 미러, 2026-08-07): 열린 팝업/모달이 0 이어야 한다.
+        #   잔존 k-window(피커·예산현황 확인·삭제 확인)가 F7 을 삼키면 저장이 안 됐는데 오류도
+        #   안 나는 **팬텀 저장**이 된다 — blur 코드가 전제하던 위험인데 정작 검증하는 코드가
+        #   없었다. 남아 있으면 저장을 시도하지 않고 끊는다(팬텀 저장보다 명시적 실패가 안전).
+        popups = await verify.confirm(
+            lambda: page.evaluate(js_lib.POPUP_COUNT_JS),
+            lambda n: isinstance(n, int) and n == 0,
+            timing=verify.ASYNC,
+            what="F7 직전 열린 팝업 수",
+            expected=0,
+            unknown_when=lambda n: not isinstance(n, int),
+        )
+        if popups.mismatch:
+            await emit_step(events, "save_doc", "failed")
+            msg = (
+                f"저장(F7) 중단 — 열린 팝업이 {popups.actual}개 남아 있습니다. "
+                "잔존 팝업은 F7 을 삼켜 팬텀 저장을 유발합니다."
+            )
+            await emit_log(events, msg, "error")
+            return {"error": msg, "retry_save": False}
+        if popups.unknown:
+            await emit_log(events, f"F7 직전 팝업 수 확인 불가 — 진행: {popups.reason}", "warn")
         # ⚠ TODO(Phase 6): 저장 성공의 **양성 신호**(결의번호 채번·성공 토스트)는 실 F7 저장으로만
         #   실측 가능하다. 현재 save_document 는 실패 신호(검증 토스트·오류 모달) 부재로 ok 를 판정한다
         #   (card 와 동일). 실측 후 양성 신호 검증을 추가한다 — PROCESS.md '남은 작업' 플래그 참조.
