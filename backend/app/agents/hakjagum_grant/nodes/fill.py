@@ -110,9 +110,13 @@ def make_fill_rows_node():
         oe = await doc_steps.open_evdn_editor(page)
         if not oe.get("ok"):
             return await fail("증빙 열기", oe.get("reason"))
+        # 스테일 팝업(열기)·팝업 미닫힘(적용 후) warn 도 유실 금지 — 이후 피커 오독·엉뚱한 셀
+        # 덮어쓰기의 전조라 완료 로그가 이를 감추면 안 된다(trip_domestic warn_if_unverified 동형).
+        await note_warn("증빙 열기", oe)
         se = await doc_steps.select_evdn_code(page, EVDN_CODE)
         if not se.get("ok"):
             return await fail("증빙유형(10)", se.get("reason"))
+        await note_warn("증빙유형(10)", se)
         # 2) (세금)계산서일(START_DT) = 증빙일.
         dt = await steps.set_invoice_date(page, str(row.get("invoiceDate") or ""))
         if not dt.get("ok"):
@@ -121,6 +125,7 @@ def make_fill_rows_node():
         pr = await steps.fill_partner_by_search(page, self_name)
         if not pr.get("ok"):
             return await fail("거래처", pr.get("reason"))
+        await note_warn("거래처", pr)
         self_display = str(pr.get("name") or self_name).strip()
         # 4) 예산단위(부서 × 비용구분 복리후생비-기타 고정 조합).
         bu = await steps.fill_budget_fixed(page, department, cost_type)
@@ -131,6 +136,7 @@ def make_fill_rows_node():
         pj = await steps.fill_project(page, row.get("project") or {})
         if not pj.get("ok"):
             return await fail("프로젝트", pj.get("reason"))
+        await note_warn("프로젝트", pj)
         # 6) 공급가액(거래금액=SPPRC_AMT2) = 셀 에디터 실 타이핑 + 예산현황 확인(setValue 금지).
         sa = await steps.type_amount(page, amount)
         if not sa.get("ok"):
