@@ -157,11 +157,16 @@ def make_set_gubun_node(gubun_text: str):
         page = state["page"]
         await emit_step(emit, "set_gubun", "running")
         t0 = time.monotonic()
-        # select 로드 폴링(300ms 간격, 상한 15s 기준 — ERP 지연 시 회수 상한만 배율 ≤×4 확대)
-        for _ in range(latency.budget_polls(50)):
-            if await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
+        # select 로드 폴링(상한 15s) — ⚠ 시간축 규율(2026-08-07): 종전 budget_polls×
+        # wait_for_timeout 명목 폴은 간격이 delay_scale 로 축소돼 실관찰창이 붕괴한다.
+        # 폴 대기는 실시간(verify.DEFAULT_SLEEP), 상한만 latency 배율(≤×4) 확대.
+        waited = 0
+        load_cap_ms = latency.budget_ms(15_000)
+        while not await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
+            if waited >= load_cap_ms:
                 break
-            await page.wait_for_timeout(300)
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
         r = await page.evaluate(
             js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS,
             {"selector": selectors.GUBUN_SELECT, "text": gubun_text},
@@ -212,8 +217,14 @@ def make_add_row_node():
         t0 = time.monotonic()
         await js_click(page, selectors.BTN_ADD)
         rows: Any = -1
-        for _ in range(33):  # 디테일 그리드 rowCount 0→1 폴링(300ms 간격, 상한 ~10s 유지)
-            await page.wait_for_timeout(300)
+        # 디테일 그리드 rowCount 0→1 폴링(상한 ~10s 유지) — ⚠ 시간축 규율(2026-08-07):
+        # 종전 range(33)×wait_for_timeout(300) 명목 폴은 delay_scale 로 관찰창이 붕괴하고
+        # latency 배율도 없어 느린 ERP 에서 상한 확대조차 못 받았다. 실시간 누산 + 배율 확대.
+        waited = 0
+        row_cap_ms = latency.budget_ms(10_000)
+        while waited < row_cap_ms:
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
             rows = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
             if isinstance(rows, int) and rows > 0:
                 break

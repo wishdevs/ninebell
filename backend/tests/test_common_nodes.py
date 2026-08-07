@@ -33,16 +33,21 @@ class _GubunPage:
 
     OPTIONS = {"카드": "3", "출장(국내·자차)": "7", "일반": "1"}
 
-    def __init__(self, *, reverts_to: str | None = None, unreadable: bool = False) -> None:
+    def __init__(
+        self, *, reverts_to: str | None = None, unreadable: bool = False, select_at: int = 1
+    ) -> None:
         self.current = "일반"  # 화면 초기값.
         self.reverts_to = reverts_to
         self.unreadable = unreadable
+        self.select_at = select_at  # 몇 번째 로드 폴부터 select 가 존재하는가(늦은 로드 재현).
+        self.select_reads = 0
         self.set_calls: list[str] = []
         self.waits: list[int] = []
 
     async def evaluate(self, js_src, arg=None):
         if isinstance(js_src, str) and js_src.startswith("(s) =>"):
-            return arg == selectors.GUBUN_SELECT  # select 로드 폴링.
+            self.select_reads += 1
+            return arg == selectors.GUBUN_SELECT and self.select_reads >= self.select_at
         if js_src is js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS:
             assert arg["selector"] == selectors.GUBUN_SELECT
             text = arg["text"]
@@ -135,6 +140,59 @@ async def test_set_gubun_keeps_cascade_settle_wait_before_confirm():
     page = _GubunPage()
     await nodes.make_set_gubun_node("카드")(_state(page))
     assert 1_500 in page.waits
+
+
+async def test_set_gubun_select_load_poll_is_realtime():
+    """⚠ 핀(2026-08-07 리뷰): select 로드 폴링 대기는 실시간 sleep 이다 — wait_for_timeout
+    (delay_scale 축소 대상) 명목 폴로 되돌리면 300ms 대기가 기록돼 이 단언이 잡는다.
+    (의도적으로 유지하는 연쇄 정착 1.5s 만 wait_for_timeout 을 쓴다.)"""
+    page = _GubunPage(select_at=3)  # 3번째 폴에야 select 출현(늦은 로드).
+    st = _state(page)
+    out = await nodes.make_set_gubun_node("카드")(st)
+    assert out == {}
+    assert page.select_reads >= 3  # 소진 전 폴링 유지(늦은 로드를 미출현으로 오판하지 않음).
+    assert page.waits == [1_500]  # 로드 폴 대기는 기록되지 않는다(정착 1.5s 만 스케일 대상).
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# add_row(F3) — 행 생성 관찰은 실시간(delay_scale 축소 비대상)
+# ══════════════════════════════════════════════════════════════════════════════
+class _AddRowPage:
+    """추가(F3) 후 디테일 rowCount 폴링 페이크 — js_click(문자열 JS) + rowcount 시퀀스."""
+
+    def __init__(self, rowcounts: list[int]) -> None:
+        self._seq = list(rowcounts)
+        self.waits: list[int] = []
+
+    async def evaluate(self, js_src, arg=None):
+        if isinstance(js_src, str) and js_src.startswith("(sel) =>"):
+            return True  # BTN_ADD js_click.
+        if js_src is js_lib.DETAIL_ROWCOUNT_JS:
+            return self._seq.pop(0) if len(self._seq) > 1 else self._seq[0]
+        raise AssertionError(f"예상치 못한 evaluate: {str(js_src)[:60]}")
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+async def test_add_row_observes_realtime_until_row_created():
+    """F3 행 생성 관찰 대기는 실시간 sleep 이다 — wait_for_timeout(delay_scale 축소 대상)이면
+    CARD_DELAY_SCALE 적용 시 관찰창이 붕괴해 정상 생성을 '행 미생성'으로 오판한다(2026-08-07)."""
+    page = _AddRowPage([0, 0, 1])
+    st = _state(page)
+    out = await nodes.make_add_row_node()(st)
+    assert out == {}
+    assert page.waits == []  # 관찰 루프가 wait_for_timeout 을 쓰지 않는다.
+    assert _steps(_drain(st["events"]), "add_row")[-1] == "done"
+
+
+async def test_add_row_errors_when_row_never_appears():
+    """미생성 = 상한 소진 후 error 단락(기존 실패 계약 보존)."""
+    page = _AddRowPage([0])
+    st = _state(page)
+    out = await nodes.make_add_row_node()(st)
+    assert "error" in out and "행" in out["error"]
+    assert _steps(_drain(st["events"]), "add_row")[-1] == "failed"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -16,7 +16,7 @@ from typing import Any, Optional
 from nbkit.browser.actions import js_click
 from nbkit.browser.waits import wait_for_selector
 from nbkit.grid.strategies import CollectionStrategy, GridExtractor
-from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.errors import GridError
 from nbkit.patterns import EmitFn, emit_log, emit_shot, emit_step
 
@@ -38,14 +38,25 @@ async def run_query(page: Any, *, emit: Optional[EmitFn] = None) -> int:
             await emit_log(
                 emit, f"조회 재시도 ({attempt}/{QUERY_ATTEMPTS}) — 그리드가 안 떠서 다시 조회합니다.", "warn"
             )
-        await js_click(page, selectors.BTN_LOOKUP)
-        for i in range(QUERY_POLL_TRIES):
-            await page.wait_for_timeout(1_000)
+        if not await js_click(page, selectors.BTN_LOOKUP):
+            # 버튼 미발견(리스킨/화면 미로딩)은 폴링·재시도가 무의미한 구조 실패 — 종전엔 반환을
+            # 버려 클릭이 안 나갔는데도 3회전 ~45s 명목 폴을 태운 뒤 '응답하지 않음'으로
+            # 오진했다(2026-08-07 감사, voucher run_query 의 js_click 반환 확인과 동일 규율).
+            await emit_step(emit, "query", "failed")
+            raise GridError("조회 버튼을 찾지 못했습니다(화면 미로딩/버튼 변경 가능) — 조회를 실행하지 못했습니다.")
+        # ⚠ 시간축 규율(2026-08-07): 종전 wait_for_timeout(1s)×15 명목 폴은 간격이 delay_scale
+        # 로 축소돼 실관찰창이 붕괴한다 — 폴 대기는 실시간(verify.DEFAULT_SLEEP)으로 세고
+        # 상한만 latency 배율(≤×4)로 확대한다(voucher_receivable._apply_popup 과 동일 패턴).
+        waited = 0
+        cap_ms = latency.budget_ms(QUERY_POLL_TRIES * 1_000)
+        while waited < cap_ms:
+            await verify.DEFAULT_SLEEP(1.0)
+            waited += 1_000
             n = await page.evaluate(js_lib.ROWCOUNT_JS)
             if isinstance(n, int) and n > 0:
                 rows = n
                 break
-            if i == 8:  # 중간 상황 알림 + 화면 캡처
+            if waited == 9_000:  # 중간 상황 알림 + 화면 캡처(종전 9회차와 동일 시점).
                 await emit_log(emit, f"조회 응답 대기 중… ({int(time.monotonic() - t0)}초 경과)", "info")
                 await emit_shot(emit, page)
         if rows > 0:

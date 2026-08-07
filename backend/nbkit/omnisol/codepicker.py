@@ -76,13 +76,14 @@ async def _wait_picker_rows_stable(
     return last
 
 
-async def _wait_picker_closed(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> None:
-    """'적용' 클릭 후 피커 팝업이 닫힐 때까지 폴링(고정 1000ms 대체).
+async def _wait_picker_closed(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> bool:
+    """'적용' 클릭 후 피커 팝업이 닫힐 때까지 폴링(고정 1000ms 대체). 닫힘 확인 True.
 
     ⚠ 상한은 **실시간(monotonic)** × latency 배율 — 명목 카운터(waited += interval)는
     delay_scale 에서 실관찰창이 쪼그라들어(예: 0.15 배 → 1.5s 가 실 ~225ms) 닫힘 애니메이션
     (실시간)을 다 못 보고 '진행'해 다음 피커가 잔존 팝업을 오독한다 —
     _wait_picker_rows_stable 의 2026-07-04 회귀와 동일 함정.
+    상한 소진(미닫힘)은 False — 호출부가 잔존 팝업 오염을 하드 실패로 다룰 근거(2026-08-07 감사).
     """
     t0 = time.monotonic()
     budget_ms = latency.budget_ms(cap_ms)
@@ -90,7 +91,26 @@ async def _wait_picker_closed(page: Any, *, cap_ms: int = 1_500, interval_ms: in
         await page.wait_for_timeout(interval_ms)
         n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
         if not isinstance(n, int) or n < 0:  # 팝업 사라짐
-            return
+            return True
+    return False
+
+
+async def _wait_apply_btn(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> Any:
+    """'적용' 버튼 출현 폴링 — 좌표 dict | None(상한 소진).
+
+    ⚠ 종전 고정 wait_for_timeout(400) 후 **단발 read** 는 delay_scale(card_collect 0.15)에서
+    실 60ms 정착이라 버튼 미출현 오탐이 잦았고, 미출현이어도 무조건 성공을 반환해 가짜
+    성공(폼 미반영 + 피커 방치)이 됐다(2026-08-07 감사). 상한은 실시간 × latency 배율.
+    """
+    t0 = time.monotonic()
+    budget_ms = latency.budget_ms(cap_ms)
+    while True:
+        box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
+        if box:
+            return box
+        if (time.monotonic() - t0) * 1_000 >= budget_ms:
+            return None
+        await page.wait_for_timeout(interval_ms)
 
 
 # field_id: bg_cd(예산단위)/acct_cd(계정)/pjt_cd(프로젝트). code/name 필드는 팝업 컬럼.
@@ -118,17 +138,28 @@ async def fill_codepicker(
     await _wait_picker_rows_stable(page, cap_ms=3_000)  # 팝업 오픈+그리드 준비(고정 1.5s 대체)
 
     async def _fail(reason: str, **extra: Any) -> dict:
-        # 실패 시 열린 코드피커 팝업을 닫는다 — 안 닫으면 다음 코드피커가 이 팝업을 읽어 오작동한다.
+        # 실패 시 열린 코드피커 팝업을 닫고 **닫힘까지 확인**한다 — 종전 닫기 JS 반환 무시 +
+        # 고정 400ms 대기는 안 닫힌 스테일 피커를 남겼고, 다음 fill_codepicker 가 그 팝업을
+        # 자기 것으로 오독해 이전 그리드에서 선택/적용했다(2026-07-24 부서팝업 동형, 감사
+        # 2026-08-07). 미닫힘은 원래 실패 사유를 덮지 않고 병기한다(trip _fail_close 규율).
         await page.evaluate(js_lib.PICKER_CLOSE_JS)
-        await page.wait_for_timeout(400)
+        if not await _wait_picker_closed(page):
+            await page.evaluate(js_lib.PICKER_CLOSE_JS)  # reapply — 첫 닫기가 빗나갔을 수 있다.
+            if not await _wait_picker_closed(page):
+                reason = f"{reason} / ⚠ 실패 정리 중 피커 팝업 미닫힘(다음 피커 오독 위험)"
         return {"ok": False, "reason": reason, **extra}
 
     if keyword:
         s = await page.evaluate(js_lib.PICKER_SEARCH_JS, keyword)
-        if s.get("ok"):
-            await page.keyboard.press("Enter")
-            # 서버 재조회 안정 대기(고정 1.2s 대체) — min_ms 로 옛 rowcount 오인 방지.
-            await _wait_picker_rows_stable(page, cap_ms=2_000, min_ms=600)
+        if not s.get("ok"):
+            # 검색창 미발견인데 그대로 진행하면 **미필터 전체 목록**의 상위 25행 창에서 매칭해
+            # 오선택 코드가 전표에 기록되거나 허위 '일치 없음'이 된다(감사 2026-08-07 —
+            # expense_card do_fill_search 의 하드 실패와 동일 규율). 검색어는 처리 대상 집합을
+            # 정의하므로 하드 실패로 끊는다.
+            return await _fail(f"{field_id} 검색창 미발견 — '{keyword}' 미적용")
+        await page.keyboard.press("Enter")
+        # 서버 재조회 안정 대기(고정 1.2s 대체) — min_ms 로 옛 rowcount 오인 방지.
+        await _wait_picker_rows_stable(page, cap_ms=2_000, min_ms=600)
     read = await page.evaluate(js_lib.PICKER_READ_JS, [code_field, name_field, 25])
     opts = read.get("options") or []
 
@@ -173,11 +204,15 @@ async def fill_codepicker(
     sel = await page.evaluate(js_lib.PICKER_SELECT_JS, chosen["i"])
     if not sel.get("ok"):
         return await _fail(f"{field_id} 행 선택 실패: {sel}")
-    await page.wait_for_timeout(400)
-    apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
-    if apply_box:
-        await page.mouse.click(apply_box["x"], apply_box["y"])
-        await _wait_picker_closed(page)  # 팝업 닫힘 폴링(고정 1s 대체)
+    # 적용은 상태변경 프리미티브 — 버튼 출현·클릭·팝업 닫힘을 확인해야 성공이다. 예전엔
+    # 버튼 미출현이어도 {ok:True, code, name} 을 돌려줘 선택이 폼에 안 붙었는데 '반영됨'으로
+    # 기록되고, 안 닫힌 피커가 다음 'last non-법인카드 k-window' 조작을 오염시켰다(감사 2026-08-07).
+    apply_box = await _wait_apply_btn(page)
+    if not apply_box:
+        return await _fail(f"{field_id} '적용' 버튼 미출현 — 선택이 폼에 반영되지 않았습니다")
+    await page.mouse.click(apply_box["x"], apply_box["y"])
+    if not await _wait_picker_closed(page):  # 팝업 닫힘 폴링(고정 1s 대체) — 미닫힘은 하드 실패.
+        return await _fail(f"{field_id} 피커가 '적용' 후에도 닫히지 않았습니다(선택 미반영 가능)")
     return {"ok": True, "code": chosen["code"], "name": chosen["name"]}
 
 
@@ -188,17 +223,31 @@ async def _open_picker(page: Any, field_id: str) -> bool:
     버튼(#{field}-wrapper .dews-codepicker-button)이 렌더될 때까지 폴링한다 — 컨테이너의 느린
     렌더(--disable-dev-shm-usage)나 '증빙 확인 중' 모달로 버튼이 지연 출현하면 예전엔 box=None
     즉시 실패로 0행이 됐다(프로젝트 카탈로그 동기화 prod 0건 원인, 2026-07-10 규명).
+
+    ⚠ 상한은 **실시간(monotonic)** × latency 배율 — 종전 range(24)×wait(250ms) 명목 카운터는
+    delay_scale 0.15(card_collect)에서 실관찰창이 6s→~0.9s 로 붕괴해, 막으려던 prod 0건
+    사고가 이 에이전트에서만 재현 가능했다(2026-08-07 감사). _wait_picker_rows_stable 과
+    동일 규율: 폴 간격만 스케일, 상한 불변.
     """
     box = None
-    for i in range(_OPEN_BTN_POLLS):
+    t0 = time.monotonic()
+    budget_ms = latency.budget_ms(_OPEN_BTN_POLLS * _OPEN_BTN_INTERVAL_MS)
+    polls = 0
+    while True:
         box = await page.evaluate(js_lib.picker_btn_js(field_id))
         if box:
-            if i:
-                logger.info("코드피커 '%s' 버튼 %d회 폴링 후 출현(~%dms)", field_id, i, i * _OPEN_BTN_INTERVAL_MS)
+            if polls:
+                logger.info(
+                    "코드피커 '%s' 버튼 %d회 폴링 후 출현(~%dms)",
+                    field_id, polls, int((time.monotonic() - t0) * 1_000),
+                )
+            break
+        if (time.monotonic() - t0) * 1_000 >= budget_ms:
             break
         await page.wait_for_timeout(_OPEN_BTN_INTERVAL_MS)
+        polls += 1
     if not box:
-        logger.warning("코드피커 '%s' 버튼 미출현(폴링 %d회 소진) — 팝업 미오픈", field_id, _OPEN_BTN_POLLS)
+        logger.warning("코드피커 '%s' 버튼 미출현(실시간 %dms 소진) — 팝업 미오픈", field_id, budget_ms)
         return False
     await page.mouse.click(box["x"], box["y"])
     await _wait_picker_rows_stable(page, cap_ms=3_000)
