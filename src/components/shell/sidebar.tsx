@@ -19,6 +19,7 @@ import {
   RiOrganizationChart,
   RiWallet3Line,
   RiBrainLine,
+  RiBookOpenLine,
   RiGitCommitLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
@@ -48,6 +49,7 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   budget: RiWallet3Line,
   learning: RiBrainLine,
   changelog: RiGitCommitLine,
+  manual: RiBookOpenLine,
 };
 
 export function Sidebar() {
