@@ -514,9 +514,9 @@ _HAKJAGUM_GRANT_FIXTURE: dict = {
 
 
 # ── 전표조회승인 배치 결재 플로우 그래프 (매출 2026-07-27 → 매입 확대 2026-08-07) ──
-# 결의서입력(문서 생성) 계열과 다른 '조회+결재' 아키타입 — 결제창을 열어 가상 상신 로그만
-# 남기고 닫는다(실제 상신 없음). (건별 순회 원형 플로우 VOUCHER_RECEIVABLE_FLOW 는 매입금의
-# 배치 확대(2026-08-07)로 마지막 사용처가 사라져 제거 — 필요 시 git 이력 참조.)
+# 결의서입력(문서 생성) 계열과 다른 '조회+결재' 아키타입 — 결제창을 열어 **상신까지 실행**한다
+# (정책 전환 2026-08-07, 취소는 전자결재 결재취소로 가역). (건별 순회 원형 플로우
+# VOUCHER_RECEIVABLE_FLOW 는 매입금의 배치 확대(2026-08-07)로 제거 — 필요 시 git 이력 참조.)
 # 건별 순회 대신 **하위(계정정보) 건수 기준 배치**: 단독 200 이상은 먼저 단독으로, 나머지는
 # 합계가 200 미만이 되도록 묶어 한 번에 결재창을 연다. 매입금은 기존 건별 플로우를 유지한다.
 VOUCHER_RECEIVABLE_BATCH_FLOW: dict = {
@@ -528,9 +528,9 @@ VOUCHER_RECEIVABLE_BATCH_FLOW: dict = {
         {"id": "plan", "kind": "decision", "status": "pending", "title": "배치 계획", "sub": "단독 200↑ 먼저 · 나머지 합계 200 미만", **_col(4)},
         {"id": "pick", "kind": "step", "status": "pending", "title": "묶음 선택(checkRow)", "sub": "그룹 행 일괄 체크", **_col(5)},
         {"id": "pay", "kind": "step", "status": "pending", "title": "결제창 열기", "sub": "묶음 1회 = 자식창 1개", **_col(6)},
-        {"id": "virtual", "kind": "step", "status": "pending", "title": "가상 상신", "sub": "상신·보관 미클릭 — 로그만", **_col(7)},
-        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 묶음?", "sub": "계획된 그룹 순회", **_col(8)},
-        {"id": "submit", "kind": "end", "status": "pending", "title": "실제 상신", "sub": "사용자가 직접(EAP)", **_col(9)},
+        {"id": "virtual", "kind": "step", "status": "pending", "title": "상신", "sub": "묶음 1회 클릭 = N건 상신 · 보관 미클릭", **_col(7)},
+        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 묶음?", "sub": "재조회(F2) 후 잔여 그룹 — 상신분은 리스트에서 소멸", **_col(8)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "상신 완료", "sub": "취소는 전자결재 결재취소로 가능", **_col(9)},
     ],
     "edges": [
         {"id": "e-access-setq", "source": "access", "target": "setq"},
@@ -558,8 +558,8 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
     "group_id": "voucher",
     "hidden": False,
     "name": "외상매출금",
-    "description": "미결·전자결재저장 상태의 매출전표(국내/해외)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
-    "handoff_note": "이 에이전트는 실제 상신을 하지 않습니다 — 결제창을 열어 '가상 상신'만 확인하고 닫습니다. 옴니솔 전표조회승인에서 대상 전표를 확인하고 전자결재(EAP)에서 직접 상신하세요. ⚠ 결제창을 여는 것만으로 EAP 임시문서가 생길 수 있으니, 여러 건 배치는 담당자 확인 후에만 사용하세요.",
+    "description": "미결·전자결재저장 상태의 매출전표(국내/해외)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 전자결재로 상신합니다.",
+    "handoff_note": "이 에이전트는 조회된 전표를 전자결재로 **실제 상신**합니다(2026-08-07 정책 전환). 상신 실패 건이 있으면 런이 중단되고 사유가 보고됩니다. 잘못 상신된 건은 전자결재 > 상신/보관함 > 상신문서에서 결재취소 → 미결문서 상신취소 → 임시보관문서 삭제로 회수할 수 있습니다. ⚠ 보관 버튼은 클릭하지 않습니다.",
     "drive": "browser",
     "interaction": "autonomous",
     "target_system": "더존 옴니솔",
@@ -582,7 +582,7 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
         {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 국내/해외매출"},
         {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고"},
         {"key": "count_details", "label": "하위 건수 파악·배치 계획", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "전표별 하위(계정정보) 행수를 읽어, 단독 200건 이상은 단독으로 · 나머지는 합계 200 미만이 되도록 결재 묶음을 계획"},
-        {"key": "loop_approvals", "label": "묶음 결재창 확인(가상 상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "계획된 묶음마다 대상 행을 함께 체크해 결제창을 한 번 열고 '가상 상신' 로그만 남기고 닫음(상신·보관 미클릭, 실제 상신 없음)"},
+        {"key": "loop_approvals", "label": "묶음 결재 상신", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "계획된 묶음마다 대상 행을 함께 체크해 결제창을 열고 상신 버튼을 클릭(묶음 1회=N건 상신, 보관 미클릭). 상신 실패 시 즉시 중단"},
     ],
     "logs": [],
 }
@@ -597,7 +597,7 @@ _VOUCHER_PAYABLE_FIXTURE: dict = {
     "id": "voucher-trade-payable",
     "workflow_id": "voucher-payable",
     "name": "외상매입금",
-    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 상신 대기 상태를 확인합니다(실제 상신은 하지 않습니다).",
+    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 전자결재로 상신합니다.",
     "steps": [
         {**s, "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
         if s["key"] == "set_query"
@@ -609,7 +609,7 @@ _VOUCHER_PAYABLE_FIXTURE: dict = {
 
 # ── 미지급금 법인카드 결재 플로우 그래프 (voucher-card 그래프의 사람용 요약) ──────
 # 공유 조회+결재에 카드 3대 확장: (B) 결의서조회승인 다중탭 결재번호 수집, (C) 결제창 안
-# 참조문서 선택. 실제 상신·참조문서 확인 없음(가상 상신 로그만).
+# 참조문서 선택+확인 클릭+첨부 검증. 검증 통과 후 상신까지 실행(정책 전환 2026-08-07).
 VOUCHER_CARD_FLOW: dict = {
     "nodes": [
         {"id": "access", "kind": "start", "status": "done", "title": "전표조회승인 접속", "sub": "전사공통(회계)", **_col(0)},
@@ -618,11 +618,11 @@ VOUCHER_CARD_FLOW: dict = {
         {"id": "collect", "kind": "step", "status": "active", "title": "결재번호 수집", "sub": "결의서조회승인(다중탭)·결의구분 카드 일괄", **_col(3)},
         {"id": "pick", "kind": "step", "status": "pending", "title": "행 선택(checkRow)", "sub": "결재 대상 지정", **_col(4)},
         {"id": "pay", "kind": "step", "status": "pending", "title": "결제창 열기", "sub": "별도 전자결재 창(EAP)", **_col(5)},
-        {"id": "refdoc", "kind": "step", "status": "pending", "title": "참조문서 선택", "sub": "문서번호=결재번호 검색→선택→아래버튼", **_col(6)},
-        {"id": "virtual", "kind": "step", "status": "pending", "title": "가상 상신", "sub": "확인·상신 미클릭 — 로그만", **_col(7)},
-        {"id": "close", "kind": "step", "status": "pending", "title": "결제창 닫기", "sub": "비영속(다음 건)", **_col(8)},
-        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 건?", "sub": "대상 전 건 반복(기본 전체)", **_col(9)},
-        {"id": "submit", "kind": "end", "status": "pending", "title": "실제 상신", "sub": "사용자가 직접(EAP)", **_col(10)},
+        {"id": "refdoc", "kind": "step", "status": "pending", "title": "참조문서 선택·확인", "sub": "문서번호=결재번호 검색→선택→확인→첨부 검증", **_col(6)},
+        {"id": "virtual", "kind": "step", "status": "pending", "title": "상신", "sub": "첨부 검증 통과 후 상신 클릭 · 보관 미클릭", **_col(7)},
+        {"id": "close", "kind": "step", "status": "pending", "title": "창 닫힘 확인", "sub": "상신 적용 판정(다음 건)", **_col(8)},
+        {"id": "more", "kind": "decision", "status": "pending", "title": "다음 건?", "sub": "재조회(F2) 후 다음 건 — 상신분은 리스트에서 소멸", **_col(9)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "상신 완료", "sub": "취소는 전자결재 결재취소로 가능", **_col(10)},
     ],
     "edges": [
         {"id": "e-access-setq", "source": "access", "target": "setq"},
@@ -643,16 +643,16 @@ VOUCHER_CARD_FLOW: dict = {
 # ── 미지급금 법인카드 — 실동작 승격(voucher-card 워크플로우) ────────────────────
 # voucher-card-payable 더미를 제자리 승격한다(agent id 유지 — 프론트/시드 연속성). 공유 백본
 # (전표조회승인 조회+결재)에 카드 3대 확장(collect_payments 결재번호 수집 · 참조문서 선택 훅).
-# steps 의 key 는 그래프 노드(emit_step 키)와 1:1(진행 하이라이트 정합). ⚠ 실제 상신·참조문서
-# 확인 없음(가상). 참조문서 검색 0건(현재 테스트 계정 시스템 승인 이슈)은 우아하게 로그 후 진행.
+# steps 의 key 는 그래프 노드(emit_step 키)와 1:1(진행 하이라이트 정합). 참조문서 확인·상신
+# 게이트 개방(2026-08-07). 참조문서 검색 0건(테스트 계정 승인 이슈)은 우아하게 로그 후 진행.
 _VOUCHER_CARD_FIXTURE: dict = {
     "id": "voucher-card-payable",
     "workflow_id": "voucher-card",
     "group_id": "voucher",
     "hidden": False,
     "name": "미지급금 법인카드",
-    "description": "미결·전자결재저장 상태의 법인카드(결의구분 카드) 전표를 조회해, 건별로 결제창을 열고 참조문서(결재번호)를 선택한 뒤 상신 대기 상태를 확인합니다(실제 상신·참조문서 확인은 하지 않습니다).",
-    "handoff_note": "이 에이전트는 실제 상신·참조문서 확인을 하지 않습니다 — 결제창을 열어 참조문서를 선택(선택+아래버튼)하고 '가상 상신'만 확인한 뒤 닫습니다. 옴니솔 전표조회승인에서 대상 전표를 확인하고 전자결재(EAP)에서 직접 참조문서 확인·상신을 진행하세요. ⚠ 결제창을 여는 것만으로 EAP 임시문서가 생길 수 있습니다. ⚠ 현재 테스트 계정은 시스템 승인 이슈로 참조문서가 0건 조회될 수 있습니다(추후 손봄).",
+    "description": "미결·전자결재저장 상태의 법인카드(결의구분 카드) 전표를 조회해, 건별로 결제창을 열고 참조문서(결재번호)를 선택·확인한 뒤 전자결재로 상신합니다.",
+    "handoff_note": "이 에이전트는 참조문서 확인과 **실제 상신**까지 수행합니다(2026-08-07 정책 전환) — 참조문서 첨부 검증을 통과한 건만 상신하며, 첨부·상신 실패 시 런이 중단되고 사유가 보고됩니다. 잘못 상신된 건은 전자결재 > 상신문서 결재취소 → 미결문서 상신취소 → 임시보관문서 삭제로 회수할 수 있습니다. ⚠ 보관 버튼은 클릭하지 않습니다. ⚠ 현재 테스트 계정은 시스템 승인 이슈로 참조문서가 0건 조회될 수 있습니다(추후 손봄).",
     "drive": "browser",
     "interaction": "autonomous",
     "target_system": "더존 옴니솔",
@@ -675,7 +675,7 @@ _VOUCHER_CARD_FIXTURE: dict = {
         {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 일반"},
         {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고(대상=결의구분 카드·결의서번호 있는 행)"},
         {"key": "collect_payments", "label": "결재번호 수집", "skill": "grid-read", "status": "pending", "phase": "수집", "detail": "결의서조회승인(다중탭)에서 결의구분=카드 일괄 조회 → ABDOCU_NO→GWDOCU_NO(결재번호) 맵 수집 → 전표조회승인 탭 복귀"},
-        {"key": "loop_approvals", "label": "결재창 순회(참조문서·가상 상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "대상 전표를 건별로 결제창까지 열어 참조문서(문서번호=결재번호)를 선택(선택+아래버튼)하고 '가상 상신' 로그만 남기고 닫음(참조문서 확인·상신 미클릭, 실제 상신 없음)"},
+        {"key": "loop_approvals", "label": "결재창 순회(참조문서·상신)", "skill": "grid-input", "status": "pending", "phase": "결재", "detail": "대상 전표를 건별로 결제창까지 열어 참조문서(문서번호=결재번호)를 선택·확인하고 첨부 검증 통과 후 상신 클릭(보관 미클릭). 첨부·상신 실패 시 즉시 중단"},
     ],
     "logs": [],
 }
@@ -711,6 +711,50 @@ _TAX_INVOICE_FIXTURE: dict = {
     "logs": [],
 }
 
+
+# ── 테스트 문서 정리(디버그 전용, 2026-08-10 → 결의서 전체 확대) — hidden 워크플로우 ──
+# 스모크 삭제 가드레일(본인 작성·결의구분 일치·미결) + HITL 선택 삭제의 공용 cleanup 그래프.
+# hidden=True: 목록/상세는 전원 비노출(404), 실행은 관리자만(ensure_can_run 비대칭) —
+# 프론트는 에이전트 상세의 디버그 모드 버튼으로만 트리거한다.
+def _cleanup_fixture(cleanup_id: str, doc_name: str, gubun_label: str) -> dict:
+    return {
+        "id": cleanup_id,
+        "workflow_id": cleanup_id,
+        "group_id": None,
+        "hidden": True,
+        "name": f"{doc_name} 테스트 문서 정리",
+        "description": (
+            f"디버깅 중 만든 {gubun_label} 결의서를 결의서입력 화면에서 조회해, "
+            "본인 작성·미결 문서 전량 가드 통과 후 사용자가 선택한 문서만 삭제(F6)합니다."
+        ),
+        "drive": "browser",
+        "interaction": "autonomous",
+        "target_system": "더존 옴니솔",
+        "target_url": "erp.ninebell.co.kr",
+        "status": "idle",
+        "progress": 0,
+        "timeout_seconds": 240,
+        "elapsed_seconds": 0,
+        "current_action": "대기 중 — 실행을 누르면 시작합니다",
+        "run_count": 0,
+        "success_rate": 0.0,
+        "avg_seconds": 0,
+        "last_run_at": None,
+        "flow_graph": None,
+        "steps": [],
+        "logs": [],
+    }
+
+
+AGENT_FIXTURES.extend(
+    [
+        _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
+        _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),
+        _cleanup_fixture("card-collect-cleanup", "법인카드", "카드"),
+        _cleanup_fixture("gyeongjo-grant-cleanup", "경조금", "경조금신청서"),
+        _cleanup_fixture("hakjagum-grant-cleanup", "학자금", "학자금신청서"),
+    ]
+)
 
 AGENT_FIXTURES.extend(
     [
