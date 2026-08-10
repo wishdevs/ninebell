@@ -22,7 +22,8 @@ export type NavIconKey =
   | 'logging'
   | 'org'
   | 'budget'
-  | 'learning';
+  | 'learning'
+  | 'manual';
 
 export interface NavItem {
   href: string;
@@ -55,6 +56,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
       // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+      // 에이전트별 사용 설명서 — 로그인한 전원 노출(게이트 없음).
+      { href: '/manual', label: '메뉴얼', icon: 'manual' },
     ],
   },
   // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  RiBookOpenLine,
   RiBugLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
@@ -183,6 +184,14 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             <h1 className="text-foreground text-[length:var(--text-heading)] leading-tight font-semibold tracking-tight">
               {agent.name}
             </h1>
+            {/* 사용 설명서 진입점 — 헤딩 옆에서 항상 보이는 필 형태 링크. */}
+            <Link
+              href={`/manual/${agent.id}`}
+              className="border-border bg-surface text-foreground-secondary hover:text-foreground inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-[length:var(--text-body-sm)] font-medium shadow-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              <RiBookOpenLine size={14} aria-hidden />
+              메뉴얼
+            </Link>
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
