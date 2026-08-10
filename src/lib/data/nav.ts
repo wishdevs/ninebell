@@ -23,7 +23,8 @@ export type NavIconKey =
   | 'org'
   | 'budget'
   | 'learning'
-  | 'changelog';
+  | 'changelog'
+  | 'manual';
 
 export interface NavItem {
   href: string;
@@ -56,6 +57,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
       // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+      // 에이전트별 사용 설명서 — 로그인한 전원 노출(게이트 없음).
+      { href: '/manual', label: '메뉴얼', icon: 'manual' },
       // 릴리스 단위 변경 기록. 읽기는 전 사용자(백엔드가 미공개 draft 를 걸러냄),
       // 추가/수정/삭제는 관리자 — 게이트 없이 노출하고 화면 안에서 편집 UI 만 가린다.
       { href: '/changelog', label: '변경사항', icon: 'changelog' },
