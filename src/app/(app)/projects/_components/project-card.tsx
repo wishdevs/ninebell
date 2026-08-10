@@ -2,11 +2,7 @@ import Link from 'next/link';
 import { Avatar } from '@/components/ui/avatar';
 import { ChipSet, Chip } from '@/components/ui/chip-set';
 import { StatusPill } from '@/components/ui/status-pill';
-import {
-  PROJECT_STATUS_LABEL,
-  type Project,
-  type ProjectStatus,
-} from '@/lib/data/projects';
+import { PROJECT_STATUS_LABEL, type Project, type ProjectStatus } from '@/lib/data/projects';
 import { formatRelativeKorean } from '@/lib/data/format';
 import { cn } from '@/lib/utils';
 
@@ -51,78 +47,82 @@ export function ProjectCard({ project }: { project: Project }) {
   const overflow = members.length - shownMembers.length;
 
   return (
-    <Link
-      href={`/projects/${slug}`}
-      className="card-interactive border-border bg-surface-raised shadow-[var(--shadow-card)] focus-visible:ring-accent focus-visible:ring-offset-background group relative flex h-full flex-col overflow-hidden rounded-[var(--radius-lg)] border outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-    >
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ background: color }} />
+    <div className="card-lift grid min-w-0">
+      <Link
+        href={`/projects/${slug}`}
+        className="card-interactive border-border bg-surface-raised focus-visible:ring-accent focus-visible:ring-offset-background group relative flex h-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+      >
+        <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ background: color }} />
 
-      <div className="flex h-full flex-col gap-4 p-5 pt-6">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="group-hover:text-accent text-[length:var(--text-body-lg)] leading-snug font-semibold tracking-tight transition-colors">
-            {name}
-          </h3>
-          <StatusTag status={status} />
-        </div>
-
-        <p className="text-foreground-secondary line-clamp-2 min-h-[2.75rem] text-sm leading-relaxed">
-          {description}
-        </p>
-
-        <div className="grid gap-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">진행률</span>
-            <span className="text-foreground-secondary font-medium tabular-nums">{progress}%</span>
+        <div className="flex h-full flex-col gap-4 p-5 pt-6">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="group-hover:text-accent text-[length:var(--text-body-lg)] leading-snug font-semibold tracking-tight transition-colors">
+              {name}
+            </h3>
+            <StatusTag status={status} />
           </div>
-          <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-            <div
-              className="bg-accent h-full rounded-full"
-              style={{ width: `${progress}%` }}
-              role="progressbar"
-              aria-valuenow={progress}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label={`${name} 진행률`}
-            />
-          </div>
-          <p className="text-muted-foreground text-xs tabular-nums">
-            열린 {openWorkCount} / 전체 {workCount}
+
+          <p className="text-foreground-secondary line-clamp-2 min-h-[2.75rem] text-sm leading-relaxed">
+            {description}
           </p>
-        </div>
 
-        <div className="mt-auto flex flex-col gap-4">
-          <ChipSet>
-            {modules.map((module) => (
-              <Chip key={module} shape="pill">
-                {module}
-              </Chip>
-            ))}
-          </ChipSet>
-
-          <div className="border-border-subtle flex items-center justify-between border-t pt-4">
-            <div className="flex items-center">
-              {shownMembers.map((member, index) => (
-                <Avatar
-                  key={member.id}
-                  userId={member.id}
-                  hasAvatar={false}
-                  label={member.name}
-                  size={28}
-                  className={cn('ring-surface-raised ring-2', index > 0 && '-ml-2')}
-                />
-              ))}
-              {overflow > 0 ? (
-                <span className="border-border bg-muted text-muted-foreground ring-surface-raised -ml-2 inline-flex h-7 w-7 items-center justify-center rounded-full border text-[10px] font-medium ring-2">
-                  +{overflow}
-                </span>
-              ) : null}
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">진행률</span>
+              <span className="text-foreground-secondary font-medium tabular-nums">
+                {progress}%
+              </span>
             </div>
-            <span className="text-muted-foreground text-xs">
-              업데이트 {formatRelativeKorean(updatedAt)}
-            </span>
+            <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+              <div
+                className="bg-accent h-full rounded-full"
+                style={{ width: `${progress}%` }}
+                role="progressbar"
+                aria-valuenow={progress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`${name} 진행률`}
+              />
+            </div>
+            <p className="text-muted-foreground text-xs tabular-nums">
+              열린 {openWorkCount} / 전체 {workCount}
+            </p>
+          </div>
+
+          <div className="mt-auto flex flex-col gap-4">
+            <ChipSet>
+              {modules.map((module) => (
+                <Chip key={module} shape="pill">
+                  {module}
+                </Chip>
+              ))}
+            </ChipSet>
+
+            <div className="border-border-subtle flex items-center justify-between border-t pt-4">
+              <div className="flex items-center">
+                {shownMembers.map((member, index) => (
+                  <Avatar
+                    key={member.id}
+                    userId={member.id}
+                    hasAvatar={false}
+                    label={member.name}
+                    size={28}
+                    className={cn('ring-surface-raised ring-2', index > 0 && '-ml-2')}
+                  />
+                ))}
+                {overflow > 0 ? (
+                  <span className="border-border bg-muted text-muted-foreground ring-surface-raised -ml-2 inline-flex h-7 w-7 items-center justify-center rounded-full border text-[10px] font-medium ring-2">
+                    +{overflow}
+                  </span>
+                ) : null}
+              </div>
+              <span className="text-muted-foreground text-xs">
+                업데이트 {formatRelativeKorean(updatedAt)}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-    </Link>
+      </Link>
+    </div>
   );
 }

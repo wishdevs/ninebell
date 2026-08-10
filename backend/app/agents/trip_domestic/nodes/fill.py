@@ -42,7 +42,12 @@ def make_set_acct_date_node():
         if not r.get("ok"):
             await emit_step(events, "set_acct_date", "failed")
             return {"error": f"회계일 설정 실패({dashed}): {r.get('reason')}"}
-        await emit_log(events, f"회계일 = {dashed} (마지막 계산서일).", "info")
+        # 확인 불가(그리드 셀 readback 실패)는 하드 실패로 막지 않되 **조용히 넘기지도 않는다** —
+        # 회계일은 저장될 데이터 자체라, 반영을 못 본 채 진행했다는 사실이 로그에 남아야 한다.
+        if r.get("warn"):
+            await emit_log(events, f"회계일 {r['warn']}", "warn")
+        verified = "" if r.get("verified", True) else " (반영 미확인)"
+        await emit_log(events, f"회계일 = {dashed} (마지막 계산서일).{verified}", "info")
         await emit_step(events, "set_acct_date", "done", _ms(t0))
         return {}
 
@@ -71,6 +76,16 @@ def make_fill_rows_node():
         if not self_name:
             await emit_step(events, "fill_rows", "failed")
             return {"error": "작성자 본인 이름(로그인 계정)이 없어 거래처·상대계정을 검색할 수 없습니다."}
+
+        async def warn_if_unverified(i: int, field: str, r: dict) -> None:
+            """스텝이 '확인 불가'로 통과시킨 자리를 로그에 드러낸다.
+
+            리더가 셀/위젯을 못 읽은 경우는 하드 실패로 올리지 않지만(리더 오탐이 플로우를
+            끊지 않게 하는 안전판), **반영을 확인했다고 단정해서도 안 된다** — 운영자가
+            나중에 그 행을 눈으로 볼 수 있게 warn 으로 남긴다.
+            """
+            if r.get("warn"):
+                await emit_log(events, f"{i + 1}행 '{field}' 미확인: {r['warn']}", "warn")
 
         async def fail(i: int, field: str, reason) -> dict:
             await emit_step(events, "fill_rows", "failed")
@@ -109,14 +124,17 @@ def make_fill_rows_node():
                 pr = await steps.fill_partner_by_search(page, self_name)
             if not pr.get("ok"):
                 return await fail(i, "거래처", pr.get("reason"))
+            await warn_if_unverified(i, "거래처", pr)
             # 4) 예산단위(부서 × 비용구분 여비교통비-국내출장 고정 조합).
             bu = await steps.fill_budget_fixed(page, department, cost_type)
             if not bu.get("ok"):
                 return await fail(i, "예산단위", bu.get("reason"))
+            await warn_if_unverified(i, "예산단위", bu)
             # 5) 프로젝트.
             pj = await steps.fill_project(page, row.get("project") or {})
             if not pj.get("ok"):
                 return await fail(i, "프로젝트", pj.get("reason"))
+            await warn_if_unverified(i, "프로젝트", pj)
             # 6) 공급가액(거래금액=SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(2026-07-09).
             #    setValue 는 예산현황 확인 트리거를 건너뛰어 파생상태 미완 → 저장 DB오류였음.
             #    타이핑 → Tab 커밋 → 예산현황 팝업 확인 → SPPRC_AMT/TOTAL_AMT 자동계산.
@@ -127,6 +145,7 @@ def make_fill_rows_node():
             nt = await steps.set_row_note(page, row.get("note") or "")
             if not nt.get("ok"):
                 return await fail(i, "적요", nt.get("reason"))
+            await warn_if_unverified(i, "적요", nt)
             # 8) 상대계정거래처(작성자 본인) = **부가선택 위젯 🔍 → 검색 → 행 더블클릭**(2026-07-09 확정).
             #    등록 시 detail 빈 행 1개가 딸려 추가됨(ERP 동작) → 9) 에서 삭제.
             cp = await steps.register_counter_partner(page, self_name)
@@ -134,10 +153,12 @@ def make_fill_rows_node():
                 return await fail(i, "상대계정거래처", cp.get("reason"))
             if cp.get("skipped"):
                 await emit_log(events, f"{i + 1}행 상대계정거래처 항목 없음(문서유형) — 스킵.", "info")
+            await warn_if_unverified(i, "상대계정거래처", cp)
             # 9) 상대계정 등록으로 추가된 빈 행 삭제(데이터 행 유지).
             db = await steps.delete_blank_row(page)
             if not db.get("ok"):
                 return await fail(i, "빈행삭제", db.get("reason"))
+            await warn_if_unverified(i, "빈행삭제", db)
 
             filled += 1
             await emit_log(events, f"{i + 1}/{total}행 반영 완료.", "ok")

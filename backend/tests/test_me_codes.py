@@ -16,7 +16,22 @@ from sqlalchemy import delete, select
 
 import app.routers.me_codes as me_codes
 import app.services.code_sync as code_sync
-from app.models import CardLearnedSelection, CardSeedSelection, ErpCodeCatalog, User
+from app.models import CardLearnedSelection, CardSeedSelection, ErpCodeCatalog, OrgUnit, User
+
+
+async def _leaf_with_cost(sm, cost_type: str) -> str:
+    """시드 조직트리에서 주어진 비용구분을 가진 말단(leaf) 팀 id 하나.
+
+    시드가 옛 slug(hq_mgmt__t0 등) 대신 경로해시 id 를 쓰므로, 비용구분(판관비/제조원가)에
+    맞는 실제 말단 팀 id 를 동적으로 골라 사용자 소속으로 지정한다.
+    """
+    async with sm() as s:
+        rows = (await s.execute(select(OrgUnit))).scalars().all()
+    parent_ids = {o.parent_id for o in rows if o.parent_id}
+    for o in rows:
+        if o.cost_type == cost_type and o.parent_id is not None and o.id not in parent_ids:
+            return o.id
+    raise AssertionError(f"비용구분 {cost_type} 말단 팀이 시드에 없습니다.")
 
 
 async def _seed_catalog(sm, rows: list[dict]) -> None:
@@ -207,6 +222,26 @@ async def test_set_default_is_scoped_per_kind(client, make_user, auth_as):
     await client.post(f"/me/favorites/{pj.json()['id']}/default")
     bg_items = {i["id"]: i["isDefault"] for i in (await client.get("/me/favorites?kind=budget_unit")).json()["items"]}
     assert bg_items[bg.json()["id"]] is True
+
+
+async def test_set_default_invariant_exactly_one_across_switches(client, make_user, auth_as):
+    """기본 전환을 반복해도 (user,kind) 당 default 는 항상 정확히 1개.
+
+    DB 부분 유니크(uq_user_code_favorites_default, 0034)가 강제하는 불변식 — 라우터가 형제
+    해제 직후 flush 로 해제 UPDATE 를 먼저 방출하지 않으면 전환 시 IntegrityError 가 난다.
+    """
+    uid = await make_user("fav-default-invariant", "user")
+    auth_as(uid)
+    ids = []
+    for code in ("A", "B", "C"):
+        r = await client.post("/me/favorites", json={"kind": "budget_unit", "code": code, "name": code})
+        ids.append(r.json()["id"])
+    # A→B→C→A 연속 전환 — 매 전환이 형제 해제 + 대상 지정을 한 트랜잭션으로 수행한다.
+    for fav_id in (ids[0], ids[1], ids[2], ids[0]):
+        resp = await client.post(f"/me/favorites/{fav_id}/default")
+        assert resp.status_code == 200
+        items = (await client.get("/me/favorites?kind=budget_unit")).json()["items"]
+        assert [i["id"] for i in items if i["isDefault"]] == [fav_id]
 
 
 async def test_set_default_others_favorite_returns_404(client, make_user, auth_as):
@@ -458,10 +493,23 @@ async def test_catalog_limit_offset(client, make_user, auth_as, sm):
 
 
 async def test_catalog_empty_syncedat_null(client, make_user, auth_as):
+    # envelope 통일(page_slice) — limit/offset 키 additive 추가(기본 DEFAULT_LIMIT=50/0).
     uid = await make_user("cat-empty", "user")
     auth_as(uid)
     resp = await client.get("/me/catalog?kind=project")
-    assert resp.json() == {"items": [], "total": 0, "syncedAt": None}
+    assert resp.json() == {"items": [], "total": 0, "limit": 50, "offset": 0, "syncedAt": None}
+
+
+async def test_catalog_and_seed_out_of_range_limit_422(client, make_user, auth_as):
+    """수동 clamp(범위 밖 보정) → PageQuery 422 계약으로 의도된 강화(docs/LIST-COMMONALIZATION.md).
+
+    이전엔 limit=0/201 이 1/200 으로 조용히 보정됐지만, 이제 범위 밖은 422 다.
+    """
+    uid = await make_user("cat-422", "user")
+    auth_as(uid)
+    for qs in ("limit=0", "limit=201", "offset=-1"):
+        assert (await client.get(f"/me/catalog?kind=project&{qs}")).status_code == 422, qs
+        assert (await client.get(f"/me/card-learning/seed?{qs}")).status_code == 422, qs
 
 
 # ── 동기화 가드 ──────────────────────────────────────────────────────────────
@@ -814,7 +862,7 @@ async def test_trip_defaults_sga_team_returns_800_project(
     client, make_user, auth_as, set_user_org, sm
 ):
     uid = await make_user("trip-sga", "user")
-    await set_user_org(uid, "hq_mgmt__t0")  # 인사기획팀 = 판관비(_SGA)
+    await set_user_org(uid, await _leaf_with_cost(sm, "판관비"))  # 판관비(_SGA) 팀
     await _seed_catalog(
         sm,
         [
@@ -837,7 +885,7 @@ async def test_trip_defaults_mfg_team_returns_500_project(
     client, make_user, auth_as, set_user_org, sm
 ):
     uid = await make_user("trip-mfg", "user")
-    await set_user_org(uid, "hq_mgmt__t3")  # 구매팀 = 제조원가(_MFG)
+    await set_user_org(uid, await _leaf_with_cost(sm, "제조원가"))  # 제조원가(_MFG) 팀
     await _seed_catalog(
         sm,
         [{"kind": "project", "code": "500|500", "name": "제조원가",
@@ -864,7 +912,7 @@ async def test_trip_defaults_wbs_equal_to_pjtno_row_wins(
 ):
     # 같은 프로젝트에 WBS 여러 행이면 wbsNo == pjtNo(=800) 행 우선.
     uid = await make_user("trip-wbs", "user")
-    await set_user_org(uid, "hq_mgmt__t0")  # 판관비
+    await set_user_org(uid, await _leaf_with_cost(sm, "판관비"))  # 판관비 팀
     await _seed_catalog(
         sm,
         [

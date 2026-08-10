@@ -95,6 +95,9 @@ def _pick_budget(o: dict) -> dict:
         "code": o["code"],
         "name": o["name"],
         "bizplanNm": o.get("bizplanNm", ""),
+        # bgacctCd 는 계정 인지 적요 리졸버(suggest_note)의 매칭 키 — 프리셀렉트 예산단위가
+        # 그 계정으로 초기 적요를 태우려면 코드가 실려야 한다(제출 write 경로와도 대칭).
+        "bgacctCd": o.get("bgacctCd", ""),
         "bgacctNm": o.get("bgacctNm", ""),
     }
 

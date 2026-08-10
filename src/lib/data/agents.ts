@@ -1,5 +1,5 @@
 /**
- * 에이전트 픽스처 — 나인벨 AX의 핵심 단위.
+ * 에이전트 도메인 모델(타입·어휘·가시성 규칙) — 나인벨 AX의 핵심 단위.
  *
  * 에이전트는 더존 ERP(옴니솔)의 반복 업무를 사람이 화면을 보며 승인하는 가운데
  * 실제 화면을 조작해 끝까지 처리한다. 상세(구동) 화면은 라이브 브라우저 +
@@ -13,8 +13,6 @@
  * 점유하므로 동시 실행 수가 제한된다(자원 보존). UI는 이 모델을 그대로 반영해
  * "라이브 세션 · 남은 시간(타임아웃)"과 "동시 세션 한도"를 노출한다.
  */
-
-import { relativeFromNow } from './format';
 
 /** 동시에 떠 있을 수 있는 라이브(헤드리스 브라우저) 세션 한도. */
 export const CONCURRENCY_LIMIT = 4;
@@ -219,421 +217,41 @@ export interface Agent {
   settingsSchema?: readonly AgentSettingDef[];
 }
 
-// 공통 단계 라벨(공용 스킬 기반)
-const baseSteps = (
-  overrides: Record<string, { status: StepStatus; substeps?: readonly SubStep[] }>,
-  tail: readonly WorkflowStep[] = [],
-): readonly WorkflowStep[] => {
-  const defs: WorkflowStep[] = [
-    {
-      id: 'login',
-      label: '로그인',
-      skill: '로그인',
-      status: 'pending',
-      detail: '더존 옴니솔 인증 후 세션 확보',
-    },
-    {
-      id: 'usertype',
-      label: '유형 확인',
-      skill: '사용자 유형 확인',
-      status: 'pending',
-      detail: '법인/사업장·권한 유형 식별',
-    },
-    {
-      id: 'menu',
-      label: '메뉴 이동',
-      skill: '메뉴 이동',
-      status: 'pending',
-      detail: '대상 업무 화면으로 이동',
-    },
-  ];
-  return [...defs.map((s) => ({ ...s, ...(overrides[s.id] ?? {}) })), ...tail];
-};
+/**
+ * UI에서만 숨기는 워크플로우 id — 백엔드/실행은 그대로 두고 화면 목록에서만 제외한다.
+ * workflowId 로 매칭하며, 상세 페이지 직접 URL 접근은 막지 않는다. 현재 숨김 대상 없음
+ * (해외출장·경조금 노출 해제). 숨기려면 해당 workflowId 를 이 Set 에 추가한다.
+ */
+export const HIDDEN_WORKFLOW_IDS: ReadonlySet<string> = new Set<string>();
 
-export const AGENTS: readonly Agent[] = [
-  {
-    id: 'outbound-test',
-    name: '출고 데이터 테스트',
-    description:
-      '로그인 → 메뉴 이동 → 조회 → 그리드 데이터 수집까지 자동 수행하는 읽기 전용 에이전트.',
-    drive: 'browser',
-    interaction: 'readonly',
-    targetSystem: '더존 옴니솔',
-    targetUrl: 'erp.ninebell.co.kr',
-    status: 'running',
-    progress: 58,
-    timeoutSeconds: 120,
-    elapsedSeconds: 47,
-    currentAction: '출고현황 그리드에서 84행을 읽는 중…',
-    runCount: 132,
-    successRate: 99.2,
-    avgSeconds: 41,
-    lastRunAt: relativeFromNow({ minutes: 3 }),
-    steps: baseSteps(
-      {
-        login: { status: 'done' },
-        usertype: { status: 'done' },
-        menu: { status: 'done' },
-      },
-      [
-        {
-          id: 'query',
-          label: '조회',
-          skill: '그리드 읽기',
-          status: 'active',
-          detail: '기간·창고 조건으로 출고현황 조회',
-          substeps: [
-            { label: '조회 조건 입력(기간/창고)', status: 'done' },
-            { label: '조회 버튼 실행', status: 'done' },
-            { label: '그리드 로딩 대기', status: 'active' },
-          ],
-        },
-        {
-          id: 'collect',
-          label: '데이터 수집',
-          skill: '그리드 읽기',
-          status: 'pending',
-          detail: '그리드 행을 구조화 데이터로 추출',
-        },
-        {
-          id: 'apply',
-          label: '결과 정리',
-          status: 'pending',
-          detail: '수집 결과를 실행 이력에 기록',
-        },
-      ],
-    ),
-    logs: [
-      {
-        id: 'l1',
-        at: relativeFromNow({ minutes: 3 }),
-        level: 'info',
-        step: '로그인',
-        message: '더존 옴니솔 세션 시작',
-      },
-      {
-        id: 'l2',
-        at: relativeFromNow({ minutes: 3 }),
-        level: 'success',
-        step: '로그인',
-        message: '인증 성공 · 사용자 유형=법인',
-      },
-      {
-        id: 'l3',
-        at: relativeFromNow({ minutes: 2 }),
-        level: 'action',
-        step: '메뉴 이동',
-        message: '자재 > 출고현황 화면으로 이동',
-      },
-      {
-        id: 'l4',
-        at: relativeFromNow({ minutes: 2 }),
-        level: 'action',
-        step: '조회',
-        message: "조회 조건 입력: 기간=2026-06, 창고='본사'",
-      },
-      {
-        id: 'l5',
-        at: relativeFromNow({ minutes: 1 }),
-        level: 'info',
-        step: '조회',
-        message: '그리드 로딩 대기 중(84행 예상)',
-      },
-    ],
-    intervention: null,
-  },
-  {
-    id: 'card-expense',
-    name: '법인카드 지출결의',
-    description:
-      '결의서 입력 화면에서 카드 결의 행을 만들고 증빙유형·프로젝트를 사람 승인으로 선택한다.',
-    drive: 'browser',
-    interaction: 'approval',
-    targetSystem: '더존 옴니솔',
-    targetUrl: 'erp.ninebell.co.kr',
-    status: 'waiting_input',
-    progress: 46,
-    timeoutSeconds: 180,
-    elapsedSeconds: 72,
-    currentAction: '증빙유형 선택을 기다리는 중 — 사용자 승인 필요',
-    runCount: 57,
-    successRate: 96.5,
-    avgSeconds: 88,
-    lastRunAt: relativeFromNow({ minutes: 12 }),
-    steps: baseSteps(
-      {
-        login: { status: 'done' },
-        usertype: { status: 'done' },
-        menu: { status: 'done' },
-      },
-      [
-        {
-          id: 'row',
-          label: '결의행 생성',
-          skill: '필드 입력',
-          status: 'done',
-          detail: '법인카드 승인내역에서 결의 대상 행 생성',
-        },
-        {
-          id: 'evidence',
-          label: '증빙유형',
-          skill: '코드피커',
-          status: 'active',
-          detail: '증빙유형 선택 — 사람 승인 지점',
-          substeps: [
-            { label: '코드피커 열기', status: 'done' },
-            { label: '증빙유형 후보 제시', status: 'done' },
-            { label: '사용자 승인 대기', status: 'active' },
-          ],
-        },
-        {
-          id: 'project',
-          label: '프로젝트',
-          skill: '코드피커',
-          status: 'pending',
-          detail: '프로젝트(검색형) 선택',
-        },
-        {
-          id: 'apply',
-          label: '적용',
-          status: 'pending',
-          detail: '입력값 적용(저장·상신은 사람이)',
-        },
-      ],
-    ),
-    logs: [
-      {
-        id: 'l1',
-        at: relativeFromNow({ minutes: 12 }),
-        level: 'success',
-        step: '로그인',
-        message: '인증 성공',
-      },
-      {
-        id: 'l2',
-        at: relativeFromNow({ minutes: 11 }),
-        level: 'action',
-        step: '메뉴 이동',
-        message: '회계 > 지출결의 입력 화면 이동',
-      },
-      {
-        id: 'l3',
-        at: relativeFromNow({ minutes: 10 }),
-        level: 'action',
-        step: '결의행 생성',
-        message: '법인카드 승인내역 3건 중 1건 결의행 생성',
-      },
-      {
-        id: 'l4',
-        at: relativeFromNow({ minutes: 9 }),
-        level: 'info',
-        step: '증빙유형',
-        message: '코드피커 열기 · 후보 4종 제시',
-      },
-      {
-        id: 'l5',
-        at: relativeFromNow({ minutes: 9 }),
-        level: 'warn',
-        step: '증빙유형',
-        message: '판단 필요 — 사용자 승인 대기',
-      },
-    ],
-    intervention: {
-      kind: 'choice',
-      title: '증빙유형 선택',
-      prompt:
-        '이 카드 결의 행에 적용할 증빙유형을 선택하세요. 선택 후 프로젝트 지정으로 이어집니다.',
-      options: [
-        { id: 'ev-normal', label: '일반경비', hint: '대부분의 카드 지출' },
-        { id: 'ev-entertain', label: '접대비', hint: '거래처 접대·경조사' },
-        { id: 'ev-welfare', label: '복리후생비', hint: '임직원 복리후생' },
-        { id: 'ev-education', label: '교육훈련비', hint: '교육·세미나·도서' },
-      ],
-    },
-  },
-  {
-    id: 'card-chat',
-    name: '법인카드 승인내역 정리 — 대화형',
-    description:
-      '법인카드 승인내역을 일괄 조회해 건별로 예산단위·계정·프로젝트·적요를 대화로 채운다(적요 추천). 저장은 확인 후.',
-    drive: 'browser',
-    interaction: 'conversational',
-    targetSystem: '더존 옴니솔',
-    targetUrl: 'erp.ninebell.co.kr',
-    status: 'waiting_input',
-    progress: 72,
-    timeoutSeconds: 240,
-    elapsedSeconds: 151,
-    currentAction: '상세 필드 입력을 위한 대화 입력을 기다리는 중',
-    runCount: 23,
-    successRate: 89.1,
-    avgSeconds: 124,
-    lastRunAt: relativeFromNow({ minutes: 6 }),
-    // steps 는 백엔드 /agents/{id} 가 단일 소스다(backend/app/services/agent_fixtures.py 시드
-    // → DB). 프론트 픽스처에는 더 이상 단계 계획을 두지 않는다(삼중 정의 해소).
-    steps: [],
-    logs: [
-      {
-        id: 'l1',
-        at: relativeFromNow({ minutes: 6 }),
-        level: 'success',
-        step: '증빙유형',
-        message: '증빙유형 적용: 일반경비',
-      },
-      {
-        id: 'l2',
-        at: relativeFromNow({ minutes: 5 }),
-        level: 'success',
-        step: '프로젝트',
-        message: '프로젝트 적용: 커머스 리뉴얼',
-      },
-      {
-        id: 'l3',
-        at: relativeFromNow({ minutes: 4 }),
-        level: 'action',
-        step: '상세 필드',
-        message: '필수 필드 식별: 적요, 사용부서, 금액',
-      },
-      {
-        id: 'l4',
-        at: relativeFromNow({ minutes: 3 }),
-        level: 'info',
-        step: '상세 필드',
-        message: '대화형 입력 대기 — 한 문장으로 입력 요청',
-      },
-    ],
-    intervention: {
-      kind: 'chat',
-      title: '상세 필드 — 대화형 입력',
-      prompt:
-        '남은 상세 필드를 한 문장으로 입력하면 에이전트가 알아서 채웁니다. 부족하면 되묻습니다.',
-      placeholder: '예) 적요는 6월 팀 회식, 사용부서는 마케팅, 금액 184,000원',
-      messages: [
-        {
-          id: 'm1',
-          role: 'agent',
-          at: relativeFromNow({ minutes: 4 }),
-          text: '상세 필드를 채울게요. 적요·사용부서·금액을 한 문장으로 알려주세요.',
-        },
-        {
-          id: 'm2',
-          role: 'user',
-          at: relativeFromNow({ minutes: 3 }),
-          text: '적요는 6월 거래처 미팅 식대로 해줘',
-        },
-        {
-          id: 'm3',
-          role: 'agent',
-          at: relativeFromNow({ minutes: 3 }),
-          text: '적요=‘6월 거래처 미팅 식대’로 입력했어요. 사용부서와 금액도 알려주시겠어요?',
-        },
-      ],
-    },
-  },
-  {
-    id: 'card-md',
-    name: '법인카드 지출결의 MD',
-    description: '같은 업무를 매 단계 화면을 읽고 AI가 스스로 판단해 수행한다(비교·실험용).',
-    drive: 'browser',
-    interaction: 'autonomous',
-    targetSystem: '더존 옴니솔',
-    targetUrl: 'erp.ninebell.co.kr',
-    status: 'completed',
-    progress: 100,
-    timeoutSeconds: 240,
-    elapsedSeconds: 167,
-    currentAction: '적용 완료 — 최종 저장·상신은 사용자 확인 대기',
-    runCount: 11,
-    successRate: 81.8,
-    avgSeconds: 167,
-    lastRunAt: relativeFromNow({ hours: 2 }),
-    steps: baseSteps(
-      {
-        login: { status: 'done' },
-        usertype: { status: 'done' },
-        menu: { status: 'done' },
-      },
-      [
-        { id: 'row', label: '결의행 생성', skill: '필드 입력', status: 'done' },
-        { id: 'evidence', label: '증빙유형', skill: '코드피커', status: 'done' },
-        { id: 'project', label: '프로젝트', skill: '코드피커', status: 'done' },
-        { id: 'apply', label: '적용', status: 'done', detail: '입력값 적용 완료' },
-      ],
-    ),
-    logs: [
-      {
-        id: 'l1',
-        at: relativeFromNow({ hours: 2, minutes: 4 }),
-        level: 'success',
-        step: '로그인',
-        message: '인증 성공',
-      },
-      {
-        id: 'l2',
-        at: relativeFromNow({ hours: 2, minutes: 2 }),
-        level: 'action',
-        step: '증빙유형',
-        message: 'AI 판단: 증빙유형=일반경비(신뢰도 0.92)',
-      },
-      {
-        id: 'l3',
-        at: relativeFromNow({ hours: 2, minutes: 1 }),
-        level: 'action',
-        step: '프로젝트',
-        message: 'AI 판단: 프로젝트=브랜드 사이트(신뢰도 0.76)',
-      },
-      {
-        id: 'l4',
-        at: relativeFromNow({ hours: 2 }),
-        level: 'success',
-        step: '적용',
-        message: '적용 완료 · 저장/상신 보류',
-      },
-    ],
-    intervention: null,
-  },
-  {
-    id: 'bom-lookup',
-    name: '자재 BOM 조회',
-    description: '품목 BOM 구조를 조회해 구성 품목과 소요량을 수집하는 읽기 전용 에이전트.',
-    drive: 'browser',
-    interaction: 'readonly',
-    targetSystem: '더존 옴니솔',
-    targetUrl: 'erp.ninebell.co.kr',
-    status: 'idle',
-    progress: 0,
-    timeoutSeconds: 120,
-    elapsedSeconds: 0,
-    currentAction: '대기 중 — 실행을 시작하면 라이브 화면이 표시됩니다.',
-    runCount: 64,
-    successRate: 98.4,
-    avgSeconds: 36,
-    lastRunAt: relativeFromNow({ days: 1 }),
-    steps: baseSteps({}, [
-      {
-        id: 'query',
-        label: '조회',
-        skill: '그리드 읽기',
-        status: 'pending',
-        detail: '품목코드로 BOM 조회',
-      },
-      { id: 'collect', label: '데이터 수집', skill: '그리드 읽기', status: 'pending' },
-      { id: 'apply', label: '결과 정리', status: 'pending' },
-    ]),
-    logs: [
-      {
-        id: 'l1',
-        at: relativeFromNow({ days: 1 }),
-        level: 'info',
-        message: '직전 실행 완료 · 구성품목 27건 수집',
-      },
-    ],
-    intervention: null,
-  },
-];
+/** 숨김 대상(HIDDEN_WORKFLOW_IDS)을 제외한 목록 — 화면 표시용 필터. */
+export function filterVisibleAgents<T extends { workflowId?: string }>(agents: readonly T[]): T[] {
+  return agents.filter((a) => !a.workflowId || !HIDDEN_WORKFLOW_IDS.has(a.workflowId));
+}
 
-export function findAgent(id: string): Agent | null {
-  return AGENTS.find((a) => a.id === id) ?? null;
+/**
+ * 디버그 전용 워크플로우 — 결의서입력(resolution)에서 일반 모드엔 숨기고 디버그 모드에만
+ * 노출하는 종류(출장·경조·학자금). 법인카드(card-collect)는 두 모드 모두 노출된다.
+ */
+export const DEBUG_ONLY_WORKFLOW_IDS: ReadonlySet<string> = new Set([
+  'trip-domestic',
+  'trip-overseas',
+  'gyeongjo-grant',
+  'hakjagum-grant',
+]);
+
+/**
+ * 디버그 모드 여부에 따라 결의서입력 종류를 걸러낸다.
+ *  · 디버그 모드: 전 종류 노출(법인카드 + 출장·경조·학자금) — 아무것도 숨기지 않는다.
+ *  · 일반 모드: 디버그 전용(출장·경조·학자금)만 숨겨 법인카드만 남긴다.
+ * 그 외 에이전트는 두 모드 모두 그대로 통과.
+ */
+export function filterByDebugMode<T extends { workflowId?: string }>(
+  agents: readonly T[],
+  debugMode: boolean,
+): T[] {
+  if (debugMode) return [...agents];
+  return agents.filter((a) => !a.workflowId || !DEBUG_ONLY_WORKFLOW_IDS.has(a.workflowId));
 }
 
 /** 헤드리스 브라우저 슬롯을 점유한 상태(라이브 세션). */
@@ -642,8 +260,3 @@ export const LIVE_SESSION_STATUSES: ReadonlySet<AgentStatus> = new Set([
   'waiting_input',
   'paused',
 ]);
-
-/** 지금 라이브(헤드리스 브라우저) 슬롯을 쓰고 있는 세션 수. */
-export function liveSessionCount(): number {
-  return AGENTS.filter((a) => LIVE_SESSION_STATUSES.has(a.status)).length;
-}

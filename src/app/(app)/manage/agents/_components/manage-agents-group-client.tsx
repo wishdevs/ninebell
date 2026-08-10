@@ -2,14 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import {
-  RiArrowLeftSLine,
-  RiErrorWarningLine,
-  RiLockLine,
-  RiSettings3Line,
-} from '@remixicon/react';
+import { RiArrowLeftSLine, RiErrorWarningLine, RiSettings3Line } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LockedEmptyState } from '@/components/ui/list-state';
 import { MetaChip } from '@/components/ui/meta-chip';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
@@ -77,11 +73,7 @@ export function ManageAgentsGroupClient({ groupId }: { groupId: string }) {
       </div>
 
       {!isAdmin ? (
-        <EmptyState
-          icon={<RiLockLine size={18} aria-hidden />}
-          title="접근 권한이 없습니다"
-          description="에이전트 관리는 관리자 이상만 사용할 수 있습니다."
-        />
+        <LockedEmptyState description="에이전트 관리는 관리자 이상만 사용할 수 있습니다." />
       ) : phase === 'loading' ? (
         <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
           <Spinner size={18} label="에이전트 불러오는 중" />

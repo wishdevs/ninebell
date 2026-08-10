@@ -1,0 +1,365 @@
+"""전표조회승인(GLDDOC00700) 화면 고유 in-page JS 상수 — voucher_receivable 프로브 이식.
+
+이 화면 고유 위젯(dews MultiCodePicker/CodePicker/PeriodPicker + 조회결과 마스터그리드 +
+결제(결재)창=별도 팝업 Page)을 잡는 JS 만 여기 둔다. 범용 JS(드롭다운 세팅·rowcount·모달
+스냅샷)는 ``nbkit.omnisol.js_lib`` 를, CSS 셀렉터(BTN_LOOKUP 등)는 ``nbkit.omnisol.selectors``
+를 재사용한다(리스킨 시 한 곳만 고침). 값/좌표는 e2e/voucher_receivable_probe.py 3회 그린 실측.
+
+⚠ CHILD_TOP_BUTTONS_JS 는 **읽기 전용**(좌표·텍스트 반환)이다 — 상신/보관 버튼을 클릭하는
+   JS 는 이 파일에 없다(절대 안전: 결제창에서 상신/보관 클릭 금지).
+"""
+
+from __future__ import annotations
+
+from nbkit.omnisol import js_lib
+
+# ⚠ 공지 팝업 닫기는 공유 프리미티브 nbkit.omnisol.modals.dismiss_notice_popup(고유 앵커
+#   #close-today-chk/#notice-dialog-close, '하루동안 보지 않기' 체크 후 닫기)로 이관했다 —
+#   전 에이전트 공통(login_flow 에서 로그인 직후 호출 + _open_picker just-in-time 재확인).
+
+# 라벨 텍스트로 그 필드의 '검색(돋보기)' dews-multicodepicker-button 좌표를 찾는다.
+# 같은 li 안 두 번째 버튼(1=화살표 드롭다운, 2=돋보기). 반환 {x, y}(중앙좌표) 또는 null.
+# ⚠ 방어: 라벨이 optional-area(패널 접힘) 안에 있으면 버튼은 DOM엔 있지만 rect 가 0×0/숨김
+#   이라 — 그런 경우 (0,0) 같은 오판 좌표 대신 **null** 을 돌려준다(호출자가 "찾음"으로
+#   오판해 빗나간 좌표를 클릭하는 것을 소스에서 차단).
+FIELD_SEARCH_BTN_RECT_JS = r"""(label) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const lbl = [...document.querySelectorAll('label')].find(e => c(e.innerText) === label);
+  if (!lbl) return null;
+  const li = lbl.closest('li');
+  const btns = [...li.querySelectorAll('.dews-multicodepicker-button')];
+  const btn = btns[1] || btns[0];
+  if (!btn) return null;
+  const r = btn.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0 || btn.offsetParent === null) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
+# 라벨의 돋보기 버튼이 **실제로 클릭 가능한 크기로 렌더**돼 있는지(패널이 접혀 0×0 이 아닌지)
+# 확인한다. optional-area 필드(전표유형)가 다른 필드 조작 중간에 재접히는 레이스(실측: D2 순회
+# 5단계 뒤 재접힘 관찰)를 감지하기 위한 것 — FIELD_SEARCH_BTN_RECT_JS 단독으로는 접힌 버튼도
+# {x:0,y:0} 같은 값을 돌려줘 "찾음"으로 오판할 수 있다. 반환 bool.
+FIELD_LABEL_VISIBLE_JS = js_lib.FIELD_LABEL_VISIBLE_JS  # 단일소스(js_lib §C) 재수출
+
+# 최상단 k-window 팝업의 RealGrid 가 **결과검증형 폴링**용으로 붙었는지 확인한다.
+# ⚠ 근본원인(2026-07-21 voucher-payable 라이브 스모크 2회 재현): 팝업 클릭 직후 고정 1200ms
+# 대기만으로 POPUP_CHECK_ALL_JS/POPUP_CHECK_ROWS_JS 를 호출하면, 서버 응답이 느린 세션에서
+# `.dews-ui-grid` 는 DOM에 있어도 dewsControl/`_grid` 바인딩이 아직 안 끝나 `Cannot read
+# properties of undefined (reading '_grid')` 로 **크래시**한다(우아한 실패가 아니라 전체
+# 그래프가 죽음). _open_picker 가 클릭 후 이 값이 true 가 될 때까지 폴링한다. 반환 bool.
+POPUP_GRID_READY_JS = r"""() => {
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const dlg = wins[wins.length - 1];
+  if (!dlg) return false;
+  const el = dlg.querySelector('.dews-ui-grid');
+  if (!el) return false;
+  const ctrl = window.jQuery(el).data('dewsControl');
+  return !!(ctrl && ctrl._grid);
+}"""
+
+# 보이는 k-window 팝업 개수 — 확인 커널과 공유하는 단일소스(js_lib §C)를 재수출한다.
+# (에이전트 전반의 '팝업 열림/닫힘 확인'이 같은 리더를 쓰도록 2026-07-27 이관.)
+POPUP_COUNT_JS = js_lib.POPUP_COUNT_JS
+
+# 최상단 k-window 팝업의 RealGrid 에서 지정 필드값과 일치하는 행을 checkRow.
+# arg = [targets(문자열 배열), fieldName]. 반환 {ok, idxs:[{t,idx,code}], n}. 무매칭 target 은 빠짐.
+# ⚠ 방어(위 POPUP_GRID_READY_JS 참조): 그리드가 아직 안 붙었으면 크래시 대신 {ok:false,
+# reason:'grid-not-ready'} 를 돌려준다 — 호출자가 이미 하는 `res.get('ok')` 체크로 우아하게
+# 실패 처리된다(폴링이 놓친 잔여 레이스의 최종 방어선).
+POPUP_CHECK_ROWS_JS = r"""([targets, fieldName]) => {
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const dlg = wins[wins.length - 1];
+  if (!dlg) return { ok: false, reason: 'no-popup' };
+  const el = dlg.querySelector('.dews-ui-grid');
+  const ctrl = el && window.jQuery(el).data('dewsControl');
+  if (!ctrl || !ctrl._grid) return { ok: false, reason: 'grid-not-ready' };
+  const g = ctrl._grid;
+  const ds = g.getDataSource();
+  const n = ds.getRowCount();
+  const rows = ds.getJsonRows(0, n - 1);
+  const idxs = [];
+  for (const t of targets) {
+    const idx = rows.findIndex(r => String(r[fieldName]).trim() === t);
+    if (idx >= 0) { g.checkRow(idx, true); idxs.push({ t, idx, code: rows[idx][fieldName.replace('_NM', '_CD')] }); }
+  }
+  return { ok: true, idxs, n };
+}"""
+
+# 팝업의 checkAll(작성부서 전체선택 전용 — checkbox 컬럼 헤더 체크와 동일 효과). 반환 {ok, n}.
+# ⚠ 방어는 POPUP_CHECK_ROWS_JS 와 동일(그리드 미부착 시 크래시 대신 {ok:false} — 아래 참조).
+POPUP_CHECK_ALL_JS = r"""() => {
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const dlg = wins[wins.length - 1];
+  if (!dlg) return { ok: false, reason: 'no-popup' };
+  const el = dlg.querySelector('.dews-ui-grid');
+  const ctrl = el && window.jQuery(el).data('dewsControl');
+  if (!ctrl || !ctrl._grid) return { ok: false, reason: 'grid-not-ready' };
+  const g = ctrl._grid;
+  g.checkAll();
+  return { ok: true, n: g.getDataSource().getRowCount() };
+}"""
+
+# 최상단 k-window 팝업의 '적용' 버튼 좌표. 반환 {x, y} 또는 null.
+POPUP_APPLY_BTN_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const dlg = wins[wins.length - 1];
+  if (!dlg) return null;
+  const b = [...dlg.querySelectorAll('button')].find(x => c(x.innerText) === '적용');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
+# 조회조건 패널 확장(▲/▼) 토글 좌표(전표유형 필드가 optional-area 라 펼쳐야 보임). {x, y} 또는 null.
+# ⚠ 첫 매치(document.querySelector)만 잡는다 — 화면에 확장 토글이 **여러 개**일 수 있어(도메인
+#   전문가 실측, 2026-07-21) 이 토글이 항상 전표유형을 드러낸다는 보장이 없다. set_query 진입
+#   시 1회 워밍(no-op 안전)용으로만 쓰고, 전표유형처럼 특정 필드를 드러내야 할 때는
+#   EXPAND_TOGGLE_RECTS_JS(복수) + ensure_field_visible(결과검증형)을 쓸 것.
+EXPAND_TOGGLE_RECT_JS = r"""() => {
+  const b = document.querySelector('.dews-condition-panel-expand-button');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
+# 화면에 보이는 **모든** 조회조건 확장 토글 좌표를 좌→우 순으로 반환(빈 배열 가능). 하위 패널마다
+# 각자 확장 버튼을 가질 수 있어(도메인전문가 실측), 어느 토글이 목표 필드를 드러내는지 미리 알
+# 수 없다 — ensure_field_visible 이 하나씩 결과검증형으로 시도한다.
+EXPAND_TOGGLE_RECTS_JS = r"""() => {
+  const btns = [...document.querySelectorAll('.dews-condition-panel-expand-button')]
+    .filter(b => b.offsetParent !== null);
+  const rects = btns.map(b => {
+    const r = b.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  });
+  rects.sort((a, b) => a.x - b.x);
+  return rects;
+}"""
+
+# 필드 표시값(멀티코드피커 text input) 읽기 — 확인 커널과 공유하는 단일소스(js_lib §C) 재수출.
+FIELD_DISPLAY_JS = js_lib.FIELD_DISPLAY_JS
+
+# 회계일 periodpicker 를 당월(1일~말일)로 세팅하는 앱 API(setMonth). ⚠ YYYYMMDD 타이핑 아님.
+SET_PERIOD_THIS_MONTH_JS = (
+    "() => { try { window.jQuery(document.querySelector('#s_period'))"
+    ".data('dewsControl').setMonth(); return true; } catch (e) { return false; } }"
+)
+
+# 회계일 periodpicker 를 임의 기간(YYYYMMDD~YYYYMMDD)으로 세팅 — 실행 전 폼이 당월이 아닌
+# 기간(예: 7/1~7/5)을 지정했을 때만 쓴다. setMonth() 는 '월 단위'라 부분 기간을 표현할 수 없어
+# 시작/종료 input 을 직접 세팅한다(미지급금 법인카드 #PERIOD_DT_C 와 동일한 dews 규약).
+# ⚠ 호출부(steps.set_period)가 readback 으로 반영을 확인한다 — 조용한 실패 금지.
+SET_PERIOD_RANGE_JS = r"""({ start, end }) => {
+  try {
+    const si = document.querySelector('#s_period_startinput');
+    const ei = document.querySelector('#s_period_endinput');
+    if (!si || !ei) return false;
+    for (const [inp, val] of [[si, start], [ei, end]]) {
+      inp.value = val;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return true;
+  } catch (e) { return false; }
+}"""
+
+# 회계일 시작/종료 입력값 읽기(숫자만) — 세팅 반영 확인용. 반환 {start, end} 또는 null(구조 미발견).
+PERIOD_VALUE_JS = r"""() => {
+  const si = document.querySelector('#s_period_startinput');
+  const ei = document.querySelector('#s_period_endinput');
+  if (!si || !ei) return null;
+  const d = v => String(v == null ? '' : v).replace(/\D/g, '');
+  return { start: d(si.value), end: d(ei.value) };
+}"""
+
+# 작성자 multicodepicker 기본선택을 비우는 앱 API(clear).
+CLEAR_WRITER_JS = (
+    "() => { try { window.jQuery(document.querySelector('#s_wrt_emp_no'))"
+    ".data('dewsControl').clear(); return true; } catch (e) { return false; } }"
+)
+
+# 결과 마스터 그리드(index 0) 컬럼+rowcount+상위 N행 덤프. arg=limit. 반환 {ok, n, cols, sample}.
+MASTER_DUMP_JS = r"""(limit) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const cols = g.getColumns().map(c => ({ field: c.fieldName, header: (c.header && c.header.text) || c.name }));
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const take = Math.min(n, limit || 5);
+    const rows = take > 0 ? ds.getJsonRows(0, take - 1) : [];
+    return { ok: true, n, cols, sample: rows };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 140) }; }
+}"""
+
+# 마스터 그리드 idx 행의 키(DOCU_NO) 읽기. arg=idx. 반환 문자열 또는 null.
+READ_ROW_KEY_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const rows = g.getDataSource().getJsonRows(idx, idx);
+    return rows && rows[0] ? rows[0].DOCU_NO : null;
+  } catch (e) { return null; }
+}"""
+
+# 마스터 그리드 idx 행의 결의서번호(ABDOCU_NO) 읽기 — 카드 참조문서(on_popup) 훅이 이 값으로
+# payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다. 매출/매입 백본은 호출하지 않는다(on_popup=None).
+# arg=idx. 반환 문자열 또는 null(ABDOCU_NO 없는 행 — 결의서입력 미경유 전표).
+READ_ROW_ABDOCU_NO_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const rows = g.getDataSource().getJsonRows(idx, idx);
+    return rows && rows[0] ? (rows[0].ABDOCU_NO || null) : null;
+  } catch (e) { return null; }
+}"""
+
+# 마스터 그리드 전 행 중 결의서번호(ABDOCU_NO) 보유 행 수 — 카드: 보유 0건이면 결재 대상이
+# 없으므로 결의서조회승인 다중탭 수집 자체를 생략하고 즉시 종료한다(사용자 확정 2026-07-30).
+# arg 없음. 반환 {ok, n(조회 행수), withAb(보유 행수)} | {ok:false, reason}.
+COUNT_ROWS_WITH_ABDOCU_JS = r"""() => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    if (n <= 0) return { ok: true, n: 0, withAb: 0 };
+    const rows = ds.getJsonRows(0, n - 1) || [];
+    const withAb = rows.filter(r => r && String(r.ABDOCU_NO || '').trim()).length;
+    return { ok: true, n, withAb };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""
+
+# 마스터 그리드 idx 행 선택 — setCurrent(하이라이트/디테일 연동) + checkRow(결재 대상 인식 필수).
+# D4 실측: checkRow 없이 setCurrent 만으론 결재 버튼이 대상을 인식하지 못한다. arg=idx. 반환 bool.
+CHECK_ROW_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    g.setCurrent({ itemIndex: idx, fieldName: g.getColumns()[1].fieldName });
+    g.checkRow(idx, true);
+    return true;
+  } catch (e) { return false; }
+}"""
+
+# 마스터 그리드 전체 체크 해제 — 배치 순회에서 직전 대상 행의 체크가 남아 결재가 여러 문서를
+# 잡는 것을 막는다(대상 행 체크 직전에 호출해 정확히 한 행만 체크된 상태로 결재). arg 없음. 반환 bool.
+UNCHECK_ALL_JS = r"""() => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    g.checkAll(false);
+    return true;
+  } catch (e) { return false; }
+}"""
+
+# D7(배치 순회 정합성) — 마스터 그리드에서 현재 **체크된** 행 인덱스 목록. 결제(결재) 버튼을
+# 누르기 직전 "정확히 1행만 체크"인지 검증하는 용도(읽기전용). RealGrid 버전에 따라 체크 API가
+# 다를 수 있어 `getCheckedRows()` 를 우선 시도하고 없으면 `getRowState` 스캔으로 폴백한다.
+# arg 없음. 반환 {ok, method, rows:[idx,...]} 또는 {ok:false, reason}.
+CHECKED_ROW_INDEXES_JS = r"""() => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    if (typeof g.getCheckedRows === 'function') {
+      return { ok: true, method: 'getCheckedRows', rows: g.getCheckedRows() };
+    }
+    const n = g.getDataSource().getRowCount();
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const st = g.getRowState ? g.getRowState(i) : null;
+      if (st && st.checked) rows.push(i);
+    }
+    return { ok: true, method: 'getRowState-scan', rows };
+  } catch (e) {
+    return { ok: false, reason: String(e).slice(0, 140) };
+  }
+}"""
+
+# 결제(결재) 버튼 좌표 — button.main-button.approval, innerText '결재'. 반환 {x, y} 또는 null.
+# ⚠ 방어(2026-07-21 배치 라이브 실측: 1건째 성공 후 2건째 결제창 미출현 관찰): 버튼이 DOM엔
+#   있어도 일시적으로 숨김/0크기(자식창 닫힘 직후 전환 애니메이션 등)일 수 있다 — 그런 경우
+#   좌표 대신 null 을 돌려줘 호출자가 "찾음"으로 오판하지 않게 한다(FIELD_SEARCH_BTN_RECT_JS
+#   와 동일 패턴).
+APPROVAL_BTN_RECT_JS = r"""() => {
+  const b = document.querySelector('button.main-button.approval');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0 || b.offsetParent === null) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
+# D7 반복 견고화 — 근본원인 확정(도메인전문가 + 2026-07-21 읽기전용 진단 2건):
+#   1. e2e/voucher_receivable_open_approval_diag.py: check_row(setCurrent)가 디테일 그리드
+#      재조회를 트리거해 `.dews-loading-bg` 오버레이가 잠깐 뜨는데, 이때 결재 버튼을 클릭하면
+#      좌표는 버튼 위여도 **오버레이가 클릭을 가로챈다**(elementFromPoint 실측: 버튼 대신
+#      dews-loading-bg DIV 반환 → window.open 미호출).
+#   2. e2e/voucher_receivable_parent_loading_diag.py: **결제창을 닫으면**(close_child) 본창이
+#      별도 후처리를 하며 `.dews-loading-container`(자식: `.dews-loading-img`/`.dews-loading-text`)
+#      스피너가 뜬다(실측: close 직후 t=0.0s 부터 t≈0.6s 까지 visible). 도메인전문가 확정:
+#      "그 로딩이 끝나기 전에 다음 행을 체크하고 결제를 다시 호출해서 안 되는 것" — 이게 2건째
+#      결제창 미출현의 진짜 근본원인.
+# 두 케이스 모두 커버하도록 알려진 dews/kendo 로딩류 셀렉터를 전부 체크한다(그중 하나라도
+# 보이면 true). k-loading-mask/k-loading/dews-loading 은 도메인전문가가 제시한 후보 —
+# 라이브에서 미확인이어도 querySelector 가 null 이면 그냥 넘어가 무해하다. 반환 bool.
+LOADING_OVERLAY_VISIBLE_JS = r"""() => {
+  const sels = [
+    '.dews-loading-bg', '.dews-loading-container',
+    '.k-loading-mask', '.k-loading', '.dews-loading',
+  ];
+  for (const sel of sels) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0 && el.offsetParent !== null) return true;
+  }
+  return false;
+}"""
+
+# 결제창(전자결재 팝업, 별도 Page) 상단 버튼(미리보기/보관/상신) 텍스트·좌표 — 리프노드 탐색.
+# ⚠ 읽기 전용: 렌더완료 판정(버튼 텍스트 표출)에만 쓴다. 상신/보관은 절대 클릭하지 않는다.
+CHILD_TOP_BUTTONS_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const targets = ['상신', '미리보기', '보관'];
+  const out = [];
+  for (const el of document.querySelectorAll('*')) {
+    if (el.children.length > 0) continue;
+    const t = c(el.innerText || el.textContent || '');
+    if (targets.includes(t)) {
+      const r = el.getBoundingClientRect();
+      out.push({ text: t, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), visible: el.offsetParent !== null });
+    }
+  }
+  return out;
+}"""
+
+# D7(배치 순회 정합성) — 결제창(자식 Page, EAP)에 실제로 표시된 전표번호를 읽는다. 결제창이
+# 대상 행과 다른 문서를 열었는지(행/팝업 어긋남) 대조하는 용도. ⚠ 읽기 전용.
+# EAP 폼의 '전표번호' 셀 셀렉터/클래스가 미확정이라(리스킨 취약) 좌표/클래스에 의존하지 않고
+# **리프 텍스트노드 전량을 정규식으로 스캔**한다(실측 포맷: 'FI'+숫자8자리 이상, 예
+# FI2026070100000010). 반환: 매치된 고유 문자열 배열 — 0개=못 찾음(모호), 1개=확정,
+# 2개+=모호(다른 곳에 같은 패턴이 더 있음 — 하드 실패 근거로 쓰지 않는다).
+CHILD_DOCU_NO_JS = r"""() => {
+  const re = /\bFI\d{8,}\b/;
+  const out = new Set();
+  for (const el of document.querySelectorAll('*')) {
+    if (el.children.length > 0) continue;
+    const t = (el.innerText || el.textContent || '').trim();
+    const m = t.match(re);
+    if (m) out.add(m[0]);
+  }
+  return [...out];
+}"""
+
+# 디테일(계정정보) 그리드의 **행수 + 소속 전표번호**를 한 번에 읽는다(왕복 1회).
+# 반환 {ok:true, n, docu_no} | {ok:false, reason}. docu_no 는 첫 행의 DOCU_NO(실측: 디테일 행이
+# 자신의 전표번호를 갖는다 — e2e/artifacts/voucher_receivable_detail_counts.json).
+# ⚠ 이 docu_no 가 **스테일 판정의 근거**다: 마스터 행을 setCurrent 한 뒤 디테일이 아직 이전 행의
+#   것이면 건수를 그 행의 것으로 오인한다(대부분 전표가 3라인이라 건수만으론 구분 불가).
+#   호출부는 docu_no == 마스터 행 키가 될 때까지 확인한 뒤에야 건수를 채택한다.
+DETAIL_COUNT_JS = r"""() => {
+  try {
+    const el = document.querySelectorAll('.dews-ui-grid')[1];
+    const ctrl = el && window.jQuery(el).data('dewsControl');
+    const g = ctrl && ctrl._grid;
+    if (!g) return { ok: false, reason: 'detail-grid-not-ready' };
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const first = n > 0 ? ds.getJsonRows(0, 0)[0] : null;
+    return { ok: true, n, docu_no: first ? String(first.DOCU_NO == null ? '' : first.DOCU_NO).trim() : null };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 120) }; }
+}"""

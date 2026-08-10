@@ -1,5 +1,6 @@
 import { DashboardShell } from '@/components/shell/dashboard-shell';
 import { ChatLauncher } from '@/components/assistant/chat-launcher';
+import { DebugModeProvider } from '@/lib/debug-mode';
 import { UserProvider } from './providers/user-provider';
 
 /**
@@ -12,8 +13,10 @@ import { UserProvider } from './providers/user-provider';
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <UserProvider>
-      <DashboardShell>{children}</DashboardShell>
-      <ChatLauncher />
+      <DebugModeProvider>
+        <DashboardShell>{children}</DashboardShell>
+        <ChatLauncher />
+      </DebugModeProvider>
     </UserProvider>
   );
 }

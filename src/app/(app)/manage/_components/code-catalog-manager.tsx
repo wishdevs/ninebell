@@ -7,18 +7,18 @@ import {
   RiDeleteBinLine,
   RiErrorWarningLine,
   RiRefreshLine,
-  RiSearchLine,
 } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
-import { Input } from '@/components/ui/input';
+import { ListStatePanel } from '@/components/ui/list-state';
 import { Pagination } from '@/components/ui/pagination';
+import { SearchInput } from '@/components/ui/search-input';
 import { SectionCard } from '@/components/ui/section-card';
 import { Spinner } from '@/components/ui/spinner';
 import { Td, Th } from '@/components/ui/table-cell';
-import { errorMessage } from '@/lib/api/client';
+import { useListParams } from '@/hooks/use-list-params';
+import { errorMessage, toApiError, type ApiError } from '@/lib/api/client';
 import {
   addFavorite,
   fetchCatalog,
@@ -39,7 +39,6 @@ import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 50;
 const SYNC_POLL_MS = 3000;
-const SEARCH_DEBOUNCE_MS = 300;
 
 /** 이 화면이 다루는 kind — ERP 카탈로그가 있는 코드만('agent' 는 즐겨찾기 전용이라 제외). */
 // org_unit 은 조직도 싱크 전용(즐겨찾기·이 카탈로그 관리 UI 대상 아님) → 여기선 제외.
@@ -72,6 +71,9 @@ const SEARCH_PLACEHOLDER: Record<CatalogOnlyKind, string> = {
  * ERP 동기화(진행 중 3초 폴링). 두 kind 가 로직을 공유하므로 kind 로 매개변수화한 단일 컴포넌트다.
  * 전체 목록은 sticky 헤더 테이블(예산단위=예산계정명 주 컬럼, 프로젝트=프로젝트/WBS요소/위치)이며
  * 두 kind 모두 서버 검색을 갖는다. 예산단위만 '전체 부서' 토글을 추가한다.
+ * 검색 디바운스·페이지·URL(q·page) 동기화와 loading/error/empty 3분기는 공용 레일
+ * (useListParams·SearchInput·ListStatePanel) 소유 — sticky 헤더 내부 스크롤 테이블 셸은
+ * 의도된 변형이라 TableCard 로 바꾸지 않는다.
  */
 export function CodeCatalogManager({
   kind,
@@ -87,19 +89,23 @@ export function CodeCatalogManager({
   const [total, setTotal] = useState(0);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<ApiError | null>(null);
 
-  const [page, setPage] = useState(1);
   const [deptAll, setDeptAll] = useState(false);
-  const [queryInput, setQueryInput] = useState('');
-  const [query, setQuery] = useState('');
+
+  // 검색·페이지는 공용 레일 소유 — 디바운스, 안정화 시 page 1 리셋, URL(q·page) 동기화.
+  const { searchInput, setSearchInput, search, page, setPage } = useListParams({ filters: {} });
+  const query = search.trim();
 
   // 페이지 이동 시 목록 스크롤을 상단으로 되돌린다(스티키 헤더 컨테이너 내부 스크롤).
   const listScrollRef = useRef<HTMLDivElement | null>(null);
-  const changePage = useCallback((next: number) => {
-    setPage(next);
-    listScrollRef.current?.scrollTo({ top: 0 });
-  }, []);
+  const changePage = useCallback(
+    (next: number) => {
+      setPage(next);
+      listScrollRef.current?.scrollTo({ top: 0 });
+    },
+    [setPage],
+  );
 
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [polling, setPolling] = useState(false);
@@ -133,7 +139,7 @@ export function CodeCatalogManager({
       setTotal(res.total);
       setSyncedAt(res.syncedAt);
     } catch (err) {
-      setLoadError(errorMessage(err, '카탈로그를 불러오지 못했습니다.'));
+      setLoadError(toApiError(err));
       setItems([]);
       setTotal(0);
     } finally {
@@ -165,15 +171,6 @@ export function CodeCatalogManager({
       active = false;
     };
   }, [kind]);
-
-  // 검색어 디바운스 — 입력 후 300ms 안정되면 서버 질의, 페이지 1로.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setQuery(queryInput.trim());
-      setPage(1);
-    }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [queryInput]);
 
   // 동기화 진행 중 폴링 — 끝나면 목록을 새로고침하고 결과를 토스트.
   useEffect(() => {
@@ -359,45 +356,27 @@ export function CodeCatalogManager({
           ) : null}
         </div>
 
-        <div className="relative">
-          <RiSearchLine
-            size={15}
-            aria-hidden
-            className="text-foreground-tertiary pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
-          />
-          <Input
-            value={queryInput}
-            onChange={(e) => setQueryInput(e.target.value)}
-            placeholder={SEARCH_PLACEHOLDER[kind]}
-            className="pl-9"
-          />
-        </div>
+        <SearchInput
+          value={searchInput}
+          onChange={setSearchInput}
+          placeholder={SEARCH_PLACEHOLDER[kind]}
+          ariaLabel="카탈로그 검색"
+          className="sm:w-full"
+        />
 
-        {loading ? (
-          <div className="text-muted-foreground flex items-center justify-center gap-2 py-10 text-sm">
-            <Spinner size={16} label="불러오는 중" />
-            불러오는 중…
-          </div>
-        ) : loadError ? (
-          <EmptyState
-            icon={<RiErrorWarningLine size={18} aria-hidden />}
-            title="불러오지 못했습니다"
-            description={loadError}
-            compact
-            action={
-              <Button size="sm" variant="secondary" onClick={() => void loadCatalog()}>
-                다시 시도
-              </Button>
-            }
-          />
-        ) : items.length === 0 ? (
-          <EmptyState
-            icon={<RiErrorWarningLine size={18} aria-hidden />}
-            title="항목이 없습니다"
-            description={query ? '검색 결과가 없습니다.' : '동기화를 실행해 ERP 코드를 가져오세요.'}
-            compact
-          />
-        ) : (
+        <ListStatePanel
+          phase={loading ? 'loading' : loadError ? 'error' : 'ready'}
+          error={loadError}
+          loadingLabel="불러오는 중…"
+          errorTitle="불러오지 못했습니다"
+          onRetry={() => void loadCatalog()}
+          isEmpty={items.length === 0}
+          empty={{
+            icon: <RiErrorWarningLine size={18} aria-hidden />,
+            title: '항목이 없습니다',
+            description: query ? '검색 결과가 없습니다.' : '동기화를 실행해 ERP 코드를 가져오세요.',
+          }}
+        >
           <div
             ref={listScrollRef}
             className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border"
@@ -440,7 +419,7 @@ export function CodeCatalogManager({
               </tbody>
             </table>
           </div>
-        )}
+        </ListStatePanel>
 
         {!loading && !loadError ? (
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={changePage} />

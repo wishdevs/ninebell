@@ -3,10 +3,14 @@
 ninebell-bak `erp/graph.py` 의 `make_chat_form_node`(+`_CARD_FORM_SCHEMA_JS`/`_READ_TX_JS`/
 `_MODAL_IDLE_JS`/`_CHAT_SYSTEM_TMPL`)을 이 엔진의 이벤트/HITL 계약에 맞게 이식했다.
 
-흐름: 모달 로딩 대기 → 필드 스키마 선행학습 → (턴 반복) chat HITL 로 사용자 메시지 수신
+흐름: 카드상세 모달 **도착 확인**(하드) + 로딩 정착 → 필드 스키마 선행학습 → (턴 반복) chat HITL 로 사용자 메시지 수신
 → Gemini 비전 function-calling 한 턴 → 도구 디스패치(fill_search/fill_dropdown/fill_text/
 set_expense/read_transactions/ask/turn_done) → chat/transactions 이벤트 스트림 → 성공한 fill 을
 ChatSelection 으로 누적. 종료는 오직 사용자의 '선택 완료'(hitl done=true) 신호로만.
+
+⚠ 누적 기준은 "도구 호출이 성공했다"가 아니라 **반영이 확인됐다**(Verdict.ok)다. 확인 불가로
+  통과한 항목은 selections 에 ``verified: False`` 를 남기고 warn 로그로 노출한다 — 이 목록이
+  그대로 템플릿으로 저장돼 AUTO 재생의 원본이 되기 때문(화면에 없는 값의 영속 차단).
 
 ⚠ 저장(F7)·상신·전표생성 절대 금지 — 모달 '적용'까지만.
 멀티턴 입력은 app.live.hitl.wait_hitl(kind='chat') 을 턴마다 호출해 받는다(단발 대기의 반복).
@@ -21,9 +25,8 @@ import logging
 import uuid
 from typing import Any
 
-import httpx
-
 from app.config import get_settings
+from app.core.http_client import new_async_client
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_transactions
 
 # 대화형(chat) HITL 은 하나의 decision_id 에 사용자 메시지를 여러 번 + '선택 완료' 1번 받는다
@@ -31,21 +34,26 @@ from app.live.events import emit_chat, emit_hitl, emit_log, emit_step, emit_tran
 # 여기선 지속 채널(open/close_hitl_channel)로 멀티턴을 받는다. 소유권(_hitl_owner)은
 # LiveSession 이 hitl 프레임을 보며 등록하고, 종료 시 close 로 정리한다.
 from app.live.hitl import close_hitl_channel, open_hitl_channel
+from nbkit.omnisol import verify
 from nbkit.patterns import emit_shot
 
 from .domain import remark_for, use_item_from_remark
-from app.agents.common.gemini import gemini_chat_decide
+from app.agents.common import ERR_REASON_MAX
+from app.agents.common.llm import chat_decide, llm_ready
 from .tools import (
     CHAT_TOOLS,
     SCAFFOLD_DROPDOWN_FIELDS,
     SCAFFOLD_SEARCH_FIELDS,
     SCAFFOLD_TEXT_FIELDS,
     VERIFIED_FIELDS,
+    Verdict,
     do_account,
     do_budget,
     do_fill_dropdown,
     do_fill_search,
     do_fill_text,
+    merge_warn,
+    wait_modal_idle,
 )
 
 logger = logging.getLogger("app.agents.expense_card.chat_form")
@@ -104,19 +112,6 @@ READ_TX_JS = """() => {
   } catch (e) { return { n: 0, rows: [], err: String(e).slice(0, 60) }; }
 }"""
 
-# 카드 모달 로딩 오버레이(dews 진행 바/마스크)가 걷혔는지 — 보이면 false(아직 로딩 중).
-MODAL_IDLE_JS = """() => {
-  try {
-    const prog = [...document.querySelectorAll('.dews-ui-progress, .dews-progress-wrapper, .dews-progress-bar, [class*="dews-progress"]')]
-      .filter(e => e.offsetParent !== null);
-    if (prog.length) return false;
-    const masks = [...document.querySelectorAll('.k-loading-mask, .k-overlay')]
-      .filter(e => e.offsetParent !== null);
-    return masks.length === 0;
-  } catch (e) { return true; }
-}"""
-
-
 _CHAT_SYSTEM_TMPL = """당신은 더존 ERP 법인카드 지출 카드상세 모달의 '나머지 필드'를 채우는 대화형 폼 에이전트입니다.
 증빙유형·프로젝트는 이전 단계에서 이미 처리됐습니다(또는 채팅 중 프로젝트는 fill_search 로 처리).
 사용자가 자연어 한 문장으로 여러 필드를 말하면, 매핑해서 도구 호출로 화면을 조작하세요.
@@ -156,22 +151,26 @@ _CHAT_PROMPT = (
 )
 
 
-async def _wait_modal_idle(page: Any, timeout_ms: int = 15000) -> bool:
-    """카드 모달의 로딩 오버레이가 걷힐 때까지 폴링 대기(고정 딜레이 대신 화면 상태)."""
-    await page.wait_for_timeout(700)  # 진행 오버레이가 나타날 짧은 여유
-    waited = 700
-    step = 400
-    while waited < timeout_ms:
-        try:
-            if await page.evaluate(MODAL_IDLE_JS):
-                await page.wait_for_timeout(300)  # 잔여 렌더 안정화
-                if await page.evaluate(MODAL_IDLE_JS):  # 한 번 더(다시 안 뜨는지)
-                    return True
-        except Exception:
-            pass
-        await page.wait_for_timeout(step)
-        waited += step
-    return False
+async def _confirm_modal_arrived(events: asyncio.Queue, page: Any) -> str | None:
+    """카드상세 모달 **도착**을 확인한다(하드). 실패 사유 문자열 또는 None(통과).
+
+    ⚠ 지금까지 이 자리엔 도착 확인이 아예 없었다 — `_wait_modal_idle` 은 로딩 오버레이 폴링일
+      뿐이고 그 반환값마저 버려졌다. 모달이 안 떠도 그대로 진행하면
+      `CARD_FORM_SCHEMA_JS`(root='최상단 visible .k-window, 없으면 document.body')가 **배경
+      결의서입력 화면**의 스키마를 조용히 학습하고, 이후 모든 필드 조작이 그 화면으로 나간다.
+      모달은 .k-window 이므로 "보이는 팝업이 1개 이상"이 도착의 근거다.
+    """
+    arrived = await verify.confirm_popup_count(
+        page, more_than=0, timing=verify.HEAVY, unknown_when=lambda v: not isinstance(v, int)
+    )
+    if arrived.mismatch:
+        return f"카드상세 모달이 열려 있지 않습니다 — {arrived.reason}"
+    if arrived.unknown:
+        await emit_log(events, f"카드상세 모달 도착 미확인(진행) — {arrived.reason}", "warn")
+    # 도착 후 로딩 오버레이가 걷힐 때까지 정착(로딩 화면 캡처/조작 방지). 판정은 아니다 —
+    # 뒤늦게 뜨는 오버레이는 이후 모든 confirm 의 settle 훅이 다시 걷어준다.
+    await wait_modal_idle(page)
+    return None
 
 
 async def _auto_replay(events: asyncio.Queue, page: Any, template: list[dict]) -> dict:
@@ -225,44 +224,49 @@ async def _auto_replay(events: asyncio.Queue, page: Any, template: list[dict]) -
         value = (sel.get("value") or "").strip()
         try:
             if name == "fill_search":
-                action = await do_fill_search(page, field, (sel.get("query") or "").strip(), value)
+                v = await do_fill_search(page, field, (sel.get("query") or "").strip(), value)
             elif name == "fill_dropdown":
-                action = await do_fill_dropdown(page, field, value)
+                v = await do_fill_dropdown(page, field, value)
             elif name == "fill_text":
-                action = await do_fill_text(page, field, value)
+                v = await do_fill_text(page, field, value)
             elif name == "set_expense":
                 # 예산단위 + 계정(자동축소) + 적요(규칙)를 한 번에. value=사용항목, query=division.
                 division = (sel.get("query") or "").strip()
-                bstatus, bmsg = await do_budget(page, value, division)
-                if bstatus == "ambiguous" and not division:
+                bv = await do_budget(page, value, division)
+                if bv.status == "ambiguous" and not division:
                     # 제/판 미지정(옛 템플릿) → 회수는 되물을 수 없으니 제조 기본으로 재시도.
-                    division = "제조"
-                    bstatus, bmsg = await do_budget(page, value, division)
-                    bmsg += " (제/판 미지정 → 제조 기본)"
-                if bstatus == "ok":
-                    astatus, _amsg = await do_account(page)
+                    bv = await do_budget(page, value, "제조")
+                    bv = Verdict(bv.ok, bv.message + " (제/판 미지정 → 제조 기본)", bv.status, bv.warn)
+                if bv.ok:
+                    av = await do_account(page)
                     remark = remark_for(value)
-                    rstatus = await do_fill_text(page, "적요", remark)
-                    action = (
-                        f"ok: 예산단위 {bmsg} / 계정 {'ok' if astatus == 'ok' else 'warn'} / "
-                        f"적요 '{remark}' {'ok' if rstatus.startswith('ok') else 'warn'}"
+                    rv = await do_fill_text(page, "적요", remark)
+                    # 하위 3개 중 하나라도 반영 확인이 안 되면 그 항목을 warn 으로 표기한다
+                    # (예전엔 '호출이 성공했다'만 보고 전부 ok 로 합쳐 보고했다).
+                    v = Verdict(
+                        True,
+                        f"ok: 예산단위 {bv.message} / 계정 {'ok' if av.ok else 'warn'} / "
+                        f"적요 '{remark}' {'ok' if rv.ok else 'warn'}",
+                        warn=merge_warn(bv.warn, av.warn if av.ok else av.message, rv.warn if rv.ok else rv.message),
                     )
                 else:
-                    action = bstatus + ": " + bmsg
+                    v = bv
             elif name == "set_account":
                 # set_expense 가 이미 처리했으면 중복이나 무해(자동축소 1건 재선택).
-                astatus, amsg = await do_account(page)
-                action = ("ok: " if astatus == "ok" else "warn: ") + amsg
+                v = await do_account(page)
             else:
-                action = f"skip: 알 수 없는 도구 '{name}'"
+                v = Verdict(False, f"skip: 알 수 없는 도구 '{name}'", status="skip")
         except Exception as exc:  # noqa: BLE001 — graceful(노드가 죽지 않게)
             logger.warning("auto replay 예외: %s %s=%s", name, field, value, exc_info=True)
-            action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:60]}"
-        level = "ok" if action.startswith("ok") else "warn"
-        if action.startswith("ok"):
-            applied.append(f"{field}={value}")
-        await emit_log(events, f"[auto] {action}", level)
-        await _say(action)
+            v = Verdict(
+                False, f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:ERR_REASON_MAX]}", status="fail"
+            )
+        if v.ok:
+            applied.append(f"{field}={value}" + ("(미확인)" if v.warn else ""))
+        if v.warn:  # 확인 불가는 조용히 넘기지 않는다 — 로그로 노출.
+            await emit_log(events, f"[auto] 반영 미확인 — {v.warn}", "warn")
+        await emit_log(events, f"[auto] {v.message}", "ok" if v.ok else "warn")
+        await _say(v.message)
         await emit_shot(events.put, page)
 
     summary = ", ".join(applied) if applied else "(적용된 필드 없음)"
@@ -288,8 +292,12 @@ def make_chat_form_node(timeout_s: int | None = None):
         page = state["page"]
         await emit_step(events, "chat_form", "running")
 
-        # 카드 모달 로딩 오버레이가 걷힐 때까지 대기 → 로딩 화면 캡처/조작 방지.
-        await _wait_modal_idle(page)
+        # 카드상세 모달 도착 확인(하드) + 로딩 오버레이 정착 → 배경 화면 오조작/로딩 캡처 방지.
+        arrival_err = await _confirm_modal_arrived(events, page)
+        if arrival_err:
+            await emit_log(events, arrival_err, "warn")
+            await emit_step(events, "chat_form", "failed")
+            return {"error": arrival_err}
 
         # AUTO 재생(회수): params["template"] 에 저장된 selections 가 있으면 대화(chat HITL·
         # Gemini)를 건너뛰고 순서대로 그대로 적용한다. 없으면 아래 기존 대화형 경로 유지.
@@ -298,7 +306,7 @@ def make_chat_form_node(timeout_s: int | None = None):
             return await _auto_replay(events, page, template)
 
         settings = get_settings()
-        if not settings.gemini_api_key:
+        if not llm_ready(settings):  # etribe 는 무인증(항상 가능) — gemini 만 키 필요.
             await emit_step(events, "chat_form", "failed")
             return {"error": "GEMINI_API_KEY 가 설정되지 않아 대화형 폼 에이전트를 실행할 수 없습니다."}
 
@@ -307,14 +315,20 @@ def make_chat_form_node(timeout_s: int | None = None):
         if not (schema or {}).get("ok"):
             schema = {"ok": False, "pickers": [], "drops": [], "inputs": []}
             await emit_log(events, "카드 모달 필드 스키마 선행학습 실패 — 알려진 필드 목록으로 대체.", "warn")
+        elif schema.get("root") == "document":
+            # 모달 도착은 위에서 확인했지만, 스키마 리더가 모달을 못 잡았다면 배경 결의서입력
+            # 화면을 학습한 것이다 — 조용히 넘기지 않고 미확인으로 노출한다.
+            await emit_log(events, "필드 스키마를 모달이 아닌 배경 화면에서 학습함(모달 미검출) — 필드 조작이 배경으로 갈 수 있습니다.", "warn")
         # 검증/미검증 표기를 스키마에 부착(거짓 검증 주장 방지).
         schema["검증된_필드"] = sorted(VERIFIED_FIELDS)
         schema["미검증_검색필드"] = SCAFFOLD_SEARCH_FIELDS
         schema["미검증_드롭다운"] = SCAFFOLD_DROPDOWN_FIELDS
         schema["미검증_텍스트"] = SCAFFOLD_TEXT_FIELDS
-        system = _CHAT_SYSTEM_TMPL.replace("{schema}", json.dumps(schema, ensure_ascii=False, indent=2))
+        # 스키마는 system 프롬프트에만 싣는다(compact — indent 는 토큰 낭비). 종전엔 매 턴
+        # chat_decide 의 context 로도 통째 재전송돼 같은 스키마가 요청당 2번 나갔다.
+        system = _CHAT_SYSTEM_TMPL.replace("{schema}", json.dumps(schema, ensure_ascii=False))
 
-        http = httpx.AsyncClient(timeout=60.0)
+        http = new_async_client(timeout=60.0)
         chat_prefix = uuid.uuid4().hex  # 이 노드 인스턴스의 채팅 id 접두(FE upsert 키 안정화).
         history = ""
         selections: list[dict] = []  # 성공한 fill 을 ChatSelection 으로 누적(필드별 최신값만).
@@ -340,47 +354,58 @@ def make_chat_form_node(timeout_s: int | None = None):
                 note=note,
             )
 
+        async def _remember(sel: dict, verdict: Verdict) -> None:
+            """selections 에 필드별 최신값을 누적한다 — **반영 확인된 것만**.
+
+            ⚠ 이 목록이 그대로 템플릿으로 저장돼 AUTO 재생의 원본이 된다. 확인 불가(warn)로
+              통과한 항목은 verified=False 를 남겨 '화면에 붙었는지 모름'을 잃지 않게 한다.
+            """
+            if verdict.warn:
+                sel["verified"] = False
+            selections[:] = [s for s in selections if s.get("field") != sel.get("field")]
+            selections.append(sel)
+            if verdict.warn:
+                await emit_log(events, f"[chat_form] 반영 미확인 — {verdict.warn}", "warn")
+
         async def _apply_budget(use_item: str, division: str) -> str:
             """set_expense — 예산단위 + 계정(자동축소) + 적요(규칙)를 한 번에. 반환 status."""
             nonlocal pending_budget, history
             try:
-                status, bmsg = await do_budget(page, use_item, division)
+                bv = await do_budget(page, use_item, division)
             except Exception as exc:  # noqa: BLE001 — graceful(노드가 죽지 않게)
                 logger.warning("set_expense 예외: %s", use_item, exc_info=True)
-                status, bmsg = "fail", f"예산단위 처리 예외: {str(exc)[:60]}"
-            await _say(("ok: " if status == "ok" else status + ": ") + bmsg, note="action")
-            history += f"어시스턴트(set_expense {use_item} {division}): {status} {bmsg}\n"
-            if status == "ok":
+                bv = Verdict(False, f"예산단위 처리 예외: {str(exc)[:ERR_REASON_MAX]}", status="fail")
+            status = bv.status
+            await _say(("ok: " if bv.ok else status + ": ") + bv.message, note="action")
+            history += f"어시스턴트(set_expense {use_item} {division}): {status} {bv.message}\n"
+            if bv.ok:
                 pending_budget = None
-                selections[:] = [s for s in selections if s.get("field") != "예산단위"]
                 # division(제조/판매)을 query 에 저장 → 재현 시 do_budget 로 복원.
-                selections.append(
-                    {"tool": "set_expense", "field": "예산단위", "value": use_item, "query": division}
+                await _remember(
+                    {"tool": "set_expense", "field": "예산단위", "value": use_item, "query": division}, bv
                 )
                 # 계정: 예산단위 후 자동축소된 계정을 무조건 자동 선택(묻지 않음).
                 try:
-                    astatus, amsg = await do_account(page)
+                    av = await do_account(page)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("계정 자동선택 예외", exc_info=True)
-                    astatus, amsg = "fail", f"계정 예외: {str(exc)[:50]}"
-                await _say(("ok: " if astatus == "ok" else "warn: ") + amsg, note="action")
-                if astatus == "ok":
-                    selections[:] = [s for s in selections if s.get("field") != "계정"]
-                    selections.append({"tool": "set_account", "field": "계정", "value": "자동"})
+                    av = Verdict(False, f"계정 예외: {str(exc)[:ERR_REASON_MAX]}", status="fail")
+                await _say(("ok: " if av.ok else "warn: ") + av.message, note="action")
+                if av.ok:
+                    await _remember({"tool": "set_account", "field": "계정", "value": "자동"}, av)
                 # 적요: 규칙 템플릿.
                 remark = remark_for(use_item)
-                ract = await do_fill_text(page, "적요", remark)
-                await _say(ract, note="action")
-                if ract.startswith("ok"):
-                    selections[:] = [s for s in selections if s.get("field") != "적요"]
-                    selections.append({"tool": "fill_text", "field": "적요", "value": remark})
+                rv = await do_fill_text(page, "적요", remark)
+                await _say(rv.message, note="action")
+                if rv.ok:
+                    await _remember({"tool": "fill_text", "field": "적요", "value": remark}, rv)
                 await _say(f"'{use_item}' → 예산단위·계정·적요 설정 완료. 프로젝트를 이어서 입력하세요.")
             elif status == "ambiguous":
                 pending_budget = use_item
-                await _say(bmsg)
+                await _say(bv.message)
             else:
                 pending_budget = None
-                await _say(bmsg)
+                await _say(bv.message)
             await emit_shot(events.put, page)
             return status
 
@@ -488,16 +513,14 @@ def make_chat_form_node(timeout_s: int | None = None):
                             b64 = base64.b64encode(buf).decode()
                         except Exception:  # noqa: BLE001
                             b64 = None
-                        name, args = await gemini_chat_decide(
+                        name, args = await chat_decide(
                             http,
-                            settings.gemini_api_key,
-                            settings.gemini_model,
-                            settings.gemini_base_url,
-                            system,
-                            "\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
-                            schema,
-                            b64,
-                            CHAT_TOOLS,
+                            system=system,
+                            history="\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
+                            context={},  # 필드 스키마는 system 에 이미 포함 — 중복 전송 금지.
+                            shot_b64=b64,
+                            tools=CHAT_TOOLS,
+                            settings=settings,
                         )
                     except Exception:  # noqa: BLE001
                         logger.exception("chat gemini decide failed")
@@ -537,7 +560,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                         try:
                             res = await page.evaluate(READ_TX_JS)
                         except Exception as exc:  # noqa: BLE001
-                            res = {"n": 0, "rows": [], "err": str(exc)[:60]}
+                            res = {"n": 0, "rows": [], "err": str(exc)[:ERR_REASON_MAX]}
                         raw = res.get("rows") or []
                         n = res.get("n", len(raw))
                         cols = [
@@ -584,26 +607,29 @@ def make_chat_form_node(timeout_s: int | None = None):
                     value = (args.get("value") or "").strip()
                     try:
                         if name == "fill_search":
-                            action = await do_fill_search(page, field, (args.get("query") or "").strip(), value)
+                            v = await do_fill_search(page, field, (args.get("query") or "").strip(), value)
                         elif name == "fill_dropdown":
-                            action = await do_fill_dropdown(page, field, value)
+                            v = await do_fill_dropdown(page, field, value)
                         elif name == "fill_text":
-                            action = await do_fill_text(page, field, value)
+                            v = await do_fill_text(page, field, value)
                         else:
-                            action = f"unknown-tool: {name}"
+                            v = Verdict(False, f"unknown-tool: {name}", status="skip")
                     except Exception as exc:  # noqa: BLE001
-                        action = f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:60]}"
+                        v = Verdict(
+                            False,
+                            f"error(미검증 가능): {field} 처리 중 예외 — {str(exc)[:ERR_REASON_MAX]}",
+                            status="fail",
+                        )
 
-                    if action.startswith("ok"):
-                        # 성공한 fill 을 구조화 selection 으로 누적. 같은 필드는 최신값으로 갱신.
+                    if v.ok:
+                        # **반영이 확인된** fill 만 구조화 selection 으로 누적(같은 필드는 최신값).
                         sel: dict = {"tool": name, "field": field, "value": value}
                         if name == "fill_search":
                             sel["query"] = (args.get("query") or "").strip()
-                        selections[:] = [s for s in selections if s.get("field") != field]
-                        selections.append(sel)
-                    history += f"어시스턴트({name} {field}={value}): {action}\n"
-                    await emit_log(events, f"[chat_form] {action}", "info")
-                    await _say(action, note="action")
+                        await _remember(sel, v)
+                    history += f"어시스턴트({name} {field}={value}): {v.message}\n"
+                    await emit_log(events, f"[chat_form] {v.message}", "info" if v.ok else "warn")
+                    await _say(v.message, note="action")
                     await emit_shot(events.put, page)
                     # 같은 사용자 턴의 추가 필드 처리로 루프 계속.
                 else:

@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import { LogsClient } from './_components/logs-client';
 
@@ -13,7 +14,13 @@ export const metadata: Metadata = {
  *
  * 서버 컴포넌트는 metadata만 소유하고, 권한 게이팅과 데이터 로드는 클라이언트 자식이
  * 담당한다(세션 쿠키 기반 fetch). logs:read(admin+) 전용.
+ *
+ * 클라이언트가 useListParams(내부 useSearchParams)로 URL 을 읽으므로 <Suspense> 경계가 필요하다.
  */
 export default function LogsPage() {
-  return <LogsClient />;
+  return (
+    <Suspense>
+      <LogsClient />
+    </Suspense>
+  );
 }

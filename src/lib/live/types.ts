@@ -5,10 +5,11 @@
  * hitl/chat/transactions/result/error)만 들어온다. 그래서 유니온을 태그드 유니온이 아니라
  * 모든 키가 옵셔널인 {@link LiveFrame} 로 모델링하고, 키 존재로 좁힌다(파싱이 단순해진다).
  *
- * 프레임 계약(고정):
+ * 프레임 계약(고정 — 백엔드 app/live/events.py 와 1:1):
  *   {"step": str, "status": "running"|"done"|"failed", "ms"?: int}
  *   {"log": str, "level": "info"|"ok"|"error"|"warn"}
- *   {"screenshot": "data:image/jpeg;base64,..."}          // 비버퍼(최신 1장)
+ *   {"screenshot": "data:image/jpeg;base64,...", "window"?: "parent"|"child"}  // 비버퍼(창별 최신 1장)
+ *   {"window": "child", "closed": true}                    // 자식 창 닫힘 전이(버퍼/커서 대상 — 재생 가능)
  *   {"hitl": {"id","kind","title","prompt","options"?}}
  *   {"chat": {"id","role","content","streaming"?,"done"?,"note"?}}
  *   {"transactions": {"title","columns","rows"}}
@@ -57,6 +58,11 @@ export interface LiveGridRow {
   time?: string;
   approved?: string;
   vatType?: string;
+  /** 부가세구분 기본값(자동 분류) — '과세' 또는 '불공'. 사용자가 그리드에서 덮어쓸 수 있다. */
+  vat?: string;
+  /** 가맹점 기반 부가세 판정(AI) — '불공'이면 계정 무관 불공(통행료·우체국·유류). 계정 변경 시
+   *  부가세구분을 원본 기준으로 복원할 때 쓴다(계정 불공만이 사유였는지 구분). */
+  vatDeduction?: string;
   /** 적요 기본값(입력 프리필). */
   note?: string;
   /** 예산단위 프리셀렉트(AI 추천 또는 기본지정). 없으면 null/미포함. */
@@ -73,8 +79,9 @@ export interface LiveGridRow {
   error?: string;
 }
 
-/** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백. */
-export type PrefillSource = 'ai' | 'default' | 'learned' | 'seed';
+/** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백,
+ * learned=개입 학습, seed=전사 기초자료, lookup=예산계정 변경에 맞춰 실시간 재추천된 적요. */
+export type PrefillSource = 'ai' | 'default' | 'learned' | 'seed' | 'lookup' | 'mirror';
 
 /** 예산단위 보기 한 항목(자주쓰는/전체 공용). deptNm 은 부서명(있을 때). */
 /** 예산단위 보기 — 선택 단위는 (예산단위명 × 사업계획명 × 예산계정명) 조합 행.
@@ -83,6 +90,9 @@ export interface BudgetUnitOption {
   code: string;
   name: string;
   bizplanNm?: string;
+  /** 예산계정 코드 — 계정 인지 적요 추천(note-suggest)의 매칭 키. 내 부서/전체 그룹에만 실려
+   * 오고 즐겨찾기엔 없을 수 있어(bgacctNm 만), 없으면 복합 code(BG|BIZPLAN|BGACCT)에서 뽑는다. */
+  bgacctCd?: string;
   bgacctNm?: string;
   /** 과거 데이터 하위호환(미사용). */
   deptNm?: string;
@@ -131,6 +141,8 @@ export interface LiveHitl {
   budgetUnits?: HitlBudgetUnits;
   /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). */
   projects?: HitlProjects;
+  /** 재개입 공지 — 직전 저장(F7) 실패 사유+조치(왜 다시 선택해야 하는지). 첫 진입엔 없음. */
+  notice?: string;
 }
 
 /** 그리드 개입 제출 한 행 — 비제외(skip=false) 행은 budgetUnit·note 필수, project 선택. */
@@ -142,6 +154,8 @@ export interface GridRowSubmit {
   project: { code: string; name: string; wbsNo?: string } | null;
   note: string;
   skip: boolean;
+  /** 부가세구분(최종) — '과세' 또는 '불공'. 저장 2패스 파티션(증빙 01=과세 / 02=불공)을 구동한다. */
+  vat?: string;
   /** 개입 학습용 — 사용자가 프리필값에서 **실제로 바꾼** 필드 표시. 바꾼 것만 학습한다
    * (프리필 그대로 수락은 학습 안 함 — 자기추천 되먹임 방지). */
   budgetEdited?: boolean;
@@ -182,15 +196,27 @@ export interface LiveFrame {
   step?: string;
   status?: LiveStepStatus;
   ms?: number;
+  /** 반복 스텝 진행 카운트(백엔드 emit_step progress) — 워크플로우 노드에 done/total 표시. */
+  progress?: LiveStepProgress;
   log?: string;
   level?: LiveLogLevel;
   screenshot?: string;
+  /**
+   * 스크린샷/닫힘 프레임이 어느 브라우저 창인지 — 'parent'(주 페이지) 또는 'child'(진짜 두 번째
+   * 창, 예: SSO 교차출처 전자결재 팝업). 없으면 'parent'(하위 호환 — 기존 단일 페이지 프레임).
+   */
+  window?: LiveWindow;
+  /** 자식 창 닫힘 전이(window='child' 와 함께) — FE 는 자식 화면을 버리고 부모창으로 복귀한다. */
+  closed?: boolean;
   hitl?: LiveHitl;
   chat?: ChatFrame;
   transactions?: LiveTransactions;
   result?: string;
   error?: string;
 }
+
+/** 라이브 뷰의 브라우저 창 구분 — 주 페이지(parent) / 팝업·자식 창(child). */
+export type LiveWindow = 'parent' | 'child';
 
 /** HITL 응답 페이로드 — 종류에 따라 하나 이상이 채워진다(POST /runs/hitl body). */
 export interface HitlPayload {
@@ -216,10 +242,17 @@ export type LiveRunStatus =
   | 'failed'; // error/연결실패(종료)
 
 /** 누적 단계(스텝 이름으로 upsert). */
+/** 반복 스텝 진행 카운트 — 예: 결재 순회 {done:2,total:5} → "2/5". */
+export interface LiveStepProgress {
+  done: number;
+  total: number;
+}
+
 export interface LiveStepState {
   step: string;
   status: LiveStepStatus;
   ms?: number;
+  progress?: LiveStepProgress;
 }
 
 /** 누적 로그 한 줄. */
@@ -247,8 +280,12 @@ export interface LiveRunState {
   status: LiveRunStatus;
   steps: readonly LiveStepState[];
   logs: readonly LiveLogLine[];
-  /** 최신 스크린캐스트 dataURL. 없으면 null. */
+  /** 활성 창의 최신 스크린캐스트 dataURL(하위 호환 파생 — screenshots[activeWindow]). 없으면 null. */
   screenshot: string | null;
+  /** 창별 최신 스크린캐스트 dataURL. 자식 창(팝업)이 없으면 child=null. */
+  screenshots: { parent: string | null; child: string | null };
+  /** 라이브 뷰에 현재 표시할 창 — 자식 창이 열리면 자동 활성화, 닫히면 parent 로 복귀. */
+  activeWindow: LiveWindow;
   /** 활성 HITL(대기 중). 없으면 null. */
   hitl: LiveHitl | null;
   chat: readonly ChatMessage[];
@@ -270,6 +307,8 @@ export interface LiveRunActions {
   sendQuery: (decisionId: string, query: string) => Promise<boolean>;
   /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). */
   sendRows: (decisionId: string, rows: GridRowSubmit[]) => Promise<boolean>;
+  /** 라이브 뷰 창 수동 전환(부모창/자식창 탭). 자식 창은 열릴 때 자동 활성화된다. */
+  selectWindow: (window: LiveWindow) => void;
 }
 
 export type UseLiveRunReturn = LiveRunState & LiveRunActions;

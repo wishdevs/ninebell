@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>세금계산서 결의서 — 프로세스 명세</title>
+<style>
+  /* ── 토큰 ─────────────────────────────────────────────────────────────────
+     회계 장부의 세계에서 가져온 팔레트. 액센트는 결재 인장의 딥틸, 경고는 장부의 붉은 잉크.
+     뉴트럴은 순회색이 아니라 틸 쪽으로 미세하게 기울여 둔다. 밝은 테마 고정. */
+  :root {
+    --paper:      #f6f7f9;
+    --surface:    #ffffff;
+    --surface-2:  #eef1f3;
+    --line:       #d8dee1;
+    --line-soft:  #e6eaec;
+    --ink:        #16202b;
+    --ink-2:      #47555f;
+    --ink-3:      #6f7d87;
+    --accent:     #0e6f72;
+    --accent-ink: #0a5457;
+    --accent-bg:  #e3f0f0;
+    --danger:     #b3392c;
+    --danger-bg:  #fbe9e7;
+    --warn:       #a8700f;
+    --warn-bg:    #fbf1de;
+    --ok:         #2f6d3f;
+    --ok-bg:      #e6f1e8;
+
+    --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
+            "Malgun Gothic", system-ui, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", monospace;
+
+    --w: 1120px;
+    --r: 4px;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  .wrap { max-width: var(--w); margin: 0 auto; padding: 0 24px; }
+
+  /* ── 헤더 ─────────────────────────────────────────────────────────────── */
+  header.top { border-bottom: 1px solid var(--line); background: var(--surface); }
+  .top-in { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+            padding: 34px 0 28px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+             color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; letter-spacing: -.02em;
+       margin: 0 0 12px; text-wrap: balance; font-weight: 660; }
+  .lede { margin: 0; max-width: 62ch; color: var(--ink-2); font-size: 15.5px; }
+  .status { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono);
+          font-size: 11px; padding: 4px 9px; border-radius: 3px; white-space: nowrap;
+          border: 1px solid transparent; }
+  .chip-warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+  .chip-accent { background: var(--accent-bg); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+  /* ── 섹션 ─────────────────────────────────────────────────────────────── */
+  section { padding: 46px 0; border-bottom: 1px solid var(--line-soft); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .sec-num { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .08em; }
+  h2 { font-size: 21px; letter-spacing: -.01em; margin: 0; font-weight: 640; }
+  .sec-sub { color: var(--ink-2); margin: 0 0 24px; max-width: 68ch; font-size: 14.5px; }
+  h3 { font-size: 15px; margin: 0 0 12px; font-weight: 640; letter-spacing: -.005em; }
+
+  /* ── 시뮬레이터 ─────────────────────────────────────────────────────────
+     제품(src/components/live/simulation/tax-invoice)과 같은 "한 번에 한 질문" 위저드 구조:
+     위=프로세스 안내 · 왼쪽=고른 답(+수정) · 오른쪽=현재 질문 하나 · 아래=증빙유형+진행 버튼. */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .panel-hd { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+              display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .panel-hd h3 { margin: 0; }
+
+  /* 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
+     예전에는 여기에 프로세스 설명 한 줄과 질문 이름 5개(11.5px)가 함께 들어 있었다.
+     읽히지도 않으면서 바로 아래 진짜 질문과 경쟁하기만 해서, 위치 정보(n/N + 막대)만
+     남기고 설명은 [?] 토글팁 안으로 옮겼다. */
+  .wiz-top { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+             display: flex; flex-direction: column; gap: 8px; }
+  .wiz-strip { margin: 0; display: flex; align-items: center; gap: 12px; }
+  .wiz-count { font-size: 14px; font-weight: 640; color: var(--ink); white-space: nowrap; }
+  .wiz-count span { color: var(--ink-2); font-weight: 400;
+                    font-variant-numeric: tabular-nums; }
+  .wiz-bar { display: flex; align-items: center; gap: 4px; flex: 1; max-width: 260px; }
+  .wiz-bar i { display: block; height: 6px; flex: 1; border-radius: 999px; background: var(--line); }
+  .wiz-bar i.done { background: var(--accent); }
+  .wiz-bar i.cur { background: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
+  .stage-path { margin: 0; font-size: 13px; color: var(--ink-2); }
+  .stage-path b { color: var(--accent-ink); font-weight: 640; }
+
+  /* 도움말 토글팁 — 호버가 아니라 **클릭/Enter**로 연다. 호버 전용 툴팁은 터치 기기에서
+     아예 열 수 없고 확대경 사용자가 내용 위로 포인터를 옮기면 닫혀버린다.
+     **답하는 데 꼭 필요한 정보는 여기 넣지 않는다** — 열어야만 보이면 못 본 사람이 생긴다. */
+  .tip { position: relative; display: inline-flex; }
+  .tip > button { width: 28px; height: 28px; flex-shrink: 0; cursor: pointer; padding: 0;
+                  display: inline-flex; align-items: center; justify-content: center;
+                  font: inherit; font-size: 14px; font-weight: 700; line-height: 1;
+                  background: var(--surface); color: var(--ink-3);
+                  border: 1px solid var(--line); border-radius: 999px; }
+  .tip > button:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .tip > div { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: 300px;
+               padding: 12px; font-size: 13px; line-height: 1.6; color: var(--ink-2);
+               background: var(--surface); border: 1px solid var(--line);
+               border-radius: var(--r); box-shadow: 0 12px 32px rgba(0,0,0,.14); }
+  .tip > div b { color: var(--ink); }
+  .tip[hidden], .tip > div[hidden] { display: none; }
+
+  /* 본문 — 왼쪽 요약 레일 + 오른쪽 현재 질문 */
+  .wiz { display: grid; grid-template-columns: 212px minmax(0,1fr); gap: 16px;
+         padding: 16px; align-items: start; }
+  @media (max-width: 760px) { .wiz { grid-template-columns: 1fr; } }
+  .wiz-side { display: flex; flex-direction: column; gap: 6px; min-height: 168px;
+              border-right: 1px solid var(--line-soft); padding-right: 14px; }
+  @media (max-width: 760px) {
+    .wiz-side { min-height: 0; border-right: 0; padding-right: 0;
+                border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
+  }
+  .wiz-side-hd { margin: 0; font-size: 11px; letter-spacing: .04em; font-weight: 640;
+                 color: var(--ink-2); }
+  .ans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  /* 줄 전체가 그 질문으로 돌아가는 버튼이다 — 예전 '수정' 버튼만 눌리던 시절엔 실측
+     39×17px 로 최소 타깃(24×24)에 못 미쳤다. 줄로 만들면 210×44px 가 나온다. */
+  .ans-row { display: flex; flex-direction: column; gap: 1px; width: 100%; min-height: 44px;
+             justify-content: center; padding: 4px 6px; border-radius: 3px; text-align: left;
+             font: inherit; background: none; border: 0; }
+  button.ans-row { cursor: pointer; }
+  button.ans-row:hover { background: var(--surface-2); }
+  .ans-list li.cur .ans-row { background: var(--accent-bg); }
+  .ans-hd { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .ans-k { font-size: 11px; letter-spacing: .02em; color: var(--ink-2); font-weight: 620; }
+  .ans-k i { font-style: normal; letter-spacing: 0; text-transform: none; color: var(--ink);
+             font-weight: 700; }
+  .ans-v { font-size: 13px; line-height: 1.35; color: var(--ink); font-weight: 620; }
+  .ans-edit { font-size: 11px; color: var(--ink-2); white-space: nowrap; }
+  button.ans-row:hover .ans-edit { color: var(--accent-ink); }
+  .ans-empty { margin: 0; font-size: 13px; color: var(--ink-2); }
+
+  .wiz-main { display: flex; flex-direction: column; gap: 12px; min-height: 168px; }
+  /* 질문 문구 — 화면에서 가장 큰 글자. 이게 13~15px 이라 보조 설명과 구분되지 않던 것이
+     가독성 문제의 핵심이었다(한 화면 한 결정을 크기로 드러낸다). */
+  .q-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .q-title { margin: 0; font-weight: 700; font-size: 20px; letter-spacing: -.01em; line-height: 1.3; }
+  .q-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .q-hint { font-size: 13px; color: var(--ink-2); margin: 0; }
+  /* 모르면 막히는 안내(예: 오류)는 토글팁으로 숨기지 않고 오히려 크게 세운다. */
+  .q-alert { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px;
+             font-weight: 620; color: var(--danger); }
+  .opts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .opt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+  @media (max-width: 620px) { .opt-grid { grid-template-columns: 1fr; } }
+  /* 마지막 화면 — 질문들이 결국 정한 것은 증빙유형 코드 하나다. 비어 있던 오른쪽 열에
+     그 결과를 크게 세운다(예전엔 12.5px 안내 문구 한 덩어리뿐이었다). */
+  .done-box { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+              border-radius: var(--r); background: var(--accent-bg);
+              border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+  .done-box p { margin: 0; font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+  .done-box b { color: var(--ink); }
+  .done-k { font-size: 11px; font-weight: 640; color: var(--ink-2); letter-spacing: .02em; }
+  .done-ev { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+  .done-ev .c { font-family: var(--mono); font-size: 34px; font-weight: 700; line-height: 1;
+                letter-spacing: -.02em; color: var(--accent-ink);
+                font-variant-numeric: tabular-nums; }
+  .done-ev .n { font-size: 16px; font-weight: 640; color: var(--ink); }
+
+  /* 하단 — 증빙유형 실시간 표시 + 진행 버튼 */
+  .wiz-foot { border-top: 1px solid var(--line-soft); padding: 12px 16px;
+              display: flex; align-items: center; justify-content: space-between;
+              gap: 14px; flex-wrap: wrap; }
+  .wiz-nav { display: flex; gap: 8px; margin-left: auto; }
+
+  .date-in { font: inherit; font-family: var(--mono); font-size: 14px; padding: 9px 10px;
+             background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+             border-radius: var(--r); }
+  .date-in:focus { border-color: var(--accent); }
+  /* 선택지 — 결정에 직접 쓰는 텍스트라 본문보다 크게. 세로 여백까지 더해 카드 자체가
+     48px 이상이 되어 터치 타깃 권장치(44×44)를 만족한다. */
+  .opt { font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; padding: 11px 14px;
+         min-height: 48px; text-align: left;
+         background: var(--surface); color: var(--ink);
+         border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
+  .opt:hover { border-color: var(--accent); }
+  .opt[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
+                              color: var(--accent-ink); }
+  .opt small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); margin-top: 3px; }
+  .opt[aria-pressed="true"] small { color: var(--accent-ink); }
+  /* 기간 빠른 선택 칩 — 예전 12.5px/26px 높이는 최소 타깃에 아슬아슬했다. */
+  .opt.opt-sm { font-size: 13px; font-weight: 500; padding: 8px 12px; min-height: 36px; }
+
+  /* 증빙유형 배지 — 코드가 주인공이라 모노 대문자로 크게 세운다. */
+  .ev { display: flex; align-items: baseline; gap: 10px; }
+  .ev-code { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+             color: var(--accent-ink); font-variant-numeric: tabular-nums; line-height: 1; }
+  .ev-name { font-size: 14px; color: var(--ink); font-weight: 600; }
+  .ev-none { font-size: 13px; color: var(--ink-2); }
+  .ev-note { font-size: 13px; line-height: 1.55; }
+
+
+  /* ── 표 ───────────────────────────────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r);
+              background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  thead th { position: sticky; top: 0; background: var(--surface-2); text-align: left;
+             font-weight: 620; font-size: 12px; letter-spacing: .02em; color: var(--ink-2);
+             padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .fld { font-family: var(--mono); font-size: 12.5px; }
+  .muted { color: var(--ink-3); }
+  .req::after { content: "필수"; font-family: var(--mono); font-size: 10px; color: var(--accent);
+                border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+                border-radius: 2px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ── 규칙 카드 ────────────────────────────────────────────────────────── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+          padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card.stripe { border-left: 3px solid var(--accent); }
+  .card.stripe-warn { border-left: 3px solid var(--warn); }
+  .card.stripe-danger { border-left: 3px solid var(--danger); }
+  .card h3 { margin: 0; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+
+  /* ── 분할 계산기 ──────────────────────────────────────────────────────── */
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 620px) { .tiles { grid-template-columns: 1fr; } }
+  .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+          padding: 11px 13px; }
+  .tile dt { font-size: 11.5px; color: var(--ink-3); font-family: var(--mono); }
+  .tile dd { margin: 3px 0 0; font-family: var(--mono); font-variant-numeric: tabular-nums;
+             font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+  .tile.ok  { background: var(--ok-bg);    border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .tile.ok dd { color: var(--ok); }
+  .tile.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .tile.warn dd { color: var(--warn); }
+  .tile.bad { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+  .tile.bad dd { color: var(--danger); }
+
+  input[type="text"], input[type="number"] {
+    font: inherit; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums;
+    text-align: right; width: 100%; padding: 6px 9px; background: var(--surface);
+    color: var(--ink); border: 1px solid var(--line); border-radius: 3px;
+  }
+  input:focus { border-color: var(--accent); }
+  .btn { font: inherit; font-size: 12.5px; cursor: pointer; padding: 6px 11px; background: var(--surface-2);
+         color: var(--ink-2); border: 1px solid var(--line); border-radius: 3px; white-space: nowrap; }
+  .btn:hover { color: var(--ink); border-color: var(--ink-3); }
+  .btn-accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn-accent:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 12.5px; cursor: pointer; padding: 5px 12px; border: 0;
+                background: var(--surface); color: var(--ink-3); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+
+  footer { padding: 34px 0 60px; color: var(--ink-3); font-size: 13px; }
+  footer p { margin: 0 0 6px; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2);
+         padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-in">
+    <div>
+      <p class="eyebrow">결의서입력 · 에이전트 명세</p>
+      <h1>세금계산서 결의서 프로세스</h1>
+      <p class="lede">
+        발행 전인지 후인지, 비용을 나눌지, 과세 성격이 무엇인지 — 세 갈래 질문이
+        이후 화면에서 무엇을 묻고 무엇을 감출지 결정합니다. 아래에서 직접 눌러
+        경로를 따라가 보세요.
+      </p>
+    </div>
+    <div class="status">
+      <span class="chip chip-warn">프론트 시뮬레이션 · 백엔드 미구축</span>
+      <span class="chip chip-accent">실제 ERP 저장 없음</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ══ 1. 인터랙티브 ══════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>직접 따라가 보기</h2></div>
+    <p class="sec-sub">
+      실제 화면과 같은 순서로 <b>한 번에 한 질문씩</b> 묻습니다. 고른 답은 왼쪽에 쌓이고,
+      <b>수정</b>을 누르면 그 질문으로 돌아갑니다.
+    </p>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <h3>1단계 — 질문</h3>
+        <button class="btn" id="reset" type="button">처음부터</button>
+      </div>
+
+      <!-- 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
+           프로세스 설명("한 번에 한 질문씩 묻습니다…")은 답하는 데 필요 없어 [?] 안으로 옮겼다. -->
+      <div class="wiz-top">
+        <p class="stage-path" id="path"></p>
+        <div class="wiz-strip">
+          <p class="wiz-count" id="count"></p>
+          <div class="wiz-bar" id="bar" role="progressbar" aria-label="질문 진행"></div>
+          <span class="tip" id="tipHow">
+            <button type="button" aria-expanded="false" aria-label="이 화면 사용법">?</button>
+            <div hidden>
+              한 번에 한 질문씩 묻습니다. 선택지를 고르면 곧바로 다음 질문으로 넘어가고,
+              고른 답은 왼쪽에 쌓입니다. 왼쪽 답을 누르면 그 질문으로 돌아가 고칠 수 있습니다.
+              <span id="tipHowExtra"></span>
+            </div>
+          </span>
+        </div>
+      </div>
+
+      <!-- 본문 — 왼쪽 고른 답(수정) + 오른쪽 현재 질문 하나 -->
+      <div class="wiz">
+        <aside class="wiz-side" aria-label="지금까지 고른 답">
+          <p class="wiz-side-hd">고른 답</p>
+          <div id="answers"></div>
+        </aside>
+        <div class="wiz-main" id="qs"></div>
+      </div>
+
+      <!-- 하단 — 증빙유형 실시간 표시 + 진행 버튼 -->
+      <div class="wiz-foot">
+        <div id="evBody"></div>
+        <div class="wiz-nav">
+          <button class="btn" id="prev" type="button">← 이전</button>
+          <button class="btn btn-accent" id="next" type="button">다음 →</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+
+
+  <!-- ══ 4. 입력 항목 ═══════════════════════════════════════════════════ -->
+
+  <!-- ══ 증빙유형 ═══════════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>증빙유형</h2></div>
+    <p class="sec-sub">
+      질문의 답이 곧 ERP 증빙유형 코드입니다. <b>발행 여부 × 비용분할 × 과세성격</b>(불공이면
+      <b>× 사유</b>)이 코드 하나로 접힙니다 — 위 시뮬레이터에서 답을 바꾸면 오른쪽에 실시간으로
+      표시됩니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="num" style="width:60px">코드</th><th>증빙유형</th>
+            <th style="width:15%">발행</th><th style="width:13%">분할</th><th style="width:24%">과세성격</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="num fld">03</td><td>세금계산서</td><td>발행 후</td><td>분할 없음</td><td>과세</td></tr>
+          <tr><td class="num fld">04</td><td>계산서</td><td>발행 후</td><td>분할 없음</td><td>비과세</td></tr>
+          <tr><td class="num fld">05</td><td>세금계산서(불공) 사업과 관련없는 지출</td><td>발행 후</td><td>분할 없음</td><td>불공 · 사업과 관련없는 지출</td></tr>
+          <tr><td class="num fld">06</td><td>세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차</td><td>발행 후</td><td>분할 없음</td><td>불공 · 비영업용 소형승용차</td></tr>
+          <tr><td class="num fld">07</td><td>세금계산서(불공) 면세사업과 관련된분</td><td>발행 후</td><td>분할 없음</td><td>불공 · 면세사업 관련</td></tr>
+          <tr><td class="num fld">11</td><td>세금계산서(원증빙)</td><td>발행 후</td><td><b>비용분할</b></td><td>과세</td></tr>
+          <tr><td class="num fld">13</td><td>계산서(원증빙)</td><td>발행 후</td><td><b>비용분할</b></td><td>비과세</td></tr>
+          <tr><td class="num fld">22</td><td>세금계산서 발행 전 입력(과세)</td><td>발행 전</td><td class="muted">불가</td><td>과세</td></tr>
+          <tr><td class="num fld">23</td><td>세금계산서 발행 전 입력(비과세)</td><td>발행 전</td><td class="muted">불가</td><td>비과세</td></tr>
+          <tr><td class="num fld">24</td><td>세금계산서 발행 전 (과세)불공 차량용</td><td>발행 전</td><td class="muted">불가</td><td>불공</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>무엇을 입력받는가</h2></div>
+    <p class="sec-sub">
+      공통 일곱 항목은 어느 경로에서나 받습니다. 거래처·공급가액은 발행 전에만 직접 입력하고,
+      발행 후에는 선택한 리스트 행에서 따라옵니다.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>항목</th><th>발행 전</th><th>발행 후</th><th>기본값 · 비고</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="req">거래처</td><td>직접 입력</td><td class="muted">선택 행에서</td><td class="muted">발행 전 전용 입력</td></tr>
+          <tr><td class="req">공급가액</td><td>직접 입력</td><td class="muted">선택 행에서</td><td class="muted">발행 전 전용 입력</td></tr>
+          <tr><td class="req">예산단위</td><td>입력</td><td>입력</td><td class="muted">코드 선택</td></tr>
+          <tr><td class="req">적요</td><td>입력</td><td>입력</td><td class="muted">자유 입력</td></tr>
+          <tr><td class="req">프로젝트</td><td>입력</td><td>입력</td><td>500 / 800 또는 프로젝트 선택</td></tr>
+          <tr><td class="req">회계일</td><td>입력</td><td>자동</td><td>선택 행의 (세금)계산서일 — 수정 가능</td></tr>
+          <tr><td class="req">자금과목</td><td>입력</td><td>입력</td><td><b>일반경비</b></td></tr>
+          <tr><td class="req">결제조건</td><td>입력</td><td>입력</td><td><b>당월결제</b></td></tr>
+          <tr><td class="req">자금예정일</td><td>입력</td><td>입력</td><td>커스텀</td></tr>
+          <tr><td>사유구분</td><td colspan="2"><b>비과세</b>일 때만</td><td>일반면세</td></tr>
+          <tr><td>불공 사유</td><td class="muted">해당 없음</td><td><b>불공</b>일 때만</td><td>1단계에서 고른 값이 따라옴</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══ 5. 분할 ════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>비용분할</h2></div>
+    <p class="sec-sub">
+      공통 항목을 모두 채운 뒤 추가로 받습니다. 행마다 예산단위 · 적요 · 프로젝트 · 공급가액 ·
+      <b>비용센터</b>를 입력하고, <b>남은 금액이 0이 되어야</b> 확정할 수 있습니다.
+      아래 계산기로 직접 나눠 보세요.
+    </p>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <h3>분할 계산기</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="muted" style="font-size:12.5px">총액</span>
+          <input type="text" id="total" value="5,476,039" style="width:130px" aria-label="총 공급가액" />
+          <div class="seg" role="group" aria-label="입력 방식">
+            <button type="button" id="mAmt" aria-pressed="true">금액</button>
+            <button type="button" id="mPct" aria-pressed="false">비율 %</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel-bd">
+        <dl class="tiles" id="tiles"></dl>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:44px">행</th>
+                <th class="num" style="width:150px" id="inCol">공급가액</th>
+                <th class="num" style="width:150px" id="deriveCol">비율</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="addRow" type="button">행 추가</button>
+          <button class="btn btn-accent" id="confirm" type="button" disabled>분할 확정</button>
+          <span class="muted" style="font-size:12.5px" id="confirmHint"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cards" style="margin-top:16px">
+      <div class="card stripe-warn">
+        <h3>잔돈은 마지막 행에 몰아준다</h3>
+        <p>비율로 나누다 원 단위 반올림으로 1원이 남으면 <b>마지막 행이 흡수</b>합니다
+           (마지막 행 = 총액 − 앞 행들의 합). 60/40으로 나눠도 남은 금액이 정확히 0원이 됩니다.</p>
+      </div>
+    </div>
+  </section>
+
+
+</main>
+
+<footer class="wrap">
+  <p>세금계산서 결의서 에이전트 — 프로세스 명세 · 나인벨 자동화 대시보드</p>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+
+  /* ── 시뮬레이터 — "한 번에 한 질문" 위저드 ─────────────────────────────
+     제품 화면(questions-step.tsx)과 같은 구조·같은 규칙이다. 답을 고르면 곧바로 다음
+     질문으로 넘어가고, 지나온 답은 왼쪽 레일에 남아 '수정'으로 되돌아간다.
+     제품이 바뀌면 이 블록도 같이 바꾼다 — 문서와 화면이 어긋나면 안 된다. */
+  var A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
+  var step = 'issue';                 // 'issue'|'period'|'split'|'tax'|'nd'|'done'
+
+  var ISSUE = { before: '발행 전', after: '발행 후' };
+  var SPLIT = { single: '분할 없음', split: '비용분할' };
+  var TAX   = { taxable: '과세', exempt: '비과세', nondeduct: '불공' };
+  var ND    = {
+    unrelated: '사업과 관련없는 지출',
+    car: '비영업용소형승용차구입, 유지 및 임차',
+    exemptbiz: '면세사업과 관련된분'
+  };
+
+  var SHORT = { issue: '발행 여부', period: '계산서일', split: '비용분할', tax: '과세여부', nd: '불공 사유' };
+  var TITLE = {
+    issue: '세금계산서 발행 전인가요?',
+    period: '세금계산서일을 선택하세요',
+    split: '비용분할이 필요한가요?',
+    tax: '과세 / 비과세 / 불공 중 어떤 것인가요?',
+    nd: '불공 사유를 선택하세요'
+  };
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+
+  function option(label, desc, active, onClick) {
+    var b = el('button', 'opt');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    b.appendChild(document.createTextNode(label));
+    if (desc) b.appendChild(el('small', null, desc));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /* ── 도움말 토글팁 ────────────────────────────────────────────────────
+     클릭/Enter 로 열고 Escape·바깥 클릭으로 닫는다. 호버 전용 툴팁과 달리 터치·키보드가
+     같은 방법으로 열 수 있다. **답하는 데 꼭 필요한 정보는 넣지 않는다.** */
+  var openTip = null;
+  function wireTip(span) {
+    var btn = span.querySelector('button');
+    var body = span.querySelector('div');
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var willOpen = body.hidden;
+      if (openTip && openTip !== span) closeTip(openTip);
+      body.hidden = !willOpen;
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      openTip = willOpen ? span : null;
+    });
+    return span;
+  }
+  function closeTip(span) {
+    if (!span) return;
+    span.querySelector('div').hidden = true;
+    span.querySelector('button').setAttribute('aria-expanded', 'false');
+    if (openTip === span) openTip = null;
+  }
+  document.addEventListener('click', function () { closeTip(openTip); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && openTip) {
+      var b = openTip.querySelector('button');
+      closeTip(openTip);
+      b.focus();
+    }
+  });
+  /** 질문 옆에 붙이는 용어 풀이 팁을 만든다(내용은 HTML 조각 배열). */
+  function makeTip(label, nodes) {
+    var span = el('span', 'tip');
+    var btn = el('button', null, '?');
+    btn.type = 'button';
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-label', label);
+    var body = el('div');
+    body.hidden = true;
+    nodes.forEach(function (n) {
+      body.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
+    });
+    span.appendChild(btn);
+    span.appendChild(body);
+    return wireTip(span);
+  }
+
+  function isoOf(x) {
+    return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0')
+      + '-' + String(x.getDate()).padStart(2, '0');
+  }
+  /* 이번 달 1일 ~ 오늘. */
+  function thisMonthToToday() {
+    var t = new Date();
+    return { from: isoOf(new Date(t.getFullYear(), t.getMonth(), 1)), to: isoOf(t) };
+  }
+  /* 오늘 기준 N개월 전 ~ 오늘(롤링). 말일 보정: 3/31→2/31 은 없으니 그 달 말일로 당긴다. */
+  function monthsAgoToToday(n) {
+    var t = new Date(), f = new Date(t), d = f.getDate();
+    f.setMonth(f.getMonth() - n);
+    if (f.getDate() !== d) f.setDate(0);
+    return { from: isoOf(f), to: isoOf(t) };
+  }
+  var RANGE_PRESETS = [
+    { id: 'this-month', label: '이번 달', range: thisMonthToToday },
+    { id: 'months-1', label: '한 달 전', range: function () { return monthsAgoToToday(1); } },
+    { id: 'months-2', label: '두 달 전', range: function () { return monthsAgoToToday(2); } }
+  ];
+
+  /* ── 경로 규칙 ──────────────────────────────────────────────────────
+     발행 **전**은 비용분할이 불가하고 불공 코드도 24 하나뿐이라 질문이 2개,
+     발행 **후**는 계산서일·비용분할이 붙어 4개(불공이면 사유까지 5개)다. */
+  function path() {
+    if (A.issue === 'before') return ['issue', 'tax'];
+    if (A.issue === 'after') {
+      return A.tax === 'nondeduct'
+        ? ['issue', 'period', 'split', 'tax', 'nd']
+        : ['issue', 'period', 'split', 'tax'];
+    }
+    return ['issue'];                 // 아직 경로가 안 정해졌다
+  }
+
+  /* 기간은 역전(시작>종료)이면 답으로 치지 않는다 — 다음으로 못 간다. */
+  function answered(k) {
+    if (k === 'issue')  return !!A.issue;
+    if (k === 'period') return !!A.from && !!A.to && A.from <= A.to;
+    if (k === 'split')  return !!A.split;
+    if (k === 'tax')    return !!A.tax;
+    return !!A.nd;
+  }
+
+  function text(k) {
+    if (k === 'issue')  return A.issue ? ISSUE[A.issue] : '—';
+    if (k === 'period') return (A.from && A.to) ? (A.from + ' ~ ' + A.to) : '—';
+    if (k === 'split')  return A.split ? SPLIT[A.split] : '—';
+    if (k === 'tax')    return A.tax ? TAX[A.tax] : '—';
+    return A.nd ? ND[A.nd] : '—';
+  }
+
+  /* 다음/이전 스텝 — 경로는 **답이 바뀐 뒤** 기준으로 계산한다. */
+  function after(k) {
+    var p = path(), i = p.indexOf(k);
+    return (i < 0 || i === p.length - 1) ? 'done' : p[i + 1];
+  }
+  function before(k) {
+    var p = path();
+    if (k === 'done') return p[p.length - 1];
+    var i = p.indexOf(k);
+    return i > 0 ? p[i - 1] : null;
+  }
+
+  function go(k) { step = k; render(true); }
+
+  function done() {
+    if (!A.issue || !A.tax) return false;
+    if (A.issue === 'before') return true;
+    if (!A.from || !A.to || A.from > A.to) return false;
+    if (!A.split) return false;
+    if (A.tax === 'nondeduct' && !A.nd) return false;
+    return true;
+  }
+
+  /* ── 현재 질문 하나 ─────────────────────────────────────────────────── */
+  function renderQuestion() {
+    var qs = document.getElementById('qs');
+    qs.textContent = '';
+
+    // 질문 문구 + (필요하면) 용어 풀이 [?]. 팁은 문구 바로 뒤에 붙인다 — 오른쪽 끝으로
+    // 밀면 위 진행줄의 [?]와 세로로 겹쳐 같은 버튼처럼 읽힌다.
+    var head = el('div', 'q-head');
+    var title = el('p', 'q-title', step === 'done' ? '질문이 모두 끝났습니다' : TITLE[step]);
+    title.tabIndex = -1;
+    title.id = 'qTitle';
+    head.appendChild(title);
+    if (step === 'tax') {
+      head.appendChild(makeTip('과세 · 비과세 · 불공 용어 설명', [
+        el('b', null, '과세'), '는 부가세가 붙는 일반 거래, ',
+        el('b', null, '비과세'), '는 부가세가 없는 거래입니다. ',
+        el('b', null, '불공'), '은 불공제 — 세금계산서는 받았지만 매입세액을 공제받지 못하는 거래입니다.'
+      ]));
+    }
+    if (step === 'split') {
+      head.appendChild(makeTip('비용분할 설명', [
+        '한 장의 세금계산서를 예산단위·프로젝트·비용센터별로 나눠 다는 것입니다. ',
+        '분할하면 증빙유형이 원증빙 계열(과세 11 · 비과세 13)로 바뀝니다.'
+      ]));
+    }
+    if (step === 'period') {
+      head.appendChild(makeTip('세금계산서일 기간 설명', [
+        '여기서 고른 기간에 발행된 (세금)계산서만 다음 리스트 화면에 나타납니다. ',
+        '기본값은 한 달 전부터 오늘까지이고, 아래 버튼으로 흔히 쓰는 기간을 한 번에 넣을 수 있습니다.'
+      ]));
+    }
+    qs.appendChild(head);
+
+    if (step === 'issue') {
+      var g1 = el('div', 'opt-grid');
+      g1.appendChild(option(ISSUE.before, '리스트가 없어 바로 입력합니다', A.issue === 'before', function () {
+        if (A.issue === 'before') { go(after('issue')); return; }
+        // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
+        A = { issue: 'before', from: '', to: '', split: 'single', tax: null, nd: null };
+        go(after('issue'));
+      }));
+      g1.appendChild(option(ISSUE.after, '조회된 목록에서 고릅니다', A.issue === 'after', function () {
+        if (A.issue === 'after') { go(after('issue')); return; }
+        // 경로가 바뀌면 뒤 답은 전부 무효 — 기간만 한 달 전~오늘로 미리 채운다.
+        var d = monthsAgoToToday(1);
+        A = { issue: 'after', from: d.from, to: d.to, split: null, tax: null, nd: null };
+        go(after('issue'));
+      }));
+      qs.appendChild(g1);
+    }
+
+    if (step === 'period') {
+      // 예전의 '날짜를 직접 고르거나 …' 안내는 화면을 보면 아는 내용이라 [?] 안으로 옮겼다.
+      var range = el('div', 'opts');
+      ['from', 'to'].forEach(function (key, idx) {
+        if (idx) range.appendChild(el('span', 'q-hint', '~'));
+        var d = document.createElement('input');
+        d.type = 'date';
+        d.className = 'date-in';
+        d.value = A[key] || '';
+        d.setAttribute('aria-label', '세금계산서일 ' + (idx ? '종료' : '시작'));
+        d.addEventListener('change', function () { A[key] = d.value; render(); });
+        range.appendChild(d);
+      });
+      qs.appendChild(range);
+
+      // 오류는 원인이 되는 입력 **바로 아래**에 둔다 — 떨어뜨려 놓으면 무엇을 고쳐야
+      // 할지 다시 찾아야 한다.
+      if (A.from && A.to && A.from > A.to) {
+        var err = el('p', 'q-alert', '시작일이 종료일보다 늦을 수 없습니다.');
+        err.setAttribute('role', 'alert');
+        qs.appendChild(err);
+      }
+
+      var quick = el('div', 'opts');
+      quick.appendChild(el('span', 'q-hint', '빠른 선택'));
+      RANGE_PRESETS.forEach(function (p) {
+        var r = p.range();
+        var b = el('button', 'opt opt-sm');
+        b.type = 'button';
+        b.textContent = p.label;
+        b.setAttribute('aria-pressed', (A.from === r.from && A.to === r.to) ? 'true' : 'false');
+        b.addEventListener('click', function () { A.from = r.from; A.to = r.to; render(); });
+        quick.appendChild(b);
+      });
+      qs.appendChild(quick);
+    }
+
+    if (step === 'split') {
+      var g3 = el('div', 'opt-grid');
+      g3.appendChild(option(SPLIT.single, '한 건으로 전액 처리', A.split === 'single', function () {
+        A.split = 'single'; go(after('split'));
+      }));
+      g3.appendChild(option(SPLIT.split, '예산단위·프로젝트·비용센터별로 나눠 담기', A.split === 'split', function () {
+        // 분할과 불공은 공존할 수 없다 — 이미 불공이면 과세여부를 해제해 다시 고르게 한다.
+        if (A.tax === 'nondeduct') { A.tax = null; A.nd = null; }
+        A.split = 'split'; go(after('split'));
+      }));
+      qs.appendChild(g3);
+    }
+
+    if (step === 'tax') {
+      // 분할이면 불공을 목록에서 제외한다(불공은 분할할 수 없다).
+      var kinds = A.split === 'split' ? ['taxable', 'exempt'] : ['taxable', 'exempt', 'nondeduct'];
+      var g4 = el('div', 'opt-grid');
+      kinds.forEach(function (k) {
+        g4.appendChild(option(TAX[k], null, A.tax === k, function () {
+          A.tax = k;
+          if (k !== 'nondeduct') A.nd = null;
+          go(after('tax'));
+        }));
+      });
+      qs.appendChild(g4);
+    }
+
+    if (step === 'nd') {
+      var g5 = el('div', 'opt-grid');
+      Object.keys(ND).forEach(function (r) {
+        g5.appendChild(option(ND[r], null, A.nd === r, function () { A.nd = r; go(after('nd')); }));
+      });
+      qs.appendChild(g5);
+    }
+
+    if (step === 'done') {
+      // 마지막 화면의 오른쪽 열은 통째로 비어 있었다. 질문들이 결국 정한 것 —
+      // 증빙유형 코드 — 을 그 자리에 크게 세운다.
+      var box = el('div', 'done-box');
+      var code = evidenceCode(A);
+      box.appendChild(el('p', 'done-k', '이 답으로 정해진 증빙유형'));
+      if (code) {
+        var evLine = el('div', 'done-ev');
+        evLine.appendChild(el('span', 'c', code));
+        evLine.appendChild(el('span', 'n', EV[code]));
+        box.appendChild(evLine);
+        if (code === '24') {
+          box.appendChild(el('p', null,
+            '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.'));
+        }
+      }
+      var p = el('p');
+      p.appendChild(document.createTextNode('확인했으면 '));
+      p.appendChild(el('b', null, A.issue === 'after' ? '리스트 보기' : '입력항목 채우기'));
+      p.appendChild(document.createTextNode('로 넘어가세요. 고칠 답은 왼쪽에서 그 줄을 누르면 됩니다.'));
+      box.appendChild(p);
+      qs.appendChild(box);
+    }
+  }
+
+  /* ── 왼쪽 요약 레일 — 답이 있는 질문만, 각 줄에 '수정' ───────────────── */
+  function renderAnswers() {
+    var host = document.getElementById('answers');
+    host.textContent = '';
+    var keys = path().filter(answered);
+
+    if (!keys.length) {
+      host.appendChild(el('p', 'ans-empty', '아직 없습니다 — 오른쪽 질문에 답하면 여기에 쌓입니다.'));
+      return;
+    }
+
+    var ul = el('ul', 'ans-list');
+    keys.forEach(function (k) {
+      var li = el('li', step === k ? 'cur' : null);
+      var cur = step === k;
+      // 지금 보고 있는 질문은 버튼이 아니다 — 이미 그 질문 화면이라 누를 곳이 없다.
+      // 나머지는 **줄 전체**가 그 질문으로 돌아가는 버튼이다(작은 '수정' 버튼 대신).
+      var row = el(cur ? 'div' : 'button', 'ans-row');
+      if (!cur) {
+        row.type = 'button';
+        row.setAttribute('aria-label', SHORT[k] + ' 수정 — 현재 답: ' + text(k));
+        row.addEventListener('click', function () { go(k); });
+      }
+      var hd = el('div', 'ans-hd');
+      var kk = el('span', 'ans-k', SHORT[k]);
+      if (cur) kk.appendChild(el('i', null, ' · 지금'));
+      hd.appendChild(kk);
+      if (!cur) hd.appendChild(el('span', 'ans-edit', '✎ 수정'));
+      row.appendChild(hd);
+      row.appendChild(el('div', 'ans-v', text(k)));
+      li.appendChild(row);
+      ul.appendChild(li);
+    });
+    host.appendChild(ul);
+  }
+
+  /* ── 상단 진행 안내 + 하단 진행 버튼 ─────────────────────────────────── */
+  function renderChrome() {
+    var p = path();
+
+    // 질문 위치 — 이름 5개를 늘어놓던 11.5px 체인 대신 "질문 n / N" + 칸 막대만 둔다.
+    // 지나온 질문의 이름과 답은 왼쪽 레일이 이미 더 크게 보여준다.
+    var pos = step === 'done' ? p.length : p.indexOf(step) + 1;
+    var count = document.getElementById('count');
+    count.textContent = '';
+    if (step === 'done') {
+      count.appendChild(document.createTextNode('질문 완료'));
+    } else {
+      // 발행 여부를 고르기 전에는 총 질문 수가 정해지지 않는다 — 1/1 로 단정하지 않는다.
+      count.appendChild(document.createTextNode('질문 ' + pos));
+      count.appendChild(el('span', null, ' / ' + (A.issue ? p.length : '?')));
+    }
+
+    var bar = document.getElementById('bar');
+    bar.textContent = '';
+    bar.setAttribute('aria-valuemin', '0');
+    if (A.issue) {
+      bar.setAttribute('aria-valuemax', String(p.length));
+      bar.setAttribute('aria-valuenow', String(pos));
+    } else {
+      bar.removeAttribute('aria-valuemax');
+      bar.removeAttribute('aria-valuenow');
+    }
+    // 화면에는 질문 이름을 적지 않지만 스크린리더에는 경로 전체를 읽어 준다.
+    bar.setAttribute('aria-valuetext', step === 'done'
+      ? ('질문 ' + p.length + '개 모두 완료')
+      : (p.length + '개 중 ' + pos + '번째 — ' + SHORT[step] + '. 전체 순서: '
+         + p.map(function (k, i) { return (i + 1) + '. ' + SHORT[k]; }).join(', ')));
+    p.forEach(function (k, i) {
+      bar.appendChild(el('i', step === 'done' || i < pos - 1 ? 'done' : (i === pos - 1 ? 'cur' : null)));
+    });
+    if (!A.issue) bar.appendChild(el('i'));
+
+    // 질문 수가 경로마다 다르다는 사실은 첫 질문에서만 궁금하다 — 팁 안에서만 덧붙인다.
+    document.getElementById('tipHowExtra').textContent =
+      A.issue ? '' : ' 발행 전이면 질문 2개, 발행 후면 4~5개입니다.';
+
+    // 전체 화면 흐름 — 질문이 끝난 뒤 어디로 가는지(경로에 따라 화면 수가 달라진다).
+    var stages = A.issue === 'before'
+      ? ['질문', '입력항목', '요약']
+      : (A.split === 'split'
+        ? ['질문', '리스트 선택', '입력항목', '비용분할', '요약']
+        : ['질문', '리스트 선택', '입력항목', '요약']);
+    var path$ = document.getElementById('path');
+    path$.textContent = '';
+    path$.appendChild(document.createTextNode('전체 흐름 · '));
+    stages.forEach(function (s, i) {
+      if (i) path$.appendChild(document.createTextNode(' › '));
+      path$.appendChild(i === 0 ? el('b', null, s) : document.createTextNode(s));
+    });
+
+    var prev = document.getElementById('prev');
+    var prevKey = before(step);
+    prev.disabled = !prevKey;
+    prev.onclick = function () { if (prevKey) go(prevKey); };
+
+    var next = document.getElementById('next');
+    if (step === 'done') {
+      next.textContent = (A.issue === 'after' ? '리스트 보기' : '입력항목 채우기') + ' →';
+      next.disabled = !done();
+      // 문서 시뮬레이터는 여기서 멈춘다 — 뒤 화면은 아래 섹션이 표로 설명한다.
+      next.onclick = null;
+    } else {
+      next.textContent = '다음 →';
+      next.disabled = !answered(step);
+      next.onclick = function () { go(after(step)); };
+    }
+  }
+
+  /* ── 증빙유형 ─────────────────────────────────────────────────────────
+     질문의 답이 곧 ERP 증빙유형 코드다. 발행 여부 × 과세성격(× 불공사유)이
+     코드 하나로 접힌다 — 사용자가 고른 것이 무엇으로 저장되는지 여기서 보인다. */
+  var EV = {
+    '03': '세금계산서',
+    '04': '계산서',
+    '05': '세금계산서(불공) 사업과 관련없는 지출',
+    '06': '세금계산서(불공) 비영업용소형승용차구입, 유지 및 임차',
+    '07': '세금계산서(불공) 면세사업과 관련된분',
+    '11': '세금계산서(원증빙)',
+    '13': '계산서(원증빙)',
+    '22': '세금계산서 발행 전 입력(과세)',
+    '23': '세금계산서 발행 전 입력(비과세)',
+    '24': '세금계산서 발행 전 (과세)불공 차량용'
+  };
+  var ND_TO_EV = { unrelated: '05', car: '06', exemptbiz: '07' };
+
+  function evidenceCode(a) {
+    if (!a.issue || !a.tax) return null;
+    if (a.issue === 'before') {
+      if (a.tax === 'taxable') return '22';
+      if (a.tax === 'exempt') return '23';
+      return '24';                       // 발행 전 불공 — 코드가 차량용 하나뿐(아래 주의)
+    }
+    // 비용분할은 **원증빙**으로 넣는다 — 과세 11 · 비과세 13.
+    // (불공은 분할할 수 없으므로 분할 × 불공 조합은 존재하지 않는다.)
+    if (a.split === 'split') {
+      if (a.tax === 'taxable') return '11';
+      if (a.tax === 'exempt') return '13';
+      return null;
+    }
+    if (a.tax === 'taxable') return '03';
+    if (a.tax === 'exempt') return '04';
+    return a.nd ? ND_TO_EV[a.nd] : null; // 불공은 사유까지 골라야 코드가 정해진다
+  }
+
+  function paintEvidence() {
+    var box = document.getElementById('evBody');
+    box.textContent = '';
+    var code = evidenceCode(A);
+
+    if (!code) {
+      var why = !A.issue ? '발행 여부를 고르면'
+        : !A.tax ? '과세여부를 고르면'
+        : '불공 사유를 고르면';
+      box.appendChild(el('p', 'ev-none', why + ' 증빙유형이 정해집니다.'));
+      return;
+    }
+
+    var row = el('div', 'ev');
+    row.appendChild(el('span', 'ev-code', code));
+    row.appendChild(el('span', 'ev-name', EV[code]));
+    box.appendChild(row);
+
+    // 발행 전 불공은 사유를 나누지 않는다 — 그래서 사유 질문도 발행 후에만 나온다.
+    if (A.issue === 'before' && A.tax === 'nondeduct') {
+      var w = el('p', 'ev-note muted', '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.');
+      w.style.margin = '0';
+      box.appendChild(w);
+    }
+  }
+
+  /* focusTitle: 스텝이 바뀐 렌더에서만 제목으로 포커스를 옮긴다 — 자동 진행으로 방금 누른
+     버튼이 사라지면 키보드 사용자가 위치를 잃기 때문(첫 렌더에서는 옮기지 않는다). */
+  function render(focusTitle) {
+    renderQuestion();
+    renderAnswers();
+    renderChrome();
+    paintEvidence();
+    if (focusTitle) {
+      var t = document.getElementById('qTitle');
+      if (t) t.focus();
+    }
+  }
+
+  document.getElementById('reset').addEventListener('click', function () {
+    A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
+    go('issue');
+  });
+  wireTip(document.getElementById('tipHow'));   // 상단 '이 화면 사용법' 토글팁
+  render();
+
+  /* ── 분할 계산기 ──────────────────────────────────────────────────── */
+  var mode = 'amount';              // 'amount' | 'percent'
+  var rows = [{ amt: 3285623 }, { amt: 2190416 }];
+
+  function won(n) {
+    var neg = n < 0, s = Math.abs(Math.round(n)).toLocaleString('ko-KR');
+    return (neg ? '-' : '') + s + '원';
+  }
+  function parseNum(s) {
+    var v = parseFloat(String(s).replace(/[^0-9.-]/g, ''));
+    return isFinite(v) ? v : 0;
+  }
+  function total() { return parseNum(document.getElementById('total').value); }
+
+  function renderSplit() {
+    var T = total();
+    var sum = rows.reduce(function (a, r) { return a + (r.amt || 0); }, 0);
+    var rest = T - sum;
+
+    /* 남았다/초과다는 총액 부호 기준 — 음수 총액(취소분)에서도 옳게 판정된다. */
+    var state = rest === 0 ? 'ok' : (T === 0 ? 'bad' : ((rest > 0) === (T > 0) ? 'warn' : 'bad'));
+    var label = rest === 0 ? '분할 완료' : (state === 'warn' ? '남은 금액' : '총액 초과');
+
+    var tiles = document.getElementById('tiles');
+    tiles.textContent = '';
+    [['총 공급가액', won(T), ''],
+     ['배분 금액', won(sum) + (T !== 0 ? ' · ' + Math.round(sum / T * 1000) / 10 + '%' : ''), ''],
+     [label, won(rest), state]].forEach(function (t) {
+      var d = el('div', 'tile' + (t[2] ? ' ' + t[2] : ''));
+      d.appendChild(el('dt', null, t[0]));
+      d.appendChild(el('dd', null, t[1]));
+      tiles.appendChild(d);
+    });
+
+    document.getElementById('inCol').textContent = mode === 'amount' ? '공급가액' : '비율 %';
+    document.getElementById('deriveCol').textContent = mode === 'amount' ? '비율' : '공급가액';
+
+    var tb = document.getElementById('rows');
+    tb.textContent = '';
+    rows.forEach(function (r, i) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'num muted', String(i + 1)));
+
+      var tdIn = el('td', 'num');
+      var inp = document.createElement('input');
+      inp.type = 'text';
+      inp.setAttribute('aria-label', (i + 1) + '행 ' + (mode === 'amount' ? '공급가액' : '비율'));
+      inp.value = mode === 'amount'
+        ? (r.amt || 0).toLocaleString('ko-KR')
+        : (T ? String(Math.round(r.amt / T * 1000) / 10) : '0');
+      inp.addEventListener('change', function () {
+        var v = parseNum(inp.value);
+        r.amt = mode === 'amount' ? v : Math.round(T * v / 100);
+        // 비율로 넣을 때 생기는 반올림 잔돈은 **마지막 행이 흡수**한다
+        // (마지막 행 = 총액 − 앞 행들의 합). 자기 자신을 입력 중이면 보정하지 않는다.
+        if (mode === 'percent' && rows.length > 1 && i !== rows.length - 1) {
+          var head = 0;
+          for (var k = 0; k < rows.length - 1; k++) head += rows[k].amt || 0;
+          rows[rows.length - 1].amt = T - head;
+        }
+        renderSplit();
+      });
+      tdIn.appendChild(inp);
+      tr.appendChild(tdIn);
+
+      var derived = mode === 'amount'
+        ? (T ? (Math.round(r.amt / T * 1000) / 10) + '%' : '—')
+        : won(r.amt);
+      tr.appendChild(el('td', 'num muted', derived));
+
+      var tdAct = el('td');
+      var wrapA = el('div');
+      wrapA.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
+      var fill = el('button', 'btn', '잔액');
+      fill.type = 'button';
+      fill.title = '남은 금액을 이 행에 흡수';
+      fill.addEventListener('click', function () { r.amt += rest; renderSplit(); });
+      wrapA.appendChild(fill);
+      if (rows.length > 1) {
+        var del = el('button', 'btn', '삭제');
+        del.type = 'button';
+        del.addEventListener('click', function () { rows.splice(i, 1); renderSplit(); });
+        wrapA.appendChild(del);
+      }
+      tdAct.appendChild(wrapA);
+      tr.appendChild(tdAct);
+      tb.appendChild(tr);
+    });
+
+    var okBtn = document.getElementById('confirm');
+    okBtn.disabled = rest !== 0;
+    document.getElementById('confirmHint').textContent = rest === 0
+      ? '남은 금액이 0원 — 확정할 수 있습니다.'
+      : '남은 금액이 0원이 되어야 확정할 수 있습니다.';
+
+    document.getElementById('mAmt').setAttribute('aria-pressed', mode === 'amount' ? 'true' : 'false');
+    document.getElementById('mPct').setAttribute('aria-pressed', mode === 'percent' ? 'true' : 'false');
+    document.getElementById('mPct').disabled = T === 0;
+    document.getElementById('mPct').title = T === 0 ? '총액이 0원이면 비율을 계산할 수 없습니다' : '';
+  }
+
+  document.getElementById('addRow').addEventListener('click', function () {
+    if (rows.length < 20) { rows.push({ amt: 0 }); renderSplit(); }
+  });
+  document.getElementById('mAmt').addEventListener('click', function () { mode = 'amount'; renderSplit(); });
+  document.getElementById('mPct').addEventListener('click', function () {
+    if (total() !== 0) { mode = 'percent'; renderSplit(); }
+  });
+  document.getElementById('total').addEventListener('change', renderSplit);
+  document.getElementById('confirm').addEventListener('click', function () {
+    alert('시뮬레이션입니다 — 실제 ERP 저장은 일어나지 않습니다.');
+  });
+  renderSplit();
+
+})();
+</script>
+</body>
+</html>

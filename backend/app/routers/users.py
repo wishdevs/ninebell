@@ -33,6 +33,9 @@ def _to_user_out(user: User) -> UserOut:
         last_active_at=user.last_login_at,
         joined_at=user.created_at,
         org_unit_id=user.org_unit_id,
+        omnisol_userid=user.omnisol_userid,
+        department=user.department,
+        updated_at=user.updated_at,
     )
 
 

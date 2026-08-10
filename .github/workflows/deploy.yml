@@ -55,6 +55,7 @@ jobs:
           IMG="$ECR_REGISTRY/$FRONT_REPO"
           docker build --platform linux/arm64 -f infra/aws/docker/front.Dockerfile \
             --build-arg NEXT_PUBLIC_API_BASE="$NEXT_PUBLIC_API_BASE" \
+            --build-arg NEXT_PUBLIC_APP_ENV="development" \
             -t "$IMG:latest" -t "$IMG:${{ github.sha }}" .
           docker push "$IMG:latest"
           docker push "$IMG:${{ github.sha }}"

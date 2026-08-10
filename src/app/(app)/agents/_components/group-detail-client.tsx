@@ -2,12 +2,12 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
-import { RiArrowLeftSLine, RiErrorWarningLine } from '@remixicon/react';
-import { Spinner } from '@/components/ui/spinner';
-import { EmptyState } from '@/components/ui/empty-state';
+import { RiArrowLeftSLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import { ListStatePanel } from '@/components/ui/list-state';
 import { MetaChip } from '@/components/ui/meta-chip';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode, filterVisibleAgents } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useFavorites } from '@/lib/live/use-favorites';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCard } from './agent-card';
@@ -22,12 +22,16 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
   const fav = useFavorites('agent');
   const { loadIds } = fav;
+  const debugMode = useDebugMode();
 
   useEffect(() => {
     void loadIds();
   }, [loadIds]);
 
-  const agents = (data ?? []).filter((a) => a.group?.id === groupId);
+  // 숨김 대상 제외 + 디버그 모드별 종류 필터 후 그룹 필터(UI 전용).
+  const agents = filterByDebugMode(filterVisibleAgents(data ?? []), debugMode).filter(
+    (a) => a.group?.id === groupId,
+  );
   const group = agents[0]?.group ?? null;
 
   return (
@@ -59,33 +63,24 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
         ) : null}
       </div>
 
-      {status === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="에이전트 불러오는 중" />
-          에이전트를 불러오는 중…
-        </div>
-      ) : status === 'error' ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="에이전트를 불러오지 못했습니다"
-          description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
-          action={
-            <Button variant="secondary" size="sm" onClick={reload}>
-              다시 시도
-            </Button>
-          }
-        />
-      ) : agents.length === 0 ? (
-        <EmptyState
-          title="그룹을 찾을 수 없습니다"
-          description="이 그룹에 속한 에이전트가 없습니다."
-          action={
+      {/* loading/error/빈 상태 3분기는 ListStatePanel 이 단일 소유. */}
+      <ListStatePanel
+        phase={status === 'success' ? 'ready' : status}
+        error={error}
+        loadingLabel="에이전트를 불러오는 중…"
+        errorTitle="에이전트를 불러오지 못했습니다"
+        onRetry={reload}
+        isEmpty={agents.length === 0}
+        empty={{
+          title: '그룹을 찾을 수 없습니다',
+          description: '이 그룹에 속한 에이전트가 없습니다.',
+          action: (
             <Button asChild variant="secondary" size="sm">
               <Link href="/agents">에이전트 목록으로</Link>
             </Button>
-          }
-        />
-      ) : (
+          ),
+        }}
+      >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {agents.map((agent) => (
             <AgentCard
@@ -98,7 +93,7 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
             />
           ))}
         </div>
-      )}
+      </ListStatePanel>
     </div>
   );
 }

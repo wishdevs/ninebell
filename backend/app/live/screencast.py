@@ -29,8 +29,13 @@ async def _ack(cdp: Any, session_id: str) -> None:
         pass
 
 
-async def screencast_pump(page: Any, events: asyncio.Queue) -> None:
-    """page 의 화면 변화 프레임을 events 로 흘린다. page 가 없거나 CDP 실패 시 조용히 종료."""
+async def screencast_pump(page: Any, events: asyncio.Queue, window: str = "parent") -> None:
+    """page 의 화면 변화 프레임을 events 로 흘린다. page 가 없거나 CDP 실패 시 조용히 종료.
+
+    window: 이 캐스트가 어느 브라우저 창을 담는지('parent'=주 페이지 / 'child'=팝업·자식 창).
+    기본 'parent' 이면 프레임에 window 키를 넣지 않아 기존 단일 페이지 계약과 바이트 동일하다
+    (하위 호환). 'child' 일 때만 프레임에 ``"window": "child"`` 를 실어 FE 가 자식 탭으로 라우팅.
+    """
     if page is None:
         return
     try:
@@ -40,10 +45,17 @@ async def screencast_pump(page: Any, events: asyncio.Queue) -> None:
         return
 
     def on_frame(params: dict) -> None:
+        # 자식 페이지가 닫힌 뒤 늦게 도착한 CDP 프레임(인플라이트)은 무시한다 — closed 전이 이후
+        # 자식 슬롯을 되살려 스테일 탭이 재활성되는 레이스의 1차 방어(HIGH-3). 닫힌 page 프레임 no-op.
+        if page.is_closed():
+            return
         data = params.get("data")
         if data:
+            frame: dict = {"screenshot": "data:image/jpeg;base64," + data}
+            if window != "parent":
+                frame["window"] = window
             try:
-                events.put_nowait({"screenshot": "data:image/jpeg;base64," + data})
+                events.put_nowait(frame)
             except Exception:
                 pass
         sid = params.get("sessionId")

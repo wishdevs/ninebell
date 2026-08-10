@@ -52,6 +52,9 @@ class TripOverseasState(BaseAgentState, total=False):
     cost_type: str  # 비용구분(판관비/제조원가) — 예산계정 (판)/(제) 접두 결정
     filled: int  # 반영 완료 행 수
     fill_failures: list[dict]  # [{row, field, reason}] — 실패 진단
+    # 확인 커널이 '확인 불가'(리더가 셀을 못 읽음)로 남긴 값 목록 — 반영을 단정하지 않기 위한 근거.
+    # 값이 틀린 것(하드 실패)과 달리 플로우는 진행하되, 저장 결과 문구를 '완료'로 쓰지 않는다.
+    unverified: list[str]
     # 저장 거부 → 재입력 재시도(방식 1: menu_nav 재진입으로 문서 새로 만들기).
     retry_save: bool
     save_retries: int

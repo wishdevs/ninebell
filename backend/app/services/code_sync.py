@@ -32,6 +32,7 @@ from app.agents.common.nodes import (
     make_user_type_node,
 )
 from app.models import ErpCodeCatalog
+from app.services.card_seed_remap import remap_seed_notes_to_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,15 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
             )
         )
         await s.commit()
+    # 카탈로그(9자리 예산계정)가 갱신됐으니 전사 시드(card_seed_notes)를 현 ERP 코드로 재정렬한다.
+    # 옛 자료의 5자리 계정과목 코드는 현 ERP 와 겹치지 않으므로, 이름으로 현 코드에 재키잉해야
+    # 개입 화면의 계정별 적요 조회(seed tier)가 실제로 매칭된다. 멱등 — 실패해도 동기화는 유지.
+    try:
+        async with sessionmaker() as s:
+            stats = await remap_seed_notes_to_catalog(s)
+        logger.info("budget_unit 동기화 후 card_seed_notes 재키잉: %s", stats)
+    except Exception:  # noqa: BLE001 — 재키잉 실패가 카탈로그 동기화 성공을 되돌려선 안 된다.
+        logger.exception("budget_unit 동기화 후 시드 재키잉 실패(동기화 자체는 성공)")
     return len(rows)
 
 
@@ -255,16 +265,20 @@ async def _sync_partners(page, sessionmaker: async_sessionmaker) -> int:
     return len(rows)
 
 
-async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: async_sessionmaker) -> int:
+async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: async_sessionmaker) -> dict:
     """조직도 스크레이프 → 본부▸팀 평탄화 → upsert(kind='org_unit', dept='') + stale 삭제.
 
     안정 ERP 코드가 없어 code 는 이름 기반: 본부='본부명', 팀='본부명|팀명'. extra 에 종류(hq/team)·
     상위 본부·인원수·정렬순서를 담는다(프론트 뷰어/향후 OrgUnit 정합용). 빈 결과는 보존 실패 처리.
+
+    미리보기(catalog) upsert 성공 후, 실제 권한 단위인 org_units 로도 반영(apply_org_tree)하고
+    department 기준 사용자 재배치(reconcile_users)한다. 반환 {count, applied, reassigned}.
     """
     from app.services.org_sync import fetch_org_tree
 
     tree = await fetch_org_tree(userid, password, browser_factory)
     flat = tree["flat"]
+    nodes = tree["nodes"]  # 전체 깊이 트리 — org_units 미러링용(catalog 미리보기는 flat 유지).
     now = datetime.now(timezone.utc)
 
     # (본부, 팀) → catalog code. 본부 자체도 1행(type=hq)으로 남겨 계층을 복원 가능하게 한다.
@@ -296,7 +310,7 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
         if not catalog:  # 빈 결과 — 기존 보존(스크레이프 실패 의심).
             if prev > 0:
                 raise RuntimeError(f"조직도 결과가 비어 있습니다(기존 {prev}건) — 중단/실패 의심, 보존")
-            return 0
+            return {"count": 0, "applied": {}, "reassigned": []}
         for row in catalog.values():
             await s.merge(
                 ErpCodeCatalog(kind="org_unit", dept="", code=row["code"], name=row["name"], extra=row["extra"], synced_at=now)
@@ -307,7 +321,27 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
             )
         )
         await s.commit()
-    return len(catalog)
+
+    # 미리보기(catalog) 반영 성공 후, 실제 권한 단위(org_units)로 멱등 반영 + 사용자 재배치.
+    # 카탈로그 커밋과 분리된 세션/트랜잭션이라, 반영이 실패해도 미리보기는 이미 남는다.
+    applied: dict = {}
+    reassigned: list[dict] = []
+    if nodes:
+        from app.services.org_apply import apply_org_tree, reconcile_users
+
+        async with sessionmaker() as s:
+            applied = await apply_org_tree(s, nodes)
+            reassigned = await reconcile_users(s)
+            await s.commit()
+        logger.info(
+            "조직도 org_units 반영(전체 깊이) — 추가 %d·갱신 %d·미변경 %d·삭제 %d·사용자 재배치 %d명",
+            len(applied.get("added", [])),
+            applied.get("updated", 0),
+            applied.get("unchanged", 0),
+            len(applied.get("deleted", [])),
+            len(reassigned),
+        )
+    return {"count": len(catalog), "applied": applied, "reassigned": reassigned}
 
 
 async def sync_catalog(
@@ -317,11 +351,19 @@ async def sync_catalog(
     browser_factory,
     sessionmaker: async_sessionmaker,
 ) -> dict:
-    """kind('budget_unit'|'project'|'partner'|'org_unit') 카탈로그 헤드리스 동기화. 반환 {count, syncedAt}."""
+    """kind('budget_unit'|'project'|'partner'|'org_unit') 카탈로그 헤드리스 동기화.
+
+    반환 {count, syncedAt}. org_unit 은 org_units 반영·사용자 재배치 요약(applied·reassigned)도 함께.
+    """
     # 조직도(org_unit)는 랜딩 우상단에 있어 카드 진입 체인이 불필요 — 로그인만 하고 스크레이프.
     if kind == "org_unit":
-        count = await _sync_org(userid, password, browser_factory, sessionmaker)
-        return {"count": count, "syncedAt": datetime.now(timezone.utc).isoformat()}
+        org = await _sync_org(userid, password, browser_factory, sessionmaker)
+        return {
+            "count": org["count"],
+            "syncedAt": datetime.now(timezone.utc).isoformat(),
+            "applied": org.get("applied"),
+            "reassigned": org.get("reassigned"),
+        }
 
     browser = await browser_factory()
     try:

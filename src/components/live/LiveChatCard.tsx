@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   RiCheckLine,
   RiCornerDownLeftLine,
@@ -38,6 +38,15 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
   // 단, 그 사용자 말풍선이 전송 실패(error)면 대기 중이 아니므로 처리 중으로 보지 않는다.
   const lastMessage = messages[messages.length - 1];
   const processing = busy || completing || (lastMessage?.role === 'user' && !lastMessage.error);
+
+  // 새 말풍선/스트리밍 갱신 시 목록을 맨 아래로 — 안 내려가면 최신 응답을 못 본다
+  // (사용자 보고 2026-07-29). 스트리밍 중에는 content 길이 변화로도 따라 내려간다.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastContentLen = lastMessage?.content.length ?? 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, lastContentLen, processing]);
 
   async function send() {
     const text = draft.trim();
@@ -78,7 +87,7 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+      <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
         {messages.map((m) => (
           <Bubble key={m.id} message={m} />
         ))}

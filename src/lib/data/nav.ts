@@ -23,6 +23,7 @@ export type NavIconKey =
   | 'org'
   | 'budget'
   | 'learning'
+  | 'changelog'
   | 'manual';
 
 export interface NavItem {
@@ -58,6 +59,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
       // 에이전트별 사용 설명서 — 로그인한 전원 노출(게이트 없음).
       { href: '/manual', label: '메뉴얼', icon: 'manual' },
+      // 릴리스 단위 변경 기록. 읽기는 전 사용자(백엔드가 미공개 draft 를 걸러냄),
+      // 추가/수정/삭제는 관리자 — 게이트 없이 노출하고 화면 안에서 편집 UI 만 가린다.
+      { href: '/changelog', label: '변경사항', icon: 'changelog' },
     ],
   },
   // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
@@ -66,9 +70,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members', permission: 'users:read' },
-      // 에이전트별 세부설정(스키마 기반 폼) 관리(관리자+).
+      // 에이전트별 세부설정(스키마 기반 폼) 관리(관리자+). 에이전트별 접근(사용 가능 조직) 설정은
+      // 이 아래 /manage/agents/access 서브라우트로 옮겨졌다(사이드바에는 별도 항목 없음).
       { href: '/manage/agents', label: '에이전트 관리', icon: 'agents', minRole: 'admin' },
-      // 조직구분별 에이전트 사용 권한 관리(관리자+).
+      // 조직구분(ERP 조직도 미러링) 관리 — 팀별 비용구분 설정(관리자+).
       { href: '/organizations', label: '조직구분 관리', icon: 'org', minRole: 'admin' },
       // 감사 = 사용자 접속/행동 감시(로그인 access_logs). 로깅 = 에이전트 사용 내역(runs).
       { href: '/audit', label: '감사', icon: 'audit', permission: 'logs:read' },
@@ -81,6 +86,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' },
       // 개입 학습(가맹점→선택)·전사 기초자료 열람 — dev·운영 모두 노출(전 로그인 사용자).
       { href: '/dev/card-learning', label: '개입 학습(디버그)', icon: 'learning' },
+      // 가맹점 분류 사전(키워드→업종/계정) 조회·관리 — 조회는 전원, 추가/수정/삭제는 관리자.
+      { href: '/dev/merchant-dict', label: '가맹점 사전', icon: 'learning' },
       // 공용 스킬 카탈로그 + 사용 에이전트 역인덱스 — 개발 환경에서만 노출.
       { href: '/skills', label: '스킬', icon: 'works', devOnly: true },
     ],

@@ -7,6 +7,7 @@ import {
   RiBugLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
+  RiErrorWarningLine,
   RiCloseLine,
   RiPlayLine,
   RiRestartLine,
@@ -15,6 +16,7 @@ import {
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { cn } from '@/lib/utils';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
 import { newRunId, useLiveRun } from '@/lib/live/use-live-run';
@@ -24,6 +26,7 @@ import {
   useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
 import { PRE_RUN_FORMS } from '@/components/live/pre-run';
+import { SIMULATION_PANELS } from '@/components/live/simulation';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -84,6 +87,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 받아 실행한다(card-chat 등 폼 없는 에이전트는 종전대로 바로 실행). 없으면 undefined.
   const PreRunForm = canRun ? PRE_RUN_FORMS[defaultWorkflow] : undefined;
   const usePreRun = !!PreRunForm;
+  // 화면 시뮬레이션 패널 — 자동화 그래프가 아직 없는(실행 불가) 에이전트가 화면 흐름만
+  // 확정하는 단계에 쓴다. 실행 경로를 타지 않으므로 라이브 세션과 무관하다.
+  const SimulationPanel = canRun ? undefined : SIMULATION_PANELS[agent.id];
   // runId 를 시작마다 새로 발급해 훅에 넘긴다 — 재마운트(StrictMode)·끊김 재접속은 같은
   // runId 로 세션을 재부착하고, "다시 실행"은 새 runId 라 새 흐름을 시작한다.
   const [session, setSession] = useState<{
@@ -126,6 +132,31 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 양보하고 라이브 브라우저 열은 축소한다(사용자 요청: 최초 입력 시 입력창을 크게).
   const preRunActive = usePreRun && !isLive;
   const panelWide = interventionActive || preRunActive;
+  // 개입 레이아웃 레벨(3) — 개입 콘텐츠(kind)별로 라이브화면 노출·크기 + 개입 패널 크기를 정한다.
+  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때)
+  //  split: 작은 라이브(좌측) + 넓은 개입   — choice, 실행 전 입력 폼
+  //  live : 라이브 크게 + 작은 패널          — 모니터링 + **chat 개입**(화면을 보면서
+  //         대화해야 하므로 채팅창은 작게, 라이브를 크게 — 사용자 요청 2026-07-29)
+  // 시뮬레이션 패널은 라이브 화면이 존재하지 않는다(실행 없음) → 그리드 개입과 같은 full 폭.
+  const layoutLevel: 'full' | 'split' | 'live' = SimulationPanel
+    ? 'full'
+    : interventionActive && run.hitl?.kind === 'grid'
+      ? 'full'
+      : interventionActive && run.hitl?.kind === 'chat'
+        ? 'live'
+        : panelWide
+          ? 'split'
+          : 'live';
+
+  // AI 추천 계산 구간(skillKey='ai-recommend' 스텝이 running) — 화면 변화가 없어 멈춰 보이는
+  // 긴 AI 콜을 라이브 화면에 눈에 띄게 오버레이한다(우측 패널만으론 잘 안 보인다는 피드백).
+  // run.steps.step(라이브 상태 키)을 agent.steps.id(계획)와 매칭해 skillKey 를 확인한다.
+  const aiWorkingLabel = useMemo(() => {
+    if (!isLive) return null;
+    const running = new Set(run.steps.filter((s) => s.status === 'running').map((s) => s.step));
+    const step = agent.steps.find((p) => p.skillKey === 'ai-recommend' && running.has(p.id));
+    return step?.label ?? null;
+  }, [isLive, run.steps, agent.steps]);
 
   // 개입 대기 알림 — 탭 제목 접두 + (백그라운드 탭이면) 브라우저 알림. 해소·종료 시 원복.
   useHitlNotification(interventionActive ? (run.hitl?.id ?? null) : null);
@@ -213,6 +244,21 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         </div>
       </div>
 
+      {/* 실패 사유 배너 — 종료(실패) 시 '왜 실패했고 무엇을 고칠지'를 메인 상단에 크게 노출한다.
+          결과 탭에도 나오지만 그리드 개입/브라우저 스테이지를 보느라 놓치기 쉬워, 메인에 무조건
+          보이게 둔다(사용자 피드백: 실패했는데 이유를 안 알려줌). error 는 여러 줄(사유+조치)일 수 있다. */}
+      {isLive && terminal && run.status === 'failed' && run.error ? (
+        <div className="border-danger/30 bg-danger/10 text-danger flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3">
+          <RiErrorWarningLine size={18} aria-hidden className="mt-0.5 shrink-0" />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p className="text-[length:var(--text-body-sm)] font-semibold">실행 실패 — 사유</p>
+            <p className="text-foreground-secondary text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
+              {run.error}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       {/* 디버그 — 단계 이동(이전/다음). 현재는 숨김(SHOW_DEBUG로 토글). */}
       {SHOW_DEBUG ? (
         <DebugStepper
@@ -231,51 +277,83 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
       {/* 브라우저 + 우측 패널. 상단 섹션이 없어 그리드가 남는 높이를 전부 쓴다. 브라우저 열 폭은
           스크린캐스트 종횡비(≈16:10)에 맞춰 (가용 높이)×16/10 로 잡아 화면이 잘리지 않고 꽉
-          차게(레터박스 최소), 좌우로 과하게 넓지 않게 하고 패널 최소폭(≈440px)은 유지한다. */}
-      <div
-        className={cn(
-          'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
-          panelWide
-            ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
-            : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
+          차게(레터박스 최소), 좌우로 과하게 넓지 않게 하고 패널 최소폭(≈440px)은 유지한다.
+          라이브 실행(실제 ERP 저장 진행) 중 렌더 예외가 화면 전체를 무너뜨리지 않도록
+          바운더리로 카드 영역 안에 가둔다 — 헤더·실행 컨트롤(중단/닫기)은 살아남는다. */}
+      <ErrorBoundary
+        fallback={({ reset }) => (
+          <div className="border-danger/30 bg-danger/10 flex flex-col items-start gap-2.5 rounded-[var(--radius-lg)] border px-5 py-4 lg:min-h-0 lg:flex-1">
+            <div className="text-danger flex items-start gap-2.5">
+              <RiErrorWarningLine size={18} aria-hidden className="mt-0.5 shrink-0" />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <p className="text-[length:var(--text-body-sm)] font-semibold">
+                  라이브 화면을 표시하는 중 문제가 발생했습니다
+                </p>
+                <p className="text-foreground-secondary text-[length:var(--text-body-sm)] leading-relaxed">
+                  실행 세션은 유지됩니다. 다시 표시를 눌러 화면만 다시 그리거나, 상단 컨트롤로
+                  실행을 중단할 수 있습니다.
+                </p>
+              </div>
+            </div>
+            <Button size="sm" variant="secondary" onClick={reset}>
+              다시 표시
+            </Button>
+          </div>
         )}
       >
-        {/* 브라우저는 항상 라이브 스테이지 — 미실행 시 run 은 idle 상태라 중립 대기 화면을
-            보여준다(정적 목업의 가짜 LIVE/진행률을 노출하지 않는다). idle/종료엔 스테이지
-            중앙에 대형 실행 CTA 를 겹친다(우상단 버튼이 안 보인다는 피드백 반영, 동작 동일). */}
-        <LiveBrowserStage
-          targetUrl={agent.targetUrl}
-          status={run.status}
-          screenshot={run.screenshot}
-          connected={run.connected}
-          canRun={canRun}
-          etaHint={etaHint}
-          // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
-          // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
-          onStart={
-            usePreRun
-              ? undefined
-              : () => {
-                  const workflowId =
-                    (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
-                  if (workflowId) startRun(workflowId, session.params);
-                }
-          }
-        />
-        {isLive ? (
-          <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
-        ) : PreRunForm ? (
-          // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
-          <PreRunForm
-            key={formRunSeq}
-            agent={agent}
-            initialParams={formSeed}
-            onStart={startFromForm}
-          />
-        ) : (
-          <AgentSidePanel agent={view} />
-        )}
-      </div>
+        <div
+          className={cn(
+            'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
+            layoutLevel === 'full'
+              ? 'lg:grid-cols-1' // 라이브 숨김 — 개입 패널이 전체폭
+              : layoutLevel === 'split'
+                ? 'lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]'
+                : 'lg:grid-cols-[clamp(320px,calc((100dvh-180px)*16/10),calc(100%-440px))_minmax(360px,1fr)]',
+          )}
+        >
+          {/* 라이브 스테이지 — full 레벨(그리드 개입)에선 숨겨 개입 패널에 전체폭을 준다. 그 외엔
+            미실행 시 idle 중립 대기 화면(가짜 LIVE 노출 안 함), idle/종료엔 중앙 대형 실행 CTA 겹침. */}
+          {layoutLevel !== 'full' ? (
+            <LiveBrowserStage
+              targetUrl={agent.targetUrl}
+              status={run.status}
+              screenshots={run.screenshots}
+              activeWindow={run.activeWindow}
+              onSelectWindow={run.selectWindow}
+              connected={run.connected}
+              canRun={canRun}
+              etaHint={etaHint}
+              aiWorking={aiWorkingLabel}
+              // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
+              // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
+              onStart={
+                usePreRun
+                  ? undefined
+                  : () => {
+                      const workflowId =
+                        (isLive ? session.workflowId : defaultWorkflow) || defaultWorkflow;
+                      if (workflowId) startRun(workflowId, session.params);
+                    }
+              }
+            />
+          ) : null}
+          {isLive ? (
+            <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
+          ) : SimulationPanel ? (
+            <SimulationPanel agent={agent} />
+          ) : PreRunForm ? (
+            // key 로 remount 해 마지막 제출값(formSeed)을 폼 초기값으로 다시 시드한다(실패 후 수정 재실행).
+            <PreRunForm
+              key={formRunSeq}
+              agent={agent}
+              initialParams={formSeed}
+              onStart={startFromForm}
+            />
+          ) : (
+            <AgentSidePanel agent={view} />
+          )}
+        </div>
+      </ErrorBoundary>
     </div>
   );
 }

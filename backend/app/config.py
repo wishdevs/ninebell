@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 개발 기본 시크릿 — 운영 휴리스틱(cookie_secure=true)에서는 이 값으로 부팅을 차단한다.
+_DEV_AUTH_SECRET = "dev-insecure-change-me-please"
 
 
 class Settings(BaseSettings):
@@ -17,9 +21,14 @@ class Settings(BaseSettings):
 
     # --- DB ---
     database_url: str = "postgresql+asyncpg://dashboard:dashboard@localhost:5432/dashboard"
+    # PG 커넥션 풀 노브(create_async_engine). SQLite(aiosqlite) 경로에는 적용하지 않는다.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_pre_ping: bool = True
 
     # --- 세션/JWT ---
-    auth_secret: str = "dev-insecure-change-me-please"
+    auth_secret: str = _DEV_AUTH_SECRET
     jwt_algorithm: str = "HS256"
     session_ttl_hours: int = 12
     # '로그인 상태 유지' 체크 시의 연장 세션 수명(기본 30일). 미체크는 session_ttl_hours.
@@ -47,9 +56,72 @@ class Settings(BaseSettings):
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
-    # gemini-2.0-flash 는 구글에서 retired(404) → 2.5-flash 로 교체(env GEMINI_MODEL 로 오버라이드).
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-2.0-flash retired(404) → 2.5 → 3.5 → 3.6-flash 상향(GA 2026-07-21, env GEMINI_MODEL 오버라이드).
+    gemini_model: str = "gemini-3.6-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    # LLM 프로바이더 선택 — 'gemini'(기본: GitHub/AWS 배포) | 'etribe'(온프렘 GitLab 배포, 사내
+    # Etribe-LLM OpenAI 호환 서버 — 회계 데이터·ERP 스크린샷이 사외로 나가지 않는다). env LLM_PROVIDER.
+    llm_provider: str = "gemini"
+    # 2026-07-23 사용자 최종 지정: GLM-5.2 서버 172.20.50.2:30001, 모델 id "ETRIBE-LLM"
+    # (/v1/models 실측, 대문자 주의), max_model_len 262144. base 에 /v1 을 붙이지 않는다
+    # (클라이언트가 /v1/chat/completions 를 붙임). 실측: 채팅·네이티브 툴콜(tool_choice=
+    # required)·thinking 기본 ON(reasoning 채널) OK. **텍스트 전용**("not a multimodal
+    # model" 400) → etribe_multimodal=False 로 디스패처가 스크린샷 첨부를 차단한다.
+    # 대안 서버: 192.168.50.2:8030 ETRIBE-VLM(멀티모달 OK·네이티브 툴콜 불가 — JSON 폴백
+    # 필요, 컨텍스트 32K) — 전환 시 ETRIBE_BASE_URL/MODEL/MULTIMODAL=true 만 바꾸면 된다.
+    etribe_base_url: str = "http://172.20.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
+    etribe_model: str = "ETRIBE-LLM"  # env ETRIBE_MODEL
+    etribe_multimodal: bool = False  # env ETRIBE_MULTIMODAL — GLM-5.2 텍스트 전용(이미지 400)
+    # 로컬 전용 LLM 프로바이더 런타임 전환 게이트(/dev/llm-provider 활성 여부). 서버 배포에선
+    # 미설정=off → 라우터가 404 를 반환해 기능 자체가 없는 것처럼 동작한다. env LLM_PROVIDER_TOGGLE.
+    llm_provider_toggle: bool = False
+    # LLM 전체 프롬프트 캡처(디버깅 전용, 기본 OFF). 켜면 프로바이더가 실제 전송하는 와이어
+    # 요청 바디 전체(system·user·context·tools)를 JSONL 로 append 한다 — 민감정보 포함이라
+    # 수집 후 파일을 정리하고 커밋하지 않는다. env LLM_PROMPT_CAPTURE / LLM_PROMPT_CAPTURE_PATH.
+    llm_prompt_capture: bool = False
+    llm_prompt_capture_path: str = "prompt-capture.jsonl"
+
+    # --- 로깅 ---
+    # root 로거 레벨. uvicorn 은 root 에 핸들러를 달지 않아 그대로 두면 app.* 의 INFO 가 전부
+    # 유실된다(core/logging_setup 참고). env LOG_LEVEL 로 운영에서 WARNING 등으로 조절한다.
+    log_level: str = "INFO"
+    # 로그 파일 경로(회전 50MB×5). 비우면 stdout 만 — **배포 기본값**이다(ECS 는 CloudWatch,
+    # 온프렘은 Docker json-file 로 stdout 을 수집하므로 컨테이너 안 파일은 무의미).
+    # 로컬 개발에서 터미널을 닫아도 로그를 남기려면 backend/.env 에 LOG_FILE=logs/app.log.
+    log_file: str = ""
+    # LLM 호출별 파일 로그 디렉터리(호출 1건 = 파일 1개, 요청·응답 전문). 비우면 끔 —
+    # **배포 기본값**. 한 줄 로그(app.llm.wire)는 프롬프트가 수천 자라 눈으로 못 읽어서,
+    # 사람이 읽을 용도로 따로 남긴다. 로컬은 LLM_LOG_DIR=logs/llm.
+    llm_log_dir: str = ""
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _normalize_llm_provider(cls, v: str) -> str:
+        """공백·대소문자 정규화 + 미지 값 즉시 실패(부팅 차단).
+
+        오타(LLM_PROVIDER=Etribe / 'etribe ' 등)가 조용히 gemini 폴백되면 온프렘의 회계
+        데이터·ERP 스크린샷이 무음으로 사외(구글)에 나간다 — 이 기능의 존재 이유가 무너지는
+        사고라 런타임 폴백 대신 부팅 시점에 명확히 실패시킨다.
+        """
+        norm = (v or "").strip().lower()
+        if norm not in {"gemini", "etribe"}:
+            raise ValueError(f"LLM_PROVIDER 는 'gemini'|'etribe' 만 허용합니다(입력: {v!r})")
+        return norm
+
+    @model_validator(mode="after")
+    def _reject_dev_secret_in_prod(self) -> Settings:
+        """운영 휴리스틱(cookie_secure=true)에서 기본 auth_secret 부팅 차단.
+
+        기본 시크릿으로 운영에 뜨면 세션 JWT 를 누구나 위조할 수 있다 — 조용한 폴백 대신
+        부팅 시점에 명확히 실패시킨다(_normalize_llm_provider 와 동일 철학). 로컬/테스트
+        (cookie_secure=false)는 기본값 부팅을 그대로 허용한다.
+        """
+        if self.cookie_secure and self.auth_secret == _DEV_AUTH_SECRET:
+            raise ValueError(
+                "COOKIE_SECURE=true(운영)인데 AUTH_SECRET 이 개발 기본값입니다 — "
+                "세션 토큰 위조가 가능하므로 부팅을 중단합니다. AUTH_SECRET 을 설정하세요."
+            )
+        return self
 
     # --- 라이브 세션(run) / 스크린캐스트 ---
     # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).
@@ -64,6 +136,11 @@ class Settings(BaseSettings):
     screencast_every_nth_frame: int = 2
     # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
     hitl_timeout_s: int = 600
+    # 런 전역 활동 시간 예산(초) — **HITL 대기 시간을 제외한 활동 시간** 기준. 사용자가
+    # 그리드/채팅 응답을 오래 고민하는 것은 정당(턴당 hitl_timeout_s 상한이 별도)하므로 세지
+    # 않고, 자동화 구간이 무한히 도는 것만 제한한다(세마포어 슬롯·Chromium 메모리 무기한
+    # 점유 방지). 초과 시 러너 워치독이 그래프를 취소하고 런을 failed 로 확정한다. 0=비활성.
+    run_active_budget_s: int = 1200
 
     # --- 로컬 시스템 관리자(admin) ---
     # 비우면 seed 가 폴백 '1111'을 쓰되 critical 경고. 프로덕션은 반드시 env 로 지정.

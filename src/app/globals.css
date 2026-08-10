@@ -209,12 +209,17 @@ samp {
     box-shadow var(--duration-normal) var(--ease-out),
     border-color var(--duration-fast) ease;
 }
-.card-interactive:hover {
+/* 리프트는 카드 자신이 아니라 '안 움직이는 부모(.card-lift)'에 커서가 있을 때 발동한다.
+   카드가 위로 떠도 hover 타깃(부모)은 제자리라 :hover 가 풀리지 않아, 경계에서 카드가
+   떴다 내렸다 반복하는 '드드득'(hover jitter)이 사라진다. (부모 hover = Tailwind group-hover 동치) */
+.card-lift:hover .card-interactive {
   transform: translateY(-2px);
   box-shadow: var(--shadow-card-raised);
   border-color: var(--border-strong);
 }
-.card-interactive:active {
+/* press 피드백도 부모 스코프로 — hover 규칙과 동일 specificity(0,3,0)이고 뒤에 와서, 누르는
+   동안(hover+active 동시)에는 active 가 이겨 리프트 대신 살짝 눌리는 느낌이 유지된다. */
+.card-lift:active .card-interactive {
   transform: translateY(0) scale(0.995);
 }
 
@@ -243,6 +248,78 @@ samp {
 }
 .animate-page-enter {
   animation: page-enter var(--duration-normal) var(--ease-out) both;
+}
+
+/* ==========================================================================
+   PIP enter — 자식창(전자결재 결제창) 플로팅 카드가 부모 위로 뜰 때
+   ========================================================================== */
+@keyframes pip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-pip-in {
+  animation: pip-in var(--duration-normal) var(--ease-out) both;
+}
+
+/* ==========================================================================
+   Drawer enter animation — panel slides in from the right edge
+   ========================================================================== */
+@keyframes drawer-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-drawer-in-right {
+  animation: drawer-in-right var(--duration-normal) var(--ease-out) both;
+}
+/* Drawer exit — panel slides back out to the right edge (open=false, still mounted
+   during the close window before unmount). */
+@keyframes drawer-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+.animate-drawer-out-right {
+  animation: drawer-out-right var(--duration-normal) var(--ease-out) both;
+}
+/* Overlay fade — dims/undims behind the drawer in step with the panel. */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes overlay-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.animate-overlay-in {
+  animation: overlay-fade-in var(--duration-normal) var(--ease-out) both;
+}
+.animate-overlay-out {
+  animation: overlay-fade-out var(--duration-normal) var(--ease-out) both;
 }
 
 /* ETA 타임라인 — 실행 중 세그먼트의 shimmer(작업 중 시각 신호). AI 추천처럼 화면 변화가
@@ -288,20 +365,7 @@ samp {
   color: transparent;
   animation: ai-gradient 2.2s linear infinite;
 }
-@keyframes ai-sparkle {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.82) rotate(12deg);
-  }
-}
-.animate-ai-sparkle {
-  animation: ai-sparkle 1.5s ease-in-out infinite;
-}
+/* (ai-sparkle 키프레임은 ThinkingOrb 도입 2026-07-23 으로 제거 — RiSparkling2Fill 대체) */
 
 /* ==========================================================================
    Aurora — barely-visible drift used as auth hero ambience.

@@ -4,6 +4,8 @@
 메시지 수(≤50)·개별 길이(≤8000)를 제한해 프롬프트 폭주/남용을 막는다.
 context 는 프론트가 만든 {agents, runs} 스냅샷이지만 형태를 강제하진 않고, 시스템 프롬프트에
 그대로 직렬화되므로 직렬화 길이만 상한(과대 페이로드로 인한 비용/지연 폭주 방지).
+시스템 프롬프트는 전적으로 서버가 소유한다 — 클라이언트는 system 필드나 role="system" 메시지로
+페르소나/지시를 주입할 수 없다(user·assistant 역할만 허용). 사내 Gemini 키의 범용 프록시화 방지.
 """
 
 from __future__ import annotations
@@ -16,13 +18,13 @@ _CONTEXT_MAX_JSON_CHARS = 20_000
 
 
 class MessageIn(BaseModel):
-    role: str = Field(pattern="^(system|user|assistant)$")
+    # system 역할은 허용하지 않는다 — 시스템 지시는 서버가 소유한다(클라이언트 주입 차단).
+    role: str = Field(pattern="^(user|assistant)$")
     content: str = Field(max_length=8000)
 
 
 class ChatRequest(BaseModel):
     messages: list[MessageIn] = Field(min_length=1, max_length=50)
-    system: str | None = None
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_output_tokens: int = Field(default=8192, ge=1, le=65000)
     context: dict | None = None

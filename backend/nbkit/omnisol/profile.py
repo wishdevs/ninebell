@@ -11,6 +11,7 @@ from typing import Any
 
 from nbkit.browser.actions import safe_evaluate
 from nbkit.omnisol import js_lib
+from nbkit.omnisol.auth import open_user_panel
 
 logger = logging.getLogger("nbkit.omnisol.profile")
 
@@ -21,17 +22,15 @@ async def read_profile(page: Any) -> dict:
     우상단 아바타를 눌러 사용자 패널을 연 뒤(부서/사용자유형 노출) best-effort 로 긁는다.
     패널을 못 열거나 셀렉터가 바뀌어도 빈 값으로 진행한다.
 
-    JS `.click()` 은 Kendo 열기 핸들러를 못 깨워 패널이 안 열리는 경우가 있어(= 부서 빈값의
-    원인), ninebell-bak `erp/graph.py:_open_user_panel` 처럼 실제 page.click 을 먼저 시도하고
-    실패 시에만 JS 로 폴백한다.
+    아바타 클릭 경로는 :func:`nbkit.omnisol.auth.open_user_panel` 하나로 통합한다 —
+    selectors.AVATAR(``a.user-pic``) 실클릭 + JS 폴백. ⚠ 이미지 src 기반 자체 클릭은
+    프로필 사진 업로드 계정에서 매칭이 아예 안 돼(2026-07-27 라이브 장애,
+    selectors.AVATAR 주석 참조) 다시 쓰지 말 것.
     """
     try:
-        await page.click("img[src*=profile_circle]", timeout=4_000)
-    except Exception:  # noqa: BLE001 — 실제 클릭 실패 시 JS 폴백
-        try:
-            await page.evaluate(js_lib.AVATAR_CLICK_JS)
-        except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
-            pass
+        await open_user_panel(page)
+    except Exception:  # noqa: BLE001 — 패널 못 열어도 읽기는 시도
+        pass
     # 패널 렌더를 폴링(고정 1.5s 대체) — 데이터가 잡히는 즉시 진행, 상한 ~2.4s(내성 유지).
     raw: dict = {}
     for _ in range(12):

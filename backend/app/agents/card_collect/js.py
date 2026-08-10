@@ -197,12 +197,21 @@ CHECK_ROWS_JS = f"""(indices) => {{
 # SET_ACCT_DATE_JS 는 js_lib 로 승격(2026-07-06, 출장 공용) — 상단 재수출 참조.
 
 
-# '카드' 서브팝업에서 소유자(CARD_OWNR_NM) 또는 관리사원(KOR_NM)이 owner 와 정규화 일치하는
-# 행만 체크(본인 카드 우선 선택, 사용자 요청 2026-07-04). 반환 {ok, n(전체), matched(체크수)}.
-# matched==0 이면 호출부가 기존 전체선택으로 폴백한다(빈 소유자/공용카드 대비).
-CARD_SUB_SELECT_BY_NAME_JS = """(owner) => {
+# '카드' 서브팝업에서 owners 중 하나와 일치하는 행만 체크(본인 카드 우선 선택, 사용자 요청
+# 2026-07-04). 매칭 3경로: ① CARD_OWNR_NM/KOR_NM/PARTNER_NM 정규화 정확일치,
+# ② 행의 어느 문자열 값이든 '(이름)' 포함 — 실측(프로브 2026-07-29) 결과 이 ERP 는
+# CARD_OWNR_NM/KOR_NM 을 개인카드에서도 채우지 않고, 소유자 표기는 카드명
+# FINPRODUCT_NM("국민법인카드(석대현)-2826")의 괄호에만 존재한다(PARTNER_NM 은 개인카드에
+# 한해 실명). owners 는 이름 변형 배열(로그인ID·프로필 순수 이름·"이름 직책") — 패널 이름이
+# "석대현 프로"처럼 직책을 달고 있어 단일 키로는 못 잡는 표기 대응(사용자 요청 2026-07-29).
+# 반환 {ok, n(전체), matched(체크수), names(매칭 카드명 최대 10)}.
+# matched==0 처리(폴백/중단)는 호출부(steps.select_all_cards)의 own_only 가 결정한다.
+CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
   const c = s => String(s==null?'':s).replace(/\\s+/g,'').toLowerCase();
-  const key = c(owner);
+  const keys = (Array.isArray(owners)?owners:[owners]).map(c).filter(k=>k);
+  const parens = keys.map(k => '(' + k + ')');
+  const inAnyField = r => Object.values(r).some(v =>
+    (typeof v === 'string' || typeof v === 'number') && parens.some(p => c(v).includes(p)));
   const sub = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
     .filter(w=>!/법인카드/.test(String((w.querySelector('.k-window-title')||{}).innerText||'').replace(/\\s+/g,' ').trim())).slice(-1)[0];
   if (!sub) return { ok:false, reason:'no-sub' };
@@ -214,15 +223,23 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owner) => {
     const rows = ds.getJsonRows(0, n-1);
     try { g.checkAll(false); } catch(e) {}
     let matched = 0;
+    const names = [];
+    // allNames: 전체 카드명(매칭 여부 무관, 최대 10) — 매칭 0장일 때 '무엇이 있었는지'를
+    // 로그로 남기기 위한 진단 필드(2026-08-02 실측: 실패 로그에 목록이 없어 원인 판별 불가했다).
+    const allNames = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i] || {};
-      if (key && (c(r.CARD_OWNR_NM) === key || c(r.KOR_NM) === key)) {
+      if (allNames.length < 10) allNames.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());
+      const exact = keys.some(k =>
+        c(r.CARD_OWNR_NM) === k || c(r.KOR_NM) === k || c(r.PARTNER_NM) === k);
+      if (keys.length && (exact || inAnyField(r))) {
         g.setChecked ? g.setChecked(i, true) : g.checkRow && g.checkRow(i, true);
         matched++;
+        if (names.length < 10) names.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());
       }
     }
     let checked=-1; try { checked=(g.getCheckedRows()||[]).length; } catch(e){}
-    return { ok:true, n, matched, checked };
+    return { ok:true, n, matched, checked, names, allNames };
   } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
 }"""
 

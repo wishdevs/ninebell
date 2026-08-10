@@ -98,9 +98,14 @@ def make_switch_evdn_node():
 
         # 잔여 확인 모달('예산현황' 등)이 남아 있으면 F3/코드피커가 막힌다 — 방어적 정리.
         # (실측: 적용 후 지연 모달이 화면을 덮은 채 02 선택 시도 → TypeError 실패)
-        cleared = await steps.dismiss_blocking_modals(page, rounds=3)
+        # 닫은 목록만 로그로 남기면 '닫았다고 보고했는데 남아 있는' 상태를 못 잡는다 —
+        # 팝업 개수 감소까지 확인한다(감소 미확인은 경고 후 진행: 후속 스텝이 각자 확인한다).
+        dm = await steps.dismiss_modals_verified(page, rounds=3)
+        cleared = dm.get("cleared") or []
         if cleared:
             await emit_log(events, f"잔여 확인 모달 {len(cleared)}건을 닫고 진행합니다.", "info")
+        if dm.get("warn"):
+            await emit_log(events, f"⚠ {dm['warn']}", "warn")
 
         r = await steps.close_card_popup(page)
         if not r.get("ok"):
@@ -136,10 +141,27 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": state["error"]}
 
-        r = await steps.select_all_cards(page, owner_name=state.get("userid"))
+        # 2차 재선택도 1차와 동일 분기 — 디버그 모드면 전체선택, 일반 모드는 본인 카드만
+        # (매칭 0장이면 1차와 같이 전체선택 폴백 — 2026-08-03 사용자 확정). 1차에서 이미
+        # 같은 판정을 했으므로 여기서 안내를 반복하지 않고 warn 만 남긴다(로그 스팸 방지).
+        p2_params = state.get("params") or {}
+        if p2_params.get("debug") is True:
+            r = await steps.select_all_cards(page)
+        else:
+            r = await steps.select_all_cards(
+                page,
+                owner_name=steps.owner_name_variants(
+                    state.get("userid"),
+                    p2_params.get("user_display_name"),
+                    p2_params.get("user_job_title"),
+                ),
+                own_only=True,
+            )
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}
+        if r.get("warn"):
+            await emit_log(events, f"⚠ 2차 카드 선택 미확인: {r['warn']}", "warn")
         period = state.get("period") or list(
             steps.compute_period(date.today(), _shared._params_cutoff_day(state))
         )
@@ -147,11 +169,23 @@ def make_switch_evdn_node():
         if not pr.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 승인일 기간 설정 실패: {pr}"}
+        if pr.get("warn"):
+            await emit_log(events, f"⚠ 2차 승인일 기간 미확인: {pr['warn']}", "warn")
         rows2 = await steps.run_query(page)
         if not isinstance(rows2, int) or rows2 < 0:
             await emit_step(events, "switch_evdn", "failed")
             return {"error": "2차 조회에 실패했습니다(그리드 로딩 실패)."}
         lst2 = await steps.read_rows(page, limit=500)
+        # 저장 제외 필터(1차 query 와 동일 규칙) — 저장 전 리스트 재확인: 승인번호 00000000·
+        # 거래처 빈 행은 매칭 후보에서 뺀다(같은 복합키의 정상 행을 오소비하는 것도 방지).
+        dropped2 = [(r, why) for r in lst2 if (why := _shared._exclude_reason(r))]
+        if dropped2:
+            desc2 = ", ".join(
+                f"{(r.get('TRAN_NM') or '(거래처 없음)')[:10]} {r.get('TRAN_AMT', '?')}원({why})"
+                for r, why in dropped2[:5]
+            )
+            await emit_log(events, f"2차 저장 제외 {len(dropped2)}건 — {desc2}", "warn")
+            lst2 = [r for r in lst2 if _shared._exclude_reason(r) is None]
         # 2차 조회 리스트 전문 로깅 — 1차에서 적용된 행이 '처리여부' 전환 실패로 재출현하는
         # 이상 징후(실전 관찰: 불공 리스트 2건) 진단용. 승인번호·금액·부가세구분을 남긴다.
         summary2 = ", ".join(
@@ -179,9 +213,12 @@ def make_switch_evdn_node():
         unmatched: list[str] = []
         for p in pending:
             queue = by_key.get(p["key"]) or []
-            # 재조회에서 사라졌거나(큐 소진) 과세로 재분류된 행은 배제(안전) — 실패로 기록.
+            # 재조회에서 사라진(큐 소진) 행만 배제(실패 기록). ⚠ ERP VAT_TP=='과세' 로는 제외하지
+            # 않는다 — **매입세액 불공제**(복리후생비-업무·해외출장·유류·접대비류 또는 AI 판정, vat.classify_vat)
+            # 행은 ERP 상 VAT_TP 가 '과세'인데도 우리가 의도적으로 불공으로 분류한 것이라, 여기서
+            # VAT_TP='과세' 로 되제외하면 계정/AI 기반 불공이 통째로 누락된다(실측: 네이버파이낸셜㈜).
             hit = queue.pop(0) if queue else None
-            if hit is None or (hit.get("VAT_TP") or "").strip() == "과세":
+            if hit is None:
                 unmatched.append(f"{p['label']}행({p.get('merchant', '')})")
                 continue
             work.append(
@@ -226,6 +263,9 @@ def make_apply_pass2_node():
         await emit_step(events, "apply_pass2", "running")
         t0 = time.monotonic()
         if not work:
+            # switch_evdn 이 불공 재조회로 연 법인카드 팝업이 남아 있으면 닫는다(불공 0매칭). 안 닫으면
+            # save_final 의 F7 이 '카드팝업 열림(적용 단계 누락)'으로 잘못 막힌다. 이미 닫혔으면 no-op.
+            await steps.close_card_popup(page)
             await emit_step(events, "apply_pass2", "done", _shared._ms(t0))
             return {"pass2_filled": 0}
         rows2: list[dict] = state.get("rows2_list") or []
@@ -246,11 +286,12 @@ def make_apply_pass2_node():
             summary += f"\n\n⚠ 매칭 실패(수동 확인 필요): {state.get('pass2_unmatched_desc', '')}"
         if failures2:
             summary += "\n\n실패 상세:\n- " + "\n- ".join(failures2)
+        # 진행 현황 카드(cc-status2)를 최종 요약으로 대체 — 표·중복 카드 제거(2026-07-29).
         await emit_chat(
             events,
-            chat_id="cc-summary2",
+            chat_id="cc-status2",
             role="assistant",
-            content=summary + "\n\n" + _shared._status_table(rows_view, status2, notes2),
+            content=summary,
             streaming=False,
         )
         await emit_log(events, f"2차(불공) 처리 완료 — {filled2}건 반영(저장 전).", "ok")
@@ -261,6 +302,10 @@ def make_apply_pass2_node():
             )
             if out.get("error"):
                 return {"error": out["error"]}
+        else:
+            # 적용된 행이 없으면 _apply_doc(=팝업 닫기)가 안 도므로, 재조회로 열린 팝업을 직접 닫아
+            # save_final F7 이 '팝업 열림'으로 오도되지 않게 한다(불공 전건 매칭/적용 실패).
+            await steps.close_card_popup(page)
         await emit_step(events, "apply_pass2", "done", _shared._ms(t0))
         return {"pass2_filled": filled2, "pass2_applied_idx": applied2_idx, "pass2_failed": len(failures2)}
 

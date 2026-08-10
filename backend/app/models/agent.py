@@ -46,6 +46,11 @@ class Agent(Base):
     interaction: Mapped[str] = mapped_column(String(32), nullable=False)
     target_system: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     target_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    # ⚠ 목업 잔재 컬럼(초기 픽스처/데모 표시용): status·progress·elapsed_seconds·current_action 은
+    #   픽스처 값이 그대로 직렬화되는 데모 표시 필드이고, run_count·success_rate·avg_seconds·
+    #   last_run_at 은 응답에서 아예 쓰이지 않는다 — 실 통계는 agent_runs 실집계
+    #   (services.agents.compute_run_stats)가 단일 소스다(serialize_agent 가 집계 결과로 대체).
+    #   컬럼 drop 은 별도 마이그레이션으로 보류.
     # running | waiting_input | paused | completed | failed | idle
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

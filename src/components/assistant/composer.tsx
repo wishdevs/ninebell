@@ -22,6 +22,7 @@ export function Composer({ onSend, disabled }: ComposerProps) {
     <div className="border-border bg-surface-raised flex items-end gap-2 rounded-[var(--radius-md)] border p-2">
       <textarea
         value={text}
+        disabled={disabled}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {

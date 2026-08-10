@@ -59,7 +59,7 @@ class CardCollectState(BaseAgentState, total=False):
     pass2_filled: int
     pass2_applied_idx: list[int]
     pass2_failed: int
-    # 저장 실패 → 그리드 재선택 재시도(방식 1: 문서 리셋 후 재실행, 상한 MAX_SAVE_RETRIES).
+    # 저장 실패 → 채팅 핸드오프에서 사용자가 '다시 시도'를 고른 경우에만 그리드 재선택 재시도.
     retry_save: bool  # save_final 이 재시도 신호를 켠다(라우터가 menu_nav 로 되돌림)
     save_retries: int  # 누적 재시도 횟수(상한 초과 시 실패 종료)
     save_error_msg: str  # 직전 저장 실패 사유(재진입한 그리드에 표시)
@@ -124,6 +124,6 @@ def build_card_collect_graph():
         return "menu_nav" if state.get("retry_save") else END
 
     g.add_conditional_edges("save_final", _after_save, {"menu_nav": "menu_nav", END: END})
-    # 재시도 루프(최대 2회)는 체인(~15노드)을 3회까지 재실행 → 기본 recursion_limit(25) 초과.
-    # 3패스(~45) + 여유로 60 으로 올린다.
-    return g.compile().with_config({"recursion_limit": 60})
+    # 재시도는 사용자 결정(채팅 핸드오프)이라 고정 상한이 없다 — 체인(~15노드) 기준 약 13회
+    # 재실행까지 수용하도록 200. (그 이상은 타임아웃/사용자 종료로 자연 종결.)
+    return g.compile().with_config({"recursion_limit": 200})

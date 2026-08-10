@@ -1,0 +1,35 @@
+# API 서버(172.20.50.50) — FastAPI 백엔드(헤드리스 Chromium 포함).
+# 두 개의 env 파일을 쓴다:
+#   .env      → 이미지 태그(BACKEND_IMAGE). CI 가 배포 때 갱신(compose 변수 치환용).
+#   app.env   → 런타임 시크릿(DATABASE_URL·AUTH_SECRET·LOCAL_ADMIN_PASSWORD·GEMINI_API_KEY…). 서버에 1회 배치.
+# 컨테이너 시작 시 entrypoint 가 `alembic upgrade head` 후 uvicorn(단일 워커) 실행.
+services:
+  api:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE 미설정 — CI 가 .env 에 registry/backend:TAG 를 씀}
+    restart: unless-stopped
+    env_file: app.env
+    environment:
+      # ⚠ 컨테이너 Chromium 필수 인자(/dev/shm 제약·샌드박스 없음).
+      CHROMIUM_ARGS: "--disable-dev-shm-usage --no-sandbox"
+      # 온프렘 시스템관리자(super_admin) allowlist — 실제 ERP 계정. 로그인 시 승격(auth.py 재평가).
+      # ⚠ AWS(ECS task def)는 별도라 무관 — 온프렘 한정. 콤마로 여러 계정.
+      SUPER_ADMIN_OMNISOL_IDS: "이트라이브2"
+    shm_size: "1gb"
+    # ⚠ 로그 회전 — Docker 기본 json-file 은 상한이 없어 `/var/lib/docker/containers/...`
+    #   에 무제한으로 쌓인다. 앱이 모든 HTTP 요청 + LLM 요청/응답 전문을 stdout 으로 내보내므로
+    #   (card-collect 400행 런 하나에 수 MB) 상한 없이 두면 디스크가 찬다. 최대 약 250MB.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    ports:
+      # 프록시(front 52)에서만 접근. 내부 인터페이스 바인딩 + 방화벽으로 52만 허용. 공개 금지.
+      - "172.20.50.50:8010:8010"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/openapi.json').getcode()==200 else 1)\""
+      interval: 15s
+      timeout: 5s
+      retries: 5

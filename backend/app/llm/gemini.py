@@ -97,7 +97,7 @@ class GeminiProvider:
                                         "args": fc.get("args") or {},
                                     },
                                 )
-                        if cand.get("finishReason"):
+                        if cand.get("finishReason") and not done_sent:
                             done_sent = True
                             yield ChatChunk(
                                 delta="", done=True, finish_reason=cand["finishReason"]

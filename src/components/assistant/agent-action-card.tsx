@@ -12,6 +12,16 @@ const CHIP =
   'inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-2.5 py-1 text-[11px] font-medium transition-colors';
 
 /**
+ * 액션의 id 를 마운트 시 스냅샷에서 해석할 수 있는지. 런 스냅샷은 최근 8건만 담으므로 모델이
+ * 더 오래된 런을 가리키면 false 가 될 수 있다. 말풍선 캡션과 카드 렌더를 일치시키는 데 쓴다.
+ */
+export function isActionResolvable(action: AssistantAction, snapshot: AssistantSnapshot): boolean {
+  return action.kind === 'run'
+    ? snapshot.runs.some((r) => r.id === action.runId)
+    : snapshot.agents.some((a) => a.id === action.agentId);
+}
+
+/**
  * 모델이 결정한 액션을 네비게이션 카드로 렌더한다. 실행 트리거는 없고 이동만 한다
  * (실행은 에이전트 상세의 라이브 UI에서). 스냅샷에서 id 를 못 찾으면 렌더하지 않는다.
  */

@@ -5,23 +5,21 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, UuidPkMixin
 
 if TYPE_CHECKING:
     from app.models.agent import Agent
 
 
-class AgentLog(Base):
+class AgentLog(UuidPkMixin, Base):
     __tablename__ = "agent_logs"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("agents.id", ondelete="CASCADE"),

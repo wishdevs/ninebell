@@ -92,9 +92,39 @@ def flatten_to_hq_team(items: list[dict]) -> list[dict]:
     return rows
 
 
-async def fetch_org_tree(userid: str, password: str, browser_factory) -> dict:
-    """헤드리스로 조직도 스크레이프 → {raw:[...], flat:[...]} (raw=전 노드, flat=본부▸팀 행).
+def build_full_tree(items: list[dict]) -> list[dict]:
+    """평탄 노드 목록(전위순회, depth) → 본부 이하 **전체 깊이** 트리를 라벨 경로로 반환.
 
+    ERP 조직을 깊이 그대로 미러링한다(경영본부>재무자원관리그룹>자재팀 등 중간 그룹 보존).
+    회사(company)·사업장(business) 최상위는 제외하고 본부(=business+1) 이하만 담는다.
+    반환 [{path:[상위라벨...,self], label, count, is_leaf}] 를 전위순서(부모 먼저)로.
+    is_leaf = 자식 없음(=말단 팀 → 비용구분 대상). 노드 식별은 정규화 라벨 경로(안정 ERP 코드 없음).
+    """
+    biz_depth = next((n["depth"] for n in items if n["type"] == "business"), 2)
+    hq_depth = biz_depth + 1
+    depts = [n for n in items if n["type"] == "dept" and n["label"]]
+
+    nodes: list[dict] = []
+    stack: list[tuple[int, str]] = []  # 현재 조상 경로 [(depth, label)]
+    for i, n in enumerate(depts):
+        d = n["depth"]
+        if d < hq_depth:
+            continue  # 본부보다 위 — 방어(정상 트리엔 없음)
+        while stack and stack[-1][0] >= d:  # 조상 스택을 현재 depth 미만까지 되감기
+            stack.pop()
+        path = [lb for (_, lb) in stack] + [n["label"]]
+        is_leaf = not (i + 1 < len(depts) and depts[i + 1]["depth"] > d)
+        nodes.append(
+            {"path": path, "label": n["label"], "count": n.get("count"), "is_leaf": is_leaf}
+        )
+        stack.append((d, n["label"]))
+    return nodes
+
+
+async def fetch_org_tree(userid: str, password: str, browser_factory) -> dict:
+    """헤드리스로 조직도 스크레이프 → {raw:[...], flat:[...], nodes:[...]}.
+
+    raw=전 노드, flat=본부▸팀 2단계(레거시 카탈로그용), nodes=전체 깊이 트리(org_units 미러링용).
     조직도는 랜딩에 있어 로그인만 하면 된다(사용자유형 전환·메뉴이동 불필요). 읽기 전용.
     """
     browser = await browser_factory()
@@ -105,6 +135,6 @@ async def fetch_org_tree(userid: str, password: str, browser_factory) -> dict:
         await _open_org_chart(page)
         full = await page.evaluate(FULL_TREE_JS)
         items = (full or {}).get("items", [])
-        return {"raw": items, "flat": flatten_to_hq_team(items)}
+        return {"raw": items, "flat": flatten_to_hq_team(items), "nodes": build_full_tree(items)}
     finally:
         await browser.close()

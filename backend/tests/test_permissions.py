@@ -23,7 +23,7 @@ async def test_agents_read_allowed_for_user_role(client, make_user, auth_as):
     auth_as(uid)
     resp = await client.get("/agents")
     assert resp.status_code == 200
-    # 노출(hidden 아님) 픽스처 개수와 동기 — 현재 카드·국내출장 2개(해외출장·경조금·학자금은 숨김).
+    # 노출(hidden 아님) 픽스처 개수와 동기 — 현재 전 에이전트 노출(숨김 대상 0, 학자금 2026-07-15 노출).
     from app.services.agent_fixtures import AGENT_FIXTURES
 
     visible = [f for f in AGENT_FIXTURES if not f.get("hidden")]

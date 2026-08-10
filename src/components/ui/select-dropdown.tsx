@@ -1,7 +1,7 @@
 'use client';
 
 import * as SelectPrimitive from '@radix-ui/react-select';
-import { RiArrowDownSLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiArrowUpSLine, RiCheckLine } from '@remixicon/react';
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -45,6 +45,41 @@ export const SelectTrigger = forwardRef<
 ));
 SelectTrigger.displayName = 'SelectTrigger';
 
+/** 스크롤 버튼(리스트가 뷰포트를 넘칠 때만 노출) — hover/키보드로 목록을 스크롤한다. */
+const SelectScrollUpButton = forwardRef<
+  ElementRef<typeof SelectPrimitive.ScrollUpButton>,
+  ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollUpButton>
+>(({ className, ...props }, ref) => (
+  <SelectPrimitive.ScrollUpButton
+    ref={ref}
+    className={cn(
+      'text-foreground-tertiary flex cursor-default items-center justify-center py-1',
+      className,
+    )}
+    {...props}
+  >
+    <RiArrowUpSLine className="h-4 w-4" aria-hidden />
+  </SelectPrimitive.ScrollUpButton>
+));
+SelectScrollUpButton.displayName = 'SelectScrollUpButton';
+
+const SelectScrollDownButton = forwardRef<
+  ElementRef<typeof SelectPrimitive.ScrollDownButton>,
+  ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollDownButton>
+>(({ className, ...props }, ref) => (
+  <SelectPrimitive.ScrollDownButton
+    ref={ref}
+    className={cn(
+      'text-foreground-tertiary flex cursor-default items-center justify-center py-1',
+      className,
+    )}
+    {...props}
+  >
+    <RiArrowDownSLine className="h-4 w-4" aria-hidden />
+  </SelectPrimitive.ScrollDownButton>
+));
+SelectScrollDownButton.displayName = 'SelectScrollDownButton';
+
 export const SelectContent = forwardRef<
   ElementRef<typeof SelectPrimitive.Content>,
   ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
@@ -55,7 +90,9 @@ export const SelectContent = forwardRef<
       position={position}
       sideOffset={sideOffset}
       className={cn(
-        'border-border bg-surface text-foreground z-50 min-w-[8rem] overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-card-raised)]',
+        // z-[110]: Dialog/Drawer(z-100) 위로. 뷰포트 초과 시 스크롤(available-height 캡).
+        'border-border bg-surface text-foreground z-[110] overflow-hidden rounded-[var(--radius-md)] border p-1 shadow-[var(--shadow-elevated)]',
+        'max-h-[min(22rem,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
@@ -64,7 +101,11 @@ export const SelectContent = forwardRef<
       )}
       {...props}
     >
-      <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
+      <SelectScrollUpButton />
+      <SelectPrimitive.Viewport className="flex flex-col gap-0.5">
+        {children}
+      </SelectPrimitive.Viewport>
+      <SelectScrollDownButton />
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ));
@@ -80,17 +121,22 @@ export const SelectItem = forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'text-foreground relative flex w-full cursor-pointer items-center rounded-[var(--radius-sm)] px-2 py-1 text-[length:var(--text-body-sm)] tabular-nums select-none',
-      'focus:bg-muted focus:outline-none',
+      'text-foreground-secondary relative flex w-full cursor-pointer items-center rounded-[var(--radius-sm)] py-1.5 pr-2.5 pl-7 text-[length:var(--text-body-sm)] tabular-nums transition-colors select-none',
+      'focus:bg-muted focus:text-foreground focus:outline-none',
       'data-[state=checked]:bg-accent/10 data-[state=checked]:text-accent data-[state=checked]:font-medium',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
     )}
     {...props}
   >
+    <span className="absolute left-1.5 flex h-3.5 w-3.5 items-center justify-center">
+      <SelectPrimitive.ItemIndicator>
+        <RiCheckLine className="text-accent h-3.5 w-3.5" aria-hidden />
+      </SelectPrimitive.ItemIndicator>
+    </span>
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     {hint != null ? (
-      <span className="text-foreground-tertiary ml-2 text-[length:var(--text-caption)] tabular-nums">
+      <span className="text-foreground-tertiary ml-auto pl-3 text-[length:var(--text-caption)] tabular-nums">
         {hint}
       </span>
     ) : null}

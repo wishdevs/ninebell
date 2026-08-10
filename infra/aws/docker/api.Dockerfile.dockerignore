@@ -1,0 +1,23 @@
+# api.Dockerfile 전용 무시파일 — BuildKit 은 `-f <path>` 빌드 시 `<path>.dockerignore` 가 있으면
+# 루트 .dockerignore 대신 이걸 쓴다. 루트 .dockerignore 는 프론트(루트 컨텍스트) 최적화로 backend/ 를
+# 제외하는데, 이 api 이미지는 루트 컨텍스트에서 `COPY backend/ .` 를 하므로 backend/ 가 있어야 한다.
+# → 루트 목록과 동일하되 `backend/` 제외만 뺀다(무거운 디렉토리·산출물은 계속 제외).
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.next
+.git
+.github
+.idea
+.recycles
+**/.terraform
+*.tfstate
+*.tfstate.*
+infra/aws/.terraform
+backend/e2e/artifacts
+*.pem
+.DS_Store
+**/.DS_Store
+.claude
+deploy/
