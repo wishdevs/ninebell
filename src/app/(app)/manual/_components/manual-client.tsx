@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Agent } from '@/lib/data/agents';
+import { GENERAL_MANUAL_SECTIONS, findGeneralDoc } from '@/lib/data/manual';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 
 /** 왼쪽 분류의 한 섹션 — 지금은 에이전트 그룹에서 파생하지만, 항목이 에이전트가 아니어도 된다. */
@@ -17,8 +18,9 @@ interface ManualSection {
 }
 
 /**
- * 에이전트 목록을 그룹별 문서 섹션으로 변환한다(등장 순서 유지).
- * 그룹 소속 섹션이 먼저, 무그룹은 '기타' 섹션으로 마지막에 둔다.
+ * 문서 섹션 구성 — 정적 등록부(비-에이전트 문서, lib/data/manual.ts)가 먼저,
+ * 그다음 에이전트 목록을 그룹별 섹션으로 변환해 잇는다(등장 순서 유지).
+ * 에이전트 무그룹은 '기타' 섹션으로 마지막에 둔다.
  */
 function manualSections(agents: readonly Agent[]): ManualSection[] {
   const byLabel = new Map<string, ManualSection>();
@@ -36,15 +38,19 @@ function manualSections(agents: readonly Agent[]): ManualSection[] {
       byLabel.set(agent.group.id, { label: agent.group.name, items: [item] });
     }
   }
-  const sections = [...byLabel.values()];
+  const sections: ManualSection[] = [
+    ...GENERAL_MANUAL_SECTIONS.map((s) => ({ label: s.label, items: [...s.items] })),
+    ...byLabel.values(),
+  ];
   if (standalone.items.length > 0) sections.push(standalone);
   return sections;
 }
 
 /**
- * 메뉴얼 — 왼쪽 분류(그룹별 문서 목록) + 오른쪽 본문.
+ * 메뉴얼 — 왼쪽 분류(섹션별 문서 목록) + 오른쪽 본문.
  *
- * 문서 목록은 `GET /agents`에서 파생한다(에이전트 목록과 동일 소스·동일 노출 규칙).
+ * 문서 목록은 두 소스의 합이다: (1) 정적 등록부(lib/data/manual.ts — 비-에이전트 문서,
+ * 2026-08-10 확장), (2) `GET /agents` 파생(에이전트 목록과 동일 소스·동일 노출 규칙).
  * 각 문서는 `/manual/{id}` 고유 주소를 가지며, 본문은 아직 공백(준비 중)이다.
  * `docId`가 없으면(/manual) 안내 화면을 보여준다.
  */
@@ -78,45 +84,69 @@ export function ManualClient({ docId }: { docId?: string }) {
       ) : (
         (() => {
           const sections = manualSections(data ?? []);
-          const selected = docId ? (data ?? []).find((agent) => agent.id === docId) : undefined;
+          // 선택 해석: 에이전트 문서 → 정적(비-에이전트) 문서 순 — 같은 주소 공간(/manual/{id}).
+          const selectedAgent = docId
+            ? (data ?? []).find((agent) => agent.id === docId)
+            : undefined;
+          const selectedGeneral = !selectedAgent && docId ? findGeneralDoc(docId) : undefined;
+          const selected = selectedAgent
+            ? { sectionLabel: selectedAgent.group?.name, title: selectedAgent.name }
+            : selectedGeneral
+              ? { sectionLabel: selectedGeneral.sectionLabel, title: selectedGeneral.doc.name }
+              : undefined;
           return (
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
-              {/* 왼쪽 분류 — 그룹 라벨 + 문서 링크. 데스크톱에선 스크롤을 따라온다. */}
-              <nav aria-label="메뉴얼 문서 목록" className="flex flex-col gap-4 lg:sticky lg:top-6">
-                {sections.map((section) => (
-                  <div key={section.label} className="flex flex-col gap-0.5">
-                    <p className="text-foreground-tertiary mb-1 px-3 text-[10px] font-semibold tracking-widest uppercase">
-                      {section.label}
-                    </p>
-                    {section.items.map((item) => (
-                      <Link
-                        key={item.id}
-                        href={`/manual/${item.id}`}
-                        className={cn(
-                          'rounded-[var(--radius-sm)] px-3 py-2 text-[length:var(--text-body-sm)] transition-colors',
-                          item.id === docId
-                            ? 'bg-surface text-foreground ring-border/50 font-semibold shadow-sm ring-1'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
-                        )}
-                      >
-                        {item.name}
-                      </Link>
-                    ))}
-                  </div>
-                ))}
+            // "한 권의 문서" 레이아웃(2026-08-10) — 목차와 본문을 **한 카드**에 담아 앱
+            // 사이드바와 구조적으로 격리한다(종전: 목차가 앱 네비와 같은 문법으로 떠 있어
+            // 사이드바가 두 개로 보였다). 목차 열은 옅은 배경 + 세로 구분선으로 톤을 나눈다.
+            <div className="border-border bg-surface overflow-hidden rounded-[var(--radius-lg)] border lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
+              <nav
+                aria-label="메뉴얼 목차"
+                className="border-border/60 bg-muted/30 border-b p-4 lg:border-r lg:border-b-0"
+              >
+                <div className="flex flex-col gap-5 lg:sticky lg:top-6">
+                  <p className="text-foreground-tertiary px-2 text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
+                    목차
+                  </p>
+                  {sections.map((section) => (
+                    <div key={section.label} className="flex flex-col gap-1">
+                      {/* 카테고리 라벨 — 항목보다 확실히 강하게(본문색 볼드). */}
+                      <p className="text-foreground px-2 text-[13px] font-bold">{section.label}</p>
+                      {section.items.map((item) => {
+                        const active = item.id === docId;
+                        return (
+                          <Link
+                            key={item.id}
+                            href={`/manual/${item.id}`}
+                            aria-current={active ? 'page' : undefined}
+                            className={cn(
+                              // 문서 트리 가이드라인(border-l) — 활성은 액센트 바 + 액센트 텍스트
+                              // (앱 사이드바의 '흰 카드+링' 활성과 다른 문법으로 구별).
+                              'border-l-2 py-1.5 pr-2 pl-3 text-[length:var(--text-body-sm)] transition-colors',
+                              active
+                                ? 'border-accent text-accent font-semibold'
+                                : 'border-border/60 text-muted-foreground hover:border-border-strong hover:text-foreground',
+                            )}
+                          >
+                            {item.name}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               </nav>
 
               {/* 본문 — 선택된 문서 헤딩 + 공백(준비 중) 본문. */}
-              <section className="border-border bg-surface min-h-[420px] rounded-[var(--radius-lg)] border p-6">
+              <section className="min-h-[420px] p-6">
                 {selected ? (
                   <div className="flex flex-col gap-2">
-                    {selected.group ? (
+                    {selected.sectionLabel ? (
                       <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
-                        {selected.group.name}
+                        {selected.sectionLabel}
                       </p>
                     ) : null}
                     <h2 className="text-foreground text-[length:var(--text-heading)] leading-tight font-semibold tracking-tight">
-                      {selected.name}
+                      {selected.title}
                     </h2>
                     <p className="text-muted-foreground mt-4 text-sm leading-relaxed">
                       문서 준비 중입니다.
