@@ -78,9 +78,7 @@ export function ManualClient({ docId }: { docId?: string }) {
       ) : (
         (() => {
           const sections = manualSections(data ?? []);
-          const selected = docId
-            ? (data ?? []).find((agent) => agent.id === docId)
-            : undefined;
+          const selected = docId ? (data ?? []).find((agent) => agent.id === docId) : undefined;
           return (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
               {/* 왼쪽 분류 — 그룹 라벨 + 문서 링크. 데스크톱에선 스크롤을 따라온다. */}
