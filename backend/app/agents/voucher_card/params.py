@@ -62,6 +62,8 @@ def parse_voucher_card_params(params: dict | None) -> VoucherCardParams:
     src: Any = raw.get("voucher") if isinstance(raw.get("voucher"), dict) else raw
     keys = ("max_rows", "accounting_ym", "period_from", "period_to")
     fields = {k: src[k] for k in keys if isinstance(src, dict) and k in src}
+    # debug 는 runs.py 가 **최상위** 에 정규화해 넣는 권위 키 — 중첩(voucher)이 아니라 raw 에서 읽는다.
+    fields["debug"] = raw.get("debug") is True
     try:
         return VoucherCardParams.model_validate(fields)
     except ValidationError as exc:  # pydantic ValidationError 는 ValueError 서브클래스.

@@ -5,8 +5,9 @@
 스냅샷)는 ``nbkit.omnisol.js_lib`` 를, CSS 셀렉터(BTN_LOOKUP 등)는 ``nbkit.omnisol.selectors``
 를 재사용한다(리스킨 시 한 곳만 고침). 값/좌표는 e2e/voucher_receivable_probe.py 3회 그린 실측.
 
-⚠ CHILD_TOP_BUTTONS_JS 는 **읽기 전용**(좌표·텍스트 반환)이다 — 상신/보관 버튼을 클릭하는
-   JS 는 이 파일에 없다(절대 안전: 결제창에서 상신/보관 클릭 금지).
+⚠ 이 파일의 JS 는 전부 **읽기 전용**(좌표·텍스트 반환)이다 — 클릭은 파이썬 쪽에서만 한다.
+   상신 클릭은 steps.click_child_submit(allow_submit 게이트 뒤, 2026-08-07 정책 전환)이
+   CHILD_TOP_BUTTONS_JS 의 좌표를 받아 수행하며, 보관은 여전히 절대 클릭 금지다.
 """
 
 from __future__ import annotations
@@ -329,7 +330,8 @@ LOADING_OVERLAY_VISIBLE_JS = r"""() => {
 }"""
 
 # 결제창(전자결재 팝업, 별도 Page) 상단 버튼(미리보기/보관/상신) 텍스트·좌표 — 리프노드 탐색.
-# ⚠ 읽기 전용: 렌더완료 판정(버튼 텍스트 표출)에만 쓴다. 상신/보관은 절대 클릭하지 않는다.
+# ⚠ 이 JS 자체는 읽기 전용(클릭 없음). 렌더완료 판정 + '상신' 좌표 소스(steps.click_child_submit,
+#   allow_submit 게이트 뒤에서만 클릭 — 2026-08-07 정책 전환). '보관'은 여전히 절대 클릭 금지.
 CHILD_TOP_BUTTONS_JS = r"""() => {
   const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
   const targets = ['상신', '미리보기', '보관'];

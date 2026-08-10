@@ -1,15 +1,17 @@
-"""결재 순회 노드(loop_approvals) — 대상 전표를 한 건씩 결제창까지 열고 '가상 상신' 후 닫는다.
+"""결재 순회 노드(loop_approvals) — 대상 전표를 한 건씩 결제창까지 열고 상신(게이트) 후 닫는다.
 
 한 행씩: 키(DOCU_NO) 읽기 → checkRow → [D7: 체크행수=1 검증] → 결재 버튼 → 결제창(별도 Page)
-→ 렌더 대기 → [D7: 결제창 전표번호=대상 DOCU_NO 대조] → **가상 상신 로그** → 창 닫기.
-처리 건수는 기본 **전체**(max_rows=None → rowcount 전 건, 사용자 결정 2026-07-21); max_rows 를
-명시하면 그 수만큼. 매 건 진행 상황(`[i/N]`·누적 실행 건수)을 로그로 노출한다.
+→ 렌더 대기 → [D7: 결제창 전표번호=대상 DOCU_NO 대조] → **상신(allow_submit) 또는 가상 상신
+로그** → 창 닫기. 처리 건수는 기본 **전체**(max_rows=None → rowcount 전 건, 사용자 결정
+2026-07-21); max_rows 를 명시하면 그 수만큼. 매 건 진행 상황(`[i/N]`·누적)을 로그로 노출한다.
 
-⚠⚠ 절대 안전 ⚠⚠
-  - 결제창(EAP)에서 **상신·보관 버튼을 절대 클릭하지 않는다**. 이 노드가 결제창에 하는 일은
-    (1) 렌더 완료 판정을 위한 상단 버튼 텍스트 **읽기**, (2) 전표번호 **읽기**(D7 대조),
-    (3) `close_child()` 로 **닫기** 뿐이다.
-  - 실제 상신은 사용자가 최종 단계에서 직접 일괄 처리한다(handoff_note).
+⚠⚠ 안전 규율(정책 전환 2026-08-07) ⚠⚠
+  - 상신은 `allow_submit`(기본 False) 게이트 뒤에서만 실클릭한다(steps.click_child_submit).
+    voucher 3종 그래프 빌더가 게이트를 연다 — 상신은 이제 가역(EAP 취소 e2e 로 회수 가능).
+  - 게이트가 닫힌 기본 경로는 종전과 동일: 결제창에서 (1) 상단 버튼 텍스트 **읽기**,
+    (2) 전표번호 **읽기**(D7), (3) **닫기** 뿐 — 가상 상신 로그만 남긴다.
+  - **보관 버튼은 게이트와 무관하게 절대 클릭하지 않는다.**
+  - 상신 클릭 실패(버튼 미발견·창 미닫힘)는 하드 실패 — 조용한 미상신 금지.
 
 ⚠ D7(배치 순회 정합성, 2026-07-21 배치 라이브 스모크로 도입): 행/팝업 어긋남(결제창이 대상
   행과 다른 문서를 열었을 가능성)이 배치 순회의 유일한 미검증 리스크였다 — 두 가지 읽기전용
@@ -38,10 +40,13 @@ def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
-def make_loop_approvals_node(on_popup=None):
-    """조회된 전표를 max_rows 만큼 순회하며 결제창을 열고 '가상 상신' 로그만 남기고 닫는다.
+def make_loop_approvals_node(on_popup=None, *, allow_submit: bool = False):
+    """조회된 전표를 max_rows 만큼 순회하며 결제창을 열고 상신(게이트) 후 닫는다.
 
-    on_popup(child, gwdocu_no, events) (기본 None): 결제창(EAP) 안에서 **가상 상신 로그 전에**
+    allow_submit(기본 False): 결제창 '상신' 실클릭 게이트. False=종전 그대로 가상 상신 로그만.
+    True(voucher 3종 빌더)=steps.click_child_submit 로 상신 실행, 실패 시 런 하드 중단.
+
+    on_popup(child, gwdocu_no, events) (기본 None): 결제창(EAP) 안에서 **상신/가상 상신 전에**
     추가 조작이 필요한 에이전트(미지급금 법인카드=참조문서 선택)를 위한 optional 훅.
       - None(외상매출금/매입금): 기존과 100% 동일(훅 미호출 — read/close 만).
       - 콜러블(카드): 렌더+D7 통과 후, 이 행의 결의서번호(ABDOCU_NO)로 state['payment_map']에서
@@ -57,6 +62,14 @@ def make_loop_approvals_node(on_popup=None):
         page = state["page"]
         await emit_step(events, "loop_approvals", "running")
         t0 = time.monotonic()
+        # 디버그 모드(로그인 체크박스 → params.debug → validate 의 debug_mode, 2026-08-10):
+        # 상신 게이트를 **런타임에** 닫는다 — 빌더 게이트(allow_submit)와 AND. 닫히면 종전
+        # 가상 상신 경로 그대로(행이 남으므로 재조회·재매핑도 없음).
+        submit_on = allow_submit and not bool(state.get("debug_mode"))
+        if allow_submit and not submit_on:
+            await emit_log(
+                events, "디버그 모드 — 상신 버튼을 클릭하지 않습니다(가상 상신, 목록 유지).", "info"
+            )
 
         rowcount = int(state.get("master_rowcount", 0))
         # max_rows None(기본) = 전체 순회. 양수면 그 수만큼(부분/테스트).
@@ -140,13 +153,27 @@ def make_loop_approvals_node(on_popup=None):
                 await emit_log(events, f"결재 대상 제외 {skipped}건 — {' · '.join(parts)}.", "info")
         else:
             scope = "전체" if max_rows is None or int(max_rows) >= rowcount else f"{process_count}/{rowcount}"
+            step_word = "상신" if submit_on else "가상 상신"
             await emit_log(
-                events, f"대상 {rowcount}건 중 {scope} 순회 시작(각 건 결제창 열기→가상 상신→닫기).", "info"
+                events, f"대상 {rowcount}건 중 {scope} 순회 시작(각 건 결제창 열기→{step_word}→닫기).", "info"
             )
 
         processed_docu_nos: list[str] = []
         # 참조문서 결과 집계(on_popup 훅이 str 을 반환할 때만) — (전표, '첨부'|미첨부 사유).
         refdoc_results: list[tuple[str, str]] = []
+        # ── 상신 반영 인덱스 재매핑(allow_submit 전용, 2026-08-07 사용자 리포트) ──────
+        # 실상신되면 그 행은 조회 필터(미결·전자결재저장)에서 **사라진다** — 초기 그리드로
+        # 선별한 뒤 대상들의 인덱스가 앞으로 당겨진다(가상 상신 시절엔 행이 남아 무문제).
+        # 규율: 상신 성공마다 재조회(F2) 후, 다음 대상 인덱스를 "이미 상신된 앞 행 수"만큼
+        # 차감해 재매핑하고, 키를 아는 대상(카드)은 체크 직전 행 키 대조로 확정 검증한다.
+        submitted_original: list[int] = []  # 상신 완료된 대상들의 **원** 인덱스 누적.
+        remaining_expected = rowcount  # 재조회 후 기대 잔여 행수(soft 대조용).
+
+        async def _row_key(cur: int) -> str | None:
+            try:
+                return await steps.read_row_key(page, cur)
+            except Exception:  # noqa: BLE001 — 읽기 실패는 모호(soft) — 키 대조를 생략한다.
+                return None
         if process_count <= 0:
             await emit_log(events, "결재를 진행할 대상이 없습니다 — 정상 완료.", "info")
             await emit_step(events, "loop_approvals", "done", _ms(t0))
@@ -169,8 +196,24 @@ def make_loop_approvals_node(on_popup=None):
             return {"error": msg, "processed": len(processed_docu_nos), "processed_docu_nos": processed_docu_nos}
 
         for seq, (idx, key, gwdocu_no) in enumerate(targets, start=1):
+            orig_idx = idx
+            if submit_on and submitted_original:
+                # 앞 상신으로 사라진 행 수만큼 현재 위치를 차감(원 인덱스 → 현재 인덱스).
+                idx = orig_idx - sum(1 for s in submitted_original if s < orig_idx)
             if key is None and on_popup is None:
-                key = await steps.read_row_key(page, idx)  # lazy — 위 사전 스캔 제거 참조.
+                # lazy — 재매핑된 현재 위치에서 읽는다. ⚠ 이 경로(건별 매출/매입)는 현재
+                # 프로덕션 그래프 미사용(매출/매입=배치, 카드=on_popup) — 다시 쓰게 되면
+                # 재정렬/신규 행 유입 대비 키 대조를 추가할 것(키를 모르는 채 상신하는 유일 경로).
+                key = await steps.read_row_key(page, idx)
+            elif submit_on and submitted_original and key:
+                # 키를 아는 대상(카드) — 재매핑 위치의 행 키 대조로 확정 검증(불일치=하드).
+                got = await _row_key(idx)
+                if got and str(got).strip() != str(key).strip():
+                    return await fail(
+                        idx,
+                        f"상신 반영 후 행 재확인 실패 — 예상 {key} / 실제 {got}"
+                        "(확정 불일치, 재조회 후 위치 어긋남)",
+                    )
             key_label = key or "(번호미상)"
             # 진행 상황 노출 — 처리 대상 기준 몇 번째인지(제외분은 분모에 넣지 않는다).
             await emit_log(
@@ -236,6 +279,7 @@ def make_loop_approvals_node(on_popup=None):
 
             mismatch: str | None = None
             refdoc_fatal: str | None = None  # 참조문서 훅 격상(2026-08-07) — 사유 담기면 런 중단.
+            submit_fatal: str | None = None  # 상신 실클릭 실패(게이트 개방 시) — 사유 담기면 런 중단.
             try:
                 # 렌더 완료 판정(상단 버튼 텍스트 표출까지 조건 폴링) — 읽기 전용.
                 top = await steps.poll_child_ready(child)
@@ -293,21 +337,31 @@ def make_loop_approvals_node(on_popup=None):
                         elif isinstance(outcome, str):
                             refdoc_results.append((key_label, outcome))
                     if refdoc_fatal is None:
-                        # ⚠ 상신(~922,30)·보관(~860,30) 절대 클릭 금지 — 가상 상신 로그만 남긴다.
-                        processed_docu_nos.append(key_label)
-                        await emit_log(
-                            events,
-                            f"[{seq}/{process_count}] 가상 상신 완료 — 전표 {key_label} "
-                            f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
-                            "ok",
-                        )
-                        # 워크플로우 노드 진행 카운트 갱신(누적 완료/전체).
-                        await emit_step(
-                            events,
-                            "loop_approvals",
-                            "running",
-                            progress={"done": len(processed_docu_nos), "total": process_count},
-                        )
+                        if submit_on:
+                            # 게이트 개방(2026-08-07) — 상신 실클릭. 실패는 하드 중단(아래).
+                            sub = await steps.click_child_submit(child)
+                            if not sub.get("ok"):
+                                submit_fatal = (
+                                    f"상신 실패 — 전표 {key_label}: "
+                                    f"{sub.get('reason') or '사유 미상'}"
+                                )
+                        if submit_fatal is None:
+                            # ⚠ 보관(~860,30)은 게이트와 무관하게 절대 클릭 금지.
+                            processed_docu_nos.append(key_label)
+                            done_word = "상신 완료" if submit_on else "가상 상신 완료"
+                            await emit_log(
+                                events,
+                                f"[{seq}/{process_count}] {done_word} — 전표 {key_label} "
+                                f"(누적 {len(processed_docu_nos)}/{process_count}건 실행).",
+                                "ok",
+                            )
+                            # 워크플로우 노드 진행 카운트 갱신(누적 완료/전체).
+                            await emit_step(
+                                events,
+                                "loop_approvals",
+                                "running",
+                                progress={"done": len(processed_docu_nos), "total": process_count},
+                            )
             finally:
                 # 성공/실패 무관하게 결제창은 반드시 닫는다(상신/보관 미클릭 = 비영속).
                 await steps.close_child(child)
@@ -324,6 +378,36 @@ def make_loop_approvals_node(on_popup=None):
             if refdoc_fatal is not None:
                 # 참조문서 격상(2026-08-07) — 대상 특정 후 첨부 실패는 조용한 진행 금지.
                 return await fail(idx, refdoc_fatal)
+            if submit_fatal is not None:
+                # 상신 실패(게이트 개방) — 미상신이 성공으로 둔갑하지 않게 즉시 중단.
+                return await fail(idx, submit_fatal)
+
+            if submit_on:
+                # 이 건 상신 성공 — 원 인덱스를 누적하고, 다음 대상이 남았으면 재조회(F2)로
+                # 그리드를 확정 상태로 만든다(상신된 행은 조회 필터에서 사라진다).
+                submitted_original.append(orig_idx)
+                remaining_expected -= 1
+                if seq < process_count:
+                    # expected: 기대 잔여 건수 일치 시 즉시 확정 — 무변화 HEAVY 소진(~7s)으로
+                    # 매 건 지연되는 것을 막는다(사용자 리포트 2026-08-07: 결제 후 ~10s 딜레이).
+                    rq = await steps.run_query(page, expected=remaining_expected)
+                    if not (isinstance(rq, dict) and rq.get("ok")):
+                        return await fail(idx, f"상신 반영 재조회(F2) 실패: {rq}")
+                    # 리로드 잔여 오버레이 방어 — 다음 건의 checkRow 가 씻겨나가지 않게(라이브
+                    # 회귀 2026-08-07: 리로드 완료 전 체크 → '행 미선택' 결재 시도).
+                    await steps.wait_loading_overlay_gone(page)
+                    got_n = rq.get("rowcount")
+                    if got_n != remaining_expected:
+                        await emit_log(
+                            events,
+                            f"상신 반영 재조회 — 잔여 {got_n}건(기대 {remaining_expected}건, soft). "
+                            "다음 대상은 인덱스 재매핑·키 대조로 확정합니다.",
+                            "warn",
+                        )
+                    else:
+                        await emit_log(
+                            events, f"상신 반영 재조회 ✅ — 잔여 {got_n}건(기대 일치).", "info"
+                        )
 
             await emit_shot(events.put, page)
 
@@ -341,20 +425,25 @@ def make_loop_approvals_node(on_popup=None):
                 else ""
             )
             refdoc_txt = f" 참조문서 첨부 {ok_n}건{miss_txt}."
+        mode_txt = "상신(전자결재 상신 완료)" if submit_on else "가상 상신(실제 상신 없음)"
         await emit_log(
             events,
-            f"결재창 확인 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 가상 상신"
-            f"(실제 상신 없음). 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}",
+            f"결재창 확인 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 "
+            f"{mode_txt}. 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}",
             "ok",
         )
         await emit_step(events, "loop_approvals", "done", _ms(t0))
+        tail = (
+            "취소가 필요하면 전자결재(상신문서)에서 결재취소로 회수할 수 있습니다."
+            if submit_on
+            else "실제 상신은 옴니솔에서 직접 진행하세요."
+        )
         return {
             "processed": len(processed_docu_nos),
             "processed_docu_nos": processed_docu_nos,
             "result": (
-                f"처리 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 결제창 확인"
-                f"(가상 상신, 실제 상신 없음). 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}. "
-                "실제 상신은 옴니솔에서 직접 진행하세요."
+                f"처리 완료 — 결재 대상 {process_count}건 중 {len(processed_docu_nos)}건 "
+                f"{mode_txt}. 조회 {rowcount}건 {skip_txt}.{refdoc_txt} 전표: {summary}. {tail}"
             ),
         }
 

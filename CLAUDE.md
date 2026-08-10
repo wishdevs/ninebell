@@ -13,7 +13,7 @@
 
 ## 안전 경계
 - 실제 전표 저장(F7/BTN_SAVE)은 원칙적으로 미실행 — 폼 채움·적용까지만. 예외는 사용자가 저장 자동화를 명시 승인한 플로우(card_collect 등)뿐이다
-- 상신(결재)은 어떤 경우에도 클릭하지 않는다. 회계전표(voucher) 계열은 가상 상신 로그만 남긴다
+- 상신(결재)은 원칙적으로 클릭하지 않는다. 예외는 **회계전표(voucher) 3종**(외상매출/외상매입/미지급금카드)으로, 결제창에서 실제 상신까지 실행한다 (2026-08-07 사용자 승인 — `backend/e2e/eap_approval_cancel_probe.py` 로 결재취소→상신취소→임시보관 삭제가 되어 가역이다). 그 외 에이전트는 여전히 상신 금지이며, 보관 버튼은 어느 에이전트도 클릭하지 않는다
 - e2e 반복 테스트는 실저장→검증→삭제(F6)→잔존 0 확인 사이클로 한다. 삭제 수단이 없는 화면은 비가역 동사 직전에서 멈춘다
 
 ## 플로우 구축 절차
@@ -37,3 +37,13 @@
 ## 테스트 관례
 - 백엔드 로직 변경은 `backend/tests/` pytest 를 동반한다 — 노드/스텝은 페이지·LLM 을 fake 로 주입해 단위 검증
 - `backend/e2e/` 프로브 스크립트는 실 ERP 대상 검증 도구라 pytest 대상이 아니다. 단, 에이전트의 파라미터 계약이 바뀌면 해당 e2e 하네스도 함께 갱신한다
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

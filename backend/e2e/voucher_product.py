@@ -266,11 +266,11 @@ _ROWCOUNT_RE = re.compile(r"조회 완료 — 대상 전표 (\d+)건\.")
 _OPEN_ONE_RE = re.compile(r"^\[(\d+)/(\d+)\] 전표 (\S+) 결제창 확인 중…")
 #: 건별 순회 — "[1/1] 가상 상신 완료 — 전표 FI… (누적 1/1건 실행)."
 #: ⚠ 전표번호 접두사는 FI 만이 아니다(2026-08-03 실측: 매입 대상이 'TEST2026053100198').
-_SUBMIT_ONE_RE = re.compile(r"^\[(\d+)/(\d+)\] 가상 상신 완료 — 전표 (\S+)")
+_SUBMIT_ONE_RE = re.compile(r"^\[(\d+)/(\d+)\] (?:가상 )?상신 완료 — 전표 (\S+)")
 #: 묶음 결재(매출) — "[1/3] 일괄 5건(…) 결재창 확인 중… 전표: FI…, FI…"  (‘결재창’·콜론 표기)
 _OPEN_BATCH_RE = re.compile(r"^\[(\d+)/(\d+)\] .*결재창 확인 중… 전표: (.*)$")
 #: 묶음 결재 — "[1/3] 가상 상신 완료 — 5건 (누적 5/12건)."  (전표번호가 이 줄엔 없다)
-_SUBMIT_BATCH_RE = re.compile(r"^\[(\d+)/(\d+)\] 가상 상신 완료 — (\d+)건")
+_SUBMIT_BATCH_RE = re.compile(r"^\[(\d+)/(\d+)\] (?:가상 )?상신 완료 — (\d+)건")
 _DOCU_TOKEN_RE = re.compile(r"[A-Z]{2,8}\d{8,}")
 
 
@@ -312,7 +312,7 @@ def parse_common(msgs: list[str]) -> dict:
                 out["opened_docu_nos"].extend(keys)
                 out["approval_opens"] += 1
 
-        if "가상 상신" in msg:
+        if "상신 완료" in msg:  # 상신(게이트 개방)·가상 상신(닫힘) 양쪽 커버.
             out["virtual_submit_logs"].append(msg)
         ms = _SUBMIT_ONE_RE.match(msg)
         if ms:

@@ -58,6 +58,9 @@ class VoucherPeriodParams(BaseModel):
 
     period_from: str | None = None
     period_to: str | None = None
+    # 디버그 모드(로그인 체크박스 → runs.py 가 params["debug"] 로 주입, 최상위 키).
+    # True 면 voucher 계열 loop_approvals 가 상신 게이트를 런타임에 닫는다(가상 상신).
+    debug: bool = False
 
     @field_validator("period_from", "period_to", mode="before")
     @classmethod

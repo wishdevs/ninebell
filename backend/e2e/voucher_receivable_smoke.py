@@ -19,7 +19,9 @@ phase0(기간 선별): 제품 폼에는 max_rows 노브가 없고 서버 기본�
 읽기 전용 조회로 기간을 **이분 탐색**해 대상이 1~3건인 부분기간을 실측으로 찾아 폼에 넣는다
 (날짜 필드를 추정하지 않는 이유는 `voucher_product.py` docstring 참조).
 
-⚠⚠ 절대 안전 ⚠⚠ 상신·보관 절대 미클릭(그래프가 보장 — 여기선 관찰만). 그래프를 조립하지
+⚠⚠ 정책 전환(2026-08-07) ⚠⚠ 이 스모크는 **실제 상신**을 수행한다(allow_submit 게이트 개방).
+상신된 전표는 e2e/eap_approval_cancel_probe.py(결재취소→상신취소→삭제)로 회수한다.
+보관은 여전히 절대 미클릭(그래프가 보장 — 여기선 관찰만). 그래프를 조립하지
 않고 제품이 등록한 워크플로우를 제품 UI 로 실행할 뿐이다.
 
 Usage:
@@ -68,7 +70,7 @@ DOCU_TYPES = v_steps.DOCU_TYPES_RECEIVABLE  # ("국내매출", "해외매출")
 async def main() -> int:
     print("[SMOKE] 외상매출금 — 제품 경로(대시보드 폼 → 실행). ERP 삭제 단계 없음(전표 미생성).",
           flush=True)
-    print("[SMOKE] ⚠ 상신·보관 절대 미클릭 — 가상 상신 로그만 관찰한다.", flush=True)
+    print("[SMOKE] ⚠ 실제 상신 수행(정책 전환 2026-08-07) — 종료 후 eap_approval_cancel_probe 로 회수할 것.", flush=True)
 
     # ── phase0 — 읽기 전용 기간 선별(결재 버튼 미클릭 → EAP draft 0건) ──────────────
     scan = await pick_period(DOCU_TYPES, tag=TAG)
@@ -147,15 +149,13 @@ async def main() -> int:
     checks["final_result_success_no_error"] = (
         bool(run.get("result_text") or tap.get("result")) and not (tap.get("errors") or [])
     )
-    # 안전 감시 — 결과 문구가 '가상만'을 선언한다(실제 상신 없음). 완화 금지.
+    # 안전 감시 — 결과 문구가 상신 완료(또는 대상 없음)를 선언한다.
     result_text = str(tap.get("result") or run.get("result_text") or "")
-    checks["result_declares_virtual_only"] = (
-        "실제 상신 없음" in result_text or "대상 전표가 없어" in result_text
+    checks["result_declares_submit_done"] = (
+        "전자결재 상신 완료" in result_text or "대상 전표가 없어" in result_text
     )
-    # 안전 감시 — 상신/보관 클릭 흔적이 로그에 없어야 한다.
-    checks["no_real_submit_logged"] = not any(
-        ("상신 클릭" in m) or ("보관 클릭" in m) for m in msgs
-    )
+    # 안전 감시 — 보관 클릭 흔적은 어떤 경우에도 없어야 한다(상신은 정상 경로).
+    checks["no_archive_clicked_logged"] = not any("보관 클릭" in m for m in msgs)
     # D7 — 확정 불일치 0(있으면 그래프가 이미 중단시킨다 — 여기서 재확인).
     checks["d7_no_confirmed_mismatch"] = len(obs["d7_mismatch"]) == 0
     checks["d7_docu_nos_distinct"] = len(set(processed)) == len(processed)
@@ -172,7 +172,7 @@ async def main() -> int:
             child_shot_in_loop == 0 and child_closed_in_loop == 0 and not processed
         )
     else:
-        checks["virtual_submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
+        checks["submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
         # 종전 `child_screenshot_emitted` — SSE 탭으로 관측(러너 방출수가 아니라 **브라우저 도달**).
         checks["child_screenshot_emitted"] = child_shot_in_loop >= 1
         # 종전 `child_closed_frame_emitted` / `d7_child_closed_at_least_once`.

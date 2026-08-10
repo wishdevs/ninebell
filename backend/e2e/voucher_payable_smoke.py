@@ -13,7 +13,9 @@ D2 검증: 전표유형 내수구매가 조회폼에 세팅됐는지 — set_que
 D3 검증: 조회 rowcount. **0건도 정상**(내수구매 미결·저장 전표가 선별 기간에 없을 수 있음) —
 그 경우 결제창 loop 는 스킵되고 정상 종료된다.
 
-⚠⚠ 절대 안전 ⚠⚠ 상신·보관 절대 미클릭(그래프가 보장 — 여기선 관찰만).
+⚠⚠ 정책 전환(2026-08-07) ⚠⚠ 이 스모크는 **실제 상신**을 수행한다(allow_submit 게이트 개방).
+상신된 전표는 e2e/eap_approval_cancel_probe.py(결재취소→상신취소→삭제)로 회수한다.
+보관은 여전히 절대 미클릭(그래프가 보장 — 여기선 관찰만).
 
 Usage:
     cd /Users/wishdev/et-works/dashboard-design/backend
@@ -61,7 +63,7 @@ DOCU_TYPES = v_steps.DOCU_TYPES_PAYABLE  # ("내수구매",)
 async def main() -> int:
     print("[SMOKE] 외상매입금 — 제품 경로(대시보드 폼 → 실행). ERP 삭제 단계 없음(전표 미생성).",
           flush=True)
-    print("[SMOKE] ⚠ 상신·보관 절대 미클릭 — 가상 상신 로그만 관찰한다.", flush=True)
+    print("[SMOKE] ⚠ 실제 상신 수행(정책 전환 2026-08-07) — 종료 후 eap_approval_cancel_probe 로 회수할 것.", flush=True)
 
     # ── phase0 — 읽기 전용 기간 선별(결재 버튼 미클릭 → EAP draft 0건) ──────────────
     scan = await pick_period(DOCU_TYPES, tag=TAG)
@@ -127,12 +129,10 @@ async def main() -> int:
         bool(run.get("result_text") or tap.get("result")) and not (tap.get("errors") or [])
     )
     result_text = str(tap.get("result") or run.get("result_text") or "")
-    checks["result_declares_virtual_only"] = (
-        "실제 상신 없음" in result_text or "대상 전표가 없어" in result_text
+    checks["result_declares_submit_done"] = (
+        "전자결재 상신 완료" in result_text or "대상 전표가 없어" in result_text
     )
-    checks["no_real_submit_logged"] = not any(
-        ("상신 클릭" in m) or ("보관 클릭" in m) for m in msgs
-    )
+    checks["no_archive_clicked_logged"] = not any("보관 클릭" in m for m in msgs)
     checks["d7_no_confirmed_mismatch"] = len(obs["d7_mismatch"]) == 0
     checks["draft_budget_respected"] = obs["approval_opens"] <= MAX_TARGET_ROWS
 
@@ -144,7 +144,7 @@ async def main() -> int:
     else:
         checks["child_screenshot_emitted"] = child_shot_in_loop >= 1
         checks["child_closed_frame_emitted"] = child_closed_in_loop >= 1
-        checks["virtual_submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
+        checks["submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
         # 배치 결재 — 묶음 수와 무관하게 **처리 전표 수** = 조회 건수(전량 커버).
         checks["processed_matches_rowcount"] = len(processed) == rowcount
         checks["processed_docu_nos_distinct"] = len(set(processed)) == len(processed)

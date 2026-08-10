@@ -665,7 +665,7 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
 # ══════════════════════════════════════════════════════════════════════════════
 # D3 — 조회 실행 + 결과 그리드 읽기
 # ══════════════════════════════════════════════════════════════════════════════
-async def run_query(page: Any) -> dict:
+async def run_query(page: Any, *, expected: int | None = None) -> dict:
     """조회(F2, BTN_LOOKUP) → 마스터 그리드(index 0) rowcount 확정. 반환 {ok, rowcount, basis}.
 
     card_collect 조회 스텝 이식(2026-08-06 — 간헐 '거짓 0건' 포렌식 수정). 예전 구현은 클릭
@@ -676,10 +676,16 @@ async def run_query(page: Any) -> dict:
       * 무변화(특히 0건)는 verify.HEAVY 스케줄(실시간 대기 — delay_scale 무관)을 전부 소진한
         뒤에만 인정하고 basis='exhausted' 로 근거를 남긴다(진짜 0건 ↔ 조회 실패 구분).
       * 그래도 못 읽으면(-1/비정수) 재조회 1회 후 실패(grid_read_flow 의 재조회 관례).
+      * expected(선택, 2026-08-07 상신 반영 재조회): 호출자가 아는 **기대 건수** — 값이 기대와
+        일치하면 base 와 같아도 **즉시 확정**한다(basis='expected'). 상신 후 재조회는 결제창을
+        닫는 순간 본창이 자동 갱신돼 클릭 전 값이 이미 기대값과 같으므로, 무변화 규율대로면
+        매 건 HEAVY 전체(6.9s+)를 문다(사용자 리포트: 결제 후 ~10s 딜레이). 기대 불일치는
+        기존 규율(변화 즉시 / 무변화 소진) 그대로 폴백한다.
     """
     before = await page.evaluate(js_lib.ROWCOUNT_BY_INDEX_JS, 0)
     # 그리드 미부착(-1)은 0 으로 본다 — 클릭 후의 0 을 '변화'로 오인하지 않기 위함(card_collect 동일).
     base = before if isinstance(before, int) and before >= 0 else 0
+    _F2_OVERLAY_APPEAR_CAP_MS = 2_500  # F2 후 로딩 오버레이 출현 관찰 상한(실시간).
     clicked = {"ok": True}
 
     async def _click_lookup() -> bool:
@@ -695,12 +701,33 @@ async def run_query(page: Any) -> dict:
         clicked["ok"] = await _click_lookup()
         if not clicked["ok"]:
             return None  # 버튼을 못 눌렀다 — rowcount 폴링은 무의미.
-        reads = {"n": 0}
+        # F2 **리로드 수명주기** 대기(라이브 회귀 2026-08-07: expected 즉시확정이 리로드 완료
+        # **전에** 반환 → 다음 묶음의 checkRow 가 뒤늦은 리로드에 씻겨나가 '행 미선택' 결재
+        # 시도. 종전 무변화 HEAVY 소진이 우연히 이 리로드를 덮고 있었다). 클릭 직후 로딩
+        # 오버레이 출현을 짧게 관찰하고, 떴으면 소멸까지 기다린 뒤에야 rowcount 를 확정한다.
+        appeared = False
+        t0 = time.monotonic()
+        while (time.monotonic() - t0) * 1_000 < _F2_OVERLAY_APPEAR_CAP_MS:
+            try:
+                if await page.evaluate(js.LOADING_OVERLAY_VISIBLE_JS):
+                    appeared = True
+                    break
+            except Exception:  # noqa: BLE001 — 스텁/버전차 방어(best-effort).
+                break
+            await verify.DEFAULT_SLEEP(0.1)
+        if appeared:
+            await wait_loading_overlay_gone(page)
+        reads = {"n": 0, "hit": 0}
 
         def settled(v: Any) -> bool:
             if not isinstance(v, int) or v < 0:
                 return False
             reads["n"] += 1
+            if expected is not None and v == expected:
+                reads["hit"] += 1
+                # 기대 건수 일치 — base 와 같아도 확정(상신 반영 재조회). 단 오버레이를 관찰하지
+                # 못했다면(리로드가 아직 시작 전일 수 있음) **연속 2회 일치**를 요구해 레이스를 막는다.
+                return appeared or reads["hit"] >= 2
             if v != base:
                 return True  # 새 결과 도착 — 즉시 확정.
             return reads["n"] >= len(verify.HEAVY)  # 무변화는 전체 대기를 소진한 뒤에만 인정.
@@ -722,7 +749,11 @@ async def run_query(page: Any) -> dict:
         if not clicked["ok"]:
             return {"ok": False, "reason": "조회(F2) 버튼을 찾지 못했습니다(재시도 포함) — 조회 미실행.", "rowcount": -1}
     if isinstance(rc, int) and rc >= 0:
-        return {"ok": True, "rowcount": rc, "basis": "changed" if rc != base else "exhausted"}
+        if expected is not None and rc == expected:
+            basis = "expected"
+        else:
+            basis = "changed" if rc != base else "exhausted"
+        return {"ok": True, "rowcount": rc, "basis": basis}
     return {
         "ok": False,
         "reason": "조회 결과 그리드 rowcount 를 읽지 못했습니다(재조회 포함).",
@@ -987,12 +1018,60 @@ async def read_child_docu_no(child: Any) -> list[str]:
 
 
 async def close_child(child: Any) -> None:
-    """결제창을 닫는다(비영속 확정 ✅) — 상신/보관을 누르지 않았으므로 아무것도 저장되지 않는다.
+    """결제창을 닫는다 — 상신을 누르지 않았다면 아무것도 저장되지 않는다(비영속 확정 ✅).
 
     finally 경로에서 호출되므로 이미 닫힌/유실된 팝업이어도 예외를 삼켜(로그 후 무시) 런 전체가
-    중단되지 않게 한다.
+    중단되지 않게 한다. 상신 성공 후에는 자식창이 이미 닫혀 있어 no-op 이다.
     """
     try:
         await child.close()
     except Exception:  # noqa: BLE001 — 이미 닫힘/유실된 팝업 teardown 은 무해.
         logger.debug("close_child: 결제창 닫기 실패(무시)", exc_info=True)
+
+
+async def click_child_submit(
+    child: Any, *, cap_ms: int = 25_000, interval_ms: int = 500
+) -> dict:
+    """⚠ 게이트 전용 — 결제창(EAP) '상신' 버튼 실클릭. loop_approvals 의 allow_submit
+    (기본 False) 뒤에서만 호출된다. 게이트가 닫힌 기본 경로에서는 절대 도달하지 않는다.
+
+    정책 전환(사용자 확정 2026-08-07): 상신은 이제 **가역** — 상신된 문서는
+    `e2e/eap_approval_cancel_probe.py`(결재취소→상신취소→삭제, 실검증 2회 PASS)로 회수할 수
+    있어 voucher 3종에 한해 실제 상신을 실행한다. '보관'은 여전히 절대 클릭하지 않는다.
+
+    시퀀스(click_refdoc_confirm 과 동일 규율 — 세팅→독립확인):
+      1. 상단 버튼 좌표를 **fresh** 로 읽어(CHILD_TOP_BUTTONS_JS) '상신'을 클릭한다(캐시 금지).
+      2. 확인 다이얼로그가 뜨면 '확인'을 클릭한다(EAP React — 취소 프로브와 동일 버튼 패턴).
+         ⚠ 상신 후속 다이얼로그·성공 신호는 미실측(리포 최초 실행 경로)이라 best-effort 다.
+      3. 성공 판정 = **자식창 닫힘**. 상한 내 안 닫히면 {ok:False} — 호출자는 하드 실패로
+         런을 중단한다(미상신이 성공으로 둔갑하는 조용한 실패 금지).
+    반환 {ok, reason?}.
+    """
+    top: list[dict] = []
+    try:
+        top = await child.evaluate(js.CHILD_TOP_BUTTONS_JS) or []
+    except Exception:  # noqa: BLE001 — 네비게이션 중 evaluate 실패 → 아래 미발견 처리.
+        top = []
+    btn = next((b for b in top if b.get("text") == "상신" and b.get("visible")), None)
+    if not btn:
+        return {"ok": False, "reason": "결제창에서 '상신' 버튼을 찾지 못했습니다."}
+    try:
+        await child.mouse.click(btn["x"], btn["y"])
+    except Exception as exc:  # noqa: BLE001 — 클릭 실패는 하드 실패 사유로 반환.
+        return {"ok": False, "reason": f"'상신' 클릭 실패: {str(exc)[:ERR_REASON_MAX]}"}
+
+    t0 = time.monotonic()
+    cap = latency.budget_ms(cap_ms)
+    while (time.monotonic() - t0) * 1_000 < cap:
+        try:
+            if child.is_closed():
+                return {"ok": True}
+        except Exception:  # noqa: BLE001 — is_closed 미지원(스텁 등)은 닫힘으로 간주.
+            return {"ok": True}
+        # 확인 다이얼로그(있을 때만) 처리 — 없으면 짧은 timeout 으로 조용히 넘어간다.
+        try:
+            await child.get_by_role("button", name="확인").first.click(timeout=1_000)
+        except Exception:  # noqa: BLE001 — 다이얼로그 없음/이미 닫힘.
+            pass
+        await verify.DEFAULT_SLEEP(interval_ms / 1000)  # 시간축 규율 — 관찰 대기는 실시간.
+    return {"ok": False, "reason": "상신 클릭 후 결제창이 닫히지 않았습니다(적용 미확인)."}
