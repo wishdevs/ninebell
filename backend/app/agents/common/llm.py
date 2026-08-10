@@ -29,7 +29,7 @@ def _is_etribe(settings: Any) -> bool:
 
 
 def llm_ready(settings: Any) -> bool:
-    """LLM 호출 가능 여부 — etribe 는 인증 없음(항상 가능), gemini 는 API 키 필요.
+    """LLM 호출 가능 여부 — etribe 는 토큰이 임의 문자열(식별자)이라 항상 가능, gemini 는 API 키 필요.
 
     호출부의 기존 `settings.gemini_api_key` 게이트 대체용 — gemini 경로에선 판정 동일.
     """
@@ -73,6 +73,8 @@ async def chat_decide(
         return await etribe_chat_decide(
             http, s.etribe_model, s.etribe_base_url, system, history, context, shot, tools,
             max_output_tokens=max_output_tokens,
+            # Bearer 토큰 = QoS 식별자(getattr 폴백은 테스트 더미 settings 호환).
+            token=getattr(s, "etribe_token", "ninebell-dashboard"),
         )
     return await gemini_chat_decide(
         http,
@@ -96,14 +98,16 @@ async def generate_text(
     *,
     system: str,
     user: str,
-    temperature: float = 0.2,
+    temperature: float | None = None,
     max_output_tokens: int = 256,
     thinking_budget: int | None = None,
     settings: Any | None = None,
 ) -> str | None:
     """단발 텍스트 생성 — 활성 프로바이더로 순수 텍스트 1개(없으면 None).
 
-    thinking_budget 은 gemini 전용 파라미터 — etribe 는 요청에서 thinking 자체를 끄므로 무시.
+    temperature None = 프로바이더 권장 기본(gemini 0.2 — 종전 디스패처 기본 유지 · etribe 1.0
+    — ETRIBE-LLM API 권장값). 명시하면 두 프로바이더 모두 그 값 그대로.
+    thinking_budget 은 gemini 전용 파라미터 — etribe 는 서버 기본(thinking ON)이라 무시.
     """
     s = settings if settings is not None else get_settings()
     if _is_etribe(s):
@@ -115,6 +119,7 @@ async def generate_text(
             user=user,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
+            token=getattr(s, "etribe_token", "ninebell-dashboard"),
         )
     return await gemini_generate_text(
         http,
@@ -123,7 +128,7 @@ async def generate_text(
         s.gemini_base_url,
         system=system,
         user=user,
-        temperature=temperature,
+        temperature=0.2 if temperature is None else temperature,
         max_output_tokens=max_output_tokens,
         thinking_budget=thinking_budget,
     )

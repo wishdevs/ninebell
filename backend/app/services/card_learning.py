@@ -445,7 +445,7 @@ async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | 
                 http,
                 system=_AI_NOTE_SYSTEM,
                 user=user,
-                temperature=0.2,
+                # temperature 미지정 = 프로바이더 권장 기본(gemini 0.2 · etribe 1.0 — API 권장).
                 # thinking ON(2026-07-23 사용자 지시 — 적요도 사고 허용). 출력 자체는 1줄이지만
                 # 사고 토큰이 같은 출력 예산을 공유하므로 헤드룸 포함(잠식 → 빈 응답 방지).
                 # thinking_budget 미전달 = gemini 모델 기본(dynamic) 사고. etribe 는 자체 헤드룸 추가.

@@ -94,13 +94,15 @@ ASSISTANT_TOOLS = [
 
 def build_llm(request: Request, settings: Settings) -> LLMProvider:
     """스트림 제너레이터 안에서 지연 호출된다 — 키 누락은 여기서 RuntimeError 로 표면화."""
-    # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — 인증 불필요.
+    # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — Bearer 토큰은
+    # 사용자 식별자(QoS 단위)라 서비스 토큰(etribe_token)을 넘긴다.
     # effective_llm_provider: 로컬 dev 런타임 오버라이드(/dev/llm-provider) 우선, 없으면 env.
     if effective_llm_provider(settings) == "etribe":
         return EtribeProvider(
             request.app.state.http,
             model=settings.etribe_model,
             base_url=settings.etribe_base_url,
+            token=settings.etribe_token,
         )
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY 가 설정되지 않아 AI 어시스턴트를 사용할 수 없습니다.")

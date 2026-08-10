@@ -1,10 +1,12 @@
 """Etribe-LLM 스트리밍 프로바이더 — 온프렘 OpenAI 호환 /v1/chat/completions 를 직접 파싱.
 
-사내 Etribe-LLM 서버는 인증이 없고(Bearer 아무 값) "stream": true 로 SSE
-chat.completion.chunk 를 흘린다. thinking 이 기본 ON 이라 사고 과정이 별도
-`reasoning_content` 델타 채널로 오므로(응답이 아님) 건너뛴다 — gemini 의 thought
-파트 스킵과 동치. 툴콜은 OpenAI 표준이라 arguments 가 문자열 조각으로 나뉘어 오며,
-조각을 누적해 완성 시점에 GeminiProvider 와 같은 모양({"name", "args"})으로 1회 방출한다.
+인증은 Bearer 임의 토큰이되 **토큰이 사용자 식별자 = QoS 단위**다(ETRIBE-LLM API 문서:
+토큰당 동시 4 요청, 초과 시 429 concurrency_limit) — settings.etribe_token 을 받아 보낸다.
+"stream": true 로 SSE chat.completion.chunk 를 흘린다. thinking 이 기본 ON 이라 사고
+과정이 별도 `reasoning_content` 델타 채널로 오므로(응답이 아님) 건너뛴다 — gemini 의
+thought 파트 스킵과 동치. 툴콜은 OpenAI 표준이라 arguments 가 문자열 조각으로 나뉘어
+오며, 조각을 누적해 완성 시점에 GeminiProvider 와 같은 모양({"name", "args"})으로 1회
+방출한다. reasoning_effort 는 보내지 않는다 — 생략=서버 자동(문서 권장).
 """
 
 from __future__ import annotations
@@ -35,10 +37,18 @@ class ContextLengthExceededError(RuntimeError):
 class EtribeProvider:
     name = "etribe"
 
-    def __init__(self, client: httpx.AsyncClient, *, model: str, base_url: str):
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        model: str,
+        base_url: str,
+        token: str = "ninebell-dashboard",
+    ):
         self._http = client
         self._model = model
         self._base = base_url.rstrip("/")
+        self._token = token
 
     def _build_body(self, messages, system, temperature, max_output_tokens, tools) -> dict:
         # 시스템 프롬프트: 인자 system + 히스토리의 system 롤을 합쳐 맨 앞 system 메시지 1개로.
@@ -54,8 +64,10 @@ class EtribeProvider:
         body: dict = {
             "model": self._model,
             "messages": oai_messages,
-            "temperature": temperature,
-            "max_tokens": max_output_tokens,
+            # None = 프로바이더 기본 — ETRIBE-LLM API 권장값 1.0(환각 억제는 서버 시스템
+            # 프롬프트 담당). 0 근처 저온은 thinking ON 에서 CoT 붕괴 위험이라 쓰지 않는다.
+            "temperature": 1.0 if temperature is None else temperature,
+            "max_tokens": max_output_tokens,  # 서버 상한 16384 — 초과는 서버가 클램프.
             "stream": True,
         }
         if tools:
@@ -69,14 +81,14 @@ class EtribeProvider:
         messages: list[ChatMessage],
         *,
         system=None,
-        temperature=0.7,
+        temperature=None,
         max_output_tokens=8192,
         tools=None,
     ) -> AsyncIterator[ChatChunk]:
         url = f"{self._base}/v1/chat/completions"
         body = self._build_body(messages, system, temperature, max_output_tokens, tools)
-        # 인증 없음 — 키는 아무 값이나 허용(가이드). OpenAI 호환 형식만 맞춘다.
-        headers = {"authorization": "Bearer none", "content-type": "application/json"}
+        # 토큰 = 사용자 식별자(QoS 단위: 토큰당 동시 4) — 대시보드 서비스 토큰으로 계량된다.
+        headers = {"authorization": f"Bearer {self._token}", "content-type": "application/json"}
         done_sent = False  # finish_reason 으로 이미 done 을 냈으면 마지막 보강 done 을 생략.
         # OpenAI 스트리밍 툴콜: arguments 가 문자열 조각으로 나뉘어 온다 — index 별 누적 버퍼.
         pending_calls: dict[int, dict] = {}

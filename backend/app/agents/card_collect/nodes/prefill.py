@@ -15,6 +15,7 @@ from ..merchant_dict import load_rules, match_in
 from .. import grouping, meal_time
 from ..recommend import (
     RECOMMEND_CHUNK_SIZE,
+    RECOMMEND_CONFIDENCE_GATE,
     RECOMMEND_CONFIDENCE_THRESHOLD,
     recommend_selections,
 )
@@ -234,7 +235,10 @@ async def _prefill_selections(
             + (f" → {n_chunks}청크" if n_chunks > 1 else "") + ")",
             "info",
         )
-        http = new_async_client(timeout=60.0)
+        # 600s — thinking ON 배치 판단은 30행에도 60s 를 넘겼다(2026-08-05 실측: 60s 타임아웃
+        # 3연속 → 청크 실패). 청크 100행 기준 생성 시간 여유를 둔다(1행 ≈ 12s, 6행 ≈ 24s 관측,
+        # 300→600s 상향은 사용자 지정).
+        http = new_async_client(timeout=600.0)
         try:
             recommendations = await recommend_selections(
                 rec_rows,
@@ -272,11 +276,13 @@ async def _prefill_selections(
     def _prefix_ok(c: dict) -> bool:
         return bool(cost_prefix) and (c.get("bgacctNm") or "").startswith(cost_prefix)
 
-    default_budget = (
-        next((c for c in budget_favs if c.get("isDefault") and _prefix_ok(c)), None)
-        or next((c for c in budget_favs if c.get("isDefault")), None)
-        or (next((c for c in budget_candidates if _prefix_ok(c)), None) if cost_prefix else None)
-    )
+    # 기본지정(★)이 없으면 기본값도 없다 — 예전엔 판/제 접두가 맞는 **첫 후보**를 blind 로
+    # 채웠는데, 후보 정렬상 첫 항목이 '(판)주민세' 같은 무관 계정이라 LLM 이 판단 불가로 남긴
+    # 행이 주민세로 도배됐다(2026-08-05 실측: 판단불가 5행 전부). 자신 있게 틀린 값보다 빈
+    # 칸이 정직하다 — 빈 행은 개입 그리드에서 사용자가 직접 고른다.
+    default_budget = next(
+        (c for c in budget_favs if c.get("isDefault") and _prefix_ok(c)), None
+    ) or next((c for c in budget_favs if c.get("isDefault")), None)
     # 프로젝트 기본: 기본지정 즐겨찾기(명시 설정) 우선, 없으면 팀 비용구분 프로젝트
     # (제조원가→500 / 판관비→800, 사용자 확정 2026-07-04).
     default_project = next((c for c in project_favs if c.get("isDefault")), None) or cost_project
@@ -286,7 +292,10 @@ async def _prefill_selections(
     for idx in range(len(rows_list)):
         no = idx + 1
         rec = recommendations.get(no) or {}
-        hi = rec.get("confidence", 0.0) >= RECOMMEND_CONFIDENCE_THRESHOLD
+        # 게이트 off(임시)면 신뢰도와 무관하게 AI 추천을 적용한다 — recommend.py 플래그 참조.
+        hi = (not RECOMMEND_CONFIDENCE_GATE) or rec.get(
+            "confidence", 0.0
+        ) >= RECOMMEND_CONFIDENCE_THRESHOLD
         # Tier 1 — 결정적 적용: 반복 확정(count>=MIN)한 가맹점은 그 선택을 그대로.
         # 단, 금액 이탈 행(그룹 금액대 초과 — 회식/접대 가능성)은 learned 를 우회해 개별 AI
         # 판단을 쓴다: 반복 확정은 평소 금액대의 근거일 뿐, 이탈 결제의 근거가 아니다.

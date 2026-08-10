@@ -123,7 +123,7 @@ async def test_dispatch_chat_decide_selects_provider(monkeypatch):
         seen["gemini"] = (key, model, base)
         return "g_tool", {"p": 1}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["etribe"] = (model, base)
         return "e_tool", {"p": 2}
 
@@ -168,7 +168,7 @@ async def test_dispatch_generate_text_selects_provider(monkeypatch):
         seen["gemini"] = {"key": key, "thinking_budget": thinking_budget}
         return "g텍스트"
 
-    async def fake_e(http, model, base, *, system, user, temperature, max_output_tokens):
+    async def fake_e(http, model, base, *, system, user, temperature, max_output_tokens, token=None):
         seen["etribe"] = {"model": model, "max": max_output_tokens}
         return "e텍스트"
 
@@ -192,7 +192,7 @@ async def test_dispatch_multimodal_gate_blocks_shot_when_disabled(monkeypatch):
     # 텍스트 전용 ETRIBE 서버(etribe_multimodal=False) — 이미지 400 방지를 위해 shot 차단.
     seen: dict[str, Any] = {}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["shot"] = shot
         return None, {}
 
@@ -208,7 +208,7 @@ async def test_dispatch_multimodal_gate_blocks_shot_when_disabled(monkeypatch):
 async def test_dispatch_multimodal_gate_passes_shot_when_enabled(monkeypatch):
     seen: dict[str, Any] = {}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["shot"] = shot
         return None, {}
 
@@ -317,7 +317,7 @@ async def test_dispatch_chat_decide_threads_max_output_tokens(monkeypatch):
         seen["gemini"] = max_output_tokens
         return None, {}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["etribe"] = max_output_tokens
         return None, {}
 

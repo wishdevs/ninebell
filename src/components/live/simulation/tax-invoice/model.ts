@@ -111,6 +111,119 @@ export function evidenceFor(
   return { code, label: EVIDENCE_LABEL[code] };
 }
 
+// ── 바로 선택(숙련자 지름길) ─────────────────────────────────────────────────
+// 증빙유형 코드는 질문 답 조합과 1:1 이라 **역방향 채움**이 성립한다 — 코드를 알면 질문을
+// 건너뛰고 바로 고른다. evidenceFor 와 같은 파일에 두는 이유: 정방향(답→코드)과 역방향
+// (코드→답)이 어긋나면 안 되는 한 쌍의 규칙이기 때문이다.
+
+export interface QuickPick {
+  code: string;
+  /** 그룹 라벨이 문맥을 제공하므로 짧게(예: '발행 전' 그룹의 '과세'). */
+  label: string;
+  issue: IssueState;
+  split: SplitChoice;
+  tax: TaxKind;
+  nondeduct: NondeductReason | null;
+}
+
+export const QUICK_PICK_GROUPS: readonly { name: string; picks: readonly QuickPick[] }[] = [
+  {
+    name: '발행 후',
+    picks: [
+      {
+        code: '03',
+        label: '세금계산서',
+        issue: 'after',
+        split: 'single',
+        tax: 'taxable',
+        nondeduct: null,
+      },
+      {
+        code: '04',
+        label: '계산서',
+        issue: 'after',
+        split: 'single',
+        tax: 'exempt',
+        nondeduct: null,
+      },
+      {
+        code: '05',
+        label: '불공·사업무관',
+        issue: 'after',
+        split: 'single',
+        tax: 'nondeduct',
+        nondeduct: 'no-business',
+      },
+      {
+        code: '06',
+        label: '불공·차량',
+        issue: 'after',
+        split: 'single',
+        tax: 'nondeduct',
+        nondeduct: 'small-car',
+      },
+      {
+        code: '07',
+        label: '불공·면세사업',
+        issue: 'after',
+        split: 'single',
+        tax: 'nondeduct',
+        nondeduct: 'exempt-business',
+      },
+    ],
+  },
+  {
+    name: '발행 후·분할',
+    picks: [
+      {
+        code: '11',
+        label: '과세',
+        issue: 'after',
+        split: 'split',
+        tax: 'taxable',
+        nondeduct: null,
+      },
+      {
+        code: '13',
+        label: '비과세',
+        issue: 'after',
+        split: 'split',
+        tax: 'exempt',
+        nondeduct: null,
+      },
+    ],
+  },
+  {
+    name: '발행 전',
+    picks: [
+      {
+        code: '22',
+        label: '과세',
+        issue: 'before',
+        split: 'single',
+        tax: 'taxable',
+        nondeduct: null,
+      },
+      {
+        code: '23',
+        label: '비과세',
+        issue: 'before',
+        split: 'single',
+        tax: 'exempt',
+        nondeduct: null,
+      },
+      {
+        code: '24',
+        label: '불공',
+        issue: 'before',
+        split: 'single',
+        tax: 'nondeduct',
+        nondeduct: null,
+      },
+    ],
+  },
+];
+
 // ── 세금계산서 리스트(더미) ──────────────────────────────────────────────────
 
 export interface TaxInvoiceRow {

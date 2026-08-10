@@ -33,7 +33,8 @@ class LLMProvider(Protocol):
         messages: list[ChatMessage],
         *,
         system: str | None = None,
-        temperature: float = 0.7,
+        # None = 프로바이더 권장 기본(gemini 0.7 · etribe 1.0 — ETRIBE-LLM API 권장값).
+        temperature: float | None = None,
         max_output_tokens: int = 8192,
         tools: list[dict] | None = None,
     ) -> AsyncIterator[ChatChunk]: ...

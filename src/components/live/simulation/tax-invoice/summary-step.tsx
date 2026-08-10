@@ -1,10 +1,10 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { RiArrowLeftLine, RiRestartLine, RiShieldCheckLine } from '@remixicon/react';
+import { RiArrowLeftLine, RiRestartLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Td, Th } from './ui';
+import { SimStepHeader, Td, Th } from './ui';
 import {
   ISSUE_LABEL,
   NONDEDUCT_LABEL,
@@ -39,9 +39,9 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 마지막 단계 — 시뮬레이션 결과 요약. 실제 저장은 하지 않는다.
- *
- * 백엔드 자동화 그래프가 붙기 전까지 이 화면이 "무엇을 ERP에 넣을 것인가"의 계약서 역할을 한다.
+ * 마지막 단계 — 입력 내용 요약(무엇을 ERP 에 넣을 것인가의 계약서 역할).
+ * 저장 실행은 백엔드 그래프 연결 후 붙는다 — UI 에는 시뮬레이션/더미 언급을 노출하지 않는다
+ * (2026-08-05 사용자 확정: 다른 에이전트의 사전 입력과 일관성).
  */
 export function SummaryStep({
   answers,
@@ -57,18 +57,10 @@ export function SummaryStep({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="border-info/30 bg-info/10 flex shrink-0 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
-        <RiShieldCheckLine size={16} aria-hidden className="text-info mt-0.5 shrink-0" />
-        <div className="min-w-0">
-          <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
-            시뮬레이션 — 실제 저장 없음
-          </p>
-          <p className="text-foreground-secondary mt-0.5 text-[11px] leading-relaxed">
-            아래 내용은 화면 시뮬레이션 결과입니다. 옴니솔에 전송하거나 저장하지 않았습니다. 자동화
-            그래프가 연결되면 이 값이 결의서 입력에 그대로 쓰입니다.
-          </p>
-        </div>
-      </div>
+      <SimStepHeader
+        title="요약 — 입력 내용 확인"
+        prompt="아래 내용으로 결의서를 만듭니다. 고칠 것이 있으면 이전 단계로 돌아가 수정하세요."
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="flex flex-col gap-4">

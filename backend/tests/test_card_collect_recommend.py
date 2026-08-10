@@ -173,6 +173,10 @@ async def test_collect_rows_high_confidence_preselects_ai(monkeypatch):
 
 
 async def test_collect_rows_low_confidence_falls_back_to_default(monkeypatch):
+    # 신뢰도 게이트는 현재 임시 off(RECOMMEND_CONFIDENCE_GATE=False, 2026-08-05 사용자 지시).
+    # 이 테스트는 게이트 **로직**의 회귀 방지용이라 켠 상태로 검증한다 — 플래그를 되돌리면
+    # 그대로 프로덕션 동작 검증이 된다.
+    monkeypatch.setattr(prefill, "RECOMMEND_CONFIDENCE_GATE", True)
     _stub_dumps(monkeypatch, units=[])
     monkeypatch.setattr(
         catalog,

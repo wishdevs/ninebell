@@ -20,11 +20,6 @@ import {
 
 const MAX_SPLIT_ROWS = 20;
 
-// 행 그리드 — 헤더행과 데이터행이 공유(출장 폼 ROW_GRID 관례).
-// # · 예산단위 · 적요 · 프로젝트 · 비용센터 · 비율 · 공급가액 · 잔액채우기 · 삭제
-const ROW_GRID =
-  'grid grid-cols-[1.5rem_minmax(9rem,1.3fr)_minmax(7.5rem,1.1fr)_minmax(8rem,1.1fr)_minmax(6.5rem,1fr)_5rem_minmax(7.5rem,1fr)_2rem_1.75rem] items-center gap-x-2';
-
 /** 행 금액(파싱 실패·빈값은 0으로 취급 — 잔액 계산이 항상 성립하게). */
 function rowAmount(r: SplitRow): number {
   return parseAmount(r.amount) ?? 0;
@@ -221,119 +216,118 @@ export function SplitStep({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto pr-1">
-        <div className="flex min-w-[54rem] flex-col gap-1">
-          <div
-            className={cn(
-              ROW_GRID,
-              'border-border/60 text-foreground-tertiary border-b px-1 pb-1.5 text-[10px] font-semibold tracking-wider uppercase',
-            )}
-          >
-            <span aria-hidden />
-            <span>예산단위</span>
-            <span>적요</span>
-            <span>프로젝트</span>
-            <span>비용센터</span>
-            <span className="text-right">비율(%)</span>
-            <span className="text-right">공급가액</span>
-            <span aria-hidden />
-            <span aria-hidden />
-          </div>
-
+      {/* 행 목록 — 2줄 행 구조(윗줄 코드 3종 / 아랫줄 적요·비율·공급가액·잔액·삭제).
+          예전의 9열 한 줄 그리드(min-w 54rem)는 시뮬레이션 패널이 라이브 스테이지와
+          화면을 나눠 쓰게 되면서(≈600px, 2026-08-04) 오른쪽이 잘려 나갔다. 가로 스크롤
+          대신 폭에 맞게 접는다 — 열 제목 행도 없애고 위젯 placeholder 가 라벨을 겸한다. */}
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="flex flex-col gap-1">
           {rows.map((r, idx) => {
             const invalid = !isRowValid(r);
             return (
               <div
                 key={r.id}
                 className={cn(
-                  'border-border/50 border-b py-1.5 last:border-b-0',
-                  ROW_GRID,
+                  'border-border/50 flex gap-2 border-b py-2 last:border-b-0',
                   invalid && 'bg-danger/[0.03]',
                 )}
               >
-                <span className="text-foreground-tertiary text-center text-[11px] font-semibold tabular-nums">
+                <span className="text-foreground-tertiary w-5 shrink-0 pt-2.5 text-center text-[11px] font-semibold tabular-nums">
                   {idx + 1}
                 </span>
-                <OptionSelect
-                  ariaLabel={`${idx + 1}행 예산단위`}
-                  value={r.budgetUnit}
-                  options={BUDGET_UNITS}
-                  onChange={(v) => setRow(r.id, { budgetUnit: v })}
-                  invalid={!r.budgetUnit}
-                />
-                <CellInput
-                  ariaLabel={`${idx + 1}행 적요`}
-                  value={r.note}
-                  onChange={(v) => setRow(r.id, { note: v })}
-                  placeholder="적요"
-                  invalid={!r.note.trim()}
-                />
-                <OptionSelect
-                  ariaLabel={`${idx + 1}행 프로젝트`}
-                  value={r.project}
-                  options={PROJECTS}
-                  onChange={(v) => setRow(r.id, { project: v })}
-                  invalid={!r.project}
-                />
-                <OptionSelect
-                  ariaLabel={`${idx + 1}행 비용센터`}
-                  value={r.costCenter}
-                  options={COST_CENTERS}
-                  onChange={(v) => setRow(r.id, { costCenter: v })}
-                  invalid={!r.costCenter}
-                />
-                <input
-                  value={r.percent}
-                  onChange={(e) => setPercent(r, e.target.value.replace(/[^\d.]/g, ''))}
-                  disabled={mode !== 'percent' || percentDisabled}
-                  inputMode="decimal"
-                  aria-label={`${idx + 1}행 비율`}
-                  placeholder="%"
-                  className={cn(
-                    'border-border bg-surface text-foreground placeholder:text-muted-foreground h-8 w-full min-w-0 rounded-[var(--radius-sm)] border px-2 text-right text-[11px] tabular-nums outline-none',
-                    'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
-                    'disabled:bg-muted/40 disabled:opacity-60',
-                  )}
-                />
-                <AmountInput
-                  ariaLabel={`${idx + 1}행 공급가액`}
-                  value={r.amount}
-                  onChange={(v) => setAmount(r, v)}
-                  disabled={mode !== 'amount'}
-                  invalid={parseAmount(r.amount) === null || parseAmount(r.amount) === 0}
-                  placeholder="0"
-                  className={cn(mode !== 'amount' && 'disabled:bg-muted/40 disabled:opacity-60')}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-foreground-tertiary hover:text-accent h-8 px-0 text-[10px]"
-                  disabled={remaining === 0}
-                  title={
-                    remaining === 0
-                      ? '남은 금액이 없습니다'
-                      : `남은 ${formatWon(remaining)}원을 이 행에 더합니다`
-                  }
-                  onClick={() => fillRemaining(r)}
-                  aria-label={`${idx + 1}행에 남은 금액 채우기`}
-                >
-                  잔액
-                </Button>
-                {rows.length > 1 ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-foreground-tertiary hover:text-danger h-8 px-0"
-                    onClick={() => removeRow(r.id)}
-                    aria-label={`${idx + 1}행 삭제`}
-                  >
-                    <RiDeleteBinLine size={14} aria-hidden />
-                  </Button>
-                ) : (
-                  <span aria-hidden />
-                )}
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <OptionSelect
+                      ariaLabel={`${idx + 1}행 예산단위`}
+                      value={r.budgetUnit}
+                      options={BUDGET_UNITS}
+                      onChange={(v) => setRow(r.id, { budgetUnit: v })}
+                      invalid={!r.budgetUnit}
+                      placeholder="예산단위"
+                    />
+                    <OptionSelect
+                      ariaLabel={`${idx + 1}행 프로젝트`}
+                      value={r.project}
+                      options={PROJECTS}
+                      onChange={(v) => setRow(r.id, { project: v })}
+                      invalid={!r.project}
+                      placeholder="프로젝트"
+                    />
+                    <OptionSelect
+                      ariaLabel={`${idx + 1}행 비용센터`}
+                      value={r.costCenter}
+                      options={COST_CENTERS}
+                      onChange={(v) => setRow(r.id, { costCenter: v })}
+                      invalid={!r.costCenter}
+                      placeholder="비용센터"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      <CellInput
+                        ariaLabel={`${idx + 1}행 적요`}
+                        value={r.note}
+                        onChange={(v) => setRow(r.id, { note: v })}
+                        placeholder="적요"
+                        invalid={!r.note.trim()}
+                      />
+                    </div>
+                    <input
+                      value={r.percent}
+                      onChange={(e) => setPercent(r, e.target.value.replace(/[^\d.]/g, ''))}
+                      disabled={mode !== 'percent' || percentDisabled}
+                      inputMode="decimal"
+                      aria-label={`${idx + 1}행 비율`}
+                      placeholder="%"
+                      className={cn(
+                        'border-border bg-surface text-foreground placeholder:text-muted-foreground h-9 w-14 shrink-0 rounded-[var(--radius-sm)] border px-2 text-right text-[12px] tabular-nums outline-none',
+                        'focus-visible:border-accent',
+                        'disabled:bg-muted/40 disabled:opacity-60',
+                      )}
+                    />
+                    <div className="w-28 shrink-0">
+                      <AmountInput
+                        ariaLabel={`${idx + 1}행 공급가액`}
+                        value={r.amount}
+                        onChange={(v) => setAmount(r, v)}
+                        disabled={mode !== 'amount'}
+                        invalid={parseAmount(r.amount) === null || parseAmount(r.amount) === 0}
+                        placeholder="공급가액"
+                        className={cn(
+                          mode !== 'amount' && 'disabled:bg-muted/40 disabled:opacity-60',
+                        )}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-foreground-tertiary hover:text-accent h-8 shrink-0 px-1 text-[10px]"
+                      disabled={remaining === 0}
+                      title={
+                        remaining === 0
+                          ? '남은 금액이 없습니다'
+                          : `남은 ${formatWon(remaining)}원을 이 행에 더합니다`
+                      }
+                      onClick={() => fillRemaining(r)}
+                      aria-label={`${idx + 1}행에 남은 금액 채우기`}
+                    >
+                      잔액
+                    </Button>
+                    {rows.length > 1 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-foreground-tertiary hover:text-danger h-8 shrink-0 px-1"
+                        onClick={() => removeRow(r.id)}
+                        aria-label={`${idx + 1}행 삭제`}
+                      >
+                        <RiDeleteBinLine size={14} aria-hidden />
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             );
           })}

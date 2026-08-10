@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { RiFlaskLine } from '@remixicon/react';
 import { SectionCard } from '@/components/ui/section-card';
 import { cn } from '@/lib/utils';
 import type { SimulationPanelProps } from '../index';
@@ -119,24 +118,17 @@ export function TaxInvoiceSimulation({ agent }: SimulationPanelProps) {
   ];
 
   return (
-    // caption('화면 시뮬레이션')은 오른쪽 '시뮬레이션' 배지와 같은 말이라 뺐다 — 같은 사실을
-    // 두 번 적으면 읽을 것만 늘고 세로 자리도 그만큼 줄어든다. description 도 한 줄로 줄였다.
+    // 헤더는 실행 전 입력 폼(pre-run — 출장 등)과 같은 문법: caption '실행 전 입력' +
+    // 제목 + 실무 설명. 시뮬레이션 배지·더미 언급은 UI 에 노출하지 않는다(2026-08-05 사용자
+    // 확정 — 다른 에이전트의 사전 입력과 일관성).
     <SectionCard
-      title={`${agent.name} — 결의서 입력 흐름`}
-      description="백엔드 자동화 미연결 — 실제 옴니솔 조회·저장 없이 화면 흐름만 확인합니다."
+      caption="실행 전 입력"
+      title={`${agent.name} 결의서`}
+      description="발행 전/후·비용분할·과세여부를 답하면 증빙유형이 정해집니다. 리스트에서 대상을 고르고 입력항목을 채워 결의서를 만듭니다."
       density="comfortable"
       className="lg:h-full lg:min-h-0 lg:overflow-hidden"
-      action={
-        // 배지 글자를 text-warning 으로 두면 warning 색이 밝아(oklch 68%) 흰 배경에서 2.67:1
-        // 밖에 안 나와 4.5:1 에 미달한다. 톤(테두리·배경)은 warning 으로 두고 글자만 올린다.
-        <span className="border-warning/40 bg-warning/10 text-foreground-secondary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold tracking-wide">
-          <RiFlaskLine size={12} aria-hidden className="text-warning" />
-          시뮬레이션
-        </span>
-      }
     >
-      {/* 단계 표시 — 발행 전/후·분할 여부에 따라 단계 수 자체가 달라진다.
-          질문 화면 안의 '질문 n/N' 과는 층위가 다르다(이건 화면 단위, 저건 질문 단위). */}
+      {/* 단계 표시 — 발행 전/후·분할 여부에 따라 단계 수 자체가 달라진다. */}
       <ol className="text-foreground-secondary flex shrink-0 flex-wrap items-center gap-1.5 text-[length:var(--text-body-sm)]">
         {stages.map((s, i) => (
           <li key={s.key} className="flex items-center gap-1.5">

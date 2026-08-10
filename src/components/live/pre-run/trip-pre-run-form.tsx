@@ -372,8 +372,10 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
       description="행마다 계산서일(증빙일)과 통행료·유류비 지원을 표에 입력하면 무개입으로 채워 저장합니다. 회계일자는 계산서일 중 가장 마지막일로 자동 지정됩니다."
       density="comfortable"
     >
-      <div className="max-sm:overflow-x-auto">
-        <div className="flex min-w-[52rem] flex-col gap-1 sm:min-w-0">
+      {/* 폼 열이 그리드 최소폭(52rem)보다 좁아지면 가로 스크롤 — min-w 를 풀면 고정폭 열들이
+          카드 밖으로 삐져나간다(스크롤 없이 clip 되던 버그라 모든 폭에서 허용). */}
+      <div className="overflow-x-auto">
+        <div className="flex min-w-[52rem] flex-col gap-1">
           {/* 표 헤더(sm 이상에서만; 모바일은 각 셀 aria-label 로 대체) */}
           <div
             className={cn(

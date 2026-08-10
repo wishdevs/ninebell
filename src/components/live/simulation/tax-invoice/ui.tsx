@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { RiCheckLine, RiFlaskLine } from '@remixicon/react';
 import {
   Select,
   SelectContent,
@@ -13,90 +12,37 @@ import { cn } from '@/lib/utils';
 import { formatWon, parseAmount } from './model';
 
 /**
- * 세금계산서 시뮬레이션 공용 조각 — 단계 헤더·선택지 버튼·컴팩트 표 셀·금액 입력.
+ * 세금계산서 시뮬레이션 공용 조각 — 단계 헤더·컴팩트 표 셀·금액 입력.
  *
  * 디자인 언어는 기존 개입 화면을 그대로 잇는다: 단계 안내는 LiveChoiceCard 의 경고톤 배너,
- * 선택지는 같은 라디오형 버튼, 리스트 표는 LiveGridCard 의 컴팩트 셀(px-2 py-1.5 · text-[11px]).
+ * 리스트 표는 LiveGridCard 의 컴팩트 셀(px-2 py-1.5 · text-[11px]).
  *
- * **타이포 규칙(2026-08-04 가독성 개편)** — 실측 결과 이 화면의 고유 문구 103개 중 77개가
- * 11px 이하였고, 정작 "결정에 쓰는" 질문·선택지가 13px 로 보조 문구와 구분되지 않았다.
- * 그래서 위계를 크기로 다시 세운다:
- *   질문 20px/700 > 선택지 라벨 15px/600 > 선택지 설명·본문 13px > 메타 라벨 11px
- * 표(Th/Td)만 예외로 11px 를 유지한다 — ERP 그리드를 그대로 비추는 자리라 LiveGridCard 와
+ * 표(Th/Td)는 11px 를 유지한다 — ERP 그리드를 그대로 비추는 자리라 LiveGridCard 와
  * 규격이 어긋나면 안 되기 때문이다. 대신 표 **안의 입력 위젯**은 12px/h-9 로 올린다.
+ *
+ * focus-visible 링은 쓰지 않는다(2026-08-04 사용자 확정) — 포커스 링 박스가 화면에 상시
+ * 노출되는 걸 원치 않는다. 입력 포커스는 테두리 색 변화로만 표시한다.
  */
-
-/** 결정에 직접 쓰는 텍스트 — 질문 문구. 화면에서 가장 큰 글자여야 한다. */
-export const QUESTION_TEXT_CLASS = 'text-[20px] leading-snug font-bold tracking-tight';
 
 // ── 단계 헤더 ────────────────────────────────────────────────────────────────
 
+/**
+ * 단계 제목 + 안내 한 줄 — 실행 전 입력 폼(pre-run)의 제목/설명 문법과 같은 중립 헤더.
+ * (예전 경고톤 배너 + 플라스크 아이콘은 '실험/시뮬레이션' 신호라 걷어냈다 — 2026-08-05
+ * 사용자 확정: 다른 에이전트의 사전 입력과 일관성.)
+ */
 export function SimStepHeader({ title, prompt }: { title: string; prompt?: ReactNode }) {
   return (
-    <div className="border-warning/30 bg-warning/10 flex shrink-0 items-start gap-2.5 rounded-[var(--radius-md)] border px-3.5 py-2.5">
-      <RiFlaskLine size={18} aria-hidden className="text-warning mt-0.5 shrink-0" />
-      <div className="min-w-0">
-        <p className="text-foreground text-[length:var(--text-body-lg)] leading-snug font-semibold">
-          {title}
+    <div className="min-w-0 shrink-0">
+      <p className="text-foreground text-[length:var(--text-body-lg)] leading-snug font-semibold">
+        {title}
+      </p>
+      {prompt ? (
+        <p className="text-foreground-secondary mt-0.5 text-[length:var(--text-body-sm)] leading-relaxed">
+          {prompt}
         </p>
-        {prompt ? (
-          <p className="text-foreground-secondary mt-1 text-[length:var(--text-body-sm)] leading-relaxed">
-            {prompt}
-          </p>
-        ) : null}
-      </div>
+      ) : null}
     </div>
-  );
-}
-
-// ── 선택지 버튼(라디오형) ────────────────────────────────────────────────────
-
-export function ChoiceOption({
-  label,
-  description,
-  active,
-  onClick,
-}: {
-  label: string;
-  description?: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        // py-3 + 15px 라벨 → 실측 높이 ≥48px. 터치 타깃 권장치(44×44)를 카드 자체로 만족한다.
-        'flex cursor-pointer items-center gap-3 rounded-[var(--radius-md)] border px-3.5 py-3 text-left transition-colors',
-        'focus-visible:ring-accent focus-visible:ring-2 focus-visible:ring-offset-2',
-        'focus-visible:ring-offset-background focus-visible:outline-none',
-        active
-          ? 'border-accent bg-accent/5 ring-accent/30 ring-2'
-          : 'border-border hover:border-accent/50 hover:bg-muted/60',
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'flex size-6 shrink-0 items-center justify-center rounded-full border',
-          active ? 'border-accent bg-accent text-accent-foreground' : 'border-border-strong',
-        )}
-      >
-        {active ? <RiCheckLine size={15} /> : null}
-      </span>
-      <span className="min-w-0">
-        <span className="text-foreground block text-[15px] leading-snug font-semibold">
-          {label}
-        </span>
-        {description ? (
-          <span className="text-foreground-secondary mt-0.5 block text-[length:var(--text-body-sm)] leading-snug">
-            {description}
-          </span>
-        ) : null}
-      </span>
-    </button>
   );
 }
 
@@ -120,7 +66,7 @@ export function Td({ children, className }: { children?: ReactNode; className?: 
 // — 입력 중 자기가 친 값을 확인하는 자리라 정적 셀보다 한 단계 크게 둔다.
 const CELL_INPUT_CLASS = cn(
   'border-border bg-surface text-foreground placeholder:text-muted-foreground h-9 w-full min-w-0 rounded-[var(--radius-sm)] border px-2 text-[12px] outline-none',
-  'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
+  'focus-visible:border-accent',
   'aria-invalid:border-danger disabled:opacity-50',
 );
 

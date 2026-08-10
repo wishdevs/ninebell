@@ -75,27 +75,19 @@
   h3 { font-size: 15px; margin: 0 0 12px; font-weight: 640; letter-spacing: -.005em; }
 
   /* ── 시뮬레이터 ─────────────────────────────────────────────────────────
-     제품(src/components/live/simulation/tax-invoice)과 같은 "한 번에 한 질문" 위저드 구조:
-     위=프로세스 안내 · 왼쪽=고른 답(+수정) · 오른쪽=현재 질문 하나 · 아래=증빙유형+진행 버튼. */
+     제품(src/components/live/simulation/tax-invoice)과 같은 "질문 행 폼" 구조:
+     위=전체 화면 흐름 · 본문=질문 행(라벨+선택지, 그 자리에서 수정) · 아래=증빙유형+다음 CTA. */
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
   .panel-hd { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
               display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .panel-hd h3 { margin: 0; }
+  /* 패널 본문(분할 계산기) — 타일·표·버튼 줄이 테두리에 붙지 않게 여백과 세로 간격을 준다. */
+  .panel-bd { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 
-  /* 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
-     예전에는 여기에 프로세스 설명 한 줄과 질문 이름 5개(11.5px)가 함께 들어 있었다.
-     읽히지도 않으면서 바로 아래 진짜 질문과 경쟁하기만 해서, 위치 정보(n/N + 막대)만
-     남기고 설명은 [?] 토글팁 안으로 옮겼다. */
-  .wiz-top { padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
-             display: flex; flex-direction: column; gap: 8px; }
-  .wiz-strip { margin: 0; display: flex; align-items: center; gap: 12px; }
-  .wiz-count { font-size: 14px; font-weight: 640; color: var(--ink); white-space: nowrap; }
-  .wiz-count span { color: var(--ink-2); font-weight: 400;
-                    font-variant-numeric: tabular-nums; }
-  .wiz-bar { display: flex; align-items: center; gap: 4px; flex: 1; max-width: 260px; }
-  .wiz-bar i { display: block; height: 6px; flex: 1; border-radius: 999px; background: var(--line); }
-  .wiz-bar i.done { background: var(--accent); }
-  .wiz-bar i.cur { background: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
+  /* 상단 — 질문이 끝나면 어디로 가는지(경로에 따라 화면 수가 달라진다).
+     예전의 "질문 n / N + 진행 막대"는 위저드와 함께 걷어냈다(2026-08-04) —
+     질문 전부가 행으로 보이니 지금 몇 번째인지 셀 필요가 없다. */
+  .wiz-top { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
   .stage-path { margin: 0; font-size: 13px; color: var(--ink-2); }
   .stage-path b { color: var(--accent-ink); font-weight: 640; }
 
@@ -116,89 +108,70 @@
   .tip > div b { color: var(--ink); }
   .tip[hidden], .tip > div[hidden] { display: none; }
 
-  /* 본문 — 왼쪽 요약 레일 + 오른쪽 현재 질문 */
-  .wiz { display: grid; grid-template-columns: 212px minmax(0,1fr); gap: 16px;
-         padding: 16px; align-items: start; }
-  @media (max-width: 760px) { .wiz { grid-template-columns: 1fr; } }
-  .wiz-side { display: flex; flex-direction: column; gap: 6px; min-height: 168px;
-              border-right: 1px solid var(--line-soft); padding-right: 14px; }
-  @media (max-width: 760px) {
-    .wiz-side { min-height: 0; border-right: 0; padding-right: 0;
-                border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
-  }
-  .wiz-side-hd { margin: 0; font-size: 11px; letter-spacing: .04em; font-weight: 640;
-                 color: var(--ink-2); }
-  .ans-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-  /* 줄 전체가 그 질문으로 돌아가는 버튼이다 — 예전 '수정' 버튼만 눌리던 시절엔 실측
-     39×17px 로 최소 타깃(24×24)에 못 미쳤다. 줄로 만들면 210×44px 가 나온다. */
-  .ans-row { display: flex; flex-direction: column; gap: 1px; width: 100%; min-height: 44px;
-             justify-content: center; padding: 4px 6px; border-radius: 3px; text-align: left;
-             font: inherit; background: none; border: 0; }
-  button.ans-row { cursor: pointer; }
-  button.ans-row:hover { background: var(--surface-2); }
-  .ans-list li.cur .ans-row { background: var(--accent-bg); }
-  .ans-hd { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .ans-k { font-size: 11px; letter-spacing: .02em; color: var(--ink-2); font-weight: 620; }
-  .ans-k i { font-style: normal; letter-spacing: 0; text-transform: none; color: var(--ink);
-             font-weight: 700; }
-  .ans-v { font-size: 13px; line-height: 1.35; color: var(--ink); font-weight: 620; }
-  .ans-edit { font-size: 11px; color: var(--ink-2); white-space: nowrap; }
-  button.ans-row:hover .ans-edit { color: var(--accent-ink); }
-  .ans-empty { margin: 0; font-size: 13px; color: var(--ink-2); }
-
-  .wiz-main { display: flex; flex-direction: column; gap: 12px; min-height: 168px; }
-  /* 질문 문구 — 화면에서 가장 큰 글자. 이게 13~15px 이라 보조 설명과 구분되지 않던 것이
-     가독성 문제의 핵심이었다(한 화면 한 결정을 크기로 드러낸다). */
-  .q-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .q-title { margin: 0; font-weight: 700; font-size: 20px; letter-spacing: -.01em; line-height: 1.3; }
-  .q-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  /* 본문 — 질문 행 폼. 제품(questions-step.tsx)과 같은 "질문 전부 한 화면" 구조로,
+     행 = 왼쪽 고정폭 라벨 + 오른쪽 선택지. 답은 그 자리에서 다른 선택지를 눌러 바꾼다.
+     (위저드·왼쪽 답 레일·'수정' 버튼은 2026-08-04 걷어냄 — 질문 2~5개가 전부 클릭
+      한 번짜리라, 화면 전환과 되돌아가기가 이동 비용만 만들었다.) */
+  .qrows { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+  .qrow { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 16px; align-items: start; }
+  @media (max-width: 620px) { .qrow { grid-template-columns: 1fr; gap: 6px; } }
+  .qrow-label { display: flex; align-items: center; gap: 6px; min-height: 40px;
+                font-size: 13px; font-weight: 640; }
+  .qrow-body { display: flex; flex-direction: column; gap: 6px; }
   .q-hint { font-size: 13px; color: var(--ink-2); margin: 0; }
-  /* 모르면 막히는 안내(예: 오류)는 토글팁으로 숨기지 않고 오히려 크게 세운다. */
+  /* 답한 갈래가 다음에 무엇으로 이어지는지 — 답한 뒤에만 행 아래 한 줄로. */
+  .q-note { margin: 0; font-size: 13px; color: var(--ink-3); }
+  /* 모르면 막히는 안내(예: 오류)는 토글팁으로 숨기지 않고 입력 바로 아래 세운다. */
   .q-alert { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px;
              font-weight: 620; color: var(--danger); }
   .opts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .opt-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-  @media (max-width: 620px) { .opt-grid { grid-template-columns: 1fr; } }
-  /* 마지막 화면 — 질문들이 결국 정한 것은 증빙유형 코드 하나다. 비어 있던 오른쪽 열에
-     그 결과를 크게 세운다(예전엔 12.5px 안내 문구 한 덩어리뿐이었다). */
-  .done-box { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
-              border-radius: var(--r); background: var(--accent-bg);
-              border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
-  .done-box p { margin: 0; font-size: 13px; color: var(--ink-2); line-height: 1.6; }
-  .done-box b { color: var(--ink); }
-  .done-k { font-size: 11px; font-weight: 640; color: var(--ink-2); letter-spacing: .02em; }
-  .done-ev { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
-  .done-ev .c { font-family: var(--mono); font-size: 34px; font-weight: 700; line-height: 1;
-                letter-spacing: -.02em; color: var(--accent-ink);
-                font-variant-numeric: tabular-nums; }
-  .done-ev .n { font-size: 16px; font-weight: 640; color: var(--ink); }
+  .vsep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  /* 바로 선택(숙련자 지름길) — 질문 폼과 **다른 표면**으로 분리한다: 음영 스트립 + 둥근
+     칩. 질문 행과 같은 문법(라벨+사각 pill)으로 두면 "답해야 하는 질문 1번"으로 읽힌다
+     (2026-08-05 사용자 피드백). 모양이 곧 의미다 — 둥근 칩=바로가기, 사각 pill=폼 입력.
+     칩 줄은 임의 줄바꿈에 맡기지 않고 코드 체계(발행 후/분할/발행 전)대로 나눈다. */
+  .quick-bar { padding: 12px 16px; background: var(--surface-2);
+               border-bottom: 1px solid var(--line-soft);
+               display: flex; flex-direction: column; gap: 8px; }
+  .quick-hd { margin: 0; font-size: 12px; color: var(--ink-2); }
+  .quick-hd b { color: var(--ink); font-weight: 640; }
+  .quick-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .quick-group-name { width: 80px; flex-shrink: 0; font-size: 12px; font-weight: 620;
+                      color: var(--ink-3); }
+  @media (max-width: 620px) { .quick-group-name { width: 100%; } }
+  .qpill { font: inherit; font-size: 13px; cursor: pointer; height: 30px; padding: 0 12px;
+           background: var(--surface); color: var(--ink-2);
+           border: 1px solid var(--line); border-radius: 999px; transition: .12s ease; }
+  .qpill:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+                 color: var(--ink); }
+  .qpill[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
+                                color: var(--accent-ink); }
+  .qpill .pill-code, .pill .pill-code { font-family: var(--mono); font-weight: 700;
+                     margin-right: 7px; font-variant-numeric: tabular-nums; }
 
-  /* 하단 — 증빙유형 실시간 표시 + 진행 버튼 */
+  /* 하단 — 증빙유형 실시간 표시 + 다음 단계 CTA(제품 하단 스트립과 같은 배치) */
   .wiz-foot { border-top: 1px solid var(--line-soft); padding: 12px 16px;
               display: flex; align-items: center; justify-content: space-between;
               gap: 14px; flex-wrap: wrap; }
-  .wiz-nav { display: flex; gap: 8px; margin-left: auto; }
 
   .date-in { font: inherit; font-family: var(--mono); font-size: 14px; padding: 9px 10px;
              background: var(--surface); color: var(--ink); border: 1px solid var(--line);
              border-radius: var(--r); }
   .date-in:focus { border-color: var(--accent); }
-  /* 선택지 — 결정에 직접 쓰는 텍스트라 본문보다 크게. 세로 여백까지 더해 카드 자체가
-     48px 이상이 되어 터치 타깃 권장치(44×44)를 만족한다. */
-  .opt { font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; padding: 11px 14px;
-         min-height: 48px; text-align: left;
-         background: var(--surface); color: var(--ink);
-         border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
-  .opt:hover { border-color: var(--accent); }
-  .opt[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
-                              color: var(--accent-ink); }
-  .opt small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); margin-top: 3px; }
-  .opt[aria-pressed="true"] small { color: var(--accent-ink); }
-  /* 기간 빠른 선택 칩 — 예전 12.5px/26px 높이는 최소 타깃에 아슬아슬했다. */
-  .opt.opt-sm { font-size: 13px; font-weight: 500; padding: 8px 12px; min-height: 36px; }
+  /* 선택지 pill — 제품 ChoicePill 과 같은 규칙: 활성은 테두리+배경(틴트)만, 바깥으로
+     그려지는 ring 없음, 굵기는 상태와 무관하게 고정(활성에서 굵어지면 글자 폭이 변해
+     옆 pill 이 밀린다). 높이 40px 로 날짜 입력과 나란히 선다. */
+  .pill { font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; height: 40px;
+          padding: 0 16px; background: var(--surface); color: var(--ink-2);
+          border: 1px solid var(--line); border-radius: var(--r); transition: .12s ease; }
+  .pill:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+                background: var(--surface-2); color: var(--ink); }
+  .pill[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent);
+                               color: var(--accent-ink); }
 
   /* 증빙유형 배지 — 코드가 주인공이라 모노 대문자로 크게 세운다. */
-  .ev { display: flex; align-items: baseline; gap: 10px; }
+  .ev { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .ev-k { font-size: 11px; font-weight: 640; letter-spacing: .02em; color: var(--ink-2); }
   .ev-code { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -.02em;
              color: var(--accent-ink); font-variant-numeric: tabular-nums; line-height: 1; }
   .ev-name { font-size: 14px; color: var(--ink); font-weight: 600; }
@@ -233,7 +206,8 @@
   .card p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
 
   /* ── 분할 계산기 ──────────────────────────────────────────────────────── */
-  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
+  /* dl 의 UA 기본 마진을 지운다 — 세로 간격은 .panel-bd 의 gap 이 담당한다. */
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin: 0; }
   @media (max-width: 620px) { .tiles { grid-template-columns: 1fr; } }
   .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
           padding: 11px 13px; }
@@ -296,8 +270,9 @@
   <section>
     <div class="sec-head"><span class="sec-num">01</span><h2>직접 따라가 보기</h2></div>
     <p class="sec-sub">
-      실제 화면과 같은 순서로 <b>한 번에 한 질문씩</b> 묻습니다. 고른 답은 왼쪽에 쌓이고,
-      <b>수정</b>을 누르면 그 질문으로 돌아갑니다.
+      실제 화면과 같은 규칙입니다. 질문이 전부 행으로 보이고 답은 <b>그 자리에서</b> 바꿉니다 —
+      발행 전/후를 바꾸면 뒤 답이 초기화되고, 비용분할을 켜면 불공이 목록에서 빠집니다.
+      증빙유형을 이미 아는 숙련자는 <b>바로 선택</b>에서 코드를 고르세요 — 답이 역방향으로 채워집니다.
     </p>
 
     <div class="panel">
@@ -306,40 +281,21 @@
         <button class="btn" id="reset" type="button">처음부터</button>
       </div>
 
-      <!-- 상단 — 전체 화면 흐름 + 지금 몇 번째 질문인지.
-           프로세스 설명("한 번에 한 질문씩 묻습니다…")은 답하는 데 필요 없어 [?] 안으로 옮겼다. -->
+      <!-- 상단 — 질문이 끝나면 어디로 가는지(경로에 따라 화면 수가 달라진다) -->
       <div class="wiz-top">
         <p class="stage-path" id="path"></p>
-        <div class="wiz-strip">
-          <p class="wiz-count" id="count"></p>
-          <div class="wiz-bar" id="bar" role="progressbar" aria-label="질문 진행"></div>
-          <span class="tip" id="tipHow">
-            <button type="button" aria-expanded="false" aria-label="이 화면 사용법">?</button>
-            <div hidden>
-              한 번에 한 질문씩 묻습니다. 선택지를 고르면 곧바로 다음 질문으로 넘어가고,
-              고른 답은 왼쪽에 쌓입니다. 왼쪽 답을 누르면 그 질문으로 돌아가 고칠 수 있습니다.
-              <span id="tipHowExtra"></span>
-            </div>
-          </span>
-        </div>
       </div>
 
-      <!-- 본문 — 왼쪽 고른 답(수정) + 오른쪽 현재 질문 하나 -->
-      <div class="wiz">
-        <aside class="wiz-side" aria-label="지금까지 고른 답">
-          <p class="wiz-side-hd">고른 답</p>
-          <div id="answers"></div>
-        </aside>
-        <div class="wiz-main" id="qs"></div>
-      </div>
+      <!-- 바로 선택 — 질문 폼 밖의 지름길 스트립(음영 표면). 스크립트가 그린다. -->
+      <div class="quick-bar" id="quick"></div>
 
-      <!-- 하단 — 증빙유형 실시간 표시 + 진행 버튼 -->
+      <!-- 본문 — 질문 행들(그 자리에서 수정). 스크립트가 경로에 맞춰 행을 그린다. -->
+      <div class="qrows" id="qs"></div>
+
+      <!-- 하단 — 증빙유형 실시간 표시 + 다음 단계 CTA -->
       <div class="wiz-foot">
         <div id="evBody"></div>
-        <div class="wiz-nav">
-          <button class="btn" id="prev" type="button">← 이전</button>
-          <button class="btn btn-accent" id="next" type="button">다음 →</button>
-        </div>
+        <button class="btn btn-accent" id="next" type="button"></button>
       </div>
     </div>
   </section>
@@ -474,14 +430,13 @@
   'use strict';
 
 
-  /* ── 시뮬레이터 — "한 번에 한 질문" 위저드 ─────────────────────────────
-     제품 화면(questions-step.tsx)과 같은 구조·같은 규칙이다. 답을 고르면 곧바로 다음
-     질문으로 넘어가고, 지나온 답은 왼쪽 레일에 남아 '수정'으로 되돌아간다.
+  /* ── 시뮬레이터 — 질문 행 폼 ────────────────────────────────────────────
+     제품 화면(questions-step.tsx)과 같은 구조·같은 규칙이다. 질문 전부가 행으로 보이고,
+     답은 그 자리에서 다른 선택지를 눌러 바꾼다(위저드·왼쪽 답 레일은 2026-08-04 걷어냄).
      제품이 바뀌면 이 블록도 같이 바꾼다 — 문서와 화면이 어긋나면 안 된다. */
   var A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
-  var step = 'issue';                 // 'issue'|'period'|'split'|'tax'|'nd'|'done'
 
-  var ISSUE = { before: '발행 전', after: '발행 후' };
+  var ISSUE = { before: '세금계산서 발행 전', after: '세금계산서 발행 후' };
   var SPLIT = { single: '분할 없음', split: '비용분할' };
   var TAX   = { taxable: '과세', exempt: '비과세', nondeduct: '불공' };
   var ND    = {
@@ -489,15 +444,7 @@
     car: '비영업용소형승용차구입, 유지 및 임차',
     exemptbiz: '면세사업과 관련된분'
   };
-
   var SHORT = { issue: '발행 여부', period: '계산서일', split: '비용분할', tax: '과세여부', nd: '불공 사유' };
-  var TITLE = {
-    issue: '세금계산서 발행 전인가요?',
-    period: '세금계산서일을 선택하세요',
-    split: '비용분할이 필요한가요?',
-    tax: '과세 / 비과세 / 불공 중 어떤 것인가요?',
-    nd: '불공 사유를 선택하세요'
-  };
 
   function el(tag, cls, txt) {
     var e = document.createElement(tag);
@@ -506,12 +453,12 @@
     return e;
   }
 
-  function option(label, desc, active, onClick) {
-    var b = el('button', 'opt');
+  /* 선택지 pill — 제품 ChoicePill 과 같은 규칙. 활성은 테두리+배경(틴트)만 — 바깥으로
+     그려지는 ring 은 스크롤 컨테이너 경계에서 잘려 쓰지 않는다. */
+  function pill(label, active, onClick) {
+    var b = el('button', 'pill', label);
     b.type = 'button';
     b.setAttribute('aria-pressed', active ? 'true' : 'false');
-    b.appendChild(document.createTextNode(label));
-    if (desc) b.appendChild(el('small', null, desc));
     b.addEventListener('click', onClick);
     return b;
   }
@@ -547,7 +494,7 @@
       b.focus();
     }
   });
-  /** 질문 옆에 붙이는 용어 풀이 팁을 만든다(내용은 HTML 조각 배열). */
+  /** 질문 행 라벨 옆에 붙이는 용어 풀이 팁을 만든다(내용은 HTML 조각 배열). */
   function makeTip(label, nodes) {
     var span = el('span', 'tip');
     var btn = el('button', null, '?');
@@ -586,9 +533,43 @@
     { id: 'months-2', label: '두 달 전', range: function () { return monthsAgoToToday(2); } }
   ];
 
+  /* ── 바로 선택(숙련자 지름길) ────────────────────────────────────────
+     자주 쓰는 사람은 증빙유형 코드를 이미 안다. 코드는 답 조합과 1:1 이라 **역방향 채움**이
+     성립한다 — 코드를 고르면 발행 여부·비용분할·과세여부(·불공 사유)가 채워지고, 발행 후의
+     기간만 기본값(한 달 전~오늘)으로 둔다. 채워진 답은 아래 행에서 언제든 개별 수정 가능. */
+  var QUICK = [
+    { name: '발행 후', items: [
+      { code: '03', label: '세금계산서',   a: { issue: 'after', split: 'single', tax: 'taxable',   nd: null } },
+      { code: '04', label: '계산서',       a: { issue: 'after', split: 'single', tax: 'exempt',    nd: null } },
+      { code: '05', label: '불공·사업무관', a: { issue: 'after', split: 'single', tax: 'nondeduct', nd: 'unrelated' } },
+      { code: '06', label: '불공·차량',     a: { issue: 'after', split: 'single', tax: 'nondeduct', nd: 'car' } },
+      { code: '07', label: '불공·면세사업', a: { issue: 'after', split: 'single', tax: 'nondeduct', nd: 'exemptbiz' } }
+    ] },
+    { name: '발행 후·분할', items: [
+      { code: '11', label: '과세',   a: { issue: 'after', split: 'split', tax: 'taxable', nd: null } },
+      { code: '13', label: '비과세', a: { issue: 'after', split: 'split', tax: 'exempt',  nd: null } }
+    ] },
+    { name: '발행 전', items: [
+      { code: '22', label: '과세',   a: { issue: 'before', split: 'single', tax: 'taxable',   nd: null } },
+      { code: '23', label: '비과세', a: { issue: 'before', split: 'single', tax: 'exempt',    nd: null } },
+      { code: '24', label: '불공',   a: { issue: 'before', split: 'single', tax: 'nondeduct', nd: null } }
+    ] }
+  ];
+
+  function applyQuick(q) {
+    // 발행 여부가 같으면 이미 고른 기간을 존중한다(코드만 갈아타는 경우 기간 유지).
+    var keepPeriod = A.issue === q.a.issue && A.from && A.to;
+    var d = q.a.issue === 'after'
+      ? (keepPeriod ? { from: A.from, to: A.to } : monthsAgoToToday(1))
+      : { from: '', to: '' };
+    A = { issue: q.a.issue, from: d.from, to: d.to, split: q.a.split, tax: q.a.tax, nd: q.a.nd };
+    render();
+  }
+
   /* ── 경로 규칙 ──────────────────────────────────────────────────────
      발행 **전**은 비용분할이 불가하고 불공 코드도 24 하나뿐이라 질문이 2개,
-     발행 **후**는 계산서일·비용분할이 붙어 4개(불공이면 사유까지 5개)다. */
+     발행 **후**는 계산서일·비용분할이 붙어 4개(불공이면 사유까지 5개)다.
+     행은 이 경로 순서대로 아래로 쌓인다 — 답하면 뒤 행이 나타난다. */
   function path() {
     if (A.issue === 'before') return ['issue', 'tax'];
     if (A.issue === 'after') {
@@ -599,37 +580,6 @@
     return ['issue'];                 // 아직 경로가 안 정해졌다
   }
 
-  /* 기간은 역전(시작>종료)이면 답으로 치지 않는다 — 다음으로 못 간다. */
-  function answered(k) {
-    if (k === 'issue')  return !!A.issue;
-    if (k === 'period') return !!A.from && !!A.to && A.from <= A.to;
-    if (k === 'split')  return !!A.split;
-    if (k === 'tax')    return !!A.tax;
-    return !!A.nd;
-  }
-
-  function text(k) {
-    if (k === 'issue')  return A.issue ? ISSUE[A.issue] : '—';
-    if (k === 'period') return (A.from && A.to) ? (A.from + ' ~ ' + A.to) : '—';
-    if (k === 'split')  return A.split ? SPLIT[A.split] : '—';
-    if (k === 'tax')    return A.tax ? TAX[A.tax] : '—';
-    return A.nd ? ND[A.nd] : '—';
-  }
-
-  /* 다음/이전 스텝 — 경로는 **답이 바뀐 뒤** 기준으로 계산한다. */
-  function after(k) {
-    var p = path(), i = p.indexOf(k);
-    return (i < 0 || i === p.length - 1) ? 'done' : p[i + 1];
-  }
-  function before(k) {
-    var p = path();
-    if (k === 'done') return p[p.length - 1];
-    var i = p.indexOf(k);
-    return i > 0 ? p[i - 1] : null;
-  }
-
-  function go(k) { step = k; render(true); }
-
   function done() {
     if (!A.issue || !A.tax) return false;
     if (A.issue === 'before') return true;
@@ -639,59 +589,53 @@
     return true;
   }
 
-  /* ── 현재 질문 하나 ─────────────────────────────────────────────────── */
-  function renderQuestion() {
+  /* ── 질문 행 — 왼쪽 고정폭 라벨(+ 용어 풀이 [?]) + 오른쪽 선택지 ─────── */
+  function qrow(key, tipNode) {
+    var row = el('div', 'qrow');
+    var lab = el('div', 'qrow-label');
+    lab.appendChild(el('span', null, SHORT[key]));
+    if (tipNode) lab.appendChild(tipNode);
+    row.appendChild(lab);
+    var body = el('div', 'qrow-body');
+    row.appendChild(body);
+    return { row: row, body: body };
+  }
+
+  function renderRows() {
     var qs = document.getElementById('qs');
     qs.textContent = '';
+    var p = path();
 
-    // 질문 문구 + (필요하면) 용어 풀이 [?]. 팁은 문구 바로 뒤에 붙인다 — 오른쪽 끝으로
-    // 밀면 위 진행줄의 [?]와 세로로 겹쳐 같은 버튼처럼 읽힌다.
-    var head = el('div', 'q-head');
-    var title = el('p', 'q-title', step === 'done' ? '질문이 모두 끝났습니다' : TITLE[step]);
-    title.tabIndex = -1;
-    title.id = 'qTitle';
-    head.appendChild(title);
-    if (step === 'tax') {
-      head.appendChild(makeTip('과세 · 비과세 · 불공 용어 설명', [
-        el('b', null, '과세'), '는 부가세가 붙는 일반 거래, ',
-        el('b', null, '비과세'), '는 부가세가 없는 거래입니다. ',
-        el('b', null, '불공'), '은 불공제 — 세금계산서는 받았지만 매입세액을 공제받지 못하는 거래입니다.'
-      ]));
+    // 발행 여부 — 경로를 가르는 첫 질문. 같은 답을 다시 누르면 아무 일도 없다.
+    var r1 = qrow('issue');
+    var o1 = el('div', 'opts');
+    o1.appendChild(pill(ISSUE.before, A.issue === 'before', function () {
+      if (A.issue === 'before') return;
+      // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
+      A = { issue: 'before', from: '', to: '', split: 'single', tax: null, nd: null };
+      render();
+    }));
+    o1.appendChild(pill(ISSUE.after, A.issue === 'after', function () {
+      if (A.issue === 'after') return;
+      // 경로가 바뀌면 뒤 답은 전부 무효 — 기간만 한 달 전~오늘로 미리 채운다.
+      var d = monthsAgoToToday(1);
+      A = { issue: 'after', from: d.from, to: d.to, split: null, tax: null, nd: null };
+      render();
+    }));
+    r1.body.appendChild(o1);
+    // 고른 갈래가 다음에 무엇으로 이어지는지 — 답한 뒤에만 한 줄로.
+    if (A.issue) {
+      r1.body.appendChild(el('p', 'q-note', A.issue === 'before'
+        ? '아직 발행되지 않아 리스트 없이 바로 입력항목을 채웁니다. 발행 전은 비용분할이 불가합니다.'
+        : '이미 발행되어 조회됩니다 — 아래 기간의 리스트에서 처리할 항목을 고릅니다.'));
     }
-    if (step === 'split') {
-      head.appendChild(makeTip('비용분할 설명', [
-        '한 장의 세금계산서를 예산단위·프로젝트·비용센터별로 나눠 다는 것입니다. ',
-        '분할하면 증빙유형이 원증빙 계열(과세 11 · 비과세 13)로 바뀝니다.'
-      ]));
-    }
-    if (step === 'period') {
-      head.appendChild(makeTip('세금계산서일 기간 설명', [
+    qs.appendChild(r1.row);
+
+    if (p.indexOf('period') >= 0) {
+      var r2 = qrow('period', makeTip('세금계산서일 기간 설명', [
         '여기서 고른 기간에 발행된 (세금)계산서만 다음 리스트 화면에 나타납니다. ',
-        '기본값은 한 달 전부터 오늘까지이고, 아래 버튼으로 흔히 쓰는 기간을 한 번에 넣을 수 있습니다.'
+        '기본값은 한 달 전부터 오늘까지입니다.'
       ]));
-    }
-    qs.appendChild(head);
-
-    if (step === 'issue') {
-      var g1 = el('div', 'opt-grid');
-      g1.appendChild(option(ISSUE.before, '리스트가 없어 바로 입력합니다', A.issue === 'before', function () {
-        if (A.issue === 'before') { go(after('issue')); return; }
-        // 발행 전은 분할 자체가 불가 — 질문을 숨기는 대신 '분할 없음'으로 고정한다.
-        A = { issue: 'before', from: '', to: '', split: 'single', tax: null, nd: null };
-        go(after('issue'));
-      }));
-      g1.appendChild(option(ISSUE.after, '조회된 목록에서 고릅니다', A.issue === 'after', function () {
-        if (A.issue === 'after') { go(after('issue')); return; }
-        // 경로가 바뀌면 뒤 답은 전부 무효 — 기간만 한 달 전~오늘로 미리 채운다.
-        var d = monthsAgoToToday(1);
-        A = { issue: 'after', from: d.from, to: d.to, split: null, tax: null, nd: null };
-        go(after('issue'));
-      }));
-      qs.appendChild(g1);
-    }
-
-    if (step === 'period') {
-      // 예전의 '날짜를 직접 고르거나 …' 안내는 화면을 보면 아는 내용이라 [?] 안으로 옮겼다.
       var range = el('div', 'opts');
       ['from', 'to'].forEach(function (key, idx) {
         if (idx) range.appendChild(el('span', 'q-hint', '~'));
@@ -703,197 +647,123 @@
         d.addEventListener('change', function () { A[key] = d.value; render(); });
         range.appendChild(d);
       });
-      qs.appendChild(range);
-
+      // 빠른 선택 — 달력을 열지 않고 흔히 쓰는 기간을 한 번에. 날짜와 같은 줄, 구분선만.
+      range.appendChild(el('span', 'vsep'));
+      RANGE_PRESETS.forEach(function (pr) {
+        var r = pr.range();
+        range.appendChild(pill(pr.label, A.from === r.from && A.to === r.to, function () {
+          A.from = r.from; A.to = r.to; render();
+        }));
+      });
+      r2.body.appendChild(range);
       // 오류는 원인이 되는 입력 **바로 아래**에 둔다 — 떨어뜨려 놓으면 무엇을 고쳐야
       // 할지 다시 찾아야 한다.
       if (A.from && A.to && A.from > A.to) {
         var err = el('p', 'q-alert', '시작일이 종료일보다 늦을 수 없습니다.');
         err.setAttribute('role', 'alert');
-        qs.appendChild(err);
+        r2.body.appendChild(err);
       }
-
-      var quick = el('div', 'opts');
-      quick.appendChild(el('span', 'q-hint', '빠른 선택'));
-      RANGE_PRESETS.forEach(function (p) {
-        var r = p.range();
-        var b = el('button', 'opt opt-sm');
-        b.type = 'button';
-        b.textContent = p.label;
-        b.setAttribute('aria-pressed', (A.from === r.from && A.to === r.to) ? 'true' : 'false');
-        b.addEventListener('click', function () { A.from = r.from; A.to = r.to; render(); });
-        quick.appendChild(b);
-      });
-      qs.appendChild(quick);
+      qs.appendChild(r2.row);
     }
 
-    if (step === 'split') {
-      var g3 = el('div', 'opt-grid');
-      g3.appendChild(option(SPLIT.single, '한 건으로 전액 처리', A.split === 'single', function () {
-        A.split = 'single'; go(after('split'));
+    if (p.indexOf('split') >= 0) {
+      var r3 = qrow('split', makeTip('비용분할 설명', [
+        '한 장의 세금계산서를 예산단위·프로젝트·비용센터별로 나눠 다는 것입니다. ',
+        '분할하면 증빙유형이 원증빙 계열(과세 11 · 비과세 13)로 바뀝니다.'
+      ]));
+      var o3 = el('div', 'opts');
+      o3.appendChild(pill(SPLIT.single, A.split === 'single', function () {
+        if (A.split === 'single') return;
+        A.split = 'single'; render();
       }));
-      g3.appendChild(option(SPLIT.split, '예산단위·프로젝트·비용센터별로 나눠 담기', A.split === 'split', function () {
+      o3.appendChild(pill(SPLIT.split, A.split === 'split', function () {
+        if (A.split === 'split') return;
         // 분할과 불공은 공존할 수 없다 — 이미 불공이면 과세여부를 해제해 다시 고르게 한다.
         if (A.tax === 'nondeduct') { A.tax = null; A.nd = null; }
-        A.split = 'split'; go(after('split'));
+        A.split = 'split'; render();
       }));
-      qs.appendChild(g3);
+      r3.body.appendChild(o3);
+      qs.appendChild(r3.row);
     }
 
-    if (step === 'tax') {
-      // 분할이면 불공을 목록에서 제외한다(불공은 분할할 수 없다).
+    if (A.issue) {
+      // 분할이면 불공을 목록에서 제외한다(불공은 분할할 수 없다 — 미노출).
       var kinds = A.split === 'split' ? ['taxable', 'exempt'] : ['taxable', 'exempt', 'nondeduct'];
-      var g4 = el('div', 'opt-grid');
+      var r4 = qrow('tax', makeTip('과세 · 비과세 · 불공 용어 설명', [
+        el('b', null, '과세'), '는 부가세가 붙는 일반 거래, ',
+        el('b', null, '비과세'), '는 부가세가 없는 거래입니다. ',
+        el('b', null, '불공'), '은 불공제 — 세금계산서는 받았지만 매입세액을 공제받지 못하는 거래입니다.'
+      ]));
+      var o4 = el('div', 'opts');
       kinds.forEach(function (k) {
-        g4.appendChild(option(TAX[k], null, A.tax === k, function () {
+        o4.appendChild(pill(TAX[k], A.tax === k, function () {
           A.tax = k;
           if (k !== 'nondeduct') A.nd = null;
-          go(after('tax'));
+          render();
         }));
       });
-      qs.appendChild(g4);
+      r4.body.appendChild(o4);
+      qs.appendChild(r4.row);
     }
 
-    if (step === 'nd') {
-      var g5 = el('div', 'opt-grid');
-      Object.keys(ND).forEach(function (r) {
-        g5.appendChild(option(ND[r], null, A.nd === r, function () { A.nd = r; go(after('nd')); }));
+    if (p.indexOf('nd') >= 0) {
+      var r5 = qrow('nd');
+      var o5 = el('div', 'opts');
+      Object.keys(ND).forEach(function (k) {
+        o5.appendChild(pill(ND[k], A.nd === k, function () { A.nd = k; render(); }));
       });
-      qs.appendChild(g5);
-    }
-
-    if (step === 'done') {
-      // 마지막 화면의 오른쪽 열은 통째로 비어 있었다. 질문들이 결국 정한 것 —
-      // 증빙유형 코드 — 을 그 자리에 크게 세운다.
-      var box = el('div', 'done-box');
-      var code = evidenceCode(A);
-      box.appendChild(el('p', 'done-k', '이 답으로 정해진 증빙유형'));
-      if (code) {
-        var evLine = el('div', 'done-ev');
-        evLine.appendChild(el('span', 'c', code));
-        evLine.appendChild(el('span', 'n', EV[code]));
-        box.appendChild(evLine);
-        if (code === '24') {
-          box.appendChild(el('p', null,
-            '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.'));
-        }
-      }
-      var p = el('p');
-      p.appendChild(document.createTextNode('확인했으면 '));
-      p.appendChild(el('b', null, A.issue === 'after' ? '리스트 보기' : '입력항목 채우기'));
-      p.appendChild(document.createTextNode('로 넘어가세요. 고칠 답은 왼쪽에서 그 줄을 누르면 됩니다.'));
-      box.appendChild(p);
-      qs.appendChild(box);
+      r5.body.appendChild(o5);
+      qs.appendChild(r5.row);
     }
   }
 
-  /* ── 왼쪽 요약 레일 — 답이 있는 질문만, 각 줄에 '수정' ───────────────── */
-  function renderAnswers() {
-    var host = document.getElementById('answers');
+  /* ── 바로 선택 스트립 — 질문 폼 밖의 지름길(선택 사항임을 문구로 명시) ── */
+  function renderQuick() {
+    var host = document.getElementById('quick');
     host.textContent = '';
-    var keys = path().filter(answered);
-
-    if (!keys.length) {
-      host.appendChild(el('p', 'ans-empty', '아직 없습니다 — 오른쪽 질문에 답하면 여기에 쌓입니다.'));
-      return;
-    }
-
-    var ul = el('ul', 'ans-list');
-    keys.forEach(function (k) {
-      var li = el('li', step === k ? 'cur' : null);
-      var cur = step === k;
-      // 지금 보고 있는 질문은 버튼이 아니다 — 이미 그 질문 화면이라 누를 곳이 없다.
-      // 나머지는 **줄 전체**가 그 질문으로 돌아가는 버튼이다(작은 '수정' 버튼 대신).
-      var row = el(cur ? 'div' : 'button', 'ans-row');
-      if (!cur) {
-        row.type = 'button';
-        row.setAttribute('aria-label', SHORT[k] + ' 수정 — 현재 답: ' + text(k));
-        row.addEventListener('click', function () { go(k); });
-      }
-      var hd = el('div', 'ans-hd');
-      var kk = el('span', 'ans-k', SHORT[k]);
-      if (cur) kk.appendChild(el('i', null, ' · 지금'));
-      hd.appendChild(kk);
-      if (!cur) hd.appendChild(el('span', 'ans-edit', '✎ 수정'));
-      row.appendChild(hd);
-      row.appendChild(el('div', 'ans-v', text(k)));
-      li.appendChild(row);
-      ul.appendChild(li);
+    var hd = el('p', 'quick-hd');
+    hd.appendChild(el('b', null, '바로 선택'));
+    hd.appendChild(document.createTextNode(
+      ' — 증빙유형을 이미 알면 코드를 누르세요. 아래 답이 자동으로 채워집니다(건너뛰어도 됩니다).'));
+    host.appendChild(hd);
+    var curCode = evidenceCode(A);
+    QUICK.forEach(function (g) {
+      var line = el('div', 'quick-group');
+      line.appendChild(el('span', 'quick-group-name', g.name));
+      g.items.forEach(function (q) {
+        var b = el('button', 'qpill');
+        b.type = 'button';
+        b.setAttribute('aria-pressed', curCode === q.code ? 'true' : 'false');
+        b.appendChild(el('span', 'pill-code', q.code));
+        b.appendChild(document.createTextNode(q.label));
+        b.addEventListener('click', function () { applyQuick(q); });
+        line.appendChild(b);
+      });
+      host.appendChild(line);
     });
-    host.appendChild(ul);
   }
 
-  /* ── 상단 진행 안내 + 하단 진행 버튼 ─────────────────────────────────── */
+  /* ── 상단 흐름 표시 + 하단 CTA ───────────────────────────────────────── */
   function renderChrome() {
-    var p = path();
-
-    // 질문 위치 — 이름 5개를 늘어놓던 11.5px 체인 대신 "질문 n / N" + 칸 막대만 둔다.
-    // 지나온 질문의 이름과 답은 왼쪽 레일이 이미 더 크게 보여준다.
-    var pos = step === 'done' ? p.length : p.indexOf(step) + 1;
-    var count = document.getElementById('count');
-    count.textContent = '';
-    if (step === 'done') {
-      count.appendChild(document.createTextNode('질문 완료'));
-    } else {
-      // 발행 여부를 고르기 전에는 총 질문 수가 정해지지 않는다 — 1/1 로 단정하지 않는다.
-      count.appendChild(document.createTextNode('질문 ' + pos));
-      count.appendChild(el('span', null, ' / ' + (A.issue ? p.length : '?')));
-    }
-
-    var bar = document.getElementById('bar');
-    bar.textContent = '';
-    bar.setAttribute('aria-valuemin', '0');
-    if (A.issue) {
-      bar.setAttribute('aria-valuemax', String(p.length));
-      bar.setAttribute('aria-valuenow', String(pos));
-    } else {
-      bar.removeAttribute('aria-valuemax');
-      bar.removeAttribute('aria-valuenow');
-    }
-    // 화면에는 질문 이름을 적지 않지만 스크린리더에는 경로 전체를 읽어 준다.
-    bar.setAttribute('aria-valuetext', step === 'done'
-      ? ('질문 ' + p.length + '개 모두 완료')
-      : (p.length + '개 중 ' + pos + '번째 — ' + SHORT[step] + '. 전체 순서: '
-         + p.map(function (k, i) { return (i + 1) + '. ' + SHORT[k]; }).join(', ')));
-    p.forEach(function (k, i) {
-      bar.appendChild(el('i', step === 'done' || i < pos - 1 ? 'done' : (i === pos - 1 ? 'cur' : null)));
-    });
-    if (!A.issue) bar.appendChild(el('i'));
-
-    // 질문 수가 경로마다 다르다는 사실은 첫 질문에서만 궁금하다 — 팁 안에서만 덧붙인다.
-    document.getElementById('tipHowExtra').textContent =
-      A.issue ? '' : ' 발행 전이면 질문 2개, 발행 후면 4~5개입니다.';
-
     // 전체 화면 흐름 — 질문이 끝난 뒤 어디로 가는지(경로에 따라 화면 수가 달라진다).
-    var stages = A.issue === 'before'
-      ? ['질문', '입력항목', '요약']
-      : (A.split === 'split'
-        ? ['질문', '리스트 선택', '입력항목', '비용분할', '요약']
-        : ['질문', '리스트 선택', '입력항목', '요약']);
-    var path$ = document.getElementById('path');
-    path$.textContent = '';
-    path$.appendChild(document.createTextNode('전체 흐름 · '));
-    stages.forEach(function (s, i) {
-      if (i) path$.appendChild(document.createTextNode(' › '));
-      path$.appendChild(i === 0 ? el('b', null, s) : document.createTextNode(s));
+    var stages = A.issue === 'after'
+      ? (A.split === 'split'
+        ? ['질문', '리스트', '입력항목', '비용분할', '요약']
+        : ['질문', '리스트', '입력항목', '요약'])
+      : ['질문', '입력항목', '요약'];
+    var host = document.getElementById('path');
+    host.textContent = '';
+    host.appendChild(document.createTextNode('전체 흐름 · '));
+    stages.forEach(function (st, i) {
+      if (i) host.appendChild(document.createTextNode(' › '));
+      host.appendChild(i === 0 ? el('b', null, st) : document.createTextNode(st));
     });
-
-    var prev = document.getElementById('prev');
-    var prevKey = before(step);
-    prev.disabled = !prevKey;
-    prev.onclick = function () { if (prevKey) go(prevKey); };
 
     var next = document.getElementById('next');
-    if (step === 'done') {
-      next.textContent = (A.issue === 'after' ? '리스트 보기' : '입력항목 채우기') + ' →';
-      next.disabled = !done();
-      // 문서 시뮬레이터는 여기서 멈춘다 — 뒤 화면은 아래 섹션이 표로 설명한다.
-      next.onclick = null;
-    } else {
-      next.textContent = '다음 →';
-      next.disabled = !answered(step);
-      next.onclick = function () { go(after(step)); };
-    }
+    next.textContent = (A.issue === 'after' ? '리스트 보기' : '입력항목 채우기') + ' →';
+    next.disabled = !done();
+    // 문서 시뮬레이터는 여기서 멈춘다 — 뒤 화면은 아래 섹션이 표로 설명한다.
+    next.onclick = null;
   }
 
   /* ── 증빙유형 ─────────────────────────────────────────────────────────
@@ -935,47 +805,41 @@
   function paintEvidence() {
     var box = document.getElementById('evBody');
     box.textContent = '';
+    var row = el('div', 'ev');
+    row.appendChild(el('span', 'ev-k', '증빙유형'));
     var code = evidenceCode(A);
 
     if (!code) {
       var why = !A.issue ? '발행 여부를 고르면'
         : !A.tax ? '과세여부를 고르면'
         : '불공 사유를 고르면';
-      box.appendChild(el('p', 'ev-none', why + ' 증빙유형이 정해집니다.'));
+      row.appendChild(el('span', 'ev-none', why + ' 증빙유형이 정해집니다.'));
+      box.appendChild(row);
       return;
     }
 
-    var row = el('div', 'ev');
     row.appendChild(el('span', 'ev-code', code));
     row.appendChild(el('span', 'ev-name', EV[code]));
-    box.appendChild(row);
-
     // 발행 전 불공은 사유를 나누지 않는다 — 그래서 사유 질문도 발행 후에만 나온다.
     if (A.issue === 'before' && A.tax === 'nondeduct') {
-      var w = el('p', 'ev-note muted', '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.');
-      w.style.margin = '0';
-      box.appendChild(w);
+      row.appendChild(el('span', 'ev-note muted', '발행 전 불공은 사유를 나누지 않고 이 코드 하나로 넣습니다.'));
     }
+    box.appendChild(row);
   }
 
-  /* focusTitle: 스텝이 바뀐 렌더에서만 제목으로 포커스를 옮긴다 — 자동 진행으로 방금 누른
-     버튼이 사라지면 키보드 사용자가 위치를 잃기 때문(첫 렌더에서는 옮기지 않는다). */
-  function render(focusTitle) {
-    renderQuestion();
-    renderAnswers();
+  /* 렌더 — 위저드 시절의 포커스 이동(제목 focus)은 없다. 화면 전환이 없으니 방금 누른
+     pill 이 그 자리에 그대로 있고, 옮길 포커스도 없다. */
+  function render() {
+    renderQuick();
+    renderRows();
     renderChrome();
     paintEvidence();
-    if (focusTitle) {
-      var t = document.getElementById('qTitle');
-      if (t) t.focus();
-    }
   }
 
   document.getElementById('reset').addEventListener('click', function () {
     A = { issue: null, from: '', to: '', split: null, tax: null, nd: null };
-    go('issue');
+    render();
   });
-  wireTip(document.getElementById('tipHow'));   // 상단 '이 화면 사용법' 토글팁
   render();
 
   /* ── 분할 계산기 ──────────────────────────────────────────────────── */

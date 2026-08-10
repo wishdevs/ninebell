@@ -121,7 +121,9 @@ export const SelectItem = forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'text-foreground-secondary relative flex w-full cursor-pointer items-center rounded-[var(--radius-sm)] py-1.5 pr-2.5 pl-7 text-[length:var(--text-body-sm)] tabular-nums transition-colors select-none',
+      // 목록 항목은 body(14px) — 트리거(body-sm)보다 한 단계 크게. 선택지를 읽고 고르는
+      // 자리라 본문 크기가 맞다(2026-08-05 사용자 확정 — 콤보박스 목록과 동일 크기).
+      'text-foreground-secondary relative flex w-full cursor-pointer items-center rounded-[var(--radius-sm)] py-1.5 pr-2.5 pl-7 text-[length:var(--text-body)] tabular-nums transition-colors select-none',
       'focus:bg-muted focus:text-foreground focus:outline-none',
       'data-[state=checked]:bg-accent/10 data-[state=checked]:text-accent data-[state=checked]:font-medium',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
