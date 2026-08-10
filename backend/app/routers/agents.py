@@ -47,8 +47,13 @@ async def list_agents(
     rows = await visible_agents(db, actor, hidden_ids=_HIDDEN_AGENT_IDS)
     # 픽스처 정의 순서로 정렬(카드 → 출장 국내). 픽스처 밖은 뒤로 + 시각순.
     rows.sort(key=lambda a: (_FIXTURE_ORDER.get(a.id, len(_FIXTURE_ORDER)), a.created_at))
-    stats = await compute_run_stats(db, [a.id for a in rows])
-    return [serialize_agent(a, stats=stats.get(a.id)) for a in rows]
+    # ⚠ agent_runs.agent_id 에는 **workflow_id** 가 저장된다(models/agent_run.py 주석) —
+    #   Agent.id(PK) 로 집계하면 영원히 0 이다(회귀 2026-08-10: voucher 그룹 통계 미표시).
+    stats = await compute_run_stats(db, [a.workflow_id for a in rows if a.workflow_id])
+    return [
+        serialize_agent(a, stats=stats.get(a.workflow_id) if a.workflow_id else None)
+        for a in rows
+    ]
 
 
 @router.get("/{agent_id}")
@@ -70,8 +75,11 @@ async def get_agent(
             )
     # 상세에서만 단계별 예상 소요(최근 성공 런 실측 평균) 계산 — 목록은 부하상 미계산.
     step_ms = await expected_step_ms(db, agent.workflow_id) if agent.workflow_id else None
-    stats = await compute_run_stats(db, [agent.id])
-    return serialize_agent(agent, stats=stats.get(agent.id), include_flow=True, step_expected_ms=step_ms)
+    # 런 이력 키는 workflow_id — 목록 집계와 동일(2026-08-10).
+    stats = await compute_run_stats(db, [agent.workflow_id]) if agent.workflow_id else {}
+    return serialize_agent(
+        agent, stats=stats.get(agent.workflow_id), include_flow=True, step_expected_ms=step_ms
+    )
 
 
 class SettingsPatchIn(BaseModel):
@@ -96,5 +104,6 @@ async def patch_agent_settings(
     # 기존 저장값 위에 병합(불변 갱신 — JSON 컬럼 in-place 변경은 dirty 감지가 안 된다).
     agent.settings = {**(agent.settings or {}), **validated}
     await db.commit()
-    stats = await compute_run_stats(db, [agent.id])
-    return serialize_agent(agent, stats=stats.get(agent.id))
+    # 런 이력 키는 workflow_id — 목록/상세 집계와 동일(2026-08-10).
+    stats = await compute_run_stats(db, [agent.workflow_id]) if agent.workflow_id else {}
+    return serialize_agent(agent, stats=stats.get(agent.workflow_id))

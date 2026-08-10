@@ -66,6 +66,11 @@ async def set_terminal(run_id: str, status: str, note: object, logs: list) -> No
         run.result = note
         run.logs = logs
         await s.commit()
+    # 방금 끝난 런이 목록 통계(실행수·평균시간)에 즉시 반영되게 캐시를 비운다(지연 import —
+    # services.agents 가 무거운 직렬화 의존을 갖고 있어 모듈 로드 시점 결합을 피한다).
+    from app.services.agents import invalidate_stats_cache
+
+    invalidate_stats_cache()
 
 
 async def list_runs(

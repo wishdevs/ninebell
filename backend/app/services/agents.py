@@ -32,6 +32,11 @@ _STATS_CACHE_TTL_SEC = 300.0
 _stats_cache: dict[tuple[str, ...], tuple[float, dict[str, dict]]] = {}
 
 
+def invalidate_stats_cache() -> None:
+    """런 종료 시 호출 — 방금 끝난 실행이 TTL(5분)을 기다리지 않고 통계에 반영되게 한다."""
+    _stats_cache.clear()
+
+
 def _finalize(total: int, ok: int, fail: int, last, avg_s: float | None) -> dict:
     """집계 원시값 → 반환 계약(run_count/success_rate/avg_seconds/last_run_at) 공통 변환."""
     terminal = ok + fail
