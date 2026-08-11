@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, api } from '@/lib/api/client';
 import { readDebugMode, writeDebugMode } from '@/lib/debug-mode';
+import { IS_DEV_ENV } from '@/lib/env';
 import { requestHitlNotificationPermission } from '@/lib/live/use-hitl-notification';
 
 /** 회원가입 유도 시 sessionStorage에 넘길 pending 정보 키. */
@@ -78,7 +79,7 @@ export function LoginForm() {
       setUserid(saved);
       setSaveId(true);
     }
-    setDebugMode(readDebugMode());
+    if (IS_DEV_ENV) setDebugMode(readDebugMode());
   }, []);
 
   async function login(uid: string, pw: string) {
@@ -196,19 +197,23 @@ export function LoginForm() {
         </label>
       </div>
 
-      {/* 디버그 모드 — 켜면 메뉴·기능이 조금 달라진다(AI 모델 스위치, 결의서입력 종류 등). */}
-      <label className="border-border/60 text-foreground-secondary -mt-1 flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-dashed px-3 py-2 text-[length:var(--text-body-sm)]">
-        <input
-          type="checkbox"
-          className="accent-accent h-4 w-4 cursor-pointer"
-          checked={debugMode}
-          onChange={(event) => setDebugMode(event.target.checked)}
-        />
-        <span className="flex items-center gap-1.5">
-          디버그 모드
-          <span className="text-foreground-tertiary text-[11px]">메뉴·기능 일부 변경</span>
-        </span>
-      </label>
+      {/* 디버그 모드 — 켜면 메뉴·기능이 조금 달라진다(AI 모델 스위치, 결의서입력 종류 등).
+          개발/AWS 테스트 빌드에서만 노출한다(온프렘은 체크박스 없음 → 제출 시 false 로 기록돼
+          이전에 켜둔 값도 해제된다). */}
+      {IS_DEV_ENV ? (
+        <label className="border-border/60 text-foreground-secondary -mt-1 flex cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-dashed px-3 py-2 text-[length:var(--text-body-sm)]">
+          <input
+            type="checkbox"
+            className="accent-accent h-4 w-4 cursor-pointer"
+            checked={debugMode}
+            onChange={(event) => setDebugMode(event.target.checked)}
+          />
+          <span className="flex items-center gap-1.5">
+            디버그 모드
+            <span className="text-foreground-tertiary text-[11px]">메뉴·기능 일부 변경</span>
+          </span>
+        </label>
+      ) : null}
 
       <Button type="submit" disabled={submitting}>
         {submitting ? (
