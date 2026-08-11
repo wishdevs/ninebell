@@ -10,7 +10,6 @@ import {
   RiDeleteBinLine,
   RiErrorWarningLine,
   RiCloseLine,
-  RiPlayLine,
   RiRestartLine,
   RiSkipBackLine,
   RiStopLine,
@@ -42,7 +41,7 @@ const SHOW_DEBUG = false;
 const CLEANUP_WORKFLOWS: Record<string, string> = {
   'trip-domestic': 'trip-domestic-cleanup',
   'trip-overseas': 'trip-overseas-cleanup',
-  'card-chat': 'card-collect-cleanup',
+  'corporate-card': 'card-collect-cleanup',
   'family-event': 'gyeongjo-grant-cleanup',
   scholarship: 'hakjagum-grant-cleanup',
 };
@@ -96,7 +95,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const defaultWorkflow = agent.workflowId;
   const canRun = !!defaultWorkflow;
   // 실행 전 입력 폼 — 이 워크플로우가 폼 레지스트리에 있으면 idle 에서 폼으로 파라미터를
-  // 받아 실행한다(card-chat 등 폼 없는 에이전트는 종전대로 바로 실행). 없으면 undefined.
+  // 받아 실행한다(corporate-card 등 폼 없는 에이전트는 종전대로 바로 실행). 없으면 undefined.
   const PreRunForm = canRun ? PRE_RUN_FORMS[defaultWorkflow] : undefined;
   const usePreRun = !!PreRunForm;
   // 화면 시뮬레이션 패널 — 자동화 그래프가 아직 없는(실행 불가) 에이전트가 화면 흐름만
@@ -515,16 +514,27 @@ function LiveControls({
   }, [enabled, terminal]);
 
   if (!enabled) {
-    const disabled = !canRun || !!preRunHint;
-    const title = !canRun
-      ? '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'
-      : (preRunHint ?? undefined);
-    return (
-      <Button size="sm" onClick={onStartReal} disabled={disabled} title={title}>
-        <RiPlayLine size={14} aria-hidden />
-        실행
-      </Button>
-    );
+    // 실행 전 폼이 있는 에이전트는 **폼의 실행 버튼이 유일한 시작점**이다. 헤더에 같은 라벨의
+    // 비활성 버튼을 두면 화면에 '실행'이 둘이 되고 상태까지 어긋나 보인다(사용자 지적
+    // 2026-08-11: 회계전표는 기간 기본값이 있어 폼 버튼만 활성이라 대비가 두드러졌다).
+    // 버튼 대신 안내 문구만 남긴다.
+    if (preRunHint) {
+      return (
+        <span className="text-foreground-tertiary text-[length:var(--text-body-sm)]">
+          {preRunHint}
+        </span>
+      );
+    }
+    // 폼이 없는 에이전트도 시작점은 **스테이지 중앙 CTA 하나**다(소요 예고까지 함께 준다).
+    // 헤더에 같은 버튼을 또 두면 화면에 '실행'이 둘이 된다 — 실행 불가 사유만 남긴다.
+    if (!canRun) {
+      return (
+        <span className="text-foreground-tertiary text-[length:var(--text-body-sm)]">
+          실행 가능한 워크플로우가 연결되지 않았습니다
+        </span>
+      );
+    }
+    return null;
   }
   if (terminal) {
     return (
