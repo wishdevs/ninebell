@@ -183,6 +183,7 @@ class _CardSubPage:
         self._matched = matched
         self._total = total
         self.by_name_called = False
+        self.by_name_arg = None  # by-name JS 로 전달된 owners 인자(변형 목록 검증용)
         self.all_called = False
         self.clicks: list[tuple] = []
         self.mouse = self  # click 을 자기 자신에서 받음
@@ -198,6 +199,7 @@ class _CardSubPage:
             return {"x": 1, "y": 2}  # 돋보기 버튼
         if script == js.CARD_SUB_SELECT_BY_NAME_JS:
             self.by_name_called = True
+            self.by_name_arg = arg
             return {"ok": True, "n": self._total, "matched": self._matched, "checked": self._matched}
         if script == js.CARD_SUB_SELECT_ALL_JS:
             self.all_called = True
@@ -208,27 +210,59 @@ class _CardSubPage:
 
 
 async def test_select_cards_by_name_when_match():
-    """본인 이름과 일치하는 카드가 있으면 그 카드만 선택(by='name')."""
+    """일반 모드(own_only=True): 본인 이름과 일치하는 카드만 선택(by='name')."""
     page = _CardSubPage(matched=2)
-    r = await steps.select_all_cards(page, owner_name="이트라이브2")
+    r = await steps.select_all_cards(page, owner_name="이트라이브2", own_only=True)
     assert r["ok"] and r["by"] == "name" and r["checked"] == 2
     assert page.by_name_called and not page.all_called  # 전체선택 미호출
 
 
-async def test_select_cards_falls_back_to_all_when_no_match():
-    """본인 카드 0건이면 기존 로직(전체선택)으로 폴백(by='all')."""
+async def test_select_cards_own_only_zero_match_falls_back_to_all():
+    """일반 모드 본인 카드 0건 — **전체선택으로 폴백**(사용자 확정 2026-08-03).
+
+    법인 공용 카드만 쓰는 계정은 본인 명의 카드가 아예 없어(카드명 괄호에 개인명 없음)
+    하드 실패시키면 실행 자체가 막힌다. 처리 대상은 뒤의 그리드 개입에서 사용자가 확정하므로
+    전체를 담는 것은 후보 제시다. 폴백 사실은 warn 으로 반드시 남아야 한다(안내 노출 근거).
+    """
     page = _CardSubPage(matched=0)
-    r = await steps.select_all_cards(page, owner_name="이트라이브2")
-    assert r["ok"] and r["by"] == "all"
-    assert page.by_name_called and page.all_called  # 매칭 0 → 전체선택 폴백
+    r = await steps.select_all_cards(page, owner_name="이트라이브2", own_only=True)
+    assert r["ok"] is True and r["by"] == "all"
+    assert page.by_name_called and page.all_called  # 본인 매칭 시도 후 전체선택
+    assert "본인 카드 0장" in (r.get("warn") or "")  # 폴백 사유가 로그로 노출된다
+
+
+async def test_select_cards_own_only_without_owner_fails():
+    """일반 모드인데 본인 판정 이름이 없으면 즉시 실패 — 팝업도 열지 않는다."""
+    page = _CardSubPage(matched=3)
+    r = await steps.select_all_cards(page, owner_name=None, own_only=True)
+    assert r["ok"] is False and "사용자 이름" in r["reason"]
+    assert not page.by_name_called and not page.all_called and page.clicks == []
 
 
 async def test_select_cards_all_when_no_owner():
-    """owner_name 미지정이면 by-name 미호출·전체선택."""
+    """디버그 모드(own_only=False 기본)면 by-name 미호출·전체선택."""
     page = _CardSubPage(matched=3)
     r = await steps.select_all_cards(page, owner_name=None)
     assert r["ok"] and r["by"] == "all"
     assert not page.by_name_called and page.all_called
+
+
+async def test_select_cards_passes_variant_list_to_js():
+    """이름 변형 목록을 주면 JS 에 배열 그대로 전달된다(빈 값·공백 정리 포함)."""
+    page = _CardSubPage(matched=1)
+    r = await steps.select_all_cards(page, owner_name=["sdh", " 석대현 ", ""], own_only=True)
+    assert r["ok"] and r["by"] == "name"
+    assert page.by_name_arg == ["sdh", "석대현"]
+
+
+async def test_owner_name_variants_includes_job_title_form():
+    """로그인ID + 순수 이름 + '이름 직책' 변형을 중복 없이 만든다(사용자 요청 2026-07-29)."""
+    assert steps.owner_name_variants("sdh", "석대현", "프로") == ["sdh", "석대현", "석대현 프로"]
+    # 직책 없으면 '이름 직책' 변형 없음, 이름 없으면 로그인ID 만.
+    assert steps.owner_name_variants("sdh", "석대현", None) == ["sdh", "석대현"]
+    assert steps.owner_name_variants("sdh", None, "프로") == ["sdh"]
+    # 로그인ID == 이름(이 ERP 관례)이면 중복 제거.
+    assert steps.owner_name_variants("석대현", "석대현", "프로") == ["석대현", "석대현 프로"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -780,3 +814,135 @@ async def test_save_document_observation_loop_does_not_use_scaled_wait():
     assert r["ok"] is True
     assert page.timeouts == 0, "관찰 루프가 delay_scale 대상 대기(wait_for_timeout)를 썼다"
     assert page.snaps >= int(steps._SAVE_MIN_OBSERVE_S / steps._SAVE_POLL_S)
+
+
+# ── apply_rows_to_document 관찰 창(실시간) — 2026-08-07 감사 교정 회귀 ─────────────
+class _StuckCardWinPage(_LateModalPage):
+    """'적용' 후 카드팝업이 끝내 닫히지 않는 fake — 모달도 없다(서버 처리 장기화 흉내)."""
+
+    def __init__(self):
+        super().__init__(card_win=True)
+        self._spawned = True  # 부모의 지연 모달 스폰 비활성화(모달 없음 유지)
+        self.timeouts = 0
+
+    async def wait_for_timeout(self, ms):
+        self.timeouts += 1
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if script == js.MODALS_SNAPSHOT_JS:
+            return []
+        return await super().evaluate(script, arg)
+
+
+async def test_apply_rows_to_document_cap_loop_does_not_use_scaled_wait():
+    """미닫힘 관찰 루프가 wait_for_timeout(명목 카운터)을 쓰면 delay_scale 0.15 에서 45s
+    상한이 ~12-20s 로 붕괴한다 — _real_sleep(실시간, 테스트에선 no-op) 폴이어야 한다."""
+    page = _StuckCardWinPage()
+    r = await steps.apply_rows_to_document(page, [0, 1])
+    assert r["ok"] is False and "닫히지 않음" in r["reason"]
+    assert page.timeouts == 0, "관찰 루프가 delay_scale 대상 대기(wait_for_timeout)를 썼다"
+    # 명목 폴백 카운터로도 45s 상한(300폴)까지는 관찰했다(조기 소진 금지).
+    assert r["elapsed_ms"] >= 0 and r["clicks"] == 0
+
+
+# ── 공용 엔진 fill_codepicker — '적용' 미출현/미닫힘 가짜 성공 차단(2026-08-07 감사) ──
+class _EnginePickerPage:
+    """엔진 fill_codepicker fake — 팝업 open 상태로 오픈/선택/적용/닫힘 시맨틱을 지킨다."""
+
+    def __init__(self, *, has_apply=True, closes=True):
+        self._has_apply = has_apply
+        self._closes = closes
+        self.open = False
+        self.clicks: list[tuple] = []
+        self.close_calls = 0
+        self.mouse = self
+
+    async def click(self, x, y):
+        self.clicks.append((x, y))
+        if (x, y) == (51, 51):
+            self.open = True  # 돋보기 → 팝업 오픈
+        if (x, y) == (52, 52) and self._closes:
+            self.open = False  # '적용' → 닫힘
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if "bg_cd-wrapper" in script:
+            return {"x": 51, "y": 51}
+        if script == js_lib.PICKER_ROWCOUNT_JS:
+            return 1 if self.open else -1
+        if script == js_lib.PICKER_READ_JS:
+            return {"rows": 1, "options": [{"i": 0, "code": "2006", "name": "본사"}]}
+        if script == js_lib.PICKER_SELECT_JS:
+            return {"ok": True}
+        if script == js_lib.PICKER_APPLY_BTN_JS:
+            return {"x": 52, "y": 52} if self._has_apply else None
+        if script == js_lib.PICKER_CLOSE_JS:
+            self.close_calls += 1
+            self.open = False
+            return True
+        return None
+
+
+async def test_engine_fill_codepicker_ok_when_applied_and_closed():
+    page = _EnginePickerPage()
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is True and r["code"] == "2006"
+    assert page.open is False  # 피커가 실제로 닫혔다
+
+
+async def test_engine_fill_codepicker_fails_when_apply_button_missing(monkeypatch):
+    """'적용' 버튼 미출현이면 선택이 폼에 안 붙는다 — 예전엔 무조건 {ok:True, code, name}."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)  # 폴 상한 축소(테스트 속도)
+    page = _EnginePickerPage(has_apply=False)
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is False and "적용" in r["reason"]
+    assert page.close_calls >= 1 and page.open is False  # 실패 시 피커를 방치하지 않는다
+
+
+async def test_engine_fill_codepicker_fails_when_picker_stays_open(monkeypatch):
+    """'적용' 후에도 팝업이 남으면 하드 실패 — 다음 non-법인카드 k-window 조작 오염 차단."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)
+    page = _EnginePickerPage(closes=False)
+    r = await steps.fill_codepicker(page, "bg_cd", "", "BG_CD", "BG_NM")
+    assert r["ok"] is False and "닫히지 않" in r["reason"]
+    assert page.open is False  # _fail 경로가 잔존 팝업을 닫았다
+
+
+# ── 공용 엔진 _open_picker — 버튼 출현 폴링 상한은 실시간(2026-08-07 감사) ─────────
+class _SlowBtnPage:
+    """코드피커 버튼이 41번째 폴에야 렌더되는 fake — 종전 명목 24폴 상한이면 미오픈 실패."""
+
+    def __init__(self, appear_on: int = 41):
+        self._appear_on = appear_on
+        self.btn_polls = 0
+        self.open = False
+        self.mouse = self
+
+    async def click(self, x, y):
+        self.open = True
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if "bg_cd-wrapper" in script:
+            self.btn_polls += 1
+            return {"x": 1, "y": 2} if self.btn_polls >= self._appear_on else None
+        if script == js_lib.PICKER_ROWCOUNT_JS:
+            return 3 if self.open else -1
+        return None
+
+
+async def test_engine_open_picker_budget_is_realtime_not_poll_count():
+    """실시간 예산(6s) 안이면 폴 횟수와 무관하게 오픈 성공 — delay_scale 0.15 에서 관찰창이
+    24×37.5ms≈0.9s 로 붕괴하던 명목 카운터 회귀 방지(2026-07-10 prod 0건 사고 재발 차단)."""
+    page = _SlowBtnPage(appear_on=41)  # 종전 range(24) 상한을 넘는 지연 출현
+    assert await steps._open_picker(page, "bg_cd") is True
+    assert page.btn_polls >= 41 and page.open is True

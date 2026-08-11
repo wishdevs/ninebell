@@ -21,10 +21,28 @@ def make_select_all_cards_node():
         page = state["page"]
         await emit_step(events, "select_all_cards", "running")
         t0 = time.monotonic()
-        # 로그인ID(=사용자명)와 일치하는 본인 카드만 우선 선택, 없으면 전체선택 폴백.
-        owner = state.get("userid")
-        r = await steps.select_all_cards(page, owner_name=owner)
+        # 카드 선택 분기(사용자 요구 2026-07-31): 디버그 모드(runs.py 가 불리언 강제 주입)면
+        # 종전처럼 **전체선택**, 기본(일반 모드)은 로그인ID·프로필 이름·"이름 직책"과 일치하는
+        # **본인 카드만**(매칭 0장이면 폴백 없이 중단 — 무매칭 임의선택 금지).
+        # 직책 변형은 패널 이름 "석대현 프로" 표기 대응(사용자 요청 2026-07-29).
+        params = state.get("params") or {}
+        debug = params.get("debug") is True
+        owners = steps.owner_name_variants(
+            state.get("userid"), params.get("user_display_name"), params.get("user_job_title")
+        )
+        owner = owners[0] if owners else None  # 로그 표시용 대표 키.
+        if debug:
+            r = await steps.select_all_cards(page)
+        else:
+            r = await steps.select_all_cards(page, owner_name=owners, own_only=True)
         if not r.get("ok"):
+            if not debug and r.get("matched") == 0:
+                # 매칭 진단(카드 수·대조 이름)을 로그로 남긴다 — 사후 원인 추적용.
+                await emit_log(
+                    events,
+                    f"본인 카드 매칭 0장(전체 {r.get('n')}장) — 대조 이름: {', '.join(owners)}",
+                    "error",
+                )
             await emit_step(events, "select_all_cards", "failed")
             return {"error": f"카드 선택 실패: {r.get('reason')}"}
         # 확인 불가(리더가 못 읽음)는 하드 실패가 아니지만 **성공으로 단정하지 않는다** —
@@ -34,11 +52,25 @@ def make_select_all_cards_node():
         # 폼 반영을 확인하지 못했으면 '완료'가 아니라 '미확인'으로 적는다(성공 단정 금지).
         done = "완료" if r.get("verified", True) else "적용(폼 반영 미확인)"
         if r.get("by") == "name":
+            names = ", ".join(n for n in (r.get("names") or []) if n)
             await emit_log(
-                events, f"본인('{owner}') 카드 {r.get('checked')}장 선택·적용 {done}.", "ok"
+                events,
+                f"본인('{owner}') 카드 {r.get('checked')}장 선택·적용 {done}."
+                + (f" — {names}" if names else ""),
+                "ok",
             )
+        elif debug:
+            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}(디버그 모드).", "ok")
         else:
-            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}(본인 카드 없음).", "ok")
+            # 일반 모드인데 by='all' = 본인 카드 0장 폴백(사용자 확정 2026-08-03).
+            # 왜 전체가 선택됐는지 사용자가 화면에서 바로 알 수 있어야 한다.
+            await emit_log(
+                events,
+                f"본인('{owner}') 명의 카드가 없어 법인카드 {r.get('n')}장 **전체**를 선택했습니다"
+                " — 처리할 내역은 다음 단계 그리드에서 직접 확인·선택해 주세요.",
+                "warn",
+            )
+            await emit_log(events, f"법인카드 {r.get('n')}장 전체선택·적용 {done}.", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "select_all_cards", "done", _shared._ms(t0))
         return {}

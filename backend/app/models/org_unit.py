@@ -10,7 +10,7 @@ agent_org_access = (agent_id, org_unit_id) 존재 = 그 조직구분(팀)이 그
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -24,6 +24,13 @@ COST_TYPE_PREFIX = {COST_TYPE_SGA: "(판)", COST_TYPE_MFG: "(제)"}
 
 class OrgUnit(Base, TimestampMixin):
     __tablename__ = "org_units"
+    # cost_type 은 NULL(컨테이너) 또는 COST_TYPES 만 허용(0033 과 동일 정의).
+    __table_args__ = (
+        CheckConstraint(
+            f"cost_type IS NULL OR cost_type IN ('{COST_TYPE_SGA}','{COST_TYPE_MFG}')",
+            name="cost_type",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     label: Mapped[str] = mapped_column(String(120), nullable=False)

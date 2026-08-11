@@ -127,8 +127,10 @@ async def main() -> int:
             report["dept_ok"] = dept_ok
             await _snapshot(page, f"결의부서 전체선택({dept_ok})", report)
 
-            writer_ok = await csteps.clear_collect_writer(page)
-            report["writer_ok"] = writer_ok
+            # 2026-08-07 계약 변경: clear_collect_writer 는 {ok, warn?, reason?} dict 를 돌려준다.
+            writer_res = await csteps.clear_collect_writer(page)
+            writer_ok = bool(writer_res.get("ok"))
+            report["writer_ok"] = writer_res
             await _snapshot(page, f"결의자 비움({writer_ok})", report)
 
             gubun_ok = await csteps.set_collect_gubun_card(page)

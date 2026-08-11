@@ -8,6 +8,7 @@ DB 의존성이 없어 단위 테스트가 쉽다(ax `core/security.py` 구조 �
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -66,3 +67,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
     except (ValueError, TypeError):
         return False
+
+
+async def verify_password_async(password: str, password_hash: str) -> bool:
+    """verify_password 의 async 래퍼 — 워커 스레드에서 실행(asyncio.to_thread).
+
+    bcrypt.checkpw 는 CPU 바운드(수백 ms)라 이벤트 루프에서 직접 부르면 같은 루프의
+    스크린캐스트(16fps)·SSE 스트림까지 블로킹된다. 요청 경로(로그인)는 이 래퍼를 쓴다
+    (시드 등 동기 경로는 verify_password/hash_password 유지)."""
+    return await asyncio.to_thread(verify_password, password, password_hash)

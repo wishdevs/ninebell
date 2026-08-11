@@ -13,7 +13,7 @@ import {
   ORG_NONE,
   type MemberStatus,
 } from '@/lib/data/members';
-import { buildOrgUnitTree, type OrgUnit } from '@/lib/data/org-units';
+import { buildOrgUnitOptionGroups, type OrgUnit } from '@/lib/data/org-units';
 
 /** 조직구분 필터 값 — 'all' | ORG_NONE('__none__') | 실제 orgUnitId. */
 export type OrgFilterValue = 'all' | string;
@@ -37,8 +37,8 @@ interface MembersFilterBarProps {
  * 멤버 화면 상단 필터 툴바 — 셸·검색 인풋·초기화 버튼은 공용 레일(ListToolbar+SearchInput)이
  * 소유하고, 이 파일은 역할/조직구분/상태 **라벨 칩 드롭다운**만 남는다. 칩은 rounded-full·라벨
  * 접두·활성 시 accent 틴트로, 테이블 행의 사각 인라인 셀렉트(편집용)와 시각적으로 확실히
- * 구분한다(필터=칩 / 편집=셀). works-client 의 필터 칩 언어를 따른다. 조직구분은 본부▸팀
- * 그룹(멤버는 팀에만 배정 가능이라 본부 자체는 옵션 없음).
+ * 구분한다(필터=칩 / 편집=셀). works-client 의 필터 칩 언어를 따른다. 조직구분은 본부 그룹
+ * 아래 전 깊이 노드를 들여쓰기로 나열한다(본부 자체는 배정 불가라 옵션 없음).
  */
 export function MembersFilterBar({
   query,
@@ -53,7 +53,7 @@ export function MembersFilterBar({
   isFiltered,
   onReset,
 }: MembersFilterBarProps) {
-  const orgTree = buildOrgUnitTree(orgUnits);
+  const orgGroups = buildOrgUnitOptionGroups(orgUnits);
 
   return (
     <ListToolbar isFiltered={isFiltered} onReset={onReset}>
@@ -89,13 +89,17 @@ export function MembersFilterBar({
         >
           <SelectItem value="all">전체</SelectItem>
           <SelectItem value={ORG_NONE}>미지정</SelectItem>
-          {orgTree.map(({ parent, children }) =>
-            children.length === 0 ? null : (
+          {orgGroups.map(({ parent, options }) =>
+            options.length === 0 ? null : (
               <SelectGroup key={parent.id}>
                 <SelectLabel>{parent.label}</SelectLabel>
-                {children.map((child) => (
-                  <SelectItem key={child.id} value={child.id}>
-                    {child.label}
+                {options.map(({ unit, depth }) => (
+                  <SelectItem
+                    key={unit.id}
+                    value={unit.id}
+                    style={{ paddingLeft: `${1.75 + depth * 0.75}rem` }}
+                  >
+                    {unit.label}
                   </SelectItem>
                 ))}
               </SelectGroup>

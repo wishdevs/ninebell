@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
+import { IS_DEV_ENV } from '@/lib/env';
 import { SettingsClient } from './_components/settings-client';
 
 export const metadata: Metadata = { title: '조직 설정' };
@@ -10,5 +12,7 @@ export const metadata: Metadata = { title: '조직 설정' };
  * 인터랙티브 로직은 클라이언트 자식(SettingsClient)에 위임한다.
  */
 export default function SettingsPage() {
+  // 정적 픽스처 기반 목업 — 비개발 환경에선 직접 URL 접근을 404 로 막는다(nav devOnly 규약).
+  if (!IS_DEV_ENV) notFound();
   return <SettingsClient />;
 }

@@ -23,7 +23,8 @@ export type NavIconKey =
   | 'org'
   | 'budget'
   | 'learning'
-  | 'changelog';
+  | 'changelog'
+  | 'manual';
 
 export interface NavItem {
   href: string;
@@ -37,12 +38,16 @@ export interface NavItem {
   minRole?: Role;
   /** true면 개발 환경(NODE_ENV!=='production')에서만 노출 — 제작용 디버그 메뉴. */
   devOnly?: boolean;
+  /** true면 디버그 모드(로그인 체크박스, localStorage)일 때만 노출. */
+  debugOnly?: boolean;
 }
 
 export interface NavGroup {
   /** null이면 라벨 없는 그룹(홈 진입점). */
   label: string | null;
   items: readonly NavItem[];
+  /** true면 그룹 전체를 디버그 모드일 때만 노출(항목별 게이트와 별개). */
+  debugOnly?: boolean;
 }
 
 export const NAV_GROUPS: readonly NavGroup[] = [
@@ -56,9 +61,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
       // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
       { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
-      // 릴리스 단위 변경 기록. 읽기는 전 사용자(백엔드가 미공개 draft 를 걸러냄),
-      // 추가/수정/삭제는 관리자 — 게이트 없이 노출하고 화면 안에서 편집 UI 만 가린다.
-      { href: '/changelog', label: '변경사항', icon: 'changelog' },
+      // 에이전트별 사용 설명서 — 로그인한 전원 노출(게이트 없음).
+      { href: '/manual', label: '메뉴얼', icon: 'manual' },
+      // 릴리스 단위 변경 기록 — 디버그 모드에서만 노출(사용자 결정 2026-08-07).
+      // URL 직접 접근은 막지 않는다(백엔드가 미공개 draft 를 걸러냄, 편집 UI 는 화면 안 게이트).
+      { href: '/changelog', label: '변경사항', icon: 'changelog', debugOnly: true },
     ],
   },
   // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
@@ -79,6 +86,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
   {
     label: '개발',
+    // 그룹 전체를 디버그 모드에서만 노출(사용자 결정 2026-08-07) — 항목별 게이트는 그대로 중첩.
+    debugOnly: true,
     items: [
       { href: '/design-system', label: '디자인 시스템', icon: 'design', minRole: 'admin' },
       // 개입 학습(가맹점→선택)·전사 기초자료 열람 — dev·운영 모두 노출(전 로그인 사용자).

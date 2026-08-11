@@ -71,11 +71,11 @@ def _patch_collect_ok(monkeypatch, *, mapping=None, tab_back=True, calls=None):
 
     async def _writer(page):
         calls.append("writer")
-        return True
+        return {"ok": True}
 
     async def _period(page, start, end):
         calls.append(("period", start, end))
-        return True
+        return {"ok": True}
 
     async def _gubun(page):
         calls.append("gubun")
@@ -156,6 +156,35 @@ async def test_collect_tab_back_failure_errors(monkeypatch):
     assert_keys_declared(VoucherCardState, out)
 
 
+async def test_collect_no_abdocu_rows_skips_tab_and_ends(monkeypatch):
+    """결의서번호(ABDOCU_NO) 보유 0건 — 결의서조회승인 탭을 열지 않고 빈 맵으로 즉시 종료
+    (사용자 확정 2026-07-30: 대상이 없으면 다중탭 수집 불필요)."""
+    calls = _patch_collect_ok(monkeypatch)
+
+    async def _count(page):
+        return {"ok": True, "n": 5, "withAb": 0}
+
+    monkeypatch.setattr(cp_mod.shared_steps, "count_rows_with_abdocu", _count)
+    node = make_collect_payments_node()
+    out = await node({"events": _q(), "page": _StubPage(), "master_rowcount": 5})
+    assert out == {"payment_map": {}, "payment_map_count": 0}
+    assert calls == []  # 탭 열기·조건 세팅·조회 전부 미실행.
+    assert_keys_declared(VoucherCardState, out)
+
+
+async def test_collect_abdocu_precheck_failure_falls_back_to_collect(monkeypatch):
+    """사전 판정 실패(ok:False)는 즉시 종료하지 않고 기존 경로(수집 진행)로 폴백한다."""
+    calls = _patch_collect_ok(monkeypatch)
+
+    async def _count(page):
+        return {"ok": False, "reason": "stub"}
+
+    monkeypatch.setattr(cp_mod.shared_steps, "count_rows_with_abdocu", _count)
+    node = make_collect_payments_node()
+    out = await node({"events": _q(), "page": _StubPage(), "master_rowcount": 2})
+    assert "open_tab" in calls and "error" not in out
+
+
 async def test_collect_grid_unreadable_proceeds_empty(monkeypatch):
     # 그리드 읽기 실패는 error 로 단락하지 않고 빈 맵으로 진행(참조문서 훅이 우아하게 처리).
     _patch_collect_ok(monkeypatch)
@@ -193,6 +222,8 @@ class _RefChild:
         dialog_visible: bool = True,
         docno_value: str = "GW1",
         panel_expanded: bool = True,
+        confirm_closes_dialog: bool = True,
+        confirm_applies: bool = True,
     ) -> None:
         # 조회 **전**에는 전체 목록 건수, 조회 후에 필터 결과로 바뀐다(실물 시맨틱).
         self._total_after = total
@@ -207,6 +238,10 @@ class _RefChild:
         self._selected_docs: list[str] = []      # 선택된 문서 목록(gridView 로 읽히는 실제 행)
         self._doc_no = docno_value               # 검색 대상 문서번호
         self._marked_index = 0
+        self._confirm_closes_dialog = confirm_closes_dialog
+        self._confirm_applies = confirm_applies  # False = dialog 는 닫혔는데 첨부 미반영 재현.
+        self._eap_attached = False               # 확인 적용 → EAP 본문 '참조문서' 필드 반영.
+        self._dialog_closed = False              # 확인 클릭 적용 시 dialog 소멸(실물 시맨틱)
         self.evaluated: list[str] = []
         self.mouse_clicks: list[tuple[int, int]] = []
         self.element_clicks: list[str] = []
@@ -222,6 +257,12 @@ class _RefChild:
 
         async def click(self, x, y):
             self._c.mouse_clicks.append((x, y))
+            # 확인(130,230) 클릭 → 적용되면 dialog 소멸(click_refdoc_confirm 사후검증 대상).
+            if (x, y) == _CONFIRM_COORD and self._c._confirm_closes_dialog:
+                self._c._dialog_closed = True
+                if self._c._confirm_applies:
+                    # 실물 시맨틱(실측 2026-08-07): 확인 적용 → EAP 본문 '참조문서' 필드 반영.
+                    self._c._eap_attached = True
 
     class _Keyboard:
         def __init__(self, c) -> None:
@@ -235,6 +276,10 @@ class _RefChild:
 
     async def wait_for_timeout(self, ms):
         return None
+
+    async def screenshot(self, **kw):
+        # 첨부 확인 프레임 송출(emit_shot → screenshot_data_url) 지원 — 최소 jpeg 바이트 흉내.
+        return b"attach-evidence"
 
     async def click(self, selector, timeout=None):
         self.clicked_selectors.append(selector)
@@ -273,6 +318,8 @@ class _RefChild:
             self._marked_index = (arg or {}).get("index", 0)
             return {"ok": True, "marked": "move", "count": 2, "index": self._marked_index}
         if js_src == cjs.REFDOC_STATE_JS:
+            if self._dialog_closed:
+                return {"ok": False, "reason": "no-dialog"}
             return {
                 "ok": True,
                 "total": self._total,
@@ -281,6 +328,10 @@ class _RefChild:
                 "topGrid": {"x": 150, "y": 319, "w": 684, "h": 189},
                 "bottomGrid": {"x": 150, "y": 623, "w": 684, "h": 189},
             }
+        if js_src == cjs.REFDOC_TOP_CHECKED_JS:
+            # 체크박스 좌표(166,361) 클릭이 실제로 있었을 때만 체크 반영(실물 시맨틱).
+            checked = 1 if (166, 361) in self.mouse_clicks else 0
+            return {"ok": True, "checked": checked, "api": "getCheckedRows"}
         if js_src == cjs.REFDOC_GRID_ROWS_JS:
             return {
                 "ok": True,
@@ -291,6 +342,14 @@ class _RefChild:
             return {"x": 130, "y": 230}
         if js_src == cjs.REFDOC_CLOSE_BTN_RECT_JS:
             return {"x": 140, "y": 240}
+        if js_src == cjs.EAP_REFDOC_FIELD_STATE_JS:
+            # 실물 시맨틱(실측 2026-08-07): 확인 적용 전 "선택된 문서가 없습니다", 적용 후
+            # "[문서번호]/문서분류/제목" — 대상 문서번호 포함 여부로 attached 판정.
+            if self._eap_attached:
+                return {"ok": True, "attached": str(arg) == self._doc_no, "none": False,
+                        "text": f"참 조 문 서 [{self._doc_no}]/연차휴가신청서/제목 선택"}
+            return {"ok": True, "attached": False, "none": True,
+                    "text": "참 조 문 서 선택된 문서가 없습니다. 선택"}
         raise AssertionError(f"unexpected js: {js_src[:60]!r}")
 
 
@@ -350,16 +409,50 @@ async def test_on_popup_uses_keyboard_clear_then_type_for_docno():
     assert child.typed == ["GW1"]
 
 
-async def test_on_popup_allow_confirm_gate_clicks_confirm():
-    # 게이트 개방(allow_confirm=True) 시에만 확인을 클릭한다(승인 이슈 해소 후 전용).
+async def test_on_popup_allow_confirm_clicks_confirm_and_verifies_attachment():
+    """게이트 개방 경로(프로덕션 기본 — 사용자 확정 2026-08-07): 선택 1건 확인 → 확인 클릭 →
+    **결제창 '참조문서' 필드 첨부 1건 검증**까지 통과해야 '첨부'(완료)다."""
     hook = make_reference_doc_hook(allow_confirm=True)
     child = _RefChild(total=1, docno_value="GW1")
     q = _q()
-    await hook(child, "GW1", q)
+    res = await hook(child, "GW1", q)
     logs = _logs(_drain(q))
-    assert any("참조문서 확인 클릭(allow_confirm=True)" in m for m in logs)
+    assert any("참조문서 확인 클릭 ✅" in m for m in logs)
+    assert any("첨부 1건 확인 ✅" in m and "완료 처리" in m for m in logs)
     assert _CONFIRM_COORD in child.mouse_clicks
-    assert cjs.REFDOC_CONFIRM_BTN_RECT_JS in child.evaluated
+    assert cjs.EAP_REFDOC_FIELD_STATE_JS in child.evaluated  # 첨부 반영 독립 확인(EAP 본문).
+    assert res == "첨부"
+
+
+async def test_on_popup_allow_confirm_click_failure_is_fatal():
+    """⚠ 격상(사용자 확정 2026-08-07): '반드시 확인 클릭' 요구 — 클릭/적용 실패는 warn 진행이
+    아니라 fatal(런 중단)이다. dialog 는 취소(X)로 정리한다."""
+    hook = make_reference_doc_hook(allow_confirm=True)
+    child = _RefChild(total=1, docno_value="GW1", confirm_closes_dialog=False)
+    q = _q()
+    res = await hook(child, "GW1", q)
+    logs = _logs(_drain(q))
+    assert any("참조문서 확인 클릭 실패" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "확인 클릭 실패" in res.get("reason", "")
+    # dialog 는 취소(X)로 정리한다.
+    assert cjs.REFDOC_CLOSE_BTN_RECT_JS in child.evaluated
+    assert (140, 240) in child.mouse_clicks
+
+
+async def test_on_popup_confirm_ok_but_attachment_missing_is_fatal():
+    """⚠ '반드시 확인'(사용자 확정 2026-08-07): 확인은 눌렸는데 결제창 '참조문서' 필드에
+    첨부가 반영되지 않으면 완료가 아니다 — fatal. ('첨부파일 N개' 위젯이 아니라 이 필드가
+    유일한 판정 근거라는 실측 반영.)"""
+    hook = make_reference_doc_hook(allow_confirm=True)
+    child = _RefChild(total=1, docno_value="GW1", confirm_applies=False)
+    q = _q()
+    res = await hook(child, "GW1", q)
+    logs = _logs(_drain(q))
+    assert any("첨부 반영 확인 실패" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "첨부 1건 확인 실패" in res.get("reason", "")
+    assert not any("완료 처리" in m for m in logs)
 
 
 async def test_on_popup_dialog_not_found_logs_and_returns():
@@ -449,6 +542,34 @@ async def test_loop_on_popup_receives_mapped_gwdocu(monkeypatch):
     assert out["processed"] == 2
     # 각 행의 ABDOCU_NO(RN-A/RN-B) → payment_map → GWDOCU_NO(GW-A/GW-B) 로 훅 호출.
     assert seen == ["GW-A", "GW-B"]
+
+
+async def test_loop_summary_aggregates_refdoc_outcomes(monkeypatch):
+    """훅이 반환한 참조문서 결과가 최종 요약에 집계된다 — 누락이 요약에서 보이게(2026-08-06).
+
+    종전에는 요약이 "N건 중 N건 결제창 확인"만 말해 참조문서 미첨부가 중간 warn 한 줄로
+    스쳐 지나갔다(사용자가 "너무 빨라서 안 보였다"고 한 보고 갭).
+    """
+    child = _LoopChild()
+    _patch_loop_for_card(monkeypatch, child, {0: "RN-A", 1: "RN-B"})
+    outcomes = {"GW-A": "첨부", "GW-B": "창 열기 실패(클릭 후 미개방)"}
+
+    async def _on_popup(c, gwdocu_no, events):
+        return outcomes[gwdocu_no]
+
+    node = make_loop_approvals_node(on_popup=_on_popup)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 2,
+            "max_rows": 2,
+            "payment_map": {"RN-A": "GW-A", "RN-B": "GW-B"},
+        }
+    )
+    assert "참조문서 첨부 1건" in out["result"]
+    assert "미첨부 1건" in out["result"]
+    assert "창 열기 실패(클릭 후 미개방)" in out["result"]  # 전표별 사유까지 요약에 남는다.
 
 
 async def test_loop_skips_row_without_gwdocu_mapping(monkeypatch):
@@ -579,14 +700,17 @@ async def test_reference_doc_confirm_is_gated_by_allow_confirm():
     assert src.count("click_refdoc_confirm") == 1
 
 
-async def test_default_hook_factory_gate_is_closed():
-    # 그래프가 쓰는 기본 훅은 allow_confirm=False(미클릭).
+async def test_hook_factory_default_closed_but_graph_opens_gate():
+    """게이트 정책(사용자 확정 2026-08-07): 팩토리 **기본값은 여전히 False**(다른 호출부의
+    우발적 확인 클릭 방지)이되, 프로덕션 그래프는 **명시적으로 True** 로 개방한다 —
+    확인 클릭 + 결제창 첨부 1건 검증까지가 완료 조건(비영속 실측 근거는 graph 주석)."""
     sig = inspect.signature(make_reference_doc_hook)
     assert sig.parameters["allow_confirm"].default is False
-    # 그래프 조립부가 명시적으로 allow_confirm=False 로 훅을 생성한다.
     import app.agents.voucher_card.graph as cgraph
 
-    assert "make_reference_doc_hook(allow_confirm=False)" in inspect.getsource(cgraph)
+    src = inspect.getsource(cgraph)
+    assert "make_reference_doc_hook(allow_confirm=True)" in src
+    assert "사용자 확정 2026-08-07" in src  # 개방 근거가 코드에 남아 있어야 한다.
 
 
 async def test_card_sources_have_no_submit_button_click():
@@ -648,32 +772,60 @@ async def test_collect_stops_when_query_result_unconfirmed(monkeypatch):
     assert "read" not in calls  # 스테일 그리드를 맵으로 읽지 않는다.
 
 
-async def test_collect_warns_but_proceeds_on_auxiliary_condition_failures(monkeypatch):
+async def test_collect_writer_clear_failure_is_hard(monkeypatch):
+    """⚠ 격상(2026-08-07 사용자 확정): 결의자 비움 실패는 warn 진행이 아니라 **런 중단**이다 —
+    로그인 계정으로 좁혀진 채 수집된 맵은 대상과 어긋나 하류가 전 행을 조용히 건너뛴다
+    (결의부서와 동일 메커니즘)."""
     calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
 
-    async def _false(page):
-        return False
+    async def _writer_fail(page):
+        return {"ok": False, "reason": "'결의자' 비움 확인 실패(재클리어 소진)"}
 
-    async def _false_period(page, start, end):
-        return False
+    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _writer_fail)
+    out = await make_collect_payments_node()(
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 3}
+    )
+    assert "결의자" in out["error"] and "중단" in out["error"]
+    assert "read" not in calls  # 좁혀진 범위로 수집(맵 읽기)하지 않는다.
 
-    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _false)
-    monkeypatch.setattr(cp_mod.steps, "set_collect_period", _false_period)
-    q = _q()
+
+async def test_collect_period_failure_is_hard(monkeypatch):
+    """⚠ 격상(2026-08-07): 회계일 미반영도 하드 — 두 화면 기간이 어긋난 맵은 누락을 만든다."""
+    calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
+
+    async def _period_fail(page, start, end):
+        return {"ok": False, "reason": "회계일 확인 실패(재세팅 소진)"}
+
+    monkeypatch.setattr(cp_mod.steps, "set_collect_period", _period_fail)
     out = await make_collect_payments_node()(
         {
-            "events": q,
+            "events": _q(),
             "page": _StubPage(),
             "master_rowcount": 3,
             "period_from": "20260701",
             "period_to": "20260705",
         }
     )
+    assert "회계일" in out["error"] and "중단" in out["error"]
+    assert "read" not in calls
+
+
+async def test_collect_reader_unknown_warns_but_proceeds(monkeypatch):
+    """리더 확인 불가(unknown)는 격상 대상이 아니다 — warn 을 남기고 진행한다(오탐이 런을
+    끊지 않게, '정해진 단계를 벗어났을 때만 에러' 규율)."""
+    calls = _patch_collect_ok(monkeypatch, mapping={"RN1": "GW1"})
+
+    async def _writer_unknown(page):
+        return {"ok": True, "warn": "'결의자' 비움 확인 불가(라벨 미발견)"}
+
+    monkeypatch.setattr(cp_mod.steps, "clear_collect_writer", _writer_unknown)
+    q = _q()
+    out = await make_collect_payments_node()(
+        {"events": q, "page": _StubPage(), "master_rowcount": 3}
+    )
     assert out["payment_map"] == {"RN1": "GW1"} and "error" not in out
-    logs = _logs(_drain(q))
-    assert any("결의자" in m for m in logs)
-    assert any("회계일" in m for m in logs)
-    assert "read" in calls  # 보조 조건 실패는 수집을 막지 않는다.
+    assert any("결의자" in m for m in _logs(_drain(q)))
+    assert "read" in calls
 
 
 # ── 참조문서 훅: '조회 미실행' 과 '조회했으나 0건' 을 구분한다(2026-07-27) ──────────
@@ -941,25 +1093,102 @@ async def test_move_verification_claims_only_what_it_checked():
 
 
 async def test_on_popup_fails_when_selected_list_ends_up_empty(monkeypatch):
-    """⚠ 성공 조건(사용자 확정 2026-07-27): **첨부 후 참조문서 1건 이상**.
+    """⚠ 성공 조건(사용자 확정 2026-08-07): 처음 결제창(0건)과 달리 **선택된 문서 목록이
+    정확히 1건(pre+1)** 이고 그 문서가 담겨 있어야 한다.
 
-    이동 직후엔 담겼다고 보고돼도 dialog 를 닫기 직전 확인에서 0건이면 **실패**로 처리한다
-    (담겼다고 믿고 넘어가면 참조문서 없는 결재가 조용히 진행된다).
+    이동 직후엔 담겼다고 보고돼도 dialog 를 닫기 직전 최종 확인이 어긋나면 **fatal**(런 중단)
+    이다 — 담겼다고 믿고 넘어가면 참조문서 없는 결재가 조용히 진행된다(격상 2026-08-07).
     """
     hook = make_reference_doc_hook()
     child = _RefChild(total_before=2714, total=1)
 
     async def _moved_then_lost(c, docu_no=None):
-        return {"ok": True, "verified": True, "count": 1}
+        return {"ok": True, "verified": True, "count": 1, "pre_count": 0}
+
+    async def _final_count_zero(c):
+        return 0
 
     async def _final_missing(c, docu_no):
         return False  # 최종 확인에서 목록에 없음
 
     monkeypatch.setattr(rd_mod.steps, "move_refdoc_down", _moved_then_lost)
+    monkeypatch.setattr(rd_mod.steps, "selected_list_count", _final_count_zero)
     monkeypatch.setattr(rd_mod.steps, "selected_list_has_doc", _final_missing)
     q = _q()
-    await hook(child, "GW1", q)
+    res = await hook(child, "GW1", q)
     logs = _logs(_drain(q))
-    assert any("최종 확인에서 목록에 없" in m for m in logs)
+    assert any("최종 확인이 어긋납니다" in m for m in logs)
     assert any("참조문서 첨부 실패" in m for m in logs)
     assert not any("첨부 완료" in m for m in logs)
+    assert isinstance(res, dict) and res.get("fatal") is True  # 격상 — 런 중단 신호.
+    assert "첨부 실패" in res.get("outcome", "")
+
+
+async def test_on_popup_attach_success_emits_child_shot_and_holds(monkeypatch):
+    """사용자 확정(2026-08-07): 첨부 확인 후 **결제창 화면**(선택된 문서 목록 1건이 보이는
+    상태)을 스크린샷 프레임으로 송출하고 0.5초 유지한다 — 로그만으로 스쳐 지나가던 첨부
+    증거를 대시보드 스크린캐스트에서 눈으로 확인 가능하게."""
+    naps: list[float] = []
+
+    async def _nap(s):
+        naps.append(s)
+
+    monkeypatch.setattr(rd_mod.verify, "DEFAULT_SLEEP", _nap)
+    hook = make_reference_doc_hook()
+    child = _RefChild(total_before=2714, total=1)
+    q = _q()
+    await hook(child, "GW1", q)
+    frames = _drain(q)
+    shots = [f for f in frames if "screenshot" in f]
+    assert shots and shots[0].get("window") == "child"  # 결제창(child) 프레임이 송출됐다.
+    idx_ok = next(i for i, f in enumerate(frames) if "첨부 완료" in str(f.get("log", "")))
+    idx_shot = next(i for i, f in enumerate(frames) if "screenshot" in f)
+    idx_virtual = next(i for i, f in enumerate(frames) if "가상: 참조문서" in str(f.get("log", "")))
+    assert idx_ok < idx_shot < idx_virtual  # 첨부 확인 직후·dialog 정리 전에 보여준다.
+    assert 0.5 in naps  # 표시 유지 0.5초(실시간 sleep — 테스트에선 기록만).
+
+
+async def test_on_popup_select_fail_after_match_is_fatal(monkeypatch):
+    """⚠ 격상(2026-08-07): 검색이 대상 1건을 **특정한 뒤의** 행 선택 실패는 warn 진행이 아니라
+    fatal — '첨부가 잘 안 되는' 상태가 가상 상신 성공으로 묻히지 않는다."""
+    hook = make_reference_doc_hook()
+    child = _RefChild(total_before=2714, total=1)
+
+    async def _select_fail(c):
+        return False
+
+    monkeypatch.setattr(rd_mod.steps, "select_refdoc_first_row", _select_fail)
+    q = _q()
+    res = await hook(child, "GW1", q)
+    assert isinstance(res, dict) and res.get("fatal") is True
+    assert "행 선택" in res.get("reason", "")
+    assert cjs.REFDOC_CLOSE_BTN_RECT_JS in child.evaluated  # 실패 정리로 dialog 닫음.
+
+
+async def test_on_popup_environment_paths_stay_graceful():
+    """격상 범위 확인 — 데이터/환경 사정(결재번호 미상·검색 0건)은 종전대로 str 우아 경로다."""
+    hook = make_reference_doc_hook()
+    assert await hook(_RefChild(), None, _q()) == "결재번호 미상"
+    res = await hook(_RefChild(total=0, no_data=True), "GW1", _q())
+    assert res == "검색 0건"  # fatal 아님 — 가상 상신으로 진행하는 기존 계약 유지.
+
+
+async def test_loop_refdoc_fatal_outcome_stops_run(monkeypatch):
+    """⚠ 격상 배선(2026-08-07): 훅이 {fatal:True} 를 반환하면 그 전표를 '가상 상신 완료'로
+    처리하지 않고 런을 중단한다(결제창 정리는 finally 가 보장)."""
+    child = _LoopChild()
+    _patch_loop_for_card(monkeypatch, child, {0: "RN-A"})
+
+    async def _on_popup(c, gwdocu_no, events):
+        return {"outcome": "첨부 실패", "fatal": True,
+                "reason": f"참조문서 첨부 실패({gwdocu_no}) — 이동 미성립"}
+
+    node = make_loop_approvals_node(on_popup=_on_popup)
+    q = _q()
+    out = await node(
+        {"events": q, "page": object(), "master_rowcount": 1, "max_rows": 1,
+         "payment_map": {"RN-A": "GW-A"}}
+    )
+    assert "error" in out and "참조문서 첨부 실패" in out["error"]
+    logs = _logs(_drain(q))
+    assert not any("가상 상신 완료" in m for m in logs)  # 실패 전표를 성공으로 세지 않는다.

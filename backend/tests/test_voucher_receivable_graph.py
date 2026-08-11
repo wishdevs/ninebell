@@ -23,7 +23,7 @@ from app.live.registry import get_spec, get_workflow, list_workflows
 from app.services.agent_fixtures import AGENT_FIXTURES
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, VOUCHER_RECEIVABLE
 
-# 매입금(건별 순회) 기준 노드 집합 — 공유 백본.
+# 공유 백본 코어 노드 집합(건별 순회 원형 — 현재 카드 계열이 사용).
 _EXPECTED_NODES = {
     "validate_params",
     "login",
@@ -33,7 +33,7 @@ _EXPECTED_NODES = {
     "run_query",
     "loop_approvals",
 }
-# 매출금은 배치 결재라 하위 건수 파악 노드가 하나 더 붙는다(사용자 요구 2026-07-27).
+# 배치 결재는 하위 건수 파악 노드가 하나 더 붙는다 — 매출(2026-07-27)·매입(2026-08-07 확대).
 _EXPECTED_NODES_BATCH = _EXPECTED_NODES | {"count_details"}
 
 
@@ -66,8 +66,9 @@ def test_graph_is_recompilable():
 
 # ── 외상매입금(voucher-payable) — 공유 그래프 재사용, 전표유형만 다름 ──────────────────
 def test_payable_graph_same_backbone_as_receivable():
-    # 전표유형만 파라미터로 다르고 노드 백본은 완전 동일해야 한다(공유 빌더).
-    assert _graph_nodes(build_voucher_payable_graph()) == _EXPECTED_NODES
+    # 전표유형만 파라미터로 다르고 노드 백본은 매출금과 완전 동일해야 한다(공유 빌더 +
+    # 배치 결재 — 2026-08-07 매입 확대: count_details 포함).
+    assert _graph_nodes(build_voucher_payable_graph()) == _EXPECTED_NODES_BATCH
 
 
 def test_payable_workflow_registered():
@@ -85,8 +86,8 @@ def test_payable_fixture_promoted_and_lockstep():
     assert fx["workflow_id"] == "voucher-payable"
     assert fx["group_id"] == "voucher" and fx["name"] == "외상매입금"
     assert fx["hidden"] is False
-    # steps 키가 그래프 노드와 1:1(진행 하이라이트 정합) — 매출과 동일 백본.
-    assert {s["key"] for s in fx["steps"]} == _EXPECTED_NODES
+    # steps 키가 그래프 노드와 1:1(진행 하이라이트 정합) — 매출과 동일 백본(배치 포함).
+    assert {s["key"] for s in fx["steps"]} == _EXPECTED_NODES_BATCH
 
 
 # ── registry ──────────────────────────────────────────────────────────────────

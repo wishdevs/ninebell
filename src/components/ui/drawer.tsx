@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { RiCloseLine } from '@remixicon/react';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { cn } from '@/lib/utils';
 
 const noopSubscribe = () => () => {};
@@ -52,8 +53,6 @@ export function Drawer({
   // open=false 여도 닫힘 애니메이션이 끝날 때까지 마운트를 유지한다(팍 사라지지 않게).
   const [rendered, setRendered] = useState(open);
   const panelRef = useRef<HTMLDivElement>(null);
-  // 열기 직전 포커스를 잡아 닫을 때 트리거로 되돌린다(오버레이 뒤로 포커스가 빠지지 않게).
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   // 마운트 수명 관리: 열리면 즉시 유지, 닫히면 CLOSE_MS 뒤 언마운트(그 사이 exit 애니메이션 재생).
   useEffect(() => {
@@ -66,45 +65,23 @@ export function Drawer({
     return () => window.clearTimeout(t);
   }, [open, rendered]);
 
+  // 포커스 트랩(초기 포커스·Tab 순환·닫을 때 트리거 복원) — Dialog 와 공용 훅.
+  useFocusTrap(panelRef, open);
+
   useEffect(() => {
     if (!open) return;
-    restoreFocusRef.current = document.activeElement as HTMLElement | null;
-
-    // Tab/Shift+Tab을 패널 안에서 순환시키는 포커스 트랩 — aria-modal 계약 충족.
-    function trapTab(e: KeyboardEvent) {
-      const panel = panelRef.current;
-      if (!panel) return;
-      const focusables = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
 
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
-      else if (e.key === 'Tab') trapTab(e);
     }
 
     document.addEventListener('keydown', onKey);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    // 열릴 때 패널로 초기 포커스 이동(다음 틱 — 포털 마운트 후).
-    const focusTimer = window.setTimeout(() => panelRef.current?.focus(), 0);
 
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prevOverflow;
-      window.clearTimeout(focusTimer);
-      restoreFocusRef.current?.focus?.();
     };
   }, [open, onClose]);
 

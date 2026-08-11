@@ -138,7 +138,7 @@ async def test_read_payment_map_grid_not_ready_graceful():
 async def test_set_collect_period_none_is_noop_true():
     page = _FakePage({})  # SET_PERIOD_RANGE_JS 를 호출하지 않아야 한다.
     ok = await csteps.set_collect_period(page, None, None)
-    assert ok is True
+    assert ok["ok"] is True
     assert cjs.SET_PERIOD_RANGE_JS not in page.eval_args  # 미조작(폼 기본값 당월).
 
 
@@ -155,14 +155,15 @@ async def test_set_collect_period_current_month_is_still_applied():
         cjs.SET_PERIOD_RANGE_JS: True,
         js_lib.PERIOD_VALUE_JS: {"found": True, "values": [start, end], "now": start[:6]},
     })
-    assert await csteps.set_collect_period(page, start, end) is True
+    assert (await csteps.set_collect_period(page, start, end))["ok"] is True
     assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": start, "end": end}
 
 
 async def test_set_collect_period_range_sets_inputs():
     page = _FakePage({cjs.SET_PERIOD_RANGE_JS: True})
     ok = await csteps.set_collect_period(page, "20260201", "20260228")
-    assert ok is True
+    # 리더 미지원 스텁 — 반영 확인 불가는 warn 통과(하드 아님).
+    assert ok["ok"] is True and ok.get("warn")
     assert page.eval_args[cjs.SET_PERIOD_RANGE_JS] == {"start": "20260201", "end": "20260228"}
 
 
@@ -244,10 +245,19 @@ async def test_fill_refdoc_docno_clears_then_types_and_readback_ok():
 
 
 async def test_fill_refdoc_docno_retries_on_mismatch_then_gives_up():
-    child = _DocnoChild({cjs.REFDOC_DOCNO_VALUE_JS: "STALE"})  # 항상 불일치 → 2회 시도 후 False.
+    child = _DocnoChild({cjs.REFDOC_DOCNO_VALUE_JS: "STALE"})  # 항상 불일치 → 소진 후 False.
     ok = await csteps.fill_refdoc_docno(child, "GW1")
     assert ok is False
-    assert child.typed == ["GW1", "GW1"]  # 2회 시도.
+    # 확인 커널(ASYNC) — 최초 1회 + 재시도 회차마다 reapply(재클릭→재클리어→재타이핑).
+    assert child.typed == ["GW1"] * 4
+
+
+async def test_fill_refdoc_docno_reader_unavailable_is_warn_pass():
+    # dialog 스코프 리더 실패(None)는 '값이 다름'이 아니라 **확인 불가** — 입력 수행으로 보고
+    # 진행한다(warn 통과). 하류 조회·결과 게이트가 최종 판정을 이어받는다.
+    child = _DocnoChild({cjs.REFDOC_DOCNO_VALUE_JS: None})
+    assert await csteps.fill_refdoc_docno(child, "GW1") is True
+    assert child.typed[0] == "GW1"
 
 
 async def test_fill_refdoc_docno_no_input_returns_false():
@@ -344,15 +354,37 @@ async def test_run_refdoc_search_false_when_button_missing():
     assert await csteps.run_refdoc_search(child) is False
 
 
-async def test_click_refdoc_confirm_clicks_when_present():
-    child = _FakeChild({cjs.REFDOC_CONFIRM_BTN_RECT_JS: {"x": 9, "y": 9}})
-    assert await csteps.click_refdoc_confirm(child) is True
+async def test_click_refdoc_confirm_verifies_dialog_dismissed():
+    # 정착 rect 후 클릭 → **dialog 소멸**(REFDOC_STATE_JS no-dialog)로 적용을 독립 확인한다.
+    child = _FakeChild(
+        {
+            cjs.REFDOC_CONFIRM_BTN_RECT_JS: {"x": 9, "y": 9},
+            cjs.REFDOC_STATE_JS: {"ok": False, "reason": "no-dialog"},
+        }
+    )
+    res = await csteps.click_refdoc_confirm(child)
+    assert res["ok"] is True
     assert (9, 9) in child.clicks
+
+
+async def test_click_refdoc_confirm_fails_when_dialog_persists():
+    # ⚠ 회귀 핵심(2026-08-07 감사): 종전엔 클릭 후 고정 500ms → 무조건 True — 미적용이 성공으로
+    # 둔갑했다. 이제 dialog 가 남아 있으면 재클릭(reapply) 소진 후 {ok:False, reason}.
+    child = _FakeChild(
+        {
+            cjs.REFDOC_CONFIRM_BTN_RECT_JS: {"x": 9, "y": 9},
+            cjs.REFDOC_STATE_JS: {"ok": True, "total": 1},
+        }
+    )
+    res = await csteps.click_refdoc_confirm(child)
+    assert res["ok"] is False and "dialog" in res["reason"]
+    assert child.clicks.count((9, 9)) == 4  # 최초 1회 + reapply 재클릭 3회.
 
 
 async def test_click_refdoc_confirm_none_returns_false():
     child = _FakeChild({cjs.REFDOC_CONFIRM_BTN_RECT_JS: None})
-    assert await csteps.click_refdoc_confirm(child) is False
+    res = await csteps.click_refdoc_confirm(child)
+    assert res["ok"] is False
     assert child.clicks == []
 
 
@@ -421,6 +453,46 @@ async def test_run_collect_query_requires_result_grid_response():
     assert await csteps.run_collect_query(stale) is False
 
 
+class _QueryPage(_FakePage):
+    """클릭 전/후 rowcount 가 다른 실물 시맨틱 — 기준선(base) 스냅샷 검증용."""
+
+    def __init__(self, before: int, after: int) -> None:
+        super().__init__({cjs.VISIBLE_LOOKUP_BTN_RECT_JS: {"x": 1, "y": 2}})
+        self._before, self._after = before, after
+        self.rowcount_reads = 0
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == cjs.VISIBLE_MASTER_ROWCOUNT_JS:
+            self.rowcount_reads += 1
+            return self._after if self.clicks else self._before
+        return await super().evaluate(js_src, arg)
+
+
+async def test_run_collect_query_confirms_on_change_from_baseline():
+    # 클릭 **전** 스냅샷(base=5) 대비 값이 바뀌면(12) 즉시 확정 — 스테일 그리드를 새 결과로
+    # 오인하지 않는 vr_steps.run_query 기준선 규율.
+    page = _QueryPage(before=5, after=12)
+    assert await csteps.run_collect_query(page) is True
+    assert page.rowcount_reads == 2  # 기준선 1회 + 확인 1회(변화 즉시 확정).
+
+
+async def test_run_collect_query_unchanged_needs_full_exhaustion():
+    # ⚠ 회귀 핵심(2026-08-07 감사): 종전 술어(rowcount>=0)는 클릭 이전 상태로도 첫 폴에서
+    # 충족됐다 — 무변화(스테일 가능)는 HEAVY 스케줄을 전부 소진한 뒤에만 인정한다.
+    page = _QueryPage(before=5, after=5)
+    assert await csteps.run_collect_query(page) is True
+    from nbkit.omnisol import verify
+
+    assert page.rowcount_reads == 1 + len(verify.HEAVY)  # 기준선 1회 + 전체 폴 소진.
+
+
+async def test_run_collect_query_false_when_click_not_delivered():
+    # 가시 조회버튼도 BTN_LOOKUP 폴백도 못 눌렀다 — 미클릭이 '조회 완료'로 위장되지 않는다
+    # (그리드에 직전 결과가 남아 있어도 rowcount 폴링 없이 즉시 False).
+    page = _FakePage({cjs.VISIBLE_LOOKUP_BTN_RECT_JS: None, cjs.VISIBLE_MASTER_ROWCOUNT_JS: 7})
+    assert await csteps.run_collect_query(page) is False
+
+
 async def test_switch_back_to_voucher_tab_requires_approval_button_visible():
     from app.agents.voucher_receivable import js as vr_js
 
@@ -444,7 +516,7 @@ async def test_set_collect_period_confirms_target_range():
             },
         }
     )
-    assert await csteps.set_collect_period(page, "20260701", "20260705") is True
+    assert (await csteps.set_collect_period(page, "20260701", "20260705"))["ok"] is True
 
     # 같은 달이지만 기간이 다르면(말일까지) 불일치로 잡아야 한다 — ym 비교였다면 통과했을 케이스.
     wrong = _FakePage(
@@ -458,7 +530,8 @@ async def test_set_collect_period_confirms_target_range():
             },
         }
     )
-    assert await csteps.set_collect_period(wrong, "20260701", "20260705") is False
+    wrong_res = await csteps.set_collect_period(wrong, "20260701", "20260705")
+    assert wrong_res["ok"] is False and wrong_res.get("reason")  # 하드 근거(격상 2026-08-07).
 
 
 async def test_open_refdoc_dialog_requires_dialog_title_visible():
@@ -469,8 +542,9 @@ async def test_open_refdoc_dialog_requires_dialog_title_visible():
             js_lib.VISIBLE_TEXT_JS: True,
         }
     )
-    assert await csteps.open_refdoc_dialog(child) is True
+    assert await csteps.open_refdoc_dialog(child) == "opened"
 
+    # 클릭까지 했는데 dialog 미출현 — 'no-dialog'(버튼 미발견과 구분, 재클릭 상한 3회 소진).
     not_open = _FakeChild(
         {
             cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
@@ -478,7 +552,45 @@ async def test_open_refdoc_dialog_requires_dialog_title_visible():
             js_lib.VISIBLE_TEXT_JS: False,
         }
     )
-    assert await csteps.open_refdoc_dialog(not_open) is False
+    assert await csteps.open_refdoc_dialog(not_open) == "no-dialog"
+    assert len(not_open.clicks) == csteps._REFDOC_OPEN_CLICK_MAX  # fresh 좌표로 재클릭했다.
+
+    # 버튼 자체가 없음 — 'no-button'(클릭 0회).
+    no_btn = _FakeChild(
+        {
+            cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
+            cjs.REFDOC_SELECT_BTN_RECT_JS: None,
+        }
+    )
+    assert await csteps.open_refdoc_dialog(no_btn) == "no-button"
+    assert no_btn.clicks == []
+
+
+async def test_open_refdoc_dialog_reclicks_when_first_click_swallowed():
+    """첫 클릭이 스크롤 애니메이션 좌표를 눌러 먹히지 않은 레이스 — 재클릭으로 dialog 를 연다.
+
+    2026-08-06 포렌식 회귀 고정: 종전(고정 500ms + 단발 클릭)은 이 상황에서 그대로 실패해
+    같은 전표(4번째)만 참조문서가 반복 누락됐다.
+    """
+
+    class _Swallow(_FakeChild):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    cjs.REFDOC_SELECT_BTN_SCROLL_JS: True,
+                    cjs.REFDOC_SELECT_BTN_RECT_JS: {"x": 1, "y": 2},
+                }
+            )
+
+        async def evaluate(self, js_src, arg=None):
+            if js_src == js_lib.VISIBLE_TEXT_JS:
+                # 두 번째 클릭부터 dialog 가 보인다(첫 클릭은 빗나감).
+                return len(self.clicks) >= 2
+            return await super().evaluate(js_src, arg)
+
+    child = _Swallow()
+    assert await csteps.open_refdoc_dialog(child) == "opened"
+    assert len(child.clicks) == 2  # 1회 빗나감 + 재클릭 1회
 
 
 class _RefdocPanel:
@@ -529,28 +641,62 @@ async def test_expand_refdoc_filter_false_when_button_never_appears():
 
 
 
+class _GridChild:
+    """캔버스 그리드 좌표 클릭 + checkBar 리더 실물 시맨틱 — `checks_after` 번째 클릭부터
+    체크가 반영된다(None=영원히 미반영, 'unknown'=checkBar API 판독 불가)."""
+
+    def __init__(self, y=319, checks_after: int | str | None = 1):
+        self._y = y
+        self._checks_after = checks_after
+        self.clicks: list = []
+        self.mouse = _FakeMouse(self.clicks)
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == cjs.REFDOC_STATE_JS:
+            return {"ok": True, "total": 1, "noData": False, "selectedEmpty": True,
+                    "topGrid": {"x": 150, "y": self._y, "w": 684, "h": 189},
+                    "bottomGrid": {"x": 150, "y": 623, "w": 684, "h": 189}}
+        if js_src == cjs.REFDOC_TOP_CHECKED_JS:
+            if self._checks_after == "unknown":
+                return {"ok": False, "reason": "no-check-api"}
+            if self._checks_after is not None and len(self.clicks) >= self._checks_after:
+                return {"ok": True, "checked": 1}
+            return {"ok": True, "checked": 0}
+        return None
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
 async def test_select_refdoc_first_row_clicks_checkbox_column():
     """⚠ 실측(2026-07-27): 행 중앙(제목 셀) 클릭은 선택되지 않는다 — **체크박스 열**이어야 한다."""
-
-    class _GridChild:
-        def __init__(self, y=319):
-            self._y = y
-            self.clicks: list = []
-            self.mouse = _FakeMouse(self.clicks)
-
-        async def evaluate(self, js_src, arg=None):
-            if js_src == cjs.REFDOC_STATE_JS:
-                return {"ok": True, "total": 1, "noData": False, "selectedEmpty": True,
-                        "topGrid": {"x": 150, "y": self._y, "w": 684, "h": 189},
-                        "bottomGrid": {"x": 150, "y": 623, "w": 684, "h": 189}}
-            return None
-
-        async def wait_for_timeout(self, ms):
-            return None
-
     child = _GridChild()
     assert await csteps.select_refdoc_first_row(child) is True
     assert child.clicks == [(166, 361)]  # 체크박스 열(+16), 헤더(30) 아래 첫 행 중앙(+12)
+
+
+async def test_select_refdoc_first_row_reclicks_until_check_reflected():
+    # ⚠ 회귀 핵심(2026-08-07 감사): 종전엔 클릭 후 무조건 True — 빗나간 클릭이 '이동 실패'로
+    # 오보고됐다. 이제 checkBar 리더로 반영을 확인하고 미반영이면 좌표 재독 후 재클릭한다.
+    child = _GridChild(checks_after=2)  # 첫 클릭은 빗나감 — 2번째부터 체크.
+    assert await csteps.select_refdoc_first_row(child) is True
+    assert child.clicks == [(166, 361), (166, 361)]
+
+
+async def test_select_refdoc_first_row_false_when_check_never_lands():
+    child = _GridChild(checks_after=None)
+    assert await csteps.select_refdoc_first_row(child) is False
+    assert len(child.clicks) == 4  # 최초 1회 + reapply 재클릭 3회 소진.
+
+
+async def test_select_refdoc_first_row_unknown_reader_defers_to_move_verification():
+    # checkBar API 판독 불가는 하드 실패가 아니다 — move_refdoc_down 의 결과검증(grew)이
+    # 판정을 이어받으므로 warn 통과(True).
+    # ⚠ 토글 회귀 핀(2026-08-07 리뷰 확정): 체크박스는 토글이라, 판독 불가 세션에서 맹목
+    # reapply 는 1+3=4클릭 짝수 토글로 정상 체크를 해제한다 — **단일 클릭 유지**를 고정한다.
+    child = _GridChild(checks_after="unknown")
+    assert await csteps.select_refdoc_first_row(child) is True
+    assert child.clicks == [(166, 361)]  # 판독 불가 = 맹목 재클릭 금지(토글 홀짝 보존).
 
 
 async def test_select_refdoc_first_row_refuses_when_grid_offscreen():

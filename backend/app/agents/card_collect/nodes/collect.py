@@ -200,6 +200,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
         preselect = await prefill._prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
+            # 접속자 직급(runs 가 params 로 주입) — 팀원이면 접대비·회식비 계정을 추천에서 제외.
+            user_job_title=(state.get("params") or {}).get("user_job_title"),
         )
         # 계정 인지 적요 재추천: 프리셀렉트된 예산계정(bgacctCd)으로 suggest_note 사다리를 태워
         # 초기 적요도 계정 인지되게 만든다(엔드포인트 /me/note-suggest 와 같은 리졸버 — 배치

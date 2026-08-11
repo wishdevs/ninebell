@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.config import Settings, get_settings
-from app.core.deps import CurrentUser
+from app.core.deps import CurrentUser, DbSession
 from app.core.llm_runtime import effective_llm_provider
 from app.llm.base import ChatMessage, LLMProvider
 from app.llm.etribe import ContextLengthExceededError, EtribeProvider
@@ -94,13 +94,15 @@ ASSISTANT_TOOLS = [
 
 def build_llm(request: Request, settings: Settings) -> LLMProvider:
     """스트림 제너레이터 안에서 지연 호출된다 — 키 누락은 여기서 RuntimeError 로 표면화."""
-    # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — 인증 불필요.
+    # 온프렘 배포(LLM_PROVIDER=etribe): 사내 Etribe-LLM(OpenAI 호환) — Bearer 토큰은
+    # 사용자 식별자(QoS 단위)라 서비스 토큰(etribe_token)을 넘긴다.
     # effective_llm_provider: 로컬 dev 런타임 오버라이드(/dev/llm-provider) 우선, 없으면 env.
     if effective_llm_provider(settings) == "etribe":
         return EtribeProvider(
             request.app.state.http,
             model=settings.etribe_model,
             base_url=settings.etribe_base_url,
+            token=settings.etribe_token,
         )
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY 가 설정되지 않아 AI 어시스턴트를 사용할 수 없습니다.")
@@ -127,7 +129,9 @@ def _system_prompt(req: ChatRequest) -> str:
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, request: Request, _actor: CurrentUser) -> StreamingResponse:
+async def chat(
+    req: ChatRequest, request: Request, _actor: CurrentUser, db: DbSession
+) -> StreamingResponse:
     settings = get_settings()
     system = _system_prompt(req)
     msgs = [ChatMessage(role=m.role, content=m.content) for m in req.messages]
@@ -166,6 +170,12 @@ async def chat(req: ChatRequest, request: Request, _actor: CurrentUser) -> Strea
             message = _stream_error_message(exc)
             yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
+
+    # 요청 세션 조기 반납: 스트림은 DB 를 쓰지 않는데(컨텍스트는 요청 body, LLM 은 httpx)
+    # StreamingResponse 수명 내내 세션이 idle-in-transaction 으로 풀을 점유하는 것을 막는다.
+    # db 는 get_current_user 와 같은 캐시된 요청 세션이며, teardown 의 close 재호출은 멱등.
+    await db.commit()
+    await db.close()
 
     # 슬롯 해제는 BackgroundTask 로 응답 종료(정상 완료·클라이언트 중단 무관)에 묶는다 —
     # 제너레이터가 아예 소비되지 않아도 해제가 보장되고, 중복 해제도 없다.

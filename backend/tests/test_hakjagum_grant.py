@@ -549,3 +549,53 @@ async def test_fill_rows_surfaces_unverified_fields(monkeypatch):
     # 미확인이 있으면 완료라고 단정하지 않는다 — 마무리 로그가 warn 이고 미확인 필드를 명시한다.
     final = logs[-1]
     assert final["level"] == "warn" and "미확인" in final["log"] and "완료" not in final["log"]
+
+
+@pytest.mark.asyncio
+async def test_fill_rows_surfaces_warns_from_evdn_partner_project(monkeypatch):
+    # 회귀(2026-08-07 감사): note_warn 이 예산단위·적요에만 붙어 있어 증빙 열기(스테일 팝업)·
+    # 증빙유형(팝업 미닫힘)·거래처·프로젝트({ok:True, warn})의 warn 이 조용히 버려졌다 —
+    # '학자금 반영 완료'(ok) 로그와 fill_warnings 가 거짓이 되는 자체 불변식 위반(경조금 동형).
+    calls: list = []
+    notes: list = []
+    _patch_fill_all_ok(monkeypatch, calls, notes)
+
+    def _warned(name, extra=None, warn=""):
+        async def _f(*a, **k):
+            calls.append(name)
+            return {"ok": True, "warn": warn, **(extra or {})}
+
+        return _f
+
+    monkeypatch.setattr(
+        fill.doc_steps,
+        "open_evdn_editor",
+        _warned("open_evdn", {"shown": {}}, warn="증빙유형 팝업이 이미 열린 상태에서 시작 — 스테일 팝업 가능"),
+    )
+    monkeypatch.setattr(
+        fill.doc_steps,
+        "select_evdn_code",
+        _warned("select_evdn", {"name": "규정에의한 비용정산", "code": "10"}, warn="증빙유형 팝업 닫힘 확인 불가"),
+    )
+    monkeypatch.setattr(
+        fill.steps,
+        "fill_partner_by_search",
+        _warned("fill_partner_by_search", {"name": "홍길동"}, warn="거래처(PARTNER) 확인 불가"),
+    )
+    monkeypatch.setattr(
+        fill.steps, "fill_project", _warned("fill_project", warn="프로젝트(PJT_NM) 확인 불가")
+    )
+    node = make_fill_rows_node()
+    state = _fill_state()
+    out = await node(state)
+    assert out["filled"] == 1
+    # 네 스텝의 warn 이 전부 fill_warnings 에 실린다(호출 순서 그대로).
+    assert out["fill_warnings"] == ["증빙 열기", "증빙유형(10)", "거래처", "프로젝트"]
+    assert_keys_declared(HakjagumGrantState, out)
+    logs = [e for e in _drain(state["events"]) if "log" in e]
+    final = logs[-1]
+    assert final["level"] == "warn" and "미확인" in final["log"] and "완료" not in final["log"]
+    # 각 warn 은 개별 warn 로그로도 방출된다.
+    warn_logs = [e["log"] for e in logs if e.get("level") == "warn"]
+    assert any("증빙 열기" in w for w in warn_logs)
+    assert any("거래처" in w for w in warn_logs)

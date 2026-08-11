@@ -46,6 +46,19 @@ router = APIRouter(
 )
 
 
+async def _release_db(db) -> None:
+    """SSE 응답 반환 직전에 요청 세션을 반납(commit+close)한다.
+
+    StreamingResponse 는 스트림이 끝나야 의존성 teardown 이 돌므로, 그대로 두면 요청
+    세션이 스트림 수명(HITL 대기 600s/턴 × 재연결) 내내 idle-in-transaction 으로 풀을
+    점유한다. 스트림 제너레이터(LiveSession.stream)는 인메모리 버퍼만 읽고, 런 기록은
+    live/store 가 자체 세션(get_sessionmaker)을 열므로 이 세션은 이후 쓰이지 않는다.
+    teardown 의 close 재호출은 멱등이라 무해하다.
+    """
+    await db.commit()
+    await db.close()
+
+
 def _sse(events) -> StreamingResponse:
     """이벤트 dict 비동기 이터러블을 SSE(text/event-stream) 응답으로 감싼다."""
 
@@ -152,6 +165,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     if sess is not None:
         if sess.owner and sess.owner != owner:
             return JSONResponse({"error": "이 흐름에 대한 권한이 없습니다."}, status_code=403)
+        await _release_db(db)
         return _sse(sess.stream(body.cursor))
 
     # 세션이 없는데 커서>0 → 흐름이 이미 종료/정리됨(새 브라우저를 띄우지 않는다).
@@ -202,11 +216,18 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 권한 상승을 차단한다(리뷰 HIGH). 권위 키 집합 = effective_settings 가 그 에이전트에 대해
     # 반환하는 키(스키마 유일소스라 에이전트별 하드코딩 없음) + department/cost_type(서버 주입).
     server_settings = effective_settings(agent_row.id, agent_row.settings)
-    authoritative_keys = set(server_settings) | {"department", "cost_type"}
+    authoritative_keys = set(server_settings) | {
+        "department", "cost_type", "user_display_name", "user_job_title"
+    }
     user_params = {
         k: v for k, v in (body.params or {}).items() if k not in authoritative_keys
     }
     params = {**server_settings, **user_params}
+
+    # 디버그 모드(로그인 화면 체크) — true 면 카드 선택이 종전처럼 전체 카드, 기본(false)은
+    # **본인 카드만**. 클라이언트 값은 불리언 True 만 인정(문자열 'true'·숫자 1 등은 전부
+    # False 강제) — 서버 기본 '본인만'을 타입 조작으로 뒤집을 수 없게 한다(신뢰 최소화).
+    params["debug"] = (body.params or {}).get("debug") is True
 
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).
@@ -217,6 +238,12 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 으로 특정한다(카드 경로는 department 를 읽지 않아 불변). body.params 가 있으면 우선.
     if user.department:
         params.setdefault("department", user.department)
+    # 사용자 이름·직책(ERP 프로필 분리값) 주입 → 법인카드 본인 카드 매칭이 로그인ID 외에
+    # 순수 이름("석대현")과 "이름 직책"("석대현 프로") 표기까지 대조할 수 있게 한다.
+    if user.display_name:
+        params["user_display_name"] = user.display_name
+    if user.job_title:
+        params["user_job_title"] = user.job_title
 
     # AUTO 재생(회수): templateId 가 있으면 소유자·워크플로우를 검증하고 저장된 selections 를
     # params["template"] 로 주입한다. chat_form 이 이를 보면 대화 없이 순서대로 적용한다.
@@ -252,6 +279,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             await store.set_terminal(tracked_run_id, status, note, logs)
 
     sess = create_session(body.runId, owner, producer, on_terminal)
+    await _release_db(db)
     return _sse(sess.stream(0))
 
 

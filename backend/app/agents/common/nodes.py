@@ -14,6 +14,7 @@ nbkit.patterns.emit_* 콜백과 동일 인터페이스). 실패는 {"error": ...
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -21,12 +22,14 @@ from app.agents.common import doc_steps
 from app.config import get_settings
 from nbkit.browser.actions import js_click
 from nbkit.browser.popups import close_foreign_pages
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, MenuSchema
 from nbkit.patterns import emit_log, emit_shot, emit_step
 from nbkit.patterns.login_flow import ensure_logged_in
 from nbkit.patterns.menu_navigate_flow import navigate_schema
 from nbkit.patterns.user_type_flow import ensure_user_type
+
+logger = logging.getLogger(__name__)
 
 
 def _ms(t0: float) -> int:
@@ -56,6 +59,9 @@ def make_login_node():
         try:
             await ensure_logged_in(page, state["userid"], state["password"], base, emit=emit)
         except Exception as exc:  # noqa: BLE001 — 도메인 오류를 error 프레임으로 승격
+            # 예외를 error 프레임으로 삼키면 runner 의 logger.exception 에 도달하지 않아 서버
+            # 로그에 트레이스백이 남지 않는다 — 여기서 스택을 남긴다(사용자 메시지는 불변).
+            logger.exception("login 노드 실패")
             return {"error": f"로그인 실패: {exc}"}
         return {}
 
@@ -77,6 +83,8 @@ def make_user_type_node(target_type: str):
             await close_foreign_pages(state["page"], get_settings().erp_base)
             await ensure_user_type(state["page"], target_type, emit=emit)
         except Exception as exc:  # noqa: BLE001
+            # 서버 로그용 트레이스백(login 노드와 같은 규율) — 사용자 메시지는 불변.
+            logger.exception("user_type 노드 실패(target=%s)", target_type)
             return {"error": f"사용자유형 전환 실패: {exc}"}
         return {}
 
@@ -95,17 +103,37 @@ def make_menu_nav_node(schema: MenuSchema = EXPENSE_CARD):
             return {}
         emit = state["events"].put
         base = get_settings().erp_base
+        page = state["page"]
         try:
-            await navigate_schema(state["page"], schema, base, emit=emit)
+            active = await navigate_schema(page, schema, base, emit=emit)
+            # 크래시 복구(menu_navigate_flow)로 page 가 교체됐을 수 있다 — 이후 정리·후속
+            # 노드는 실제 사용 중인 페이지 기준(테스트 스텁이 None 을 돌려주면 기존 유지).
+            if active is not None:
+                page = active
             # 메뉴 진입 뒤에도 공지/홈페이지 창이 뜰 수 있다(실측 2026-07-27: 로그인 완료
             # +252ms 에 더존 공지창 uc.ninebell.co.kr 이 별도 창으로 출현 — 로그인 감시 구간이
             # 끝난 뒤라 아무도 닫지 않았다). 화면을 덮은 채 다음 조작이 진행되지 않게 정리한다.
             # ⚠ 결재 순회 전 단계에서만 호출한다(결제창=EAP 도 다른 호스트의 창이다).
-            closed = await close_foreign_pages(state["page"], base)
+            closed = await close_foreign_pages(page, base)
             for url in closed:
                 await emit_log(emit, f"메뉴 진입 후 뜬 외부 창을 닫았습니다 — {url}", "info")
+            # ERP 지연 감지 안내(관측성) — 그리드 출현 되먹임(navigate_menu) 직후가 배율이
+            # 갱신된 첫 지점이라, 사용자에게 상한 확대 사실을 1줄로 알린다(성공 경로 불변).
+            f = latency.factor()
+            if f > 1.5:
+                await emit_log(
+                    emit, f"ERP 응답 지연 감지 — 대기 상한을 ×{f:.1f}로 확대해 진행합니다.", "warn"
+                )
         except Exception as exc:  # noqa: BLE001
+            # 예외를 error 프레임으로 삼키면 runner 의 logger.exception 에 도달하지 않아 서버
+            # 로그에 트레이스백이 전혀 없었다(라이브 실증 2026-07-31: 렌더러 크래시 원인
+            # 재구성 불가). 사용자 노출 메시지는 불변, 서버 로그에만 스택을 남긴다.
+            logger.exception("menu_nav 노드 실패(%s)", schema.label)
             return {"error": f"메뉴 진입 실패: {exc}"}
+        if page is not state["page"]:
+            # 교체된 새 page 를 state 로 전파 — BaseAgentState 에 page 가 선언돼 있어 LangGraph
+            # silent-drop 없이 후속 노드(각자 state["page"] 를 재조회)로 전달된다.
+            return {"page": page}
         return {}
 
     return menu_nav
@@ -129,10 +157,16 @@ def make_set_gubun_node(gubun_text: str):
         page = state["page"]
         await emit_step(emit, "set_gubun", "running")
         t0 = time.monotonic()
-        for _ in range(50):  # select 로드 폴링(300ms 간격, 상한 15s 유지)
-            if await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
+        # select 로드 폴링(상한 15s) — ⚠ 시간축 규율(2026-08-07): 종전 budget_polls×
+        # wait_for_timeout 명목 폴은 간격이 delay_scale 로 축소돼 실관찰창이 붕괴한다.
+        # 폴 대기는 실시간(verify.DEFAULT_SLEEP), 상한만 latency 배율(≤×4) 확대.
+        waited = 0
+        load_cap_ms = latency.budget_ms(15_000)
+        while not await page.evaluate("(s) => !!document.querySelector(s)", selectors.GUBUN_SELECT):
+            if waited >= load_cap_ms:
                 break
-            await page.wait_for_timeout(300)
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
         r = await page.evaluate(
             js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS,
             {"selector": selectors.GUBUN_SELECT, "text": gubun_text},
@@ -183,8 +217,14 @@ def make_add_row_node():
         t0 = time.monotonic()
         await js_click(page, selectors.BTN_ADD)
         rows: Any = -1
-        for _ in range(33):  # 디테일 그리드 rowCount 0→1 폴링(300ms 간격, 상한 ~10s 유지)
-            await page.wait_for_timeout(300)
+        # 디테일 그리드 rowCount 0→1 폴링(상한 ~10s 유지) — ⚠ 시간축 규율(2026-08-07):
+        # 종전 range(33)×wait_for_timeout(300) 명목 폴은 delay_scale 로 관찰창이 붕괴하고
+        # latency 배율도 없어 느린 ERP 에서 상한 확대조차 못 받았다. 실시간 누산 + 배율 확대.
+        waited = 0
+        row_cap_ms = latency.budget_ms(10_000)
+        while waited < row_cap_ms:
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
             rows = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
             if isinstance(rows, int) and rows > 0:
                 break

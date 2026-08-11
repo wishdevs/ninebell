@@ -12,10 +12,11 @@ app.agents.voucher_receivable.js + nbkit.omnisol.{js_lib,selectors} 단일소스
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
@@ -42,16 +43,42 @@ PERIOD_FIELD = "#s_period"  # 회계일 periodpicker 컨테이너(반영 확인 
 
 # 작성부서 팝업 그리드 데이터(부서 목록) 로드 폴링 — 그리드 컨트롤 부착(_grid) 후에도 46건
 # 데이터 fetch 가 늦으면 checkAll 이 0건을 체크한다(2026-07-24 '전체선택 안 됨' 실측).
-_DEPT_LOAD_TRIES = 8
-_DEPT_LOAD_INTERVAL_MS = 500
 _DEPT_APPLY_SETTLE_MS = 300  # checkAll 체크 반영 대기(적용 전).
+_PICKER_ROWS_CAP_MS = 6_000  # 팝업 행 도착 관찰 상한(실시간) — ERP 지연 시 latency 배율(≤×4)로 확대.
+_PICKER_ROWS_INTERVAL_S = 0.25
+_PICKER_ROWS_MAX_POLLS = 40  # 테스트의 no-op sleep 에서도 유한 종료를 보장하는 안전판.
+_BTN_RECT_TRIES = 4  # 돋보기 rect null(재접힘 직후) 짧은 재관찰 횟수.
+_BTN_RECT_INTERVAL_S = 0.15
+_BTN_STABLE_GAP_S = 0.12  # 좌표 2회 연속 동일 판정 간격(패널 확장 애니메이션 정착).
+_OPEN_CLICK_MAX = 3  # 팝업 미출현 시 돋보기 재클릭 상한.
+_OPEN_WINDOW_MS = 2_500  # 클릭당 팝업 출현 관찰창(실시간, latency 배율 적용).
+
+
+async def _search_btn_rect_stable(page: Any, label: str) -> Any:
+    """돋보기 버튼 rect 를 **정착 좌표**로 얻는다 — null 이면 짧게 재관찰(재접힘 직후 재출현),
+    얻으면 같은 좌표가 2회 연속 읽힐 때까지 확인해 확장 애니메이션 중의 이동 좌표 클릭을 막는다.
+    계속 null 이면 None(패널 접힘 — 가시성 재확보는 호출부 몫)."""
+    rect = None
+    for _ in range(_BTN_RECT_TRIES):
+        rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
+        if rect:
+            break
+        await verify.DEFAULT_SLEEP(_BTN_RECT_INTERVAL_S)
+    if not rect:
+        return None
+    for _ in range(_BTN_RECT_TRIES):
+        await verify.DEFAULT_SLEEP(_BTN_STABLE_GAP_S)
+        again = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
+        if again == rect:
+            return rect
+        if not again:
+            return None
+        rect = again
+    return rect  # 계속 흔들리면 마지막 좌표로 진행 — 클릭 실패는 상위 재클릭이 흡수.
 
 # 결제창 렌더 완료 폴링 상한(SSO 리다이렉트+SPA 마운트 1~12s 편차 — 고정대기 금지, 조건폴링).
 CHILD_READY_CAP_MS = 25_000
 CHILD_READY_INTERVAL_MS = 1_000
-# 결과 조회 rowcount 안정 폴링(그리드 로딩 대기).
-QUERY_POLL_TRIES = 30
-QUERY_POLL_INTERVAL_MS = 400
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -113,9 +140,17 @@ async def ensure_field_visible(page: Any, label: str, *, max_toggles: int = 4) -
     rects = await page.evaluate(js.EXPAND_TOGGLE_RECTS_JS) or []
     for rect in rects[:max_toggles]:
         await mouse_click(page, rect["x"], rect["y"])
-        await page.wait_for_timeout(1_000)
-        if await page.evaluate(js.FIELD_LABEL_VISIBLE_JS, label):
-            return True
+        # 무엇을 기다리나: 이 토글의 확장 애니메이션 뒤 **목표 라벨 가시화**(종전 고정 1s 후
+        # 1회 확인). 보이는 즉시 진행하고, 이 토글이 목표 필드를 안 드러내면 상한(1s ×
+        # latency 배율, 실시간 monotonic — delay_scale 무관) 소진 후 다음 토글(기존 수순 동일).
+        t0 = time.monotonic()
+        cap_ms = latency.budget_ms(1_000)
+        while True:
+            if await page.evaluate(js.FIELD_LABEL_VISIBLE_JS, label):
+                return True
+            if (time.monotonic() - t0) * 1_000 >= cap_ms:
+                break
+            await page.wait_for_timeout(200)
     return False
 
 
@@ -149,29 +184,98 @@ async def _open_picker(
         before = await page.evaluate(js.POPUP_COUNT_JS)
     except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
         before = 0
-    rect = await page.evaluate(js.FIELD_SEARCH_BTN_RECT_JS, label)
-    if not rect:
-        return False
-    await mouse_click(page, rect["x"], rect["y"])
-    await page.wait_for_timeout(1_200)
-    waited = 0
-    while waited < ready_cap_ms:
+    # ⚠ 결과검증형 클릭 재시도(2026-08-01 전표유형 라이브 실증): 가시성 확인(ensure_field_visible)
+    #   통과 직후에도 ① rect 읽는 순간 패널이 재접혀 null 이거나 ② 확장 애니메이션 중의 좌표를
+    #   읽어 클릭이 빗나가 팝업이 안 뜨는 레이스가 있다(종전엔 고정 선대기가 우연히 가림).
+    #   좌표는 2회 연속 동일(애니메이션 정착 — 사용자유형 드롭다운과 동일 패턴)일 때만 클릭하고,
+    #   클릭당 출현 관찰창 안에 팝업이 안 뜨면 fresh 좌표로 재클릭한다(최대 3회 — 이미 첫
+    #   클릭이 먹은 경우의 중복 오픈을 피하기 위해 관찰창을 충분히 두고 상한을 낮게 유지).
+    deadline = time.monotonic() + latency.budget_ms(ready_cap_ms) / 1000.0
+    opened = False
+    for _ in range(_OPEN_CLICK_MAX):
+        rect = await _search_btn_rect_stable(page, label)
+        if not rect:
+            return False  # 접힘/미발견 — 호출부가 가시성 재확보 후 재시도할 몫.
+        await mouse_click(page, rect["x"], rect["y"])
+        window_end = min(deadline, time.monotonic() + latency.budget_ms(_OPEN_WINDOW_MS) / 1000.0)
+        polls = 0
+        while polls < _PICKER_ROWS_MAX_POLLS:
+            try:
+                if await page.evaluate(js.POPUP_COUNT_JS) > before:
+                    opened = True
+                    break
+            except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+                return True
+            if time.monotonic() >= window_end:
+                break
+            polls += 1
+            await verify.DEFAULT_SLEEP(ready_interval_ms / 1000.0)
+        if opened or time.monotonic() >= deadline:
+            break
+    if not opened:
+        # 새 팝업이 안 떴으면(스테일 잔여 팝업/열기 실패) False 로 명확히 실패시킨다.
         try:
-            opened = await page.evaluate(js.POPUP_COUNT_JS) > before
-            ready = await page.evaluate(js.POPUP_GRID_READY_JS)
+            return await page.evaluate(js.POPUP_COUNT_JS) > before
         except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
             return True
-        if opened and ready:
+    # ⚠ 이중 오픈 정규화(2026-08-07 무결성 감사): 첫 클릭이 실제로 먹었는데 렌더가 출현 관찰창
+    #   (_OPEN_WINDOW_MS)을 넘겨 재클릭이 나가면 팝업이 **2개** 뜬다 — _apply_popup 은 '개수
+    #   감소'만 확인하므로 잔여 1개가 남아 다음 피커가 스테일 팝업을 읽는 오염 경로가 된다
+    #   (2026-07-24 사고의 재유입 뒷문). 초과분을 즉시 닫아 '새 팝업 1개' 불변식을 복원한다.
+    if isinstance(before, int):
+        try:
+            n_now = await page.evaluate(js.POPUP_COUNT_JS)
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+            n_now = None
+        if isinstance(n_now, int) and n_now > before + 1:
+            logger.warning("피커 '%s' 이중 오픈 감지(%d→%d) — 초과분 닫기 정규화", label, before, n_now)
+            await _close_top_popup(page, count=n_now - (before + 1))
+    # 그리드 부착 폴링(기존 하드닝 유지) — 상한 내 미부착이어도 팝업이 떴으면 진행을 허용한다
+    # (호출부 JS 가 grid-not-ready 를 우아하게 반환하는 최종 방어선이 있다). 실시간 상한과
+    # 명목 횟수 상한을 병행한다(no-op sleep 테스트에서의 폴 폭증 방지).
+    ready_polls_cap = max(1, latency.budget_ms(ready_cap_ms) // max(1, ready_interval_ms))
+    for _ in range(ready_polls_cap):
+        try:
+            if await page.evaluate(js.POPUP_GRID_READY_JS):
+                return True
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
             return True
-        await page.wait_for_timeout(ready_interval_ms)
-        waited += ready_interval_ms
-    # 타임아웃: 새 팝업이 떴으면(개수 증가) 그리드 부착만 느린 것 — 기존 하드닝(2026-07-21)대로
-    # 진행을 허용한다(호출부 JS 가 grid-not-ready 를 우아하게 반환하는 최종 방어선이 있다).
-    # 새 팝업이 안 떴으면(스테일 잔여 팝업/열기 실패) False 로 명확히 실패시킨다.
-    try:
-        return await page.evaluate(js.POPUP_COUNT_JS) > before
-    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
-        return True
+        if time.monotonic() >= deadline:
+            return True
+        await verify.DEFAULT_SLEEP(ready_interval_ms / 1000.0)
+    return True
+
+
+async def _eval_rows_when_loaded(page: Any, script: str, arg: Any = None) -> Any:
+    """팝업 행 검색/전체선택 JS 를 **행 도착까지** 실시간 폴링한 뒤 마지막 결과를 반환한다.
+
+    ⚠ 근본원인(2026-08-01 전자결재상태 라이브 실증): `_open_picker` 는 '팝업 출현 + 그리드
+    부착'까지만 보장하고 **데이터 행 도착은 별개의 비동기 로드**다. 종전에는 열기 경로의
+    고정 1200ms 선대기가 이 틈을 우연히 가렸으나, 조건 폴링 전환(bcf6106)으로 선대기가
+    사라지자 '그리드는 붙었는데 행은 0개'인 순간의 단발 checkRow 가 {ok:True, n:0} 으로
+    실패 오판됐다. 부서(checkAll)만 자체 로드 폴링이 있었고 전자결재상태·전표유형은 단발이라
+    이 공용 헬퍼로 통일한다.
+    - 무엇을 기다리나: 행 도착(n>0 또는 idxs 비어있지 않음). 그 동안의 {ok:False}(grid-not-ready
+      우아 반환 포함)·n==0 은 '아직'으로 보고 재시도한다.
+    - n>0 인데 대상 미매칭이면 즉시 반환 — 대상 부재는 기다려도 생기지 않으므로 빠른 실패가 옳다.
+    - 대기는 확인 커널과 같은 실시간 sleep(verify.DEFAULT_SLEEP — delay_scale 무관, 테스트는
+      conftest 가 no-op 대체)이며 상한은 latency 배율로만 확대된다.
+    """
+    deadline = time.monotonic() + latency.budget_ms(_PICKER_ROWS_CAP_MS) / 1000.0
+    res: Any = None
+    for _ in range(_PICKER_ROWS_MAX_POLLS):
+        res = await (page.evaluate(script, arg) if arg is not None else page.evaluate(script))
+        if isinstance(res, dict) and res.get("ok") and ((res.get("n") or 0) > 0 or res.get("idxs")):
+            return res
+        if time.monotonic() >= deadline:
+            break
+        await verify.DEFAULT_SLEEP(_PICKER_ROWS_INTERVAL_S)
+    return res
+
+
+def _rows_never_loaded(res: Any) -> bool:
+    """행 도착 대기가 끝내 실패했는지(대상 부재와 구분) — ok 인데 n==0(빈 그리드)이면 참."""
+    return isinstance(res, dict) and bool(res.get("ok")) and not res.get("idxs") and (res.get("n") or 0) == 0
 
 
 async def _apply_popup(
@@ -199,8 +303,13 @@ async def _apply_popup(
         return True
     reclicked = False
     waited = 0
-    while waited < close_cap_ms:
-        await page.wait_for_timeout(interval_ms)
+    # ⚠ 시간축 규율(2026-08-07): 닫힘 관찰은 **실패-경로 대기**다 — 종전 page.wait_for_timeout
+    #   은 delay_scale(0.4)로 줄어 관찰창이 실효 3.2s·재클릭 0.6s 로 붕괴했다(명목 카운터 함정,
+    #   card_collect/trip_domestic 과 동일 규율로 정리). 실시간 sleep(verify.DEFAULT_SLEEP)으로
+    #   세고(명목 누산 == 실경과), 상한만 latency 배율(≤×4)로 확대한다.
+    cap_ms = latency.budget_ms(close_cap_ms)
+    while waited < cap_ms:
+        await verify.DEFAULT_SLEEP(interval_ms / 1000)
         waited += interval_ms
         if await page.evaluate(js.POPUP_COUNT_JS) < before:
             return True  # 팝업 개수 감소 = 실제 닫힘 확정.
@@ -215,6 +324,64 @@ async def _apply_popup(
     return False
 
 
+async def _close_top_popup(page: Any, *, count: int = 1) -> bool:
+    """최상단 업무 팝업을 닫고 **개수 감소를 확인**한다(count 개까지). 전부 닫히면 True.
+
+    이중 오픈 정규화·실패 경로 정리(_fail_close) 공용. 닫기 JS 는 검증된 공유 프리미티브
+    js_lib.PICKER_CLOSE_JS(최상단 보이는 k-window 의 닫기/취소 클릭)를 재사용하고, 감소 확인은
+    업무 팝업 기준(POPUP_COUNT_JS — 공지 제외)으로 한다. 닫기가 공지창에 먹은 회차는 업무
+    개수가 안 줄어 reapply 재클릭으로 수렴한다.
+    """
+    for _ in range(max(1, count)):
+        try:
+            before = await page.evaluate(js.POPUP_COUNT_JS)
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+            return False
+        if not isinstance(before, int) or before <= 0:
+            return True  # 닫을 팝업이 없다.
+        try:
+            await page.evaluate(js_lib.PICKER_CLOSE_JS)
+        except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+            return False
+        chk = await verify.confirm_popup_count(
+            page, less_than=before, reapply=lambda: page.evaluate(js_lib.PICKER_CLOSE_JS)
+        )
+        if not chk:
+            return False
+    return True
+
+
+async def _reset_popups(page: Any) -> None:
+    """attempt 재진입 위생 — 직전 시도가 남긴 업무 팝업을 전부 닫아 기준선(0)을 복원한다.
+
+    결과검증형 재시도(attempt-as-reapply)에서 잔존 팝업을 안 닫으면 `_open_picker` 의
+    '개수 증가' 판정이 영원히 실패한다(돋보기 클릭이 잔존 팝업 뒤로 먹힘).
+    """
+    try:
+        n = await page.evaluate(js.POPUP_COUNT_JS)
+    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+        return
+    if isinstance(n, int) and n > 0:
+        await _close_top_popup(page, count=n)
+
+
+async def _fail_close(page: Any, reason: str, **extra: Any) -> dict:
+    """실패 경로 — 열린 피커 팝업을 정리하고 실패 dict 를 돌려준다(trip_domestic 규율 이식).
+
+    팝업 스텝이 팝업을 연 뒤 실패하면서 열린 채 반환하면, 다음 피커가 그 잔존 팝업을 읽는
+    오염(최상단 규칙)이 생긴다 — 이 화면(set_query)의 기준선은 '업무 팝업 0개'이므로 전부
+    닫는다. 닫힘 실패는 **원래 실패 사유를 덮지 않고** 경고만 덧붙인다.
+    """
+    try:
+        n = await page.evaluate(js.POPUP_COUNT_JS)
+    except Exception:  # noqa: BLE001 — 테스트 스텁 등 방어(best-effort).
+        n = None
+    if isinstance(n, int) and n > 0:
+        if not await _close_top_popup(page, count=n):
+            reason = f"{reason} / ⚠ 실패 정리 중 팝업 미닫힘(다음 스텝 오염 주의)"
+    return {"ok": False, "reason": reason, **extra}
+
+
 async def set_dept_all(page: Any) -> dict:
     """작성부서 = 전체선택 — 돋보기 → 목록 로드 대기 → checkAll → 적용 → 표시값 검증.
 
@@ -224,29 +391,48 @@ async def set_dept_all(page: Any) -> dict:
       (2) checkAll 직후 곧장 적용하면 체크 반영 전 커밋될 수 있어 짧게 settle 후 적용.
       (3) 적용 후 표시값이 비면 전체선택 미반영 — 잘못된 부서 필터로 조회하면 결재 대상이
           어긋나므로 **명확히 실패**시킨다(조용히 잘못된 조회로 진행하지 않는다).
+    ⚠ 결과검증형 재시도(2026-08-07): 열기→행대기→checkAll→적용 전체를 attempt 로 묶어 표시값이
+      붙을 때까지 재실행한다(voucher_card set_collect_dept_all 실증 패턴 — "첫 시도만 실패하고
+      즉시 재시도는 전부 성공"하는 준비-덜-됨 레이스를 구조적으로 흡수). 재진입 시 잔존 팝업은
+      _reset_popups 로 정리해 개수 기준선을 복원한다.
     반환 {ok, n?, display?}.
     """
-    if not await _open_picker(page, DEPT_LABEL):
-        return {"ok": False, "reason": "작성부서 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
-    # (1) 부서 목록 로드 대기 — checkAll 이 실제로 행을 체크(n>0)할 때까지 폴링.
-    res: Any = None
-    for _ in range(_DEPT_LOAD_TRIES):
-        res = await page.evaluate(js.POPUP_CHECK_ALL_JS)
-        if isinstance(res, dict) and res.get("ok") and (res.get("n") or 0) > 0:
-            break
-        await page.wait_for_timeout(_DEPT_LOAD_INTERVAL_MS)
-    if not (isinstance(res, dict) and res.get("ok")):
-        return {"ok": False, "reason": f"작성부서 팝업 전체선택(checkAll) 실패: {res}"}
-    if (res.get("n") or 0) <= 0:
-        return {"ok": False, "reason": "작성부서 목록이 로드되지 않아 전체선택이 0건입니다(그리드 데이터 대기 실패)."}
-    # (2) checkAll 반영 settle 후 적용.
-    await page.wait_for_timeout(_DEPT_APPLY_SETTLE_MS)
-    if not await _apply_popup(page):
-        return {"ok": False, "reason": "작성부서 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
-    # (3) 전체선택 반영 검증 — 표시값이 비면 실패(잘못된 부서 필터 조회 차단).
-    #     확인 커널로 위임: 적용 직후 즉시 1회 확인하고, 반영이 늦으면 점증 대기로 3회 재확인한다.
-    chk = await verify.confirm_display(page, DEPT_LABEL, unknown_when=_unreadable_display)
-    return _verdict(chk, n=res.get("n"), display=chk.actual)
+    last: dict = {"n": None, "why": None, "done": False}
+
+    async def attempt() -> None:
+        await _reset_popups(page)
+        if not await _open_picker(page, DEPT_LABEL):
+            last["why"] = "작성부서 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."
+            return
+        # (1) 부서 목록 로드 대기 — checkAll 이 실제로 행을 체크(n>0)할 때까지 공용 헬퍼로 폴링
+        #     (종전 자체 루프는 wait_for_timeout 이 delay_scale 로 축소돼 관찰창이 줄던 명목
+        #     카운터 함정이 있었다 — 실시간 monotonic + latency 배율로 통일).
+        res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ALL_JS)
+        if not (isinstance(res, dict) and res.get("ok")):
+            last["why"] = f"작성부서 팝업 전체선택(checkAll) 실패: {res}"
+            return
+        if (res.get("n") or 0) <= 0:
+            last["why"] = "작성부서 목록이 로드되지 않아 전체선택이 0건입니다(그리드 데이터 대기 실패)."
+            return
+        last["n"] = res.get("n")
+        last["why"] = None
+        # (2) checkAll 반영 settle 후 적용.
+        await page.wait_for_timeout(_DEPT_APPLY_SETTLE_MS)
+        if not await _apply_popup(page):
+            last["why"] = "작성부서 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."
+            return
+        last["done"] = True  # 적용·닫힘까지 완주한 시도가 있다 — 표시값 판정의 전제.
+
+    await attempt()
+    # (3) 전체선택 반영 검증 — 표시값이 비면 attempt 전체를 재실행(최대 3회, 실시간 점증 대기).
+    chk = await verify.confirm_display(
+        page, DEPT_LABEL, unknown_when=_unreadable_display, reapply=attempt
+    )
+    if last["done"] and (chk or chk.unknown):
+        return _verdict(chk, n=last["n"], display=chk.actual)
+    # 완주(적용까지) 없이 그럴듯한 표시값만으로 성공 처리하지 않는다 — 완주했으면 표시값
+    # 불일치(확인 실패)가, 미완주면 마지막 시도의 실패 지점이 실패 근거다.
+    return await _fail_close(page, chk.reason if last["done"] else (last["why"] or chk.reason))
 
 
 async def set_period_this_month(page: Any) -> dict:
@@ -254,6 +440,7 @@ async def set_period_this_month(page: Any) -> dict:
 
     ⚠ YYYYMMDD 타이핑 아님. setMonth() 는 예외 없이 반환해도 위젯이 값을 안 붙이는 경우가
     있어(폼 리로드 레이스), 시작·종료 입력값의 연월이 **브라우저 기준 당월**인지 재확인한다.
+    되돌려지는 성격의 값이라(range 분기와 동일) 재시도 때는 setMonth() 를 재실행한다.
     """
     ok = await page.evaluate(js.SET_PERIOD_THIS_MONTH_JS)
     if not ok:
@@ -264,6 +451,7 @@ async def set_period_this_month(page: Any) -> dict:
         timing=verify.INSTANT,
         what="회계일(당월)",
         expected="당월 1일~말일",
+        reapply=lambda: page.evaluate(js.SET_PERIOD_THIS_MONTH_JS),
         unknown_when=lambda v: not (isinstance(v, dict) and v.get("found")),
     )
     values = chk.actual.get("values") if isinstance(chk.actual, dict) else None
@@ -285,26 +473,42 @@ async def set_period(page: Any, start: str | None = None, end: str | None = None
     if not start or not end:
         return await set_period_this_month(page)
 
-    ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, {"start": start, "end": end})
+    payload = {"start": start, "end": end}
+    ok = await page.evaluate(js.SET_PERIOD_RANGE_JS, payload)
     if not ok:
         return {"ok": False, "reason": "회계일 기간 입력 실패(시작/종료 input 미발견)."}
-    values = await page.evaluate(js.PERIOD_VALUE_JS)
-    if not isinstance(values, dict):
-        return {"ok": True, "warn": "반영 확인 불가(회계일 입력 구조를 읽지 못함).", "display": None}
-    if values.get("start") != start or values.get("end") != end:
-        return {
-            "ok": False,
-            "reason": f"회계일 기간 반영 불일치 — 기대 {start}~{end}, 실제 {values}.",
-        }
-    return {"ok": True, "display": f"{start}~{end}"}
+    # ⚠ 되돌림 레이스(2026-08-03·08-06 라이브 실패 실측): dews periodpicker 의 change 핸들러가
+    #   값을 비동기로 되돌려 **end 만 붙고 start 는 위젯 기본값**으로 돌아간 부분 반영이 관측됐다.
+    #   단발 readback 은 그 과도상태를 하드 실패로 오판한다 — card_collect set_period 와 같은
+    #   규율로 확인 커널 재확인 + 되돌려지는 성격의 값이라 재시도 때 **재세팅**(reapply)한다.
+    chk = await verify.confirm(
+        lambda: page.evaluate(js.PERIOD_VALUE_JS),
+        lambda v: isinstance(v, dict) and v.get("start") == start and v.get("end") == end,
+        timing=verify.INSTANT,
+        what="회계일 기간",
+        expected=f"{start}~{end}",
+        reapply=lambda: page.evaluate(js.SET_PERIOD_RANGE_JS, payload),
+        unknown_when=lambda v: not isinstance(v, dict),
+    )
+    return _verdict(chk, display=f"{start}~{end}" if chk else None)
 
 
 async def clear_writer(page: Any) -> dict:
-    """작성자 = 비움 — dews multicodepicker clear() 후 **표시값이 실제로 비었는지 확인**."""
+    """작성자 = 비움 — dews multicodepicker clear() 후 **표시값이 실제로 비었는지 확인**.
+
+    ⚠ 되돌림 대비(2026-08-07): 작성자는 폼 리로드/change 캐스케이드가 로그인 사용자 기본값을
+    **비동기로 재주입**하는 성격의 필드다 — 재확인에서 비어있지 않으면 재클리어(reapply)한다.
+    (t=0 재확인 통과 후 늦게 재주입되는 창은 조회 직전 재확정 게이트(nodes/query.py)가 봉합.)
+    """
     ok = await page.evaluate(js.CLEAR_WRITER_JS)
     if not ok:
         return {"ok": False, "reason": "작성자 multicodepicker clear() 호출 실패."}
-    chk = await verify.confirm_display_empty(page, WRITER_LABEL, timing=verify.INSTANT)
+    chk = await verify.confirm_display_empty(
+        page,
+        WRITER_LABEL,
+        timing=verify.INSTANT,
+        reapply=lambda: page.evaluate(js.CLEAR_WRITER_JS),
+    )
     return _verdict(chk)
 
 
@@ -313,11 +517,28 @@ async def set_docu_status(page: Any, text: str = DOCU_ST_TARGET) -> dict:
 
     ⚠ 세팅 JS 의 {ok:true} 는 "옵션을 찾아 값을 넣었다"까지다 — change 핸들러/폼 리로드가 값을
     되돌리는 경우가 있어 실제 선택값을 확인한다. 되돌려지는 성격이라 재시도 때 **재세팅**한다.
+    ⚠ 준비 게이트(2026-08-07): 직전 스텝(팝업 적용·기간 세팅)이 폼 리로드를 유발하는 구간이라
+    select 부재/위젯 재바인딩 순간에 단발 세팅이 실패할 수 있다 — 세팅 전에 준비를 폴링하고
+    (형제 구현 common/nodes.set_gubun 의 존재 폴링을 확인 커널로 승격), 1차 세팅 실패도 즉시
+    하드 실패하지 않는다(confirm_select 의 reapply 재세팅이 소진된 뒤에만 실패 확정 — 종전엔
+    1차 실패가 reapply 에 도달조차 못 하는 구조였다).
     """
     payload = {"selector": DOCU_ST_SELECT, "text": text}
+    ready = await verify.confirm(
+        lambda: page.evaluate(js.DOCU_ST_READY_JS, DOCU_ST_SELECT),
+        lambda v: isinstance(v, dict) and bool(v.get("widget")),
+        timing=verify.ASYNC,
+        what="전표상태 위젯 준비",
+        expected="select+kendo 부착",
+    )
+    if not ready:
+        if not (isinstance(ready.actual, dict) and ready.actual.get("sel")):
+            return {"ok": False, "reason": f"전표상태 select 미출현: {ready.reason}"}
+        # 위젯만 미부착(native select 존재) — 세팅 JS 의 native 폴백으로 진행(하드 리그레션 방지).
+        logger.warning("전표상태 kendo 위젯 미부착 — native select 폴백으로 진행: %s", ready.reason)
     r = await page.evaluate(js_lib.KENDO_SET_DROPDOWN_BY_TEXT_JS, payload)
     if not (isinstance(r, dict) and r.get("ok")):
-        return {"ok": False, "reason": f"전표상태 '{text}' 설정 실패: {r}"}
+        logger.warning("전표상태 '%s' 1차 세팅 실패(%s) — 확인 커널 재세팅으로 재시도", text, r)
     chk = await verify.confirm_select(
         page,
         DOCU_ST_SELECT,
@@ -329,17 +550,49 @@ async def set_docu_status(page: Any, text: str = DOCU_ST_TARGET) -> dict:
 
 
 async def set_gwaprvlst(page: Any, target: str = GWAPRVLST_TARGET) -> dict:
-    """전자결재상태 = 저장 — MultiCodePicker 팝업 RealGrid checkRow(SYSDEF_NM==target) → 적용."""
-    if not await _open_picker(page, GWAPRVLST_LABEL):
-        return {"ok": False, "reason": "전자결재상태 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."}
-    res = await page.evaluate(js.POPUP_CHECK_ROWS_JS, [[target], "SYSDEF_NM"])
-    if not (isinstance(res, dict) and res.get("ok") and res.get("idxs")):
-        return {"ok": False, "reason": f"전자결재상태 '{target}' 행을 팝업에서 찾지 못했습니다: {res}"}
-    if not await _apply_popup(page):
-        return {"ok": False, "reason": "전자결재상태 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
-    # 팝업 안 checkRow 성공은 '팝업 내부 상태'일 뿐 — 적용이 **폼에 붙었는지**까지 확인한다.
-    chk = await verify.confirm_display(page, GWAPRVLST_LABEL, unknown_when=_unreadable_display)
-    return _verdict(chk, checked=res.get("idxs"), display=chk.actual)
+    """전자결재상태 = 저장 — MultiCodePicker 팝업 RealGrid checkRow(SYSDEF_NM==target) → 적용.
+
+    ⚠ 결과검증형 재시도(2026-08-07): 열기→행대기→checkRow→적용 전체를 attempt 로 묶어 폼
+      표시값이 붙을 때까지 재실행한다(set_dept_all 과 동일 규율). 단 **대상 부재**(행은 로드
+      됐는데 target 미매칭)는 기다리거나 다시 열어도 생기지 않으므로 즉시 실패한다(재시도는
+      타이밍 실패에만 — 오탐 재시도로 런타임을 낭비하지 않는다).
+    """
+    last: dict = {"idxs": None, "why": None, "absent": False, "done": False}
+
+    async def attempt() -> None:
+        if last["absent"]:
+            return  # 대상 부재 확정 — 재실행 무의미.
+        await _reset_popups(page)
+        if not await _open_picker(page, GWAPRVLST_LABEL):
+            last["why"] = "전자결재상태 팝업을 열지 못했습니다(돋보기 미발견 또는 팝업 미표시)."
+            return
+        res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ROWS_JS, [[target], "SYSDEF_NM"])
+        if not (isinstance(res, dict) and res.get("ok") and res.get("idxs")):
+            if _rows_never_loaded(res):
+                last["why"] = f"전자결재상태 팝업 행이 로드되지 않았습니다(행 도착 대기 실패): {res}"
+            else:
+                last["why"] = f"전자결재상태 '{target}' 행을 팝업에서 찾지 못했습니다: {res}"
+                last["absent"] = True
+            return
+        last["idxs"] = res.get("idxs")
+        last["why"] = None
+        if not await _apply_popup(page):
+            last["why"] = "전자결재상태 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."
+            return
+        last["done"] = True
+
+    await attempt()
+    if last["absent"]:
+        return await _fail_close(page, last["why"])
+    # 팝업 안 checkRow 성공은 '팝업 내부 상태'일 뿐 — 적용이 **폼에 붙었는지**까지 확인하고,
+    # 안 붙었으면 attempt 전체를 재실행한다(최대 3회, 실시간 점증 대기).
+    chk = await verify.confirm_display(
+        page, GWAPRVLST_LABEL, unknown_when=_unreadable_display, reapply=attempt
+    )
+    if last["done"] and (chk or chk.unknown):
+        return _verdict(chk, checked=last["idxs"], display=chk.actual)
+    # 완주(적용까지) 없는 그럴듯한 표시값은 성공 근거가 아니다(스테일 표시 차단).
+    return await _fail_close(page, chk.reason if last["done"] else (last["why"] or chk.reason))
 
 
 async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS) -> dict:
@@ -354,42 +607,158 @@ async def set_docu_types(page: Any, targets: tuple[str, ...] = DOCU_TYPE_TARGETS
       직전에 ensure_field_visible(결과검증형: 좌→우 토글을 하나씩 시도, 이미 보이면 미클릭)로
       가시성을 보장한다(고정 1회 expand 대신 조건 확인 — 타이밍 카테고리 수정).
     """
-    if not await ensure_field_visible(page, DOCU_TYPE_LABEL):
-        return {"ok": False, "reason": "전표유형 필드가 어떤 확장 토글로도 보이지 않았습니다."}
-    if not await _open_picker(page, DOCU_TYPE_LABEL):
-        return {"ok": False, "reason": "전표유형 팝업을 열지 못했습니다(돋보기 미발견/팝업 미표시 — 패널 확장 확인)."}
-    # ⚠ 실측(2026-07-21 읽기전용 진단, e2e/voucher_receivable_docu_type_diag.py): 이 팝업의
-    # 실제 RealGrid 필드는 전자결재상태 팝업과 동일한 범용 코드테이블 스키마
-    # SYSDEF_CD/SYSDEF_NM 이다 — 'DOCU_NM'/'DOCU_CD' 필드는 이 팝업엔 없다(2026-07-20 프로브
-    # 기록이 실측과 어긋남 — 코드/명칭 레벨 불일치, PROCESS.md D2 정정 대상).
-    res = await page.evaluate(js.POPUP_CHECK_ROWS_JS, [list(targets), "SYSDEF_NM"])
-    checked = res.get("idxs") if isinstance(res, dict) else None
-    if not (isinstance(res, dict) and res.get("ok") and checked and len(checked) == len(targets)):
-        return {"ok": False, "reason": f"전표유형 {list(targets)} 전부를 팝업에서 찾지 못했습니다: {res}"}
-    if not await _apply_popup(page):
-        return {"ok": False, "reason": "전표유형 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."}
+    last: dict = {"checked": None, "why": None, "absent": False, "done": False}
+
+    async def attempt() -> None:
+        if last["absent"]:
+            return  # 대상 부재 확정 — 재실행 무의미.
+        await _reset_popups(page)
+        if not await ensure_field_visible(page, DOCU_TYPE_LABEL):
+            last["why"] = "전표유형 필드가 어떤 확장 토글로도 보이지 않았습니다."
+            return
+        if not await _open_picker(page, DOCU_TYPE_LABEL):
+            # ⚠ 재접힘 레이스(2026-08-01 라이브 실증): 가시성 확인~돋보기 클릭 사이에 패널이 다시
+            #   접히면 rect 가 null 로 남아 열기가 실패한다 — 가시성을 재확보하고 1회만 재시도.
+            logger.warning("전표유형 팝업 열기 실패 — 패널 재접힘 의심, 가시성 재확보 후 재시도")
+            reopened = (
+                await ensure_field_visible(page, DOCU_TYPE_LABEL)
+                and await _open_picker(page, DOCU_TYPE_LABEL)
+            )
+            if not reopened:
+                last["why"] = "전표유형 팝업을 열지 못했습니다(돋보기 미발견/팝업 미표시 — 패널 확장 확인)."
+                return
+        # ⚠ 실측(2026-07-21 읽기전용 진단, e2e/voucher_receivable_docu_type_diag.py): 이 팝업의
+        # 실제 RealGrid 필드는 전자결재상태 팝업과 동일한 범용 코드테이블 스키마
+        # SYSDEF_CD/SYSDEF_NM 이다 — 'DOCU_NM'/'DOCU_CD' 필드는 이 팝업엔 없다(2026-07-20 프로브
+        # 기록이 실측과 어긋남 — 코드/명칭 레벨 불일치, PROCESS.md D2 정정 대상).
+        res = await _eval_rows_when_loaded(page, js.POPUP_CHECK_ROWS_JS, [list(targets), "SYSDEF_NM"])
+        checked = res.get("idxs") if isinstance(res, dict) else None
+        if not (isinstance(res, dict) and res.get("ok") and checked and len(checked) == len(targets)):
+            if _rows_never_loaded(res):
+                last["why"] = f"전표유형 팝업 행이 로드되지 않았습니다(행 도착 대기 실패): {res}"
+            else:
+                last["why"] = f"전표유형 {list(targets)} 전부를 팝업에서 찾지 못했습니다: {res}"
+                last["absent"] = True
+            return
+        last["checked"] = checked
+        last["why"] = None
+        if not await _apply_popup(page):
+            last["why"] = "전표유형 팝업 적용/닫힘 실패(적용 버튼 미발견 또는 팝업이 닫히지 않음)."
+            return
+        last["done"] = True
+
+    await attempt()
+    if last["absent"]:
+        return await _fail_close(page, last["why"])
     # 폼 반영 확인 — 표시 형식(이름/코드/건수)이 세션마다 달라 정확일치는 요구하지 않고
     # '비어있지 않음'을 근거로 삼는다(어느 대상을 체크했는지는 위 checkRow 가 이미 확정).
-    chk = await verify.confirm_display(page, DOCU_TYPE_LABEL, unknown_when=_unreadable_display)
-    return _verdict(chk, checked=checked, display=chk.actual)
+    # 미반영이면 attempt 전체(가시성 재확보 포함)를 재실행한다(2026-08-07 결과검증형 재시도).
+    chk = await verify.confirm_display(
+        page, DOCU_TYPE_LABEL, unknown_when=_unreadable_display, reapply=attempt
+    )
+    if last["done"] and (chk or chk.unknown):
+        return _verdict(chk, checked=last["checked"], display=chk.actual)
+    # 완주(적용까지) 없는 그럴듯한 표시값은 성공 근거가 아니다(스테일 표시 차단).
+    return await _fail_close(page, chk.reason if last["done"] else (last["why"] or chk.reason))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # D3 — 조회 실행 + 결과 그리드 읽기
 # ══════════════════════════════════════════════════════════════════════════════
-async def run_query(page: Any) -> dict:
-    """조회(F2, BTN_LOOKUP) → 마스터 그리드(index 0) rowcount 안정 폴링. 반환 {ok, rowcount}.
+async def run_query(page: Any, *, expected: int | None = None) -> dict:
+    """조회(F2, BTN_LOOKUP) → 마스터 그리드(index 0) rowcount 확정. 반환 {ok, rowcount, basis}.
 
-    rowcount≥0 = 정상(0이면 처리 대상 없음). 못 읽으면(-1/비정수) ok=False(그리드 미로딩).
+    card_collect 조회 스텝 이식(2026-08-06 — 간헐 '거짓 0건' 포렌식 수정). 예전 구현은 클릭
+    뒤 첫 폴(실질 ≈160ms — page.wait_for_timeout 이 delay_scale 0.4 로 축소)의 rowcount≥0 을
+    그대로 믿어, ERP 응답이 늦으면 0건/부분 건수를 성공으로 확정했다(→ 조용한 '대상 없음'
+    종료, 부분 계획으로 인한 '계획 밖 전표 혼입' 하드 실패). 규율을 바꾼다:
+      * 클릭 **전** rowcount 를 기준값(base)으로 스냅샷 — 값이 base 와 **달라지면** 즉시 확정.
+      * 무변화(특히 0건)는 verify.HEAVY 스케줄(실시간 대기 — delay_scale 무관)을 전부 소진한
+        뒤에만 인정하고 basis='exhausted' 로 근거를 남긴다(진짜 0건 ↔ 조회 실패 구분).
+      * 그래도 못 읽으면(-1/비정수) 재조회 1회 후 실패(grid_read_flow 의 재조회 관례).
+      * expected(선택, 2026-08-07 상신 반영 재조회): 호출자가 아는 **기대 건수** — 값이 기대와
+        일치하면 base 와 같아도 **즉시 확정**한다(basis='expected'). 상신 후 재조회는 결제창을
+        닫는 순간 본창이 자동 갱신돼 클릭 전 값이 이미 기대값과 같으므로, 무변화 규율대로면
+        매 건 HEAVY 전체(6.9s+)를 문다(사용자 리포트: 결제 후 ~10s 딜레이). 기대 불일치는
+        기존 규율(변화 즉시 / 무변화 소진) 그대로 폴백한다.
     """
-    await js_click(page, selectors.BTN_LOOKUP)
-    rc: Any = -1
-    for _ in range(QUERY_POLL_TRIES):
-        await page.wait_for_timeout(QUERY_POLL_INTERVAL_MS)
-        rc = await page.evaluate(js_lib.ROWCOUNT_BY_INDEX_JS, 0)
-        if isinstance(rc, int) and rc >= 0:
-            return {"ok": True, "rowcount": rc}
-    return {"ok": False, "reason": "조회 결과 그리드 rowcount 를 읽지 못했습니다.", "rowcount": -1}
+    before = await page.evaluate(js_lib.ROWCOUNT_BY_INDEX_JS, 0)
+    # 그리드 미부착(-1)은 0 으로 본다 — 클릭 후의 0 을 '변화'로 오인하지 않기 위함(card_collect 동일).
+    base = before if isinstance(before, int) and before >= 0 else 0
+    _F2_OVERLAY_APPEAR_CAP_MS = 2_500  # F2 후 로딩 오버레이 출현 관찰 상한(실시간).
+    clicked = {"ok": True}
+
+    async def _click_lookup() -> bool:
+        # ⚠ fire-and-forget 봉합(2026-08-07): js_click 반환(False=버튼 미발견)을 무시하면 base
+        #   무변화 → basis='exhausted' 로 **조회 미실행이 '0건 정상완료'로 위장**된다. 미발견이면
+        #   오버레이 소거를 기다렸다 1회 재시도하고, 그래도 없으면 명시적으로 실패시킨다.
+        if await js_click(page, selectors.BTN_LOOKUP):
+            return True
+        await wait_loading_overlay_gone(page)
+        return bool(await js_click(page, selectors.BTN_LOOKUP))
+
+    async def _query_once() -> Any:
+        clicked["ok"] = await _click_lookup()
+        if not clicked["ok"]:
+            return None  # 버튼을 못 눌렀다 — rowcount 폴링은 무의미.
+        # F2 **리로드 수명주기** 대기(라이브 회귀 2026-08-07: expected 즉시확정이 리로드 완료
+        # **전에** 반환 → 다음 묶음의 checkRow 가 뒤늦은 리로드에 씻겨나가 '행 미선택' 결재
+        # 시도. 종전 무변화 HEAVY 소진이 우연히 이 리로드를 덮고 있었다). 클릭 직후 로딩
+        # 오버레이 출현을 짧게 관찰하고, 떴으면 소멸까지 기다린 뒤에야 rowcount 를 확정한다.
+        appeared = False
+        t0 = time.monotonic()
+        while (time.monotonic() - t0) * 1_000 < _F2_OVERLAY_APPEAR_CAP_MS:
+            try:
+                if await page.evaluate(js.LOADING_OVERLAY_VISIBLE_JS):
+                    appeared = True
+                    break
+            except Exception:  # noqa: BLE001 — 스텁/버전차 방어(best-effort).
+                break
+            await verify.DEFAULT_SLEEP(0.1)
+        if appeared:
+            await wait_loading_overlay_gone(page)
+        reads = {"n": 0, "hit": 0}
+
+        def settled(v: Any) -> bool:
+            if not isinstance(v, int) or v < 0:
+                return False
+            reads["n"] += 1
+            if expected is not None and v == expected:
+                reads["hit"] += 1
+                # 기대 건수 일치 — base 와 같아도 확정(상신 반영 재조회). 단 오버레이를 관찰하지
+                # 못했다면(리로드가 아직 시작 전일 수 있음) **연속 2회 일치**를 요구해 레이스를 막는다.
+                return appeared or reads["hit"] >= 2
+            if v != base:
+                return True  # 새 결과 도착 — 즉시 확정.
+            return reads["n"] >= len(verify.HEAVY)  # 무변화는 전체 대기를 소진한 뒤에만 인정.
+
+        chk = await verify.confirm(
+            lambda: page.evaluate(js_lib.ROWCOUNT_BY_INDEX_JS, 0),
+            settled,
+            timing=verify.HEAVY,
+            what="조회 결과 rowcount",
+            expected=f"기준({base}건)과 구분되는 확정값",
+        )
+        return chk.actual
+
+    rc = await _query_once()
+    if not clicked["ok"]:
+        return {"ok": False, "reason": "조회(F2) 버튼을 찾지 못했습니다(재시도 포함) — 조회 미실행.", "rowcount": -1}
+    if not (isinstance(rc, int) and rc >= 0):
+        rc = await _query_once()  # 그리드 미부착/읽기 실패 — 재조회 1회.
+        if not clicked["ok"]:
+            return {"ok": False, "reason": "조회(F2) 버튼을 찾지 못했습니다(재시도 포함) — 조회 미실행.", "rowcount": -1}
+    if isinstance(rc, int) and rc >= 0:
+        if expected is not None and rc == expected:
+            basis = "expected"
+        else:
+            basis = "changed" if rc != base else "exhausted"
+        return {"ok": True, "rowcount": rc, "basis": basis}
+    return {
+        "ok": False,
+        "reason": "조회 결과 그리드 rowcount 를 읽지 못했습니다(재조회 포함).",
+        "rowcount": -1,
+    }
 
 
 async def read_master_rows(page: Any, limit: int = 5) -> dict:
@@ -412,6 +781,20 @@ async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
         return await page.evaluate(js.READ_ROW_ABDOCU_NO_JS, idx)
     except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
         return None
+
+
+async def count_rows_with_abdocu(page: Any) -> dict:
+    """마스터 그리드에서 결의서번호(ABDOCU_NO) 보유 행 수 — {ok, n, withAb} | {ok:False}.
+
+    카드(voucher-card)가 결의서조회승인 수집 **전에** 호출해, 보유 0건이면 다중탭 수집을
+    생략하고 즉시 종료한다(사용자 확정 2026-07-30). 읽기 실패는 ok:False 로 돌려 호출자가
+    기존 경로(수집 진행)로 폴백하게 한다.
+    """
+    try:
+        res = await page.evaluate(js.COUNT_ROWS_WITH_ABDOCU_JS)
+        return res if isinstance(res, dict) else {"ok": False, "reason": f"비정상 반환: {res!r}"}
+    except Exception as exc:  # noqa: BLE001 — 테스트 스텁/버전차 방어(soft-fail).
+        return {"ok": False, "reason": str(exc)[:ERR_REASON_MAX]}
 
 
 async def read_detail_count(page: Any, idx: int, docu_no: str | None = None) -> dict:
@@ -503,11 +886,14 @@ async def wait_loading_overlay_gone(
     """
     try:
         waited = 0
-        while waited < cap_ms:
+        # 시간축 규율(2026-08-07): 실패-경로 관찰창 — 실시간 sleep + latency 상한(종전
+        # page.wait_for_timeout 은 delay_scale 0.4 로 상한이 3.2s 로 붕괴하던 명목 카운터).
+        cap = latency.budget_ms(cap_ms)
+        while waited < cap:
             visible = await page.evaluate(js.LOADING_OVERLAY_VISIBLE_JS)
             if not visible:
                 return True
-            await page.wait_for_timeout(interval_ms)
+            await verify.DEFAULT_SLEEP(interval_ms / 1000)
             waited += interval_ms
         return False
     except Exception:  # noqa: BLE001 — 테스트 스텁/버전차 방어(best-effort).
@@ -569,10 +955,10 @@ async def settle_parent_after_child_close(page: Any, child: Any) -> None:
     `open_approval` 자체의 재시도(+ 자체 로딩 대기)가 최종 방어선이다.
     """
     try:
-        for _ in range(20):  # child.is_closed() 될 때까지(최대 ~2s, 100ms 폴링).
+        for _ in range(20):  # child.is_closed() 될 때까지(최대 ~2s 실시간, 100ms 폴링).
             if child.is_closed():
                 break
-            await page.wait_for_timeout(100)
+            await verify.DEFAULT_SLEEP(0.1)  # 시간축 규율 — delay_scale 로 관찰창이 줄지 않게.
     except Exception:  # noqa: BLE001
         return
     # 근본원인 수정 지점 — 팝업 닫힘 직후 본창 로딩이 끝날 때까지 대기(다음 반복 진입 전).
@@ -582,11 +968,11 @@ async def settle_parent_after_child_close(page: Any, child: Any) -> None:
     except Exception:  # noqa: BLE001
         pass
     try:
-        for _ in range(15):  # 결재 버튼 rect 가 다시 유효해질 때까지(최대 ~3s, 200ms 폴링).
+        for _ in range(15):  # 결재 버튼 rect 가 다시 유효해질 때까지(최대 ~3s 실시간, 200ms 폴링).
             rect = await page.evaluate(js.APPROVAL_BTN_RECT_JS)
             if rect:
                 return
-            await page.wait_for_timeout(200)
+            await verify.DEFAULT_SLEEP(0.2)  # 시간축 규율 — delay_scale 로 관찰창이 줄지 않게.
     except Exception:  # noqa: BLE001
         return
 
@@ -612,7 +998,9 @@ async def poll_child_ready(
             top = []
         if top or waited >= cap_ms:
             break
-        await child.wait_for_timeout(interval_ms)
+        # 자식 Page 는 _ScaledPage 미적용이라 종전에도 실시간이었다 — 시간축 단일화(관찰 대기는
+        # 항상 실시간 sleep) 규율에 맞춰 통일한다(동작 불변).
+        await verify.DEFAULT_SLEEP(interval_ms / 1000)
         waited += interval_ms
     return top
 
@@ -630,12 +1018,60 @@ async def read_child_docu_no(child: Any) -> list[str]:
 
 
 async def close_child(child: Any) -> None:
-    """결제창을 닫는다(비영속 확정 ✅) — 상신/보관을 누르지 않았으므로 아무것도 저장되지 않는다.
+    """결제창을 닫는다 — 상신을 누르지 않았다면 아무것도 저장되지 않는다(비영속 확정 ✅).
 
     finally 경로에서 호출되므로 이미 닫힌/유실된 팝업이어도 예외를 삼켜(로그 후 무시) 런 전체가
-    중단되지 않게 한다.
+    중단되지 않게 한다. 상신 성공 후에는 자식창이 이미 닫혀 있어 no-op 이다.
     """
     try:
         await child.close()
     except Exception:  # noqa: BLE001 — 이미 닫힘/유실된 팝업 teardown 은 무해.
         logger.debug("close_child: 결제창 닫기 실패(무시)", exc_info=True)
+
+
+async def click_child_submit(
+    child: Any, *, cap_ms: int = 25_000, interval_ms: int = 500
+) -> dict:
+    """⚠ 게이트 전용 — 결제창(EAP) '상신' 버튼 실클릭. loop_approvals 의 allow_submit
+    (기본 False) 뒤에서만 호출된다. 게이트가 닫힌 기본 경로에서는 절대 도달하지 않는다.
+
+    정책 전환(사용자 확정 2026-08-07): 상신은 이제 **가역** — 상신된 문서는
+    `e2e/eap_approval_cancel_probe.py`(결재취소→상신취소→삭제, 실검증 2회 PASS)로 회수할 수
+    있어 voucher 3종에 한해 실제 상신을 실행한다. '보관'은 여전히 절대 클릭하지 않는다.
+
+    시퀀스(click_refdoc_confirm 과 동일 규율 — 세팅→독립확인):
+      1. 상단 버튼 좌표를 **fresh** 로 읽어(CHILD_TOP_BUTTONS_JS) '상신'을 클릭한다(캐시 금지).
+      2. 확인 다이얼로그가 뜨면 '확인'을 클릭한다(EAP React — 취소 프로브와 동일 버튼 패턴).
+         ⚠ 상신 후속 다이얼로그·성공 신호는 미실측(리포 최초 실행 경로)이라 best-effort 다.
+      3. 성공 판정 = **자식창 닫힘**. 상한 내 안 닫히면 {ok:False} — 호출자는 하드 실패로
+         런을 중단한다(미상신이 성공으로 둔갑하는 조용한 실패 금지).
+    반환 {ok, reason?}.
+    """
+    top: list[dict] = []
+    try:
+        top = await child.evaluate(js.CHILD_TOP_BUTTONS_JS) or []
+    except Exception:  # noqa: BLE001 — 네비게이션 중 evaluate 실패 → 아래 미발견 처리.
+        top = []
+    btn = next((b for b in top if b.get("text") == "상신" and b.get("visible")), None)
+    if not btn:
+        return {"ok": False, "reason": "결제창에서 '상신' 버튼을 찾지 못했습니다."}
+    try:
+        await child.mouse.click(btn["x"], btn["y"])
+    except Exception as exc:  # noqa: BLE001 — 클릭 실패는 하드 실패 사유로 반환.
+        return {"ok": False, "reason": f"'상신' 클릭 실패: {str(exc)[:ERR_REASON_MAX]}"}
+
+    t0 = time.monotonic()
+    cap = latency.budget_ms(cap_ms)
+    while (time.monotonic() - t0) * 1_000 < cap:
+        try:
+            if child.is_closed():
+                return {"ok": True}
+        except Exception:  # noqa: BLE001 — is_closed 미지원(스텁 등)은 닫힘으로 간주.
+            return {"ok": True}
+        # 확인 다이얼로그(있을 때만) 처리 — 없으면 짧은 timeout 으로 조용히 넘어간다.
+        try:
+            await child.get_by_role("button", name="확인").first.click(timeout=1_000)
+        except Exception:  # noqa: BLE001 — 다이얼로그 없음/이미 닫힘.
+            pass
+        await verify.DEFAULT_SLEEP(interval_ms / 1000)  # 시간축 규율 — 관찰 대기는 실시간.
+    return {"ok": False, "reason": "상신 클릭 후 결제창이 닫히지 않았습니다(적용 미확인)."}

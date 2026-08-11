@@ -15,6 +15,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -170,6 +171,16 @@ def _uuid(owner: str | None) -> uuid.UUID | None:
         return None
 
 
+def _dialect_insert(session: AsyncSession):
+    """세션 방언에 맞는 insert 생성자 — on_conflict_do_update 를 지원하는 PG/SQLite 방언용.
+
+    select-then-insert 는 유니크 제약 경쟁(동시 런) 때 IntegrityError 로 배치 전체가
+    유실됐다 — 행 단위 원자 upsert 로 전환한다.
+    """
+    bind = session.bind
+    return postgresql.insert if (bind is not None and bind.dialect.name == "postgresql") else sqlite.insert
+
+
 async def record_selections(owner: str | None, entries: list[dict]) -> int:
     """확정 선택을 (user, norm_merchant) upsert. entries={merchant, budget, project, note}.
 
@@ -193,42 +204,47 @@ async def record_selections(owner: str | None, entries: list[dict]) -> int:
     n = 0
     try:
         async with get_sessionmaker()() as s:
+            insert = _dialect_insert(s)
+            table = CardLearnedSelection.__table__
             for key, e in collapsed.items():
-                merchant = (e.get("merchant") or "").strip()
-                row = (
-                    await s.execute(
-                        select(CardLearnedSelection).where(
-                            CardLearnedSelection.user_id == uid,
-                            CardLearnedSelection.norm_merchant == key,
-                        )
+                merchant = (e.get("merchant") or "").strip()  # key 비공백 ⇒ merchant 비공백.
+                stmt = insert(CardLearnedSelection).values(
+                    user_id=uid,
+                    norm_merchant=key,
+                    merchant=merchant,
+                    budget=e.get("budget") or None,
+                    project=e.get("project") or None,
+                    note=(e.get("note") or "").strip() or None,
+                    count=1,
+                    last_used_at=now,
+                )
+                # 재확정 시맨틱 유지: count++ + 최신 스냅샷 갱신(빈 새값은 기존값 보존).
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["user_id", "norm_merchant"],
+                    set_={
+                        "merchant": stmt.excluded.merchant,
+                        "budget": func.coalesce(stmt.excluded.budget, table.c.budget),
+                        "project": func.coalesce(stmt.excluded.project, table.c.project),
+                        "note": func.coalesce(stmt.excluded.note, table.c.note),
+                        "count": func.coalesce(table.c.count, 0) + 1,
+                        "last_used_at": now,
+                    },
+                )
+                # 행 단위 커밋으로 오류 격리 — 한 행의 실패가 배치의 다른 행을 유실시키지 않는다.
+                try:
+                    await s.execute(stmt)
+                    await s.commit()
+                    n += 1
+                except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
+                    logger.warning(
+                        "card learning record_selections row failed (merchant=%r)",
+                        merchant,
+                        exc_info=True,
                     )
-                ).scalar_one_or_none()
-                if row is None:
-                    s.add(
-                        CardLearnedSelection(
-                            user_id=uid,
-                            norm_merchant=key,
-                            merchant=merchant,
-                            budget=e.get("budget") or None,
-                            project=e.get("project") or None,
-                            note=(e.get("note") or "").strip() or None,
-                            count=1,
-                            last_used_at=now,
-                        )
-                    )
-                else:
-                    row.merchant = merchant or row.merchant
-                    row.budget = e.get("budget") or row.budget
-                    row.project = e.get("project") or row.project
-                    if (e.get("note") or "").strip():
-                        row.note = e["note"].strip()
-                    row.count = (row.count or 0) + 1
-                    row.last_used_at = now
-                n += 1
-            await s.commit()
-    except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
+                    await s.rollback()
+    except Exception:  # noqa: BLE001 — 세션 열기 등 배치 밖 실패도 런을 죽이지 않는다.
         logger.exception("card learning record_selections failed")
-        return 0
+        return n
     return n
 
 
@@ -260,45 +276,49 @@ async def record_account_notes(owner: str | None, entries: list[dict]) -> int:
     n = 0
     try:
         async with get_sessionmaker()() as s:
+            insert = _dialect_insert(s)
+            table = CardLearnedNote.__table__
             for (key, acct_code), e in collapsed.items():
-                row = (
-                    await s.execute(
-                        select(CardLearnedNote).where(
-                            CardLearnedNote.user_id == uid,
-                            CardLearnedNote.norm_merchant == key,
-                            CardLearnedNote.acct_code == acct_code,
-                        )
-                    )
-                ).scalar_one_or_none()
                 # 기록 경로 정리 — 확정 적요에 남은 PII(차량번호·이름 괄호)를 들어올 때 걷어낸다.
                 note = sanitize_note(e.get("note"))
                 acct_name = (e.get("acct_name") or "").strip() or None
-                if row is None:
-                    s.add(
-                        CardLearnedNote(
-                            user_id=uid,
-                            norm_merchant=key,
-                            merchant=e["merchant"],
-                            acct_code=acct_code,
-                            acct_name=acct_name,
-                            note=note,
-                            count=1,
-                            last_used_at=now,
-                        )
+                stmt = insert(CardLearnedNote).values(
+                    user_id=uid,
+                    norm_merchant=key,
+                    merchant=e["merchant"],
+                    acct_code=acct_code,
+                    acct_name=acct_name,
+                    note=note,
+                    count=1,
+                    last_used_at=now,
+                )
+                # 재확정 시맨틱 유지: count++ + 최신 적요/계정명 갱신(빈 새값은 기존값 보존).
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["user_id", "norm_merchant", "acct_code"],
+                    set_={
+                        "merchant": stmt.excluded.merchant,
+                        "acct_name": func.coalesce(stmt.excluded.acct_name, table.c.acct_name),
+                        "note": func.coalesce(stmt.excluded.note, table.c.note),
+                        "count": func.coalesce(table.c.count, 0) + 1,
+                        "last_used_at": now,
+                    },
+                )
+                # 행 단위 커밋으로 오류 격리 — 한 행의 실패가 배치의 다른 행을 유실시키지 않는다.
+                try:
+                    await s.execute(stmt)
+                    await s.commit()
+                    n += 1
+                except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
+                    logger.warning(
+                        "card learning record_account_notes row failed (merchant=%r acct=%r)",
+                        e.get("merchant"),
+                        acct_code,
+                        exc_info=True,
                     )
-                else:
-                    row.merchant = e["merchant"] or row.merchant
-                    if acct_name:
-                        row.acct_name = acct_name
-                    if note:
-                        row.note = note
-                    row.count = (row.count or 0) + 1
-                    row.last_used_at = now
-                n += 1
-            await s.commit()
-    except Exception:  # noqa: BLE001 — 학습 실패가 런/제출을 깨선 안 된다.
+                    await s.rollback()
+    except Exception:  # noqa: BLE001 — 세션 열기 등 배치 밖 실패도 런을 죽이지 않는다.
         logger.exception("card learning record_account_notes failed")
-        return 0
+        return n
     return n
 
 
@@ -425,7 +445,7 @@ async def _ai_note_generate(merchant: str, acct_name: str) -> tuple[str, str] | 
                 http,
                 system=_AI_NOTE_SYSTEM,
                 user=user,
-                temperature=0.2,
+                # temperature 미지정 = 프로바이더 권장 기본(gemini 0.2 · etribe 1.0 — API 권장).
                 # thinking ON(2026-07-23 사용자 지시 — 적요도 사고 허용). 출력 자체는 1줄이지만
                 # 사고 토큰이 같은 출력 예산을 공유하므로 헤드룸 포함(잠식 → 빈 응답 방지).
                 # thinking_budget 미전달 = gemini 모델 기본(dynamic) 사고. etribe 는 자체 헤드룸 추가.

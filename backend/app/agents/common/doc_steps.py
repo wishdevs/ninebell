@@ -9,10 +9,11 @@ in-page JS 는 :mod:`nbkit.omnisol.js_lib` 단일 소스를 쓴다. 하위호환
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from nbkit.browser.actions import js_click, mouse_click
-from nbkit.omnisol import js_lib, selectors, verify
+from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
 
 # 재수출(하위호환·가독성) — card js.SET_ACCT_DATE_JS 도 js_lib 단일소스를 재수출한다.
@@ -87,8 +88,15 @@ async def add_next_row(page: Any, expected_count: int, *, timeout_polls: int = 3
     """
     await js_click(page, selectors.BTN_ADD)
     rows: Any = -1
-    for _ in range(timeout_polls):  # 300ms 간격(상한 ~10s) — add_row 노드와 동일 폴링.
-        await page.wait_for_timeout(300)
+    # ⚠ 시간축 규율(2026-08-07): 종전 budget_polls×wait_for_timeout 명목 폴은 간격이
+    # delay_scale(trip 0.4/card 0.15)로 축소돼 실관찰창이 40%/15%로 붕괴했다(상한 ~10s 가
+    # 실 1.5~4s). 폴 대기는 실시간(verify.DEFAULT_SLEEP)으로 세고(명목 누산 ≤ 실경과)
+    # 상한만 latency 배율(≤×4)로 확대한다 — voucher_receivable._apply_popup 과 동일 패턴.
+    waited = 0
+    cap_ms = latency.budget_ms(timeout_polls * 300)  # 기본 33폴 × 300ms ≈ 10s.
+    while waited < cap_ms:
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
         rows = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
         if isinstance(rows, int) and rows >= expected_count:
             return {"ok": True, "rows": rows}
@@ -128,10 +136,14 @@ async def open_evdn_editor(page: Any) -> dict:
         if not shown:
             continue
         rect = None
-        waited = 0
-        while waited < 1_000:  # 돋보기 rect 준비 폴링(상한 1s)
+        # ⚠ 시간축 규율(2026-08-07): 관찰 상한은 **실시간**(monotonic × latency 배율)이다 —
+        # 종전 'waited += 100' 명목 카운터는 page.wait_for_timeout 이 delay_scale(0.4/0.15)로
+        # 축소돼 실관찰창이 40%/15%로 붕괴했다(codepicker._wait_picker_closed 와 동일 교정).
+        # 폴 간격만 wait_for_timeout(정상경로 단축 허용), 상한은 monotonic 으로 잰다.
+        t0 = time.monotonic()
+        rect_cap_ms = latency.budget_ms(1_000)  # 돋보기 rect 준비 관찰 상한(실시간 1s × 배율).
+        while (time.monotonic() - t0) * 1_000 < rect_cap_ms:
             await page.wait_for_timeout(100)
-            waited += 100
             rect = await page.evaluate(js_lib.EVDN_EDITOR_MAGNIFIER_RECT_JS)
             if rect:
                 break
@@ -139,8 +151,12 @@ async def open_evdn_editor(page: Any) -> dict:
             continue
         await mouse_click(page, rect["x"], rect["y"])  # 돋보기(캔버스) 클릭
         opened = False
-        for _ in range(20):  # 300ms 간격(상한 6s)
-            await page.wait_for_timeout(300)
+        # 팝업 열림 관찰(상한 6s) — 위 rect 대기와 같은 시간축 규율: 명목 폴 대신 실시간 누산.
+        waited = 0
+        open_cap_ms = latency.budget_ms(6_000)
+        while waited < open_cap_ms:
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
             opened = await page.evaluate(js_lib.EVDN_POPUP_OPEN_JS)
             if opened:
                 break
@@ -165,20 +181,28 @@ async def select_evdn_code(page: Any, code: str) -> dict:
     # 전 1회 재확인(EVDN_* JS 는 그리드 보유 다이얼로그만 잡아 오인은 없지만 클릭은 좌표라 방어).
     await dismiss_notice_popup(page, appear_cap_ms=0)
     r: dict = {}
-    for _ in range(20):  # 행 로드 폴링(상한 ~6s)
+    # 행 로드 폴링(상한 ~6s) — 시간축 규율(2026-08-07): 명목 폴 대신 실시간 누산(위와 동일).
+    waited = 0
+    row_cap_ms = latency.budget_ms(6_000)
+    while True:
         r = await page.evaluate(js_lib.EVDN_SELECT_BY_CODE_JS, code)
-        if r.get("ok"):
+        if r.get("ok") or waited >= row_cap_ms:
             break
-        await page.wait_for_timeout(300)
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
     if not r.get("ok"):
-        return {"ok": False, "reason": f"증빙유형 코드 {code} 자동선택 실패: {r.get('reason')}"}
+        return await _fail_close(page, f"증빙유형 코드 {code} 자동선택 실패: {r.get('reason')}")
     await page.wait_for_timeout(500)
     sel_name = r.get("name") or ""
     box = await page.evaluate(js_lib.EVDN_APPLY_BOX_JS)
     if box:
         await mouse_click(page, box["x"], box["y"])
-    for _ in range(27):  # 셀 반영 폴링(상한 ~8s)
-        await page.wait_for_timeout(300)
+    # 셀 반영 폴링(상한 ~8s) — 시간축 규율 동일.
+    waited = 0
+    cell_cap_ms = latency.budget_ms(8_000)
+    while waited < cell_cap_ms:
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
         cell = await page.evaluate(js_lib.DETAIL_EVDN_CELL_JS)
         if sel_name and sel_name in cell:
             out = {"ok": True, "name": sel_name, "code": r.get("code")}
@@ -186,7 +210,31 @@ async def select_evdn_code(page: Any, code: str) -> dict:
             if not closed:
                 out["warn"] = closed.reason
             return out
-    return {"ok": False, "reason": "증빙유형 자동 적용(적용 버튼)에 실패했습니다."}
+    return await _fail_close(page, "증빙유형 자동 적용(적용 버튼)에 실패했습니다.")
+
+
+async def _fail_close(page: Any, reason: str) -> dict:
+    """select_evdn_code 실패 반환 직전 열린 증빙 팝업 정리 — trip_domestic._fail_close 이식.
+
+    실패 후 재시도/다음 행 진행(출장 fill_rows)에서 잔여 팝업이 남으면 다음 open_evdn_editor 가
+    그 스테일 팝업을 '열렸다'로 오판하고 그 팝업의 '적용'이 엉뚱한 행 셀에 쓰인다(2026-07-02
+    동형 — 종전엔 open 쪽 스테일 warn 하나로만 방어됐다, 2026-08-07 감사). 닫기는 공유
+    프리미티브 js_lib.PICKER_CLOSE_JS(최상단 보이는 k-window 닫기/취소 클릭 — voucher
+    _close_top_popup 과 동일 재사용)로 하고, 닫힘은 증빙 전용 리더로 확인한다(reapply=재닫기).
+    미닫힘이어도 **원래 실패 사유를 덮지 않는다**(경고 병기).
+    """
+    await page.evaluate(js_lib.PICKER_CLOSE_JS)
+    chk = await verify.confirm(
+        read=lambda: page.evaluate(js_lib.EVDN_POPUP_OPEN_JS),
+        ok=lambda v: not v,  # falsy = 보이는 증빙 dialog 없음(= 닫힘).
+        timing=verify.ASYNC,
+        what="증빙유형 팝업 닫힘(실패 정리)",
+        expected="닫힘",
+        reapply=lambda: page.evaluate(js_lib.PICKER_CLOSE_JS),
+    )
+    if not chk:
+        reason = f"{reason} / ⚠ 실패 정리 중 증빙 팝업 미닫힘: {chk.reason}"
+    return {"ok": False, "reason": reason}
 
 
 async def _confirm_evdn_popup_closed(page: Any) -> verify.Confirmed:

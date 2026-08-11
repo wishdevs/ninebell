@@ -516,7 +516,10 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     async def _ok_close(page):
         return {"ok": True}
 
-    async def _ok_cards(page, owner_name=None):
+    cards_kwargs: dict = {}  # 2차 재선택도 일반 모드 기본(본인만·own_only=True)인지 검증.
+
+    async def _ok_cards(page, owner_name=None, own_only=False):
+        cards_kwargs.update(owner_name=owner_name, own_only=own_only)
         return {"ok": True, "n": 5, "checked": 5, "by": "all"}
 
     async def _ok_period(page, s, e):
@@ -562,6 +565,8 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     assert out["pass2_unmatched"] == 1
     assert [w["label"] for w in out["pass2_work"]] == [2]
     assert out["pass2_work"][0]["idx"] == rows2[1]["i"]
+    # 디버그 아님(params 부재) → 2차 재선택도 본인 카드만(own_only=True) 경로.
+    assert cards_kwargs["own_only"] is True
 
 
 async def test_switch_evdn_matches_taxable_vat_reclassified_nondeductible(monkeypatch):
@@ -811,6 +816,49 @@ async def test_save_final_requery_unreadable_holds_judgment(monkeypatch):
         {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
     )
     assert "처리 완료" in out["result"] and out["retry_save"] is False
+
+
+async def test_save_final_requery_click_failure_skips_stale_grid_read(monkeypatch):
+    """재조회(F2) 클릭 실패면 confirm_grid_rows 를 아예 돌리지 않고 보류(2026-08-07 감사).
+
+    클릭이 안 됐는데 confirm 을 돌리면 F7 이전 화면의 스테일 마스터 그리드(항상 ≥1행)가
+    min_rows=1 을 통과해, 팬텀 저장(관리항목 미입력 거부)을 '재조회 문서 지속'으로 오판한다.
+    """
+    from nbkit.omnisol.verify import Confirmed
+
+    async def _ok_save(page, confirm):
+        return {"ok": True, "via": "F7", "modals_seen": []}
+
+    monkeypatch.setattr(steps, "save_document", _ok_save)
+
+    async def _click_fail(page, sel):
+        return False  # F2 버튼 미발견 — 재조회 미실행
+
+    reads: list = []
+
+    async def _stale_rows(page, **kw):
+        reads.append(kw)
+        return Confirmed(True, 3, 1, 0, None, False)  # 스테일 그리드 3행이 '통과'하는 함정
+
+    monkeypatch.setattr(save, "js_click", _click_fail)
+    monkeypatch.setattr(save.verify, "confirm_grid_rows", _stale_rows)
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(save, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await make_save_final_node()(
+        {"events": events, "page": object(), "filled": 1, "pass2_filled": 0}
+    )
+    assert "처리 완료" in out["result"] and out["retry_save"] is False  # 보류 = saved 유지
+    assert reads == []  # 클릭 미실행이면 스테일 그리드를 읽지 않는다(가짜 양성 신호 차단)
+    logs = []
+    while not events.empty():
+        ev = events.get_nowait()
+        if isinstance(ev.get("log"), str):
+            logs.append(ev["log"])
+    assert any("재조회(F2) 클릭 실패" in m for m in logs)  # 보류 사유가 warn 으로 남는다
 
 
 def test_parse_save_rejections_extracts_aprvl_account_and_maps_row():
@@ -1110,7 +1158,10 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     async def _ok_close(page):
         return {"ok": True}
 
-    async def _ok_cards(page, owner_name=None):
+    cards_kwargs: dict = {}  # 디버그 모드(params.debug=True)면 2차도 전체선택(own_only=False).
+
+    async def _ok_cards(page, owner_name=None, own_only=False):
+        cards_kwargs.update(owner_name=owner_name, own_only=own_only)
         return {"ok": True}
 
     async def _ok_period(page, s, e):
@@ -1155,11 +1206,14 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     state = {
         "events": events, "page": object(), "owner": None, "run_id": None,
         "pending_nontax": pending, "period": ["2026-06-01", "2026-06-30"],
+        "params": {"debug": True},  # 디버그 모드 — 2차 재선택 분기(전체선택) 동시 검증.
     }
     out = await cc_nodes.make_switch_evdn_node()(state)
     # 2행뿐이므로 앞선 2건이 서로 다른 idx(0,1)를 소비, 3번째는 매칭 실패.
     assert [w["idx"] for w in out["pass2_work"]] == [0, 1]
     assert out["pass2_unmatched"] == 1
+    # 디버그 모드 → 2차도 전체선택 경로(owner 미전달·own_only=False).
+    assert cards_kwargs == {"owner_name": None, "own_only": False}
 
 
 def test_graph_state_declares_all_node_output_keys():
@@ -1191,13 +1245,19 @@ def test_graph_compiles_and_channels_include_inherited_base_keys():
     from tests.support.state_contract import all_declared_keys
 
     keys = all_declared_keys(CardCollectState)
-    assert {"page", "browser", "events", "owner", "run_id", "result", "error"} <= keys
+    # params 는 카드 선택 분기 debug 플래그(runs.py 불리언 강제 주입)의 운반 채널 — 미선언이면
+    # LangGraph 가 조용히 떨어뜨려 일반/디버그 분기가 전부 기본값(본인만)으로 무력화된다.
+    assert {"page", "browser", "events", "owner", "run_id", "params", "result", "error"} <= keys
     g = build_card_collect_graph()  # 컴파일 자체가 State 스키마 검증
-    assert {"page", "result"} <= set(g.channels)
+    assert {"page", "params", "result"} <= set(g.channels)
 
 
-async def test_prefill_cost_prefix_biases_default_budget():
-    """비용구분 접두사가 있으면 기본지정이 없어도 접두사 일치 예산단위로 폴백한다."""
+async def test_prefill_without_star_default_leaves_budget_empty():
+    """기본지정(★)이 없으면 기본값도 없다 — 빈 값으로 남겨 사용자가 개입 그리드에서 고른다.
+
+    예전엔 접두사 일치 **첫 후보**로 blind 폴백했는데, 후보 정렬상 첫 항목이 '(판)주민세'
+    같은 무관 계정이라 LLM 판단 불가 행이 주민세로 도배됐다(2026-08-05 실측 — 폴백 제거).
+    """
     from types import SimpleNamespace
 
     from app.agents.card_collect.nodes import _prefill_selections
@@ -1205,7 +1265,7 @@ async def test_prefill_cost_prefix_biases_default_budget():
     events: asyncio.Queue = asyncio.Queue()
     settings = SimpleNamespace(gemini_api_key="")  # AI 스킵 → 기본 폴백 경로.
     rows_list = [{"i": 0, "TRAN_NM": "가맹점", "TRAN_AMT": "1000", "VAT_TP": "과세"}]
-    # isDefault 없음. (판)/(제) 두 후보 — cost_prefix='(제)' 면 제조원가 계정이 폴백돼야 한다.
+    # isDefault 없음 — 접두사 일치 후보가 있어도 blind 로 채우지 않는다.
     budget_favs = [
         {"code": "P1", "name": "인사기획팀", "bgacctNm": "(판)소모품비"},
         {"code": "M1", "name": "인사기획팀", "bgacctNm": "(제)복리후생비"},
@@ -1213,8 +1273,8 @@ async def test_prefill_cost_prefix_biases_default_budget():
     out = await _prefill_selections(
         events, settings, rows_list, {0: "적요"}, budget_favs, [], [], cost_prefix="(제)"
     )
-    assert out[1]["budgetSource"] == "default"
-    assert out[1]["budgetUnit"]["code"] == "M1"  # (제) 접두사 일치 폴백
+    assert out[1]["budgetSource"] is None
+    assert out[1]["budgetUnit"] is None  # 빈 값 — 그리드에서 사용자가 직접 선택
 
 
 # ── 회계일(set_acct_date) — 수집 기간 월의 말일(규칙 2026-07-04) ────────────────
@@ -1292,6 +1352,138 @@ async def test_prefill_uses_seed_budget_between_ai_and_default():
     )
     assert out[1]["budgetSource"] == "seed"
     assert out[1]["budgetUnit"]["code"] == "B1"  # 기본(B0) 아닌 seed 해석(B1)
+
+
+# ── 그룹 판단 통합(2026-07-31) — 대표 1행 AI·전파·금액 이탈·취소 미러 ────────────
+def _grp_row(i: int, merchant: str, amt: str, tm: str, yn: str = "승인", aprvl: str = "") -> dict:
+    return {
+        "i": i, "TRAN_NM": merchant, "TRAN_AMT": amt, "TRAN_TM": tm,
+        "VAT_TP": "과세", "APRVL_YN": yn, "APRVL_NO": aprvl,
+    }
+
+
+def _capture_recommend(monkeypatch, reply: dict | None = None) -> list[int]:
+    """recommend_selections 를 가로채 전송된 행 번호를 기록 — reply 는 {code 필드} 기본값."""
+    sent: list[int] = []
+    base = {"projectCode": "", "confidence": 0.9, "vatDeduction": None, **(reply or {})}
+
+    async def _fake(rows, *args, **kwargs):
+        sent.extend(r["no"] for r in rows)
+        return {r["no"]: dict(base) for r in rows}
+
+    monkeypatch.setattr(prefill, "recommend_selections", _fake)
+    return sent
+
+
+async def test_prefill_sends_one_representative_per_group(monkeypatch):
+    """같은 (가맹점×시간슬롯) 반복 결제는 대표 1행만 AI 로 가고 결과가 전원에 전파된다."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "맘스터치 상대원점", "9,000", "18:10:00"),
+        _grp_row(1, "맘스터치 상대원점", "9,900", "18:30:00"),
+        _grp_row(2, "맘스터치 상대원점", "10,000", "19:00:00"),
+    ]
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n"}, budget_favs, [], [],
+    )
+    assert len(sent) == 1  # 대표 1행만 AI 전송 — 나머지는 전파
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "ai"
+        assert out[no]["budgetUnit"]["code"] == "B1"
+
+
+async def test_prefill_learned_deterministic_rows_not_sent_to_ai(monkeypatch):
+    """learned 결정적 행(예산·프로젝트 모두 확보)은 최종 선택에서 AI 를 이기므로 AI 미전송."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "맛남의광장", "8,000", "18:07:00"),
+        _grp_row(1, "맛남의광장", "8,000", "18:09:00"),
+        _grp_row(2, "맛남의광장", "8,000", "18:10:00"),
+    ]
+    learned = {
+        card_learning.norm_merchant("맛남의광장"): {
+            "budget": {"code": "L1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+            "project": {"code": "P1", "name": "판관비"},
+            "count": 5,
+        }
+    }
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n"}, budget_favs, [], [], learned=learned,
+    )
+    assert sent == []  # 전원 learned 결정적 — AI 호출 대상 0행
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "learned"
+        assert out[no]["budgetUnit"]["code"] == "L1"
+
+
+async def test_prefill_amount_outlier_bypasses_learned_and_goes_individual(monkeypatch):
+    """그룹 금액대를 크게 벗어난 행(회식/접대 후보)은 learned 를 우회해 개별 AI 판단."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+    from app.services import card_learning
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B2"})
+    rows_list = [
+        _grp_row(0, "맘스터치 상대원점", "9,000", "18:10:00"),
+        _grp_row(1, "맘스터치 상대원점", "9,900", "18:30:00"),
+        _grp_row(2, "맘스터치 상대원점", "10,000", "19:00:00"),
+        _grp_row(3, "맘스터치 상대원점", "150,000", "19:30:00"),  # 중앙값 3배·5만 초과 — 이탈
+    ]
+    learned = {
+        card_learning.norm_merchant("맘스터치 상대원점"): {
+            "budget": {"code": "L1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+            "project": {"code": "P1", "name": "판관비"},
+            "count": 9,
+        }
+    }
+    budget_favs = [
+        {"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)복리후생비-석식"},
+        {"code": "B2", "name": "인사기획팀", "bgacctNm": "(판)접대비"},
+    ]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n", 2: "n", 3: "n"}, budget_favs, [], [], learned=learned,
+    )
+    assert sent == [4]  # 이탈 행만 개별 AI — 나머지는 learned 로 확정
+    assert out[4]["budgetSource"] == "ai"
+    assert out[4]["budgetUnit"]["code"] == "B2"  # learned(L1) 아닌 개별 판단(B2)
+    for no in (1, 2, 3):
+        assert out[no]["budgetSource"] == "learned"
+
+
+async def test_prefill_cancel_row_mirrors_original(monkeypatch):
+    """승인취소 행은 AI 를 거치지 않고 원거래의 최종 선택을 미러링한다(전표 상계)."""
+    from types import SimpleNamespace
+
+    from app.agents.card_collect.nodes import _prefill_selections
+
+    sent = _capture_recommend(monkeypatch, {"budgetUnitCode": "B1"})
+    rows_list = [
+        _grp_row(0, "시외버스 모바일 승차권", "13,600", "12:58:55", aprvl="A1"),
+        _grp_row(1, "시외버스 모바일 승차권", "-13,600", "12:58:55", yn="승인취소", aprvl="A1"),
+    ]
+    budget_favs = [{"code": "B1", "name": "인사기획팀", "bgacctNm": "(판)여비교통비-국내출장"}]
+    out = await _prefill_selections(
+        asyncio.Queue(), SimpleNamespace(gemini_api_key="k"), rows_list,
+        {0: "n", 1: "n"}, budget_favs, [], [],
+    )
+    assert sent == [1]  # 원거래만 AI — 취소 행은 판단하지 않는다
+    assert out[2]["budgetSource"] == "mirror"
+    assert out[2]["budgetUnit"]["code"] == out[1]["budgetUnit"]["code"] == "B1"
 
 
 # ── 패스 스킵 경로 보증(사용자 지적 2026-07-04) ─────────────────────────────────
@@ -1551,7 +1743,7 @@ async def test_select_all_cards_node_surfaces_unverified_warning(monkeypatch):
     """select_all_cards 의 warn(확인 불가)이 warn 레벨 로그로 노출돼야 한다."""
     from app.agents.card_collect.nodes.query import make_select_all_cards_node
 
-    async def _warned(page, owner_name=None):
+    async def _warned(page, owner_name=None, own_only=False):
         return {"ok": True, "n": 4, "checked": 4, "by": "all", "verified": False,
                 "warn": "카드번호 표시값 확인 불가"}
 
@@ -1568,6 +1760,118 @@ async def test_select_all_cards_node_surfaces_unverified_warning(monkeypatch):
         frames.append(events.get_nowait())
     logs = [f for f in frames if isinstance(f.get("log"), str)]
     assert any(f.get("level") == "warn" and "표시값 확인 불가" in f["log"] for f in logs)
+
+
+# ── 카드 선택 분기(디버그=전체 / 일반=본인만 — 사용자 요구 2026-07-31) ─────────────
+async def test_select_all_cards_node_default_selects_own_only(monkeypatch):
+    """일반 모드(디버그 아님): own_only=True + 이름 변형 전달, 로그에 매칭 카드 수·카드명."""
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    captured: dict = {}
+
+    async def _ok(page, owner_name=None, own_only=False):
+        captured.update(owner_name=owner_name, own_only=own_only)
+        return {"ok": True, "n": 5, "checked": 1, "by": "name",
+                "names": ["국민법인카드(석대현)-2826"], "verified": True}
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(steps, "select_all_cards", _ok)
+    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "userid": "sdh",
+             "params": {"user_display_name": "석대현", "user_job_title": "프로"}}
+    out = await make_select_all_cards_node()(state)
+    assert out == {}
+    assert captured["own_only"] is True
+    assert captured["owner_name"] == ["sdh", "석대현", "석대현 프로"]
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    logs = [f["log"] for f in frames if isinstance(f.get("log"), str)]
+    assert any("본인('sdh') 카드 1장" in m and "국민법인카드(석대현)-2826" in m for m in logs)
+
+
+async def test_select_all_cards_node_announces_all_fallback(monkeypatch):
+    """일반 모드에서 본인 카드 0장 → 전체선택 폴백 시 **안내 메시지가 화면에 노출**돼야 한다.
+
+    사용자 요구(2026-08-03): "본인카드가 없을시 전체선택한다고 안내메시지를 노출합니다".
+    디버그 모드 문구('디버그 모드')와 혼동되지 않아야 하고, 다음 단계에서 사용자가 직접
+    고르라는 안내까지 포함한다.
+    """
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    async def _fallback(page, owner_name=None, own_only=False):
+        return {"ok": True, "n": 6, "checked": 6, "by": "all", "verified": True,
+                "warn": "본인 카드 0장(전체 6장·대조 이름 이트라이브2) — 전체 카드로 진행합니다."}
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(steps, "select_all_cards", _fallback)
+    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "userid": "이트라이브2", "params": {}}
+    out = await make_select_all_cards_node()(state)
+    assert out == {}  # 실행은 계속된다(하드 실패 아님)
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    notices = [f["log"] for f in frames if isinstance(f.get("log"), str) and f.get("level") == "warn"]
+    assert any("명의 카드가 없어" in m and "전체" in m and "그리드에서 직접" in m for m in notices)
+    assert not any("디버그 모드" in m for f in frames if isinstance((m := f.get("log")), str))
+
+
+async def test_select_all_cards_node_debug_selects_all(monkeypatch):
+    """디버그 모드(params.debug=True): 종전 전체선택 — owner 미전달·own_only=False."""
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    captured: dict = {}
+
+    async def _ok(page, owner_name=None, own_only=False):
+        captured.update(owner_name=owner_name, own_only=own_only)
+        return {"ok": True, "n": 7, "checked": 7, "by": "all", "verified": True}
+
+    async def _noop_shot(put, page):
+        return None
+
+    monkeypatch.setattr(steps, "select_all_cards", _ok)
+    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "userid": "sdh", "params": {"debug": True}}
+    out = await make_select_all_cards_node()(state)
+    assert out == {}
+    assert captured == {"owner_name": None, "own_only": False}
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    logs = [f["log"] for f in frames if isinstance(f.get("log"), str)]
+    assert any("7장 전체선택" in m and "디버그 모드" in m for m in logs)
+
+
+async def test_select_all_cards_node_zero_match_fails_with_diagnostics(monkeypatch):
+    """일반 모드 본인 카드 0장: 에러로 중단 + 매칭 진단(카드 수·대조 이름) 로그를 남긴다."""
+    from app.agents.card_collect.nodes.query import make_select_all_cards_node
+
+    async def _zero(page, owner_name=None, own_only=False):
+        return {"ok": False, "n": 5, "matched": 0,
+                "reason": "본인 카드 0장 — 카드 5장 중 이름(sdh) 일치 없음."}
+
+    monkeypatch.setattr(steps, "select_all_cards", _zero)
+    events: asyncio.Queue = asyncio.Queue()
+    state = {"events": events, "page": object(), "userid": "sdh", "params": {}}
+    out = await make_select_all_cards_node()(state)
+    assert "error" in out and "카드 선택 실패" in out["error"] and "본인 카드 0장" in out["error"]
+    frames = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    logs = [f for f in frames if isinstance(f.get("log"), str)]
+    assert any(
+        f.get("level") == "error" and "매칭 0장" in f["log"] and "sdh" in f["log"] for f in logs
+    )
+    # 스텝 상태도 failed 로 방출됐는지.
+    assert any(f.get("step") == "select_all_cards" and f.get("status") == "failed" for f in frames)
 
 
 async def test_apply_group_fields_fails_when_note_reverted_by_picker(monkeypatch):
@@ -1677,7 +1981,7 @@ async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
     async def _ok_close(page):
         return {"ok": True}
 
-    async def _ok_cards(page, owner_name=None):
+    async def _ok_cards(page, owner_name=None, own_only=False):
         return {"ok": True, "n": 5, "checked": 5, "by": "all"}
 
     async def _ok_period(page, s, e):
@@ -1871,3 +2175,129 @@ async def test_save_final_vehicle_flow_per_row_assignments(monkeypatch):
     # 내역1(grid idx 0)→차량2(카니발 4101), 내역2(grid idx 2)→차량1(1169).
     assert fills == [[(0, "4101"), (2, "1169")]]
     assert "입력·저장" in out["result"] and out["retry_save"] is False
+
+
+# ── mgmt_items 팝업 위생(검증된 닫기·실패 분기 정리 — 2026-08-07 감사) ─────────────
+from nbkit.omnisol import js_lib  # noqa: E402
+
+
+class _VehiclePopupPage:
+    """차량 팝업 fake — popups 스택으로 개수/덤프 시맨틱을 지킨다(닫힘 미동작 주입 가능)."""
+
+    def __init__(self, *, closes: bool = True, popup_open: bool = True):
+        self.popups: list[str] = ["업무용 차량"] if popup_open else []
+        self._closes = closes
+        self.close_calls = 0
+        self.mouse = self
+
+    async def click(self, x, y):
+        return None
+
+    async def dblclick(self, x, y):
+        return None  # 더블클릭이 적용에 실패하는 사고(팝업 잔존)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, script, arg=None):
+        if script == js_lib.POPUP_COUNT_JS:
+            self.count_reads = getattr(self, "count_reads", 0) + 1
+            return len(self.popups)
+        if script == js_lib.PICKER_CLOSE_JS:
+            self.close_calls += 1
+            if self._closes and self.popups:
+                self.popups.pop()
+            return True
+        if script == mgmt_items._VEHICLE_POPUP_DUMP_JS:
+            if not self.popups:
+                return {"ok": False, "reason": "no-popup"}
+            return {"ok": False, "title": "업무용 차량", "err": "grid detach"}
+        if script == mgmt_items._POPUP_ROW_RECT_JS:
+            return {"x": 5, "y": 6}
+        return None
+
+
+async def test_close_popup_verifies_popup_count_decrease():
+    """닫기 후 팝업 개수 감소를 확인한다 — 종전(닫기 JS + 고정 0.5s + 예외 무음)은 미확인."""
+    page = _VehiclePopupPage(closes=True)
+    await mgmt_items._close_popup(page)
+    assert page.close_calls == 1 and page.popups == []
+    # ⚠ 핀(2026-08-07 리뷰): 감소 '확인'이 실제로 있었음을 개수 read 횟수로 고정 —
+    # 종전(무검증 닫기)으로 되돌리면 read 0회라 이 단언이 잡는다(스냅샷 + 확인 read ≥ 2).
+    assert getattr(page, "count_reads", 0) >= 2
+
+
+async def test_close_popup_warns_when_popup_survives(caplog):
+    """닫기가 안 먹으면 최소 warn — 잔존 팝업이 후속 덤프/상세행 클릭을 가로챈다."""
+    import logging
+
+    page = _VehiclePopupPage(closes=False)
+    with caplog.at_level(logging.WARNING, logger="app.agents.card_collect.mgmt_items"):
+        await mgmt_items._close_popup(page)
+    assert page.close_calls >= 1
+    assert any("닫히지 않았을" in r.message for r in caplog.records)
+
+
+async def test_close_popup_noop_when_no_popup():
+    """닫을 팝업이 없으면 닫기 JS 를 쏘지 않는다(최상단 창 오클릭 방지)."""
+    page = _VehiclePopupPage(popup_open=False)
+    await mgmt_items._close_popup(page)
+    assert page.close_calls == 0
+
+
+async def test_close_residual_popup_closes_leftover_and_skips_when_absent():
+    page = _VehiclePopupPage(closes=True)
+    await mgmt_items._close_residual_popup(page)
+    assert page.popups == []  # 잔존 팝업 정리됨
+    page2 = _VehiclePopupPage(popup_open=False)
+    await mgmt_items._close_residual_popup(page2)
+    assert page2.close_calls == 0  # 없는데 닫기 시도하지 않음
+
+
+async def test_fill_vehicle_readback_mismatch_closes_residual_popup(monkeypatch):
+    """더블클릭이 적용에 실패(readback 불일치)하면 잔존 팝업을 닫고 다음 배정으로 —
+    안 닫으면 다음 배정의 행 선택·돋보기 클릭이 스테일 창에 먹혀 연쇄 실패한다."""
+
+    async def _select_ok(page, idx):
+        return True
+
+    async def _popup_ok(page):
+        return {"ok": True, "n": 1, "rows": [{"code": "1169", "name": "G80", "carNo": "178노1169", "rent": "자가"}]}
+
+    async def _never_reflected(page, code, **kw):
+        return {"found": True, "code": ""}  # 적용이 안 붙음
+
+    monkeypatch.setattr(mgmt_items, "_select_detail_row", _select_ok)
+    monkeypatch.setattr(mgmt_items, "_open_vehicle_popup", _popup_ok)
+    monkeypatch.setattr(mgmt_items, "_poll_vehicle_reflected", _never_reflected)
+    page = _VehiclePopupPage(closes=True)
+    r = await mgmt_items.fill_vehicle(page, [(0, _VEHICLES[0])])
+    assert r["ok"] is False and r["failed"][0]["row"] == 1
+    assert "반영 확인 실패" in r["failed"][0]["reason"]
+    assert page.popups == []  # 실패 분기에서 잔존 팝업이 정리됐다
+
+
+async def test_open_vehicle_popup_dump_error_closes_leftover_popup(monkeypatch):
+    """돋보기로 팝업은 열렸는데 덤프가 err 로 실패하면 열린 팝업을 닫고 실패를 보고한다."""
+    from nbkit.omnisol import latency
+
+    monkeypatch.setattr(latency, "budget_ms", lambda ms: 1)  # 덤프 재시도 상한 축소(테스트 속도)
+
+    class _DumpErrPage(_VehiclePopupPage):
+        def __init__(self):
+            super().__init__(closes=True, popup_open=False)
+
+        async def click(self, x, y):
+            self.popups = ["업무용 차량"]  # 돋보기 클릭 → 팝업 오픈
+
+        async def evaluate(self, script, arg=None):
+            if script == mgmt_items._ROW_SCROLL_JS:
+                return True
+            if script == mgmt_items._ROW_BUTTON_JS:
+                return {"x": 1, "y": 2}
+            return await super().evaluate(script, arg)
+
+    page = _DumpErrPage()
+    r = await mgmt_items._open_vehicle_popup(page)
+    assert r["ok"] is False and "덤프 실패" in r["reason"]
+    assert page.popups == []  # 열린 팝업을 방치하지 않는다

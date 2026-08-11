@@ -28,10 +28,10 @@ def make_validate_params_node():
             return {"error": str(exc)}
 
         scope = "전체(조회된 전 건)" if p.max_rows is None else f"최대 {p.max_rows}건"
+        mode = "디버그 — 가상 상신(목록 유지)" if p.debug else "참조문서 확인 + 전자결재 실제 상신"
         await emit_log(
             events,
-            f"실행 파라미터 확인 — {scope} 순회 · 회계일 {p.period_label}"
-            "(실제 상신·참조문서 확인 없음).",
+            f"실행 파라미터 확인 — {scope} 순회 · 회계일 {p.period_label} · {mode}.",
             "ok",
         )
         await emit_step(events, "validate_params", "done")
@@ -39,6 +39,7 @@ def make_validate_params_node():
             "max_rows": p.max_rows,
             "period_from": p.period_from,
             "period_to": p.period_to,
+            "debug_mode": p.debug,
         }
 
     return validate_params

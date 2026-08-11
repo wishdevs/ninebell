@@ -11,10 +11,20 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models import AgentRun
+from app.services import agents as agents_service
 
 pytestmark = pytest.mark.asyncio
 
 _T0 = datetime(2026, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _clear_stats_cache():
+    """compute_run_stats 의 모듈 전역 TTL 캐시가 테스트 간 새지 않도록 비운다
+    (test_step_timings 의 _clear_cache 와 동일 규율)."""
+    agents_service._stats_cache.clear()
+    yield
+    agents_service._stats_cache.clear()
 
 
 async def _add_run(sm, *, rid, agent_id, user_id, status, started, dur_s) -> None:
@@ -35,11 +45,14 @@ async def _add_run(sm, *, rid, agent_id, user_id, status, started, dur_s) -> Non
 
 async def test_agent_stats_from_real_runs(client, make_user, auth_as, sm):
     uid = await make_user("stats-user", "super_admin")
+    # ⚠ agent_runs.agent_id 에는 **workflow_id** 가 저장된다(runs.py — card-chat 의 실제 저장값은
+    #   "card-collect"). 종전 테스트가 Agent.id("card-chat")로 심어 실런타임 키 미스매치(통계
+    #   영원히 0)를 못 잡았다(회귀 2026-08-10).
     # 성공 2(60s·120s) + 실패 1(30s) + 진행중 1(미완).
-    await _add_run(sm, rid="r1", agent_id="card-chat", user_id=uid, status="succeeded", started=_T0, dur_s=60)
-    await _add_run(sm, rid="r2", agent_id="card-chat", user_id=uid, status="succeeded", started=_T0 + timedelta(hours=1), dur_s=120)
-    await _add_run(sm, rid="r3", agent_id="card-chat", user_id=uid, status="failed", started=_T0 + timedelta(hours=2), dur_s=30)
-    await _add_run(sm, rid="r4", agent_id="card-chat", user_id=uid, status="running", started=_T0 + timedelta(hours=3), dur_s=None)
+    await _add_run(sm, rid="r1", agent_id="card-collect", user_id=uid, status="succeeded", started=_T0, dur_s=60)
+    await _add_run(sm, rid="r2", agent_id="card-collect", user_id=uid, status="succeeded", started=_T0 + timedelta(hours=1), dur_s=120)
+    await _add_run(sm, rid="r3", agent_id="card-collect", user_id=uid, status="failed", started=_T0 + timedelta(hours=2), dur_s=30)
+    await _add_run(sm, rid="r4", agent_id="card-collect", user_id=uid, status="running", started=_T0 + timedelta(hours=3), dur_s=None)
 
     auth_as(uid)
     body = (await client.get("/agents/card-chat")).json()
@@ -61,8 +74,9 @@ async def test_agent_stats_zero_when_no_runs(client, make_user, auth_as):
 
 async def test_list_agents_stats_scoped_per_agent(client, make_user, auth_as, sm):
     # 목록에서도 에이전트별로 자기 실행만 집계된다(다른 에이전트 실행이 섞이지 않음).
+    # 런 키는 workflow_id("card-collect") — 실런타임 저장값과 동일 앵커(2026-08-10).
     uid = await make_user("stats-list", "super_admin")
-    await _add_run(sm, rid="l1", agent_id="card-chat", user_id=uid, status="succeeded", started=_T0, dur_s=100)
+    await _add_run(sm, rid="l1", agent_id="card-collect", user_id=uid, status="succeeded", started=_T0, dur_s=100)
     auth_as(uid)
     rows = (await client.get("/agents")).json()
     by_id = {a["id"]: a for a in rows}

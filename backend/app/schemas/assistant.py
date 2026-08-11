@@ -25,7 +25,8 @@ class MessageIn(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[MessageIn] = Field(min_length=1, max_length=50)
-    temperature: float = Field(default=0.7, ge=0, le=2)
+    # None(기본) = 활성 프로바이더 권장값 사용 — gemini 0.7 · etribe 1.0(ETRIBE-LLM API 권장).
+    temperature: float | None = Field(default=None, ge=0, le=2)
     max_output_tokens: int = Field(default=8192, ge=1, le=65000)
     context: dict | None = None
 

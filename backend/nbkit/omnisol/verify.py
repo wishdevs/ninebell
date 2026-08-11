@@ -37,6 +37,14 @@ timing       대기(ms) 0→1→2→3회차         대표 대상
   (공지 팝업 관찰창이 같은 이유로 붕괴됐던 2026-07-26 사례). 이 대기는 **실패했을 때만**
   발생하므로 delay_scale 의 목적(정상 경로 단축)과 충돌하지 않는다.
 
+⚠ 재시도 대기(0 제외)에는 프로세스 전역 지연 배율(:mod:`nbkit.omnisol.latency`)이 곱해진다 —
+  ERP·네트워크가 느릴 때 상한만 ×1.0~4.0 으로 확대한다(INSTANT 총 1.38s → 최대 5.5s,
+  HEAVY 총 6.9s → 최대 27.6s). 성공 경로(첫 read 0ms)는 불변이고, confirm **성공** 시
+  몇 회차 만에 확인됐는지를 latency.record 로 되먹인다(1회차 = 평시 신호, 후속 회차 =
+  느림 신호). mismatch/unknown 실패는 지연이 아니라 진짜 불일치일 수 있어 되먹이지 않는다.
+  이 배율은 delay_scale(_ScaledPage, 정상 경로 고정 sleep **축소**)과 **직교**다 — 서로
+  곱하거나 간섭하지 않는다(이 커널의 대기는 실시간이라 delay_scale 이 아예 닿지 않는다).
+
 ⚠ 이 모듈은 **아무것도 클릭·저장하지 않는다**. 확인(read)과 재시도 오케스트레이션만 한다 —
   실제 액션은 호출자가 넘긴 ``apply``/``reapply`` 안에 있다.
 """
@@ -48,7 +56,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, latency
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +135,14 @@ async def confirm(
     actual: Any = None
     last_err: Optional[str] = None
     waited = 0
+    base_waited = 0  # 되먹임용 명목(배율 미적용) 누적 대기 — 배율 자기증폭 방지.
     for attempt, delay in enumerate(timing, start=1):
         if delay:
-            await nap(delay / 1000)
-            waited += delay
+            # 적응형 상한 — 점증 대기에만 지연 배율(≤×4)을 곱한다(첫 read 0ms 는 불변).
+            eff = latency.budget_ms(delay)
+            await nap(eff / 1000)
+            waited += eff
+            base_waited += delay
             if reapply is not None:
                 try:
                     await reapply()
@@ -149,6 +161,7 @@ async def confirm(
         if ok(actual):
             if attempt > 1:
                 logger.info("확인 성공 — %s (%s회차, %sms 대기)", what, attempt, waited)
+            _feedback_success(timing, base_waited)
             return Confirmed(True, actual, attempt, waited)
     unknown = bool(unknown_when(actual)) if unknown_when else False
     reason = (
@@ -159,6 +172,21 @@ async def confirm(
     )
     logger.warning("%s", reason)
     return Confirmed(False, actual, len(timing), waited, reason, unknown)
+
+
+def _feedback_success(timing: Sequence[int], base_waited: int) -> None:
+    """confirm **성공** 시 지연 배율 되먹임 — 몇 회차 만에 확인됐는지가 지연 관측이다.
+
+    1회차(누적 대기 0) 성공 = 평시 신호(비율 1.0 → factor 감쇠). 후속 회차 성공 = 스케줄의
+    첫 재시도 대기(granularity) 대비 누적 대기만큼 느림 신호(비율 >1 → factor 상승).
+    누적은 **명목(배율 미적용)** 대기(base_waited)를 쓴다 — 배율이 오른 상태의 실대기를
+    되먹이면 배율이 배율을 키우는 자기증폭이 된다. 실패(mismatch/unknown)는 지연이 아니라
+    진짜 불일치일 수 있어 호출부(confirm 성공 경로)에서 애초에 부르지 않는다.
+    """
+    base_first = next((d for d in timing if d), 0)
+    if base_first <= 0:
+        return
+    latency.record(base_first, base_first + base_waited)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

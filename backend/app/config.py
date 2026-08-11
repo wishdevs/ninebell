@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 개발 기본 시크릿 — 운영 휴리스틱(cookie_secure=true)에서는 이 값으로 부팅을 차단한다.
+_DEV_AUTH_SECRET = "dev-insecure-change-me-please"
 
 
 class Settings(BaseSettings):
@@ -18,9 +21,14 @@ class Settings(BaseSettings):
 
     # --- DB ---
     database_url: str = "postgresql+asyncpg://dashboard:dashboard@localhost:5432/dashboard"
+    # PG 커넥션 풀 노브(create_async_engine). SQLite(aiosqlite) 경로에는 적용하지 않는다.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_pre_ping: bool = True
 
     # --- 세션/JWT ---
-    auth_secret: str = "dev-insecure-change-me-please"
+    auth_secret: str = _DEV_AUTH_SECRET
     jwt_algorithm: str = "HS256"
     session_ttl_hours: int = 12
     # '로그인 상태 유지' 체크 시의 연장 세션 수명(기본 30일). 미체크는 session_ttl_hours.
@@ -54,16 +62,22 @@ class Settings(BaseSettings):
     # LLM 프로바이더 선택 — 'gemini'(기본: GitHub/AWS 배포) | 'etribe'(온프렘 GitLab 배포, 사내
     # Etribe-LLM OpenAI 호환 서버 — 회계 데이터·ERP 스크린샷이 사외로 나가지 않는다). env LLM_PROVIDER.
     llm_provider: str = "gemini"
-    # 2026-07-23 사용자 최종 지정: GLM-5.2 서버 172.20.50.2:30001, 모델 id "ETRIBE-LLM"
-    # (/v1/models 실측, 대문자 주의), max_model_len 262144. base 에 /v1 을 붙이지 않는다
-    # (클라이언트가 /v1/chat/completions 를 붙임). 실측: 채팅·네이티브 툴콜(tool_choice=
-    # required)·thinking 기본 ON(reasoning 채널) OK. **텍스트 전용**("not a multimodal
-    # model" 400) → etribe_multimodal=False 로 디스패처가 스크린샷 첨부를 차단한다.
+    # ETRIBE-LLM API(2026-08 개발자 참조) 기준: 서버 :30001, 모델 id "ETRIBE-LLM"(대문자),
+    # 컨텍스트 256K(입력+출력 합·신뢰 검색 구간 ≤~120K), max_tokens 생략 시 8192·상한
+    # 16384(초과는 서버가 클램프), 샘플링 권장 temperature=1.0·top_p=1.0(프록시 미주입),
+    # reasoning_effort 는 **생략=자동**(실작업은 서버가 high 처리 — 일괄 고정 비권장).
+    # base 에 /v1 을 붙이지 않는다(클라이언트가 /v1/chat/completions 를 붙임).
+    # 실측: 채팅·네이티브 툴콜·thinking 기본 ON(reasoning 채널) OK. **텍스트 전용**("not a
+    # multimodal model" 400) → etribe_multimodal=False 로 디스패처가 스크린샷 첨부를 차단한다.
     # 대안 서버: 192.168.50.2:8030 ETRIBE-VLM(멀티모달 OK·네이티브 툴콜 불가 — JSON 폴백
     # 필요, 컨텍스트 32K) — 전환 시 ETRIBE_BASE_URL/MODEL/MULTIMODAL=true 만 바꾸면 된다.
     etribe_base_url: str = "http://172.20.50.2:30001"  # env ETRIBE_BASE_URL(온프렘 사내망)
     etribe_model: str = "ETRIBE-LLM"  # env ETRIBE_MODEL
     etribe_multimodal: bool = False  # env ETRIBE_MULTIMODAL — GLM-5.2 텍스트 전용(이미지 400)
+    # Bearer 토큰 — API 문서상 임의 문자열이되 **사용자 식별자 = QoS 단위**다(토큰당 동시
+    # 4 요청, 초과 시 429 concurrency_limit·Retry-After 5). 서비스 식별 토큰 하나로 통일해
+    # 대시보드 트래픽이 한 버킷으로 계량되게 한다. env ETRIBE_TOKEN.
+    etribe_token: str = "ninebell-dashboard"
     # 로컬 전용 LLM 프로바이더 런타임 전환 게이트(/dev/llm-provider 활성 여부). 서버 배포에선
     # 미설정=off → 라우터가 404 를 반환해 기능 자체가 없는 것처럼 동작한다. env LLM_PROVIDER_TOGGLE.
     llm_provider_toggle: bool = False
@@ -100,6 +114,21 @@ class Settings(BaseSettings):
             raise ValueError(f"LLM_PROVIDER 는 'gemini'|'etribe' 만 허용합니다(입력: {v!r})")
         return norm
 
+    @model_validator(mode="after")
+    def _reject_dev_secret_in_prod(self) -> Settings:
+        """운영 휴리스틱(cookie_secure=true)에서 기본 auth_secret 부팅 차단.
+
+        기본 시크릿으로 운영에 뜨면 세션 JWT 를 누구나 위조할 수 있다 — 조용한 폴백 대신
+        부팅 시점에 명확히 실패시킨다(_normalize_llm_provider 와 동일 철학). 로컬/테스트
+        (cookie_secure=false)는 기본값 부팅을 그대로 허용한다.
+        """
+        if self.cookie_secure and self.auth_secret == _DEV_AUTH_SECRET:
+            raise ValueError(
+                "COOKIE_SECURE=true(운영)인데 AUTH_SECRET 이 개발 기본값입니다 — "
+                "세션 토큰 위조가 가능하므로 부팅을 중단합니다. AUTH_SECRET 을 설정하세요."
+            )
+        return self
+
     # --- 라이브 세션(run) / 스크린캐스트 ---
     # 구독자가 모두 끊긴 미완료 흐름을 유지하는 시간(재연결 가능 창).
     session_detach_grace_s: float = 120.0
@@ -113,6 +142,11 @@ class Settings(BaseSettings):
     screencast_every_nth_frame: int = 2
     # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
     hitl_timeout_s: int = 600
+    # 런 전역 활동 시간 예산(초) — **HITL 대기 시간을 제외한 활동 시간** 기준. 사용자가
+    # 그리드/채팅 응답을 오래 고민하는 것은 정당(턴당 hitl_timeout_s 상한이 별도)하므로 세지
+    # 않고, 자동화 구간이 무한히 도는 것만 제한한다(세마포어 슬롯·Chromium 메모리 무기한
+    # 점유 방지). 초과 시 러너 워치독이 그래프를 취소하고 런을 failed 로 확정한다. 0=비활성.
+    run_active_budget_s: int = 1200
 
     # --- 로컬 시스템 관리자(admin) ---
     # 비우면 seed 가 폴백 '1111'을 쓰되 critical 경고. 프로덕션은 반드시 env 로 지정.

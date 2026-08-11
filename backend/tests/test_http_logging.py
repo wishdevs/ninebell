@@ -311,6 +311,9 @@ def test_configure_logging_writes_to_file_when_path_given(tmp_path):
     """LOG_FILE 이 있으면 파일에도 남는다(로컬 개발용) — 디렉터리는 자동 생성."""
     target = tmp_path / "nested" / "app.log"
     root = logging.getLogger()
+    # conftest 가 app.main 을 import 하며 configure_logging(settings.log_file)이 먼저 돈다 —
+    # 로컬 .env 에 LOG_FILE 이 있으면 그 핸들러가 남아(멱등 규약) tmp 경로가 무시된다. 선정리.
+    _drop_file_handler(root)
     try:
         configure_logging("INFO", str(target))
         logging.getLogger("app.test.file").info("파일 싱크 확인 %s", "OK")

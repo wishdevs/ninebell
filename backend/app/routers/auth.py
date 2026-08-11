@@ -32,7 +32,7 @@ from app.core.security import (
     InvalidTokenError,
     create_session_token,
     decode_session_token,
-    verify_password,
+    verify_password_async,
 )
 from app.erp.login import ErpAuthError
 from app.models import User
@@ -79,6 +79,8 @@ def _apply_profile(user: User, profile: dict) -> None:
     """기존 사용자 프로필 best-effort 갱신(빈 값은 덮어쓰지 않음)."""
     if profile.get("display_name"):
         user.display_name = profile["display_name"]
+    if profile.get("job_title"):
+        user.job_title = profile["job_title"]
     if profile.get("department"):
         user.department = profile["department"]
     if profile.get("email"):
@@ -124,9 +126,9 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         await db.execute(select(User).where(User.omnisol_userid == body.userid))
     ).scalar_one_or_none()
 
-    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출).
+    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출). CPU 바운드라 워커 스레드에서(async 래퍼).
     if user is not None and user.password_hash is not None:
-        if not verify_password(body.password, user.password_hash):
+        if not await verify_password_async(body.password, user.password_hash):
             _record_failure()
             await record_access(
                 db,
@@ -216,6 +218,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         body.password,
         profile.get("display_name") or "",
         profile.get("department") or "",
+        job_title=profile.get("job_title") or "",
     )
     await record_access(
         db, omnisol_userid=body.userid, status="success", user_id=None, ip=ip, user_agent=ua
@@ -273,6 +276,7 @@ async def signup(body: SignupBody, request: Request, response: Response, db: DbS
         # 이름·부서는 ERP 인증 프로필값(pending)을 권위값으로 사용 — 클라 입력 무시.
         # (부서는 조직구분 자동배정 키라 특히 조작 불가여야 함)
         display_name=pending.get("display_name") or None,
+        job_title=pending.get("job_title") or None,
         department=department,
         org_unit_id=org_unit.id if org_unit is not None else None,
         email=body.email or None,  # 빈문자열/누락은 None 으로 정규화(email 선택 입력)

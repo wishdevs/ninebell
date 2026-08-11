@@ -57,9 +57,11 @@ async def get_current_user(request: Request, db: DbSession) -> User:
     # JWT 는 무상태라 이 검사 없이는 로그아웃해도 토큰이 살아있다. cred_cache 미존재
     # (테스트/lifespan 미실행)면 스킵 — 런타임엔 lifespan 이 항상 생성한다.
     cache = getattr(request.app.state, "cred_cache", None)
+    cred_entry: dict | None = None
     if cache is not None:
         jti = payload.get("jti")
-        if not jti or cache.get(jti) is None:
+        cred_entry = cache.get(jti) if jti else None
+        if cred_entry is None:
             raise _unauthorized("세션이 만료되었거나 로그아웃되었습니다.")
 
     subject = payload.get("sub")
@@ -74,6 +76,11 @@ async def get_current_user(request: Request, db: DbSession) -> User:
     # 이라 단일 조회로 권한까지 eager-load 된다.
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or user.status != "active":
+        raise _unauthorized("세션이 유효하지 않습니다.")
+    # jti↔사용자 바인딩: 캐시 엔트리 소유자(u=로그인 userid)와 토큰 sub 로 로드된 사용자가
+    # 일치해야 한다. 이 대조 없이는 시크릿 유출 시 타인 sub 로 재서명한 토큰이 유효한 jti 에
+    # 올라타 권한 상승이 가능하다(로그인 경로가 put 하는 u 와의 교차검증 — 추가 쿼리 없음).
+    if cred_entry is not None and cred_entry.get("u") != user.omnisol_userid:
         raise _unauthorized("세션이 유효하지 않습니다.")
     return user
 

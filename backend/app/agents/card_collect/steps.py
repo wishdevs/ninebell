@@ -121,15 +121,55 @@ from app.agents.common.doc_steps import set_acct_date  # noqa: E402, F401 — �
 
 
 # ── 카드 선택(본인 카드 우선, 없으면 전체) ─────────────────────────────────────────
-async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
-    """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by}.
+def owner_name_variants(
+    userid: str | None, display_name: str | None = None, job_title: str | None = None
+) -> list[str]:
+    """본인 카드 매칭 키 변형 목록 — 로그인ID + 프로필 순수 이름 + "이름 직책".
 
-    선택 규칙(사용자 확정 2026-07-04): owner_name(=로그인ID=사용자명)이 주어지면 그
-    이름과 일치하는 카드만 선택하고, 일치 0건이면 기존 로직인 **전체선택**으로 폴백한다
-    (공용카드·빈 소유자 대비). by='name'|'all'. 매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM
-    정확일치 + 카드명 괄호 '(이름)' 포함 — 실측(2026-07-29) 이 ERP 는 소유자/관리사원
-    컬럼을 채우지 않아 카드명 FINPRODUCT_NM("…법인카드(석대현)-2826")의 괄호가 유일한
-    소유자 표기다(CARD_SUB_SELECT_BY_NAME_JS 참조).
+    패널 이름이 "석대현 프로"처럼 직책을 달고 있어(사용자 확정 2026-07-29) 카드명 괄호
+    "(석대현)"과 소유자 컬럼 "석대현 프로" 표기를 모두 잡으려면 변형 전부가 필요하다.
+    중복 제거·빈 값 제외, 순서 보존.
+    """
+    variants = [userid, display_name]
+    if display_name and job_title:
+        variants.append(f"{display_name} {job_title}")
+    out: list[str] = []
+    for v in variants:
+        s = (v or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _card_names_hint(res: dict, limit: int = 6) -> str:
+    """진단용 카드명 요약 — 매칭 0장 실패/폴백 로그에 '무엇이 있었는지'를 남긴다.
+
+    2026-08-02 실측: 실패 로그가 '6장 중 일치 없음'만 남겨 카드 목록을 알 수 없었고,
+    라이브 프로브 없이는 '본인 카드가 없는 계정'인지 '매칭 규칙 결함'인지 판별 불가했다.
+    """
+    names = [str(x).strip() for x in (res.get("allNames") or res.get("names") or []) if str(x).strip()]
+    if not names:
+        return "(카드명 확인 불가)"
+    head = ", ".join(names[:limit])
+    return f"{head}{' 외 …' if len(names) > limit else ''}"
+
+
+async def select_all_cards(
+    page: Any, owner_name: str | list[str] | None = None, own_only: bool = False
+) -> dict:
+    """카드번호 돋보기 → '카드' 서브팝업 선택 → 적용. 반환 {ok, n, checked, by, names}.
+
+    선택 규칙(사용자 확정 2026-07-31 분기 → 2026-08-03 폴백 추가):
+      · own_only=True(일반 모드 기본): owner_name(로그인ID 문자열 또는 이름 변형 목록 —
+        owner_name_variants 참조)과 일치하는 **본인 카드만** 선택. **일치 0건이면 전체선택으로
+        폴백**한다 — 법인 공용 카드만 쓰는 계정은 본인 명의 카드가 아예 없어서(카드명 괄호에
+        개인명 없음) 하드 실패시키면 실행이 막힌다. 처리 대상은 뒤의 그리드 개입에서 사용자가
+        확정하므로 전체를 담는 것은 후보 제시다(폴백 사실은 warn 으로 남긴다).
+      · own_only=False(디버그 모드): 종전 동작 그대로 **전체선택**(owner_name 무시).
+    by='name'|'all'. 매칭은 CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치 + 카드명 괄호 '(이름)' 포함 —
+    실측(2026-07-29) 이 ERP 는 소유자/관리사원 컬럼을 채우지 않아 카드명
+    FINPRODUCT_NM("…법인카드(석대현)-2826")의 괄호가 유일한 소유자 표기다
+    (CARD_SUB_SELECT_BY_NAME_JS 참조).
 
     ⚠ 증빙유형 01 적용 직후 법인카드 팝업이 **로딩 중**('데이터 처리 중')일 수 있다 — 돋보기
     버튼 출현을 폴링(실측 2026-07-04: 폴링 세분화 후 '돋보기 버튼 없음' 레이스).
@@ -143,6 +183,11 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
       (4) '적용' 후 서브팝업 **닫힘** — 예전엔 상한 내 안 닫혀도 {ok:True} 를 돌려줬다.
     카드번호 필드 표시값(폼 반영)은 리더 스코프가 미실측이라 **경고 수준**으로만 본다.
     """
+    owners = [owner_name] if isinstance(owner_name, str) else list(owner_name or [])
+    owners = [o.strip() for o in owners if o and o.strip()]
+    if own_only and not owners:
+        # 본인 판정 키가 없으면 어떤 카드도 고를 수 없다 — 임의 전체선택으로 넘어가지 않는다.
+        return {"ok": False, "reason": "본인 카드 판별에 쓸 사용자 이름이 없습니다(로그인 정보 확인 불가)"}
     warns: list[str] = []
     # (1) 돋보기 버튼 출현 — 실시간 재시도(delay_scale 무관).
     found = await verify.confirm(
@@ -175,16 +220,24 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
     for wait_ms in verify.ASYNC:
         if wait_ms:
             await _real_sleep(wait_ms / 1000)
-        if owner_name and (owner_name or "").strip():
-            # 본인 이름 매칭 우선 — matched>0 이면 그것으로 확정, matched==0 이면 전체선택 폴백.
-            r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owner_name)
+        if own_only:
+            # 본인 카드만 — matched>0 이면 확정. matched==0(그리드는 로드됨)이면 **전체선택으로
+            # 폴백**한다(사용자 확정 2026-08-03): 법인 공용 카드만 쓰는 계정은 본인 명의 카드가
+            # 아예 없어(카드명 괄호에 개인명이 없음) 하드 실패시키면 실행 자체가 막힌다.
+            # 어느 카드를 실제로 처리할지는 뒤의 그리드 개입에서 사용자가 확인하므로, 여기서
+            # 전체를 담는 것은 '임의 선택'이 아니라 후보 제시다. 폴백 사실은 warn 으로 남긴다.
+            r = await page.evaluate(js.CARD_SUB_SELECT_BY_NAME_JS, owners)
             if r.get("ok") and r.get("n", 0) > 0:
                 if r.get("matched", 0) > 0:
                     sel, by = r, "name"
                     break
-                r = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)  # 매칭 0 → 전체선택
-                if r.get("ok") and r.get("n", 0) > 0:
-                    sel = r
+                fallback = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
+                if fallback.get("ok") and fallback.get("n", 0) > 0:
+                    warns.append(
+                        f"본인 카드 0장(전체 {r.get('n')}장·대조 이름 {', '.join(owners)}) "
+                        f"— 전체 카드로 진행합니다. 카드 목록: {_card_names_hint(r)}"
+                    )
+                    sel, by = fallback, "all"
                     break
         else:
             r = await page.evaluate(js.CARD_SUB_SELECT_ALL_JS)
@@ -238,6 +291,7 @@ async def select_all_cards(page: Any, owner_name: str | None = None) -> dict:
         "n": sel.get("n"),
         "checked": sel.get("checked"),
         "by": by,
+        "names": sel.get("names"),  # by='name' 일 때 매칭 카드명(최대 10) — 로그 노출용
         "display": disp.actual,
         "verified": bool(disp),  # False = 폼 반영 **미확인**(완료로 단정하지 않는다)
     }
@@ -454,13 +508,17 @@ async def _close_picker_verified(page: Any, before: int) -> None:
 async def _confirm_picker_closed(page: Any, before: int, label: str) -> dict:
     """'적용' 클릭 후 피커 팝업이 **닫혔는지** 개수 복귀로 확정. 반환 {ok, reason?|warn?}.
 
-    ⚠ 기존 _wait_picker_closed 는 page.wait_for_timeout 기반 명목 상한 1.5s 라 delay_scale
-    0.15 에서 실상한 ~225ms 로 붕괴했고, 미닫힘이어도 **아무 것도 보고하지 않았다**. 적용이
-    폼에 안 붙은 채 다음 피커로 넘어가면 그 창을 읽어 0건이 되므로 하드 실패로 다룬다.
+    적용이 폼에 안 붙은 채 다음 피커로 넘어가면 그 창을 읽어 0건이 되므로 하드 실패로 다룬다.
+    개수 리더 불가 세션(before<0)은 실시간 상한 폴백(_wait_picker_closed — rowcount 리더 관찰)
+    으로 관찰만 하고 '확인 불가'로 보고하되, 폴백이 미닫힘(False)을 관측하면 warn 에 병기한다
+    (2026-08-07 리뷰 — bool 신호 유실 봉합; 종전 명목 상한 붕괴 서술은 실시간 전환으로 해소됨).
     """
     if before < 0:
-        await _wait_picker_closed(page)  # 개수를 못 읽는 세션 — 기존 폴백(확인 불가).
-        return {"ok": True, "warn": f"{label} 피커 닫힘 확인 불가(팝업 개수 미확인)"}
+        closed = await _wait_picker_closed(page)  # 개수를 못 읽는 세션 — 실시간 관찰 폴백.
+        warn = f"{label} 피커 닫힘 확인 불가(팝업 개수 미확인)"
+        if not closed:
+            warn += " — rowcount 리더는 미닫힘을 관측(다음 피커 오독 주의)"
+        return {"ok": True, "warn": warn}
     gone = await verify.confirm_popup_count(
         page, less_than=before + 1, timing=verify.ASYNC, unknown_when=_not_int
     )
@@ -977,6 +1035,11 @@ async def dismiss_modals_verified(page: Any, rounds: int = 3) -> dict:
     return out
 
 
+# '적용' 후 모달 시퀀스 관찰 창(초) — **실시간**. save_document 의 _SAVE_* 와 동일 규율.
+_APPLY_POLL_S = 0.15
+_APPLY_CAP_S = 45.0
+
+
 async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
     """처리한 행들을 체크 → 카드팝업 '적용' → 확인 모달 처리 → 팝업 닫힘·문서 반영.
 
@@ -998,11 +1061,18 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
     await page.mouse.click(box["x"], box["y"])
 
     # 모달 시퀀스 폴링: '예'(부가세0 포함) → '확인'(예산현황) → 팝업 닫힘. check-first(400ms
-    # 선대기 제거) + 간격 축소 — 40행 처리 시 각 모달을 뜨는 즉시 클릭. 상한 45s(대량 행 서버
-    # 처리 여유). 계측(clicks/iters/elapsed)을 반환해 다음 런에서 병목 위치를 본다.
+    # 선대기 제거) — 각 모달을 뜨는 즉시 클릭. 상한 45s(대량 행 서버 처리 여유)는 **실시간**
+    # 단일 상한이다 — 종전 range(300)×wait_for_timeout(150) 명목 카운터는 delay_scale 0.15
+    # 에서 실관찰창이 ~12-20s 로 붕괴해, 40행 '적용'의 서버 처리·모달 시퀀스가 12s 를 넘으면
+    # '팝업 미닫힘' 조기 하드 실패가 났다(2026-08-07 감사, save_document 관찰창과 동형 교정).
+    # 폴 간격은 _real_sleep(실시간; 단위 테스트는 conftest 가 no-op 으로 치환 → 명목 폴 수가
+    # 대신 상한을 센다). 계측(clicks/iters/elapsed)을 반환해 다음 런에서 병목 위치를 본다.
     t0 = time.monotonic()
     clicks = 0
-    for it in range(300):
+    polls = 0
+    while True:
+        if max(time.monotonic() - t0, polls * _APPLY_POLL_S) > _APPLY_CAP_S:
+            break
         yes = await page.evaluate(js.MODAL_BTN_BOX_JS, "예")
         if yes:
             await page.mouse.click(yes["x"], yes["y"])
@@ -1017,10 +1087,9 @@ async def apply_rows_to_document(page: Any, row_indices: list[int]) -> dict:
             dismissed = await dismiss_blocking_modals(page)
             elapsed = int((time.monotonic() - t0) * 1000)
             return {"ok": True, "checked": chk.get("checked"), "late_modals": dismissed[:4],
-                    "clicks": clicks, "iters": it, "elapsed_ms": elapsed}
-        await page.wait_for_timeout(150)
-        if (time.monotonic() - t0) > 45:
-            break
+                    "clicks": clicks, "iters": polls, "elapsed_ms": elapsed}
+        await _real_sleep(_APPLY_POLL_S)
+        polls += 1
     modals = await page.evaluate(js.MODALS_SNAPSHOT_JS)
     return {"ok": False, "reason": "적용 후 카드팝업이 닫히지 않음", "modals": modals,
             "clicks": clicks, "elapsed_ms": int((time.monotonic() - t0) * 1000)}

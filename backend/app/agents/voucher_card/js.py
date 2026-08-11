@@ -350,13 +350,47 @@ REFDOC_MARK_JS = r"""({ kind, index }) => {
       if (!/OBTButton_root/.test(cls)) return false;
       const r = b.getBoundingClientRect();
       return r.top >= gapTop && r.bottom <= gapBottom && r.width <= 40 && r.height <= 40;
-    }).sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
+    }).sort((a, b) => {
+      // ⚠ 실측 확정(2026-08-07 refdoc_move 프로브): 아래(추가) 버튼은 **arrBtnDown**,
+      //   위(제거)는 arrBtnUp 클래스를 갖는다 — '라벨 없는 버튼 2개 좌→우 추정'을 결정적
+      //   식별로 대체한다(index 0 = 아래 확정). 클래스가 없으면 종전 x 정렬 폴백.
+      const ad = /arrBtnDown/.test(String(a.className)), bd = /arrBtnDown/.test(String(b.className));
+      if (ad !== bd) return ad ? -1 : 1;
+      return a.getBoundingClientRect().x - b.getBoundingClientRect().x;
+    });
     if (!cands.length) return { ok: false, reason: 'no-move-button' };
     const i = Math.min(Math.max(index || 0, 0), cands.length - 1);
     cands[i].setAttribute('data-nb-refdoc', 'move');
     return { ok: true, marked: 'move', count: cands.length, index: i };
   }
   return { ok: false, reason: 'unknown-kind' };
+}"""
+
+# 확인 클릭 후 결제창(EAP 본문) '참조문서' 필드 상태 리더(읽기 전용) — 실측 확정
+# (2026-08-07 confirm 프로브): 확인이 적용되면 이 필드가 "선택된 문서가 없습니다" →
+# "[문서번호]/문서분류/제목" 으로 바뀐다.
+# ⚠ 화면 하단 '첨부파일 N개' 위젯은 무관하다(확인 전후 0개 불변 — 파일 업로드 영역).
+#   첨부 반영 판정은 이 '참조문서' 필드가 유일한 근거다.
+# ⚠ 비영속(실측): 상신 없이 결제창을 닫으면 소멸(팝업 세션 한정 클라이언트 상태) —
+#   검증은 반드시 같은 결제창 세션 안에서, 확인 직후에 해야 한다.
+# 행 탐색은 REFDOC_SELECT_BTN_RECT_JS 와 동일 방식(dialog 밖 — 개폐 상태 무관 판독 실측 확인).
+# arg = docu_no(기대 문서번호/GWDOCU_NO). 반환 {ok, attached, none, text} | {ok:false, reason}.
+EAP_REFDOC_FIELD_STATE_JS = r"""(docuNo) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const btn = [...document.querySelectorAll('button')].find(b => {
+    const row = b.closest('tr') || b.closest('li') || (b.parentElement && b.parentElement.parentElement);
+    return row && c(row.innerText).replace(/\s+/g,'').includes('참조문서');
+  });
+  const row = btn ? (btn.closest('tr') || btn.closest('li') || (btn.parentElement && btn.parentElement.parentElement)) : null;
+  if (!row) return { ok: false, reason: 'no-refdoc-row' };
+  const text = c(row.innerText);
+  const want = c(docuNo);
+  return {
+    ok: true,
+    attached: !!want && text.includes(want),
+    none: text.includes('선택된 문서가 없습니다'),
+    text: text.slice(0, 200),
+  };
 }"""
 
 # dialog 상태 — 조회 결과 건수/없음 문구/선택된 목록 비어있음 + 두 그리드 박스(캔버스 클릭용).
@@ -393,6 +427,41 @@ REFDOC_STATE_JS = r"""() => {
     topGrid: boxes[0] || null,
     bottomGrid: boxes[1] || null,
   };
+}"""
+
+
+# 참조문서 상단 그리드(RealGrid)의 **체크된 행 수** — select_refdoc_first_row 좌표 클릭의
+# 독립 사후검증 리더(2026-08-07 무결성 감사: 클릭 후 무조건 True 봉합). gridView 인스턴스는
+# REFDOC_GRID_ROWS_JS 와 같은 경로([id^=grid_].gridView, y 정렬 첫 번째=상단)로 잡고,
+# checkBar API 이름이 RealGrid 버전에 따라 다를 수 있어(getCheckedRows/getCheckedItems)
+# 순서대로 시도한다. API 미존재/그리드 미준비는 {ok:false}(확인 불가 — unknown 분류)로 돌려
+# move_refdoc_down 의 결과검증(grew)이 판정을 이어받는다. 반환 {ok, checked} | {ok:false, reason}.
+REFDOC_TOP_CHECKED_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const heading = [...document.querySelectorAll('*')].find(
+    el => el.children.length === 0 && c(el.innerText) === '참조문서');
+  let dlg = heading;
+  for (let i = 0; i < 8 && dlg; i++) {
+    const r = dlg.getBoundingClientRect();
+    if (r.width > 400 && r.height > 300) break;
+    dlg = dlg.parentElement;
+  }
+  if (!dlg) return { ok: false, reason: 'no-dialog' };
+  const views = [];
+  for (const el of dlg.querySelectorAll('[id^=grid_]')) {
+    if (el.gridView) views.push({ y: Math.round(el.getBoundingClientRect().y), gv: el.gridView });
+  }
+  if (!views.length) return { ok: false, reason: 'grids-not-ready' };
+  views.sort((a, b) => a.y - b.y);
+  const gv = views[0].gv;
+  try {
+    for (const f of ['getCheckedRows', 'getCheckedItems']) {
+      if (typeof gv[f] !== 'function') continue;
+      const arr = gv[f]();
+      if (Array.isArray(arr)) return { ok: true, checked: arr.length, api: f };
+    }
+    return { ok: false, reason: 'no-check-api' };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 80) }; }
 }"""
 
 

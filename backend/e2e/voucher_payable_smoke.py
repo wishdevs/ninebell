@@ -1,20 +1,21 @@
-"""관리자 단건 라이브 스모크 — 전표조회승인(voucher-payable) 공유그래프 매입 종단 검증.
+"""외상매입금(voucher-payable) 라이브 스모크 — **제품 경로**(대시보드 폼 → 실행)로 실행한다.
 
-`e2e/voucher_receivable_smoke.py`(run_workflow 종단 하네스)를 그대로 재사용하되
-`build_voucher_payable_graph()`(전표유형=내수구매, SYSDEF_CD=31)로 바꾼 것 — 공유 그래프
-(`build_voucher_graph`)가 매입에도 종단 동작하는지 확인한다. **`max_rows=1` 명시**(전체 진행이
-이제 기본값이므로 스모크에선 EAP draft 를 1건으로 제한하기 위해 반드시 명시해야 한다).
+형제 스모크 `e2e/voucher_receivable_smoke.py` 와 동일 구조이며 전표유형만 **내수구매**
+(SYSDEF_CD=31, `DOCU_TYPES_PAYABLE`)로 다르다 — 공유 백본(`build_voucher_graph`)이 매입에도
+제품 경로로 종단 동작하는지 확인한다. 매출과 동일한 **배치 결재**(2026-08-07 확대: 하위
+200건 기준 단독/묶음)라 결제창 개봉 수 = 묶음 수(≤ 처리 건수)다.
 
-D2 검증: 전표유형 **내수구매**(매출과 달리 단일 타깃)가 조회폼에 정상 세팅되는지 —
-set_query 스텝 성공/실패와 "조회 조건 세팅 완료(…전표유형 내수구매)" 로그로 확인.
+전환 배경·관측 경로(agent_runs.logs + SSE 탭)·기간 선별(phase0)은 `e2e/voucher_product.py`
+모듈 docstring 참조. ERP 삭제 단계는 없다(전표 미생성 아키타입).
 
-D3 검증: 조회(F2) 후 rowcount. **0건도 정상**(내수구매 미결·저장 전표가 당월에 없을 수 있음) —
-그 경우 결제창 loop 는 스킵되고 "처리 완료 — 대상 전표가 없어…" 결과로 정상 종료된다. rowcount≥1
-이면 단건 스모크와 동일하게 결제창(EAP)·D7 정합성·자식 프레임까지 검증한다.
+D2 검증: 전표유형 내수구매가 조회폼에 세팅됐는지 — set_query 스텝 상태 + "조회 조건 세팅
+완료(…전표유형 내수구매)" 로그.
+D3 검증: 조회 rowcount. **0건도 정상**(내수구매 미결·저장 전표가 선별 기간에 없을 수 있음) —
+그 경우 결제창 loop 는 스킵되고 정상 종료된다.
 
-⚠⚠ 절대 안전 ⚠⚠
-  - 상신·보관 절대 미클릭(그래프가 이미 보장, 이 스모크는 관찰만).
-  - max_rows=1 → EAP draft 최대 1건.
+⚠⚠ 정책 전환(2026-08-07) ⚠⚠ 이 스모크는 **실제 상신**을 수행한다(allow_submit 게이트 개방).
+상신된 전표는 e2e/eap_approval_cancel_probe.py(결재취소→상신취소→삭제)로 회수한다.
+보관은 여전히 절대 미클릭(그래프가 보장 — 여기선 관찰만).
 
 Usage:
     cd /Users/wishdev/et-works/dashboard-design/backend
@@ -24,263 +25,166 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
-import os
-import re
+import logging
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend 루트
 
-from playwright.async_api import async_playwright  # noqa: E402
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
-from app.agents.voucher_receivable.graph import build_voucher_payable_graph  # noqa: E402
-from app.live.runner import run_workflow  # noqa: E402
+from app.agents.voucher_receivable import steps as v_steps  # noqa: E402
+from e2e.product_cycle import run_product  # noqa: E402
+from e2e.voucher_product import (  # noqa: E402
+    ART,
+    MAX_TARGET_ROWS,
+    SSE_TAP_JS,
+    count_in_window,
+    db_run_logs,
+    fill_period,
+    iso,
+    log_messages,
+    loop_window,
+    parse_common,
+    pick_period,
+    print_checks,
+    read_tap,
+    save_data_url_png,
+    step_status,
+)
 
-USERID = os.environ.get("E2E_USERID", "이트라이브2")
-PASSWORD = os.environ.get("E2E_PASSWORD", "1111")
-HEADLESS = os.environ.get("E2E_HEADLESS", "1") != "0"
-DELAY_SCALE = float(os.environ.get("E2E_DELAY_SCALE", "0.4"))
-OVERALL_TIMEOUT_S = 300  # 5분 상한.
-
-ARTIFACTS = Path(__file__).resolve().parent / "artifacts"
-ARTIFACTS.mkdir(exist_ok=True)
-
-_SUBMIT_RE = re.compile(r"^가상 상신: 전표 (\S+)$")
-_ROWCOUNT_RE = re.compile(r"조회 완료 — 대상 전표 (\d+)건\.")
+AGENT_ID = "voucher-trade-payable"
+WORKFLOW_ID = "voucher-payable"
+TAG = "voucher_payable_product"
+DOCU_TYPES = v_steps.DOCU_TYPES_PAYABLE  # ("내수구매",)
 
 
-def _save_data_url_png(data_url: str, path: Path) -> None:
-    prefix = "base64,"
-    idx = data_url.find(prefix)
-    raw = base64.b64decode(data_url[idx + len(prefix) :] if idx >= 0 else data_url)
-    path.write_bytes(raw)
+async def main() -> int:
+    print("[SMOKE] 외상매입금 — 제품 경로(대시보드 폼 → 실행). ERP 삭제 단계 없음(전표 미생성).",
+          flush=True)
+    print("[SMOKE] ⚠ 실제 상신 수행(정책 전환 2026-08-07) — 종료 후 eap_approval_cancel_probe 로 회수할 것.", flush=True)
 
+    # ── phase0 — 읽기 전용 기간 선별(결재 버튼 미클릭 → EAP draft 0건) ──────────────
+    scan = await pick_period(DOCU_TYPES, tag=TAG)
+    if scan.get("error"):
+        print(f"[ABORT] 기간 선별 실패 — {scan['error']}", flush=True)
+        return 2
+    if not scan.get("picked_from"):
+        print(f"[ABORT] 최근 {len(scan['windows'])}개월에 대상 전표가 없습니다 — {scan['windows']}",
+              flush=True)
+        return 2
+    p_from, p_to = iso(scan["picked_from"]), iso(scan["picked_to"])
+    print(f"[SMOKE] 선별 기간 {p_from} ~ {p_to} (대상 {scan['target_rows']}건)", flush=True)
 
-async def main() -> None:
-    counts = {
-        "step": 0,
-        "log": 0,
-        "screenshot_parent": 0,
-        "screenshot_child": 0,
-        "closed_child": 0,
-        "result": 0,
-        "error": 0,
-        "hitl": 0,
-        "chat": 0,
-        "transactions": 0,
-    }
-    frames_log: list[dict] = []
-    latest_parent_shot: str | None = None
-    latest_child_shot: str | None = None
-    virtual_submit_logs: list[str] = []
-    processed_docu_nos: list[str] = []
-    d7_ok: list[str] = []
-    d7_soft: list[str] = []
-    d7_mismatch: list[str] = []
-    d7_checked_ok: list[str] = []
-    d7_checked_soft: list[str] = []
-    error_frames: list[dict] = []
-    result_text: str | None = None
-    rowcount: int | None = None
-    set_query_status: str | None = None  # "done" | "failed" | None(미도달)
-    set_query_ok_log: str | None = None  # "조회 조건 세팅 완료(…전표유형 내수구매)."
+    # ── phase1 — 제품 UI 완주 ────────────────────────────────────────────────────
+    async def fill(page) -> None:
+        await fill_period(page, p_from, p_to)
 
-    row_child_shots: list[str] = []
+    run = await run_product(
+        agent_id=AGENT_ID,
+        workflow_id=WORKFLOW_ID,
+        fill=fill,
+        tag=TAG,
+        init_script=SSE_TAP_JS,
+        on_page_done=read_tap,
+    )
+    tap = run.get("page_probe") or {}
+    run_id = (run.get("run_after") or {}).get("id")
+    logs = db_run_logs(run_id) if run.get("run_recorded") and run_id else []
+    msgs = log_messages(logs)
+    steps = step_status(logs)
+    obs = parse_common(msgs)
 
-    creds = {"userid": USERID, "password": PASSWORD}
-    # ⚠ max_rows=1 명시 — 기본값이 이제 None(전체 진행)이라 명시하지 않으면 조회된 전 건을
-    # 처리해 EAP draft 가 rowcount 만큼 생긴다. 스모크는 1건만 검증하면 충분하다.
-    params: dict = {"max_rows": 1}
+    win = loop_window(tap)
+    child_shot_in_loop = count_in_window(tap.get("childShotSeqs"), win)
+    child_closed_in_loop = count_in_window(tap.get("childClosedSeqs"), win)
 
-    async with async_playwright() as pw:
+    if tap.get("lastParentShot"):
+        save_data_url_png(tap["lastParentShot"], ART / f"{TAG}_parent.png")
+    if tap.get("lastChildShot"):
+        save_data_url_png(tap["lastChildShot"], ART / f"{TAG}_child.png")
 
-        async def browser_factory():
-            return await pw.chromium.launch(headless=HEADLESS)
+    rowcount = obs["rowcount"]
+    processed = obs["processed_docu_nos"]
 
-        graph = build_voucher_payable_graph()
+    # ── 어설션 ──────────────────────────────────────────────────────────────────
+    checks: dict[str, bool] = {}
+    checks["product_path_run_recorded"] = bool(run.get("run_recorded"))
+    checks["db_status_succeeded"] = run.get("db_status") == "succeeded"
+    checks["ui_terminal_reached"] = bool(run.get("terminal")) and run.get("ui_status") == "succeeded"
+    checks["sse_stream_observed"] = int(tap.get("connects") or 0) >= 1
+    checks["form_period_applied"] = bool(
+        obs["params_log"] and p_from in obs["params_log"] and p_to in obs["params_log"]
+    )
+    # D2 — 전표유형 내수구매가 실제로 세팅됐다(공유 코드가 이 값을 썼다는 증거).
+    checks["docu_type_naesugumae_set_ok"] = (
+        steps.get("set_query") == "done"
+        and obs["set_query_ok_log"] is not None
+        and "내수구매" in obs["set_query_ok_log"]
+    )
+    # D3 — 조회(F2)가 실행돼 rowcount 를 읽었다(0건도 정상).
+    checks["rowcount_observed"] = rowcount is not None
+    checks["final_result_success_no_error"] = (
+        bool(run.get("result_text") or tap.get("result")) and not (tap.get("errors") or [])
+    )
+    result_text = str(tap.get("result") or run.get("result_text") or "")
+    checks["result_declares_submit_done"] = (
+        "전자결재 상신 완료" in result_text or "대상 전표가 없어" in result_text
+    )
+    checks["no_archive_clicked_logged"] = not any("보관 클릭" in m for m in msgs)
+    checks["d7_no_confirmed_mismatch"] = len(obs["d7_mismatch"]) == 0
+    checks["draft_budget_respected"] = obs["approval_opens"] <= MAX_TARGET_ROWS
 
-        t0 = time.monotonic()
-        try:
-            async with asyncio.timeout(OVERALL_TIMEOUT_S):
-                async for frame in run_workflow(
-                    graph,
-                    browser_factory,
-                    creds,
-                    params,
-                    screencast=True,
-                    delay_scale=DELAY_SCALE,
-                    run_id="smoke-payable",
-                    owner="smoke-payable",
-                ):
-                    frames_log.append(frame)
-                    if "step" in frame:
-                        counts["step"] += 1
-                        print(f"[step] {frame}", flush=True)
-                        if frame.get("step") == "set_query":
-                            set_query_status = frame.get("status")
-                    elif "log" in frame:
-                        counts["log"] += 1
-                        msg = frame["log"]
-                        print(f"[log:{frame.get('level')}] {msg}", flush=True)
-                        if "가상 상신" in msg:
-                            virtual_submit_logs.append(msg)
-                        m = _SUBMIT_RE.match(msg)
-                        if m:
-                            processed_docu_nos.append(m.group(1))
-                        rc_m = _ROWCOUNT_RE.search(msg)
-                        if rc_m:
-                            rowcount = int(rc_m.group(1))
-                        if msg.startswith("조회 조건 세팅 완료"):
-                            set_query_ok_log = msg
-                        if msg.startswith("D7 정합성 확인 ✅"):
-                            d7_ok.append(msg)
-                        elif msg.startswith("D7 정합성 확인 불가"):
-                            d7_soft.append(msg)
-                        elif "D7 정합성 오류" in msg:
-                            d7_mismatch.append(msg)
-                        elif msg.startswith("D7 체크행수 확인 ✅"):
-                            d7_checked_ok.append(msg)
-                        elif msg.startswith("D7 체크행수 확인 불가"):
-                            d7_checked_soft.append(msg)
-                    elif "screenshot" in frame:
-                        if frame.get("window") == "child":
-                            counts["screenshot_child"] += 1
-                            latest_child_shot = frame["screenshot"]
-                        else:
-                            counts["screenshot_parent"] += 1
-                            latest_parent_shot = frame["screenshot"]
-                    elif frame.get("window") == "child" and frame.get("closed"):
-                        counts["closed_child"] += 1
-                        print(f"[child] closed={frame}", flush=True)
-                        if latest_child_shot:
-                            row_child_shots.append(latest_child_shot)
-                    elif "hitl" in frame:
-                        counts["hitl"] += 1
-                        print(f"[hitl] {frame}", flush=True)
-                    elif "chat" in frame:
-                        counts["chat"] += 1
-                    elif "transactions" in frame:
-                        counts["transactions"] += 1
-                    elif "result" in frame:
-                        counts["result"] += 1
-                        result_text = frame["result"]
-                        print(f"[result] {result_text}", flush=True)
-                    elif "error" in frame:
-                        counts["error"] += 1
-                        error_frames.append(frame)
-                        print(f"[error] {frame}", flush=True)
-        except TimeoutError:
-            error_frames.append({"error": f"스모크 전체 타임아웃({OVERALL_TIMEOUT_S}s) 초과"})
-            print(f"[FATAL] 전체 타임아웃 {OVERALL_TIMEOUT_S}s 초과", flush=True)
-
-    elapsed = time.monotonic() - t0
-
-    # ── 아티팩트 ──────────────────────────────────────────────────────────────
-    parent_png = ARTIFACTS / "voucher_payable_smoke_parent.png"
-    child_png = ARTIFACTS / "voucher_payable_smoke_child.png"
-    if latest_parent_shot:
-        _save_data_url_png(latest_parent_shot, parent_png)
-        print(f"[artifact] {parent_png}", flush=True)
+    if rowcount == 0:
+        # 0건 경로 — 결제창을 한 번도 열지 않고 정상 종료한다.
+        checks["zero_rows_no_loop_attempted"] = (
+            child_shot_in_loop == 0 and child_closed_in_loop == 0 and not processed
+        )
     else:
-        print("[artifact] 부모 스크린샷 없음(미방출)", flush=True)
-    if latest_child_shot:
-        _save_data_url_png(latest_child_shot, child_png)
-        print(f"[artifact] {child_png}", flush=True)
-    else:
-        print("[artifact] 자식 스크린샷 없음(미방출) — rowcount=0 이면 정상, ≥1 이면 실패 신호", flush=True)
+        checks["child_screenshot_emitted"] = child_shot_in_loop >= 1
+        checks["child_closed_frame_emitted"] = child_closed_in_loop >= 1
+        checks["submit_log_with_docu_no"] = bool(obs["virtual_submit_logs"]) and bool(processed)
+        # 배치 결재 — 묶음 수와 무관하게 **처리 전표 수** = 조회 건수(전량 커버).
+        checks["processed_matches_rowcount"] = len(processed) == rowcount
+        checks["processed_docu_nos_distinct"] = len(set(processed)) == len(processed)
+        checks["closed_child_matches_opens"] = child_closed_in_loop == obs["approval_opens"]
 
-    row_child_pngs: list[str] = []
-    for i, shot in enumerate(row_child_shots, start=1):
-        p = ARTIFACTS / f"voucher_payable_smoke_child_row{i}.png"
-        _save_data_url_png(shot, p)
-        row_child_pngs.append(str(p))
-        print(f"[artifact] {p}", flush=True)
+    ok = print_checks(checks)
 
-    def _slim(f: dict) -> dict:
-        if "screenshot" in f:
-            return {k: v for k, v in f.items() if k != "screenshot"} | {
-                "screenshot": f"<{len(f['screenshot'])} chars>"
-            }
-        return f
+    print("\n===== 관측 상세 =====", flush=True)
+    print(f"기간 선별      = {scan['picked_from']}~{scan['picked_to']} (실측 {scan['target_rows']}건) "
+          f"· 월스캔 {scan['windows']} · 이분탐색 {scan['queries']}", flush=True)
+    print(f"agent_runs     = id={run_id} status={run.get('db_status')} "
+          f"logs={len(logs)}줄 (SSE 로그 {len(tap.get('logs') or [])}줄)", flush=True)
+    print(f"steps          = {steps}", flush=True)
+    print(f"set_query_log  = {obs['set_query_ok_log']!r}", flush=True)
+    print(f"rowcount       = {rowcount} · 결제창 개봉(=EAP draft) {obs['approval_opens']}회", flush=True)
+    print(f"opened/processed = {obs['opened_docu_nos']} / {processed}", flush=True)
+    print(f"child(loop 구간) shot={child_shot_in_loop} closed={child_closed_in_loop} "
+          f"· 전역 shot={tap.get('shotChild')} closed={tap.get('childClosed')}", flush=True)
+    print(f"d7_ok={len(obs['d7_ok'])} soft={len(obs['d7_soft'])} mismatch={len(obs['d7_mismatch'])} "
+          f"checked_ok={len(obs['d7_checked_ok'])} checked_soft={len(obs['d7_checked_soft'])}",
+          flush=True)
+    print(f"result         = {result_text!r}", flush=True)
+    if run.get("error") or run.get("fail_reason"):
+        print(f"run.error      = {run.get('error')} / {run.get('fail_reason')}", flush=True)
 
-    frames_path = ARTIFACTS / "voucher_payable_smoke_frames.json"
-    frames_path.write_text(
-        json.dumps([_slim(f) for f in frames_log], ensure_ascii=False, indent=2),
+    report = ART / f"{TAG}.json"
+    report.write_text(
+        json.dumps(
+            {"scan": scan, "run": {k: v for k, v in run.items() if k != "page_probe"},
+             "checks": checks, "observed": obs, "steps": steps,
+             "child": {"shot_in_loop": child_shot_in_loop, "closed_in_loop": child_closed_in_loop,
+                       "global_shot": tap.get("shotChild"), "global_closed": tap.get("childClosed")},
+             "db_logs": logs},
+            ensure_ascii=False, indent=1,
+        ),
         encoding="utf-8",
     )
-    print(f"[artifact] {frames_path}", flush=True)
-
-    # ── 어설션 ────────────────────────────────────────────────────────────────
-    checks: dict[str, bool] = {}
-    # D2: 전표유형(내수구매) 세팅 성공 — set_query 스텝이 failed 가 아니고, 완료 로그에
-    # "내수구매" 가 포함돼 있어야 한다(공유 코드가 실제로 이 값을 세팅했다는 증거).
-    checks["docu_type_naesugumae_set_ok"] = (
-        set_query_status == "done"
-        and set_query_ok_log is not None
-        and "내수구매" in set_query_ok_log
-    )
-    checks["final_result_success_no_error"] = (result_text is not None) and (counts["error"] == 0)
-    checks["rowcount_observed"] = rowcount is not None  # rowcount 를 못 읽었으면 set_query/run_query 이전 실패.
-
-    zero_rows = rowcount == 0
-    if zero_rows:
-        checks["zero_rows_no_loop_attempted"] = counts["screenshot_child"] == 0 and len(processed_docu_nos) == 0
-    else:
-        checks["child_screenshot_emitted"] = counts["screenshot_child"] >= 1
-        checks["virtual_submit_log_with_docu_no"] = any(
-            "전표" in m and len(m.strip()) > len("가상 상신: 전표") for m in virtual_submit_logs
-        )
-        checks["child_closed_frame_emitted"] = counts["closed_child"] >= 1
-        checks["processed_exactly_1"] = len(processed_docu_nos) == 1
-        checks["d7_no_confirmed_mismatch"] = len(d7_mismatch) == 0
-
-    print("\n===== SMOKE ASSERTIONS =====", flush=True)
-    for k, v in checks.items():
-        print(f"{'PASS' if v else 'FAIL'} — {k}", flush=True)
-
-    print("\n===== FRAME COUNTS =====", flush=True)
-    print(json.dumps(counts, ensure_ascii=False, indent=2), flush=True)
-
-    print("\n===== D2/D3/D7 상세 =====", flush=True)
-    print(f"set_query_status = {set_query_status!r}", flush=True)
-    print(f"set_query_ok_log = {set_query_ok_log!r}", flush=True)
-    print(f"rowcount = {rowcount!r}", flush=True)
-    print(f"processed_docu_nos = {processed_docu_nos}", flush=True)
-    print(f"d7_ok n={len(d7_ok)}: {d7_ok}", flush=True)
-    print(f"d7_soft n={len(d7_soft)}: {d7_soft}", flush=True)
-    print(f"d7_mismatch n={len(d7_mismatch)}: {d7_mismatch}", flush=True)
-    print(f"d7_checked_ok n={len(d7_checked_ok)}: {d7_checked_ok}", flush=True)
-    print(f"d7_checked_soft n={len(d7_checked_soft)}: {d7_checked_soft}", flush=True)
-
-    print("\n===== SUMMARY =====", flush=True)
-    summary = {
-        "elapsed_s": round(elapsed, 1),
-        "result_text": result_text,
-        "error_frames": error_frames,
-        "set_query_status": set_query_status,
-        "set_query_ok_log": set_query_ok_log,
-        "rowcount": rowcount,
-        "virtual_submit_logs": virtual_submit_logs,
-        "processed_docu_nos": processed_docu_nos,
-        "d7_ok": d7_ok,
-        "d7_soft": d7_soft,
-        "d7_mismatch": d7_mismatch,
-        "d7_checked_ok": d7_checked_ok,
-        "d7_checked_soft": d7_checked_soft,
-        "counts": counts,
-        "checks": checks,
-        "parent_png": str(parent_png) if latest_parent_shot else None,
-        "child_png": str(child_png) if latest_child_shot else None,
-        "row_child_pngs": row_child_pngs,
-    }
-    print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-
-    all_pass = all(checks.values())
-    print(f"\n===== {'ALL PASS' if all_pass else 'SOME FAILED'} =====", flush=True)
+    print(f"\n리포트: {report}", flush=True)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

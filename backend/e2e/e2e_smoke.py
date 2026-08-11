@@ -49,48 +49,15 @@ TODAY_COMPACT = TODAY.replace("-", "")
 GRID_WAIT_TIMEOUT_S = 300  # 5 min — backend drives ERP headlessly for 1st pass
 RESULT_WAIT_TIMEOUT_S = 300  # 5 min — 2nd pass (불공) can also take a while
 
-# ── in-page JS helpers for GLDDOC00300 verify/delete (copied from loop_harness.py) ──
-BTN_BOX_JS = """(sel) => {
-  const b = document.querySelector(sel);
-  if (!b) return null;
-  const r = b.getBoundingClientRect();
-  if (r.width === 0 || r.height === 0) return null;
-  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
-}"""
-
-MASTER_ROWCOUNT_JS = ("() => { try { return window.jQuery(document.querySelectorAll('.dews-ui-grid')[0])"
-                      ".data('dewsControl')._grid.getDataSource().getRowCount(); } catch(e) { return -1; } }")
-
-MASTER_DUMP_JS = """(index) => {
-  try {
-    const ctrl = window.jQuery(document.querySelectorAll('.dews-ui-grid')[index]).data('dewsControl');
-    const g = ctrl._grid;
-    const ds = g.getDataSource();
-    const n = ds.getRowCount();
-    let columns = [];
-    try {
-      const cols = g.getColumns ? g.getColumns() : [];
-      columns = cols.map(c => ({
-        field: c.fieldName || c.name || c.field || null,
-        header: (c.header && (c.header.text || c.header.caption)) || c.caption || c.title || c.headerText || null
-      }));
-    } catch (e) { columns = [{ err: String(e).slice(0, 100) }]; }
-    const rows = n > 0 ? ds.getJsonRows(0, n - 1) : [];
-    return { n, columns, fieldKeys: rows[0] ? Object.keys(rows[0]) : null, rows };
-  } catch (e) { return { n: -1, err: String(e).slice(0, 160) }; }
-}"""
-
-SELECT_MASTER_JS = """(index) => {
-  try {
-    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[index]).data('dewsControl')._grid;
-    const n = g.getDataSource().getRowCount();
-    let via = [];
-    try { if (g.checkAll) { g.checkAll(true); via.push('checkAll'); } } catch (e) {}
-    try { if (g.setAllCheckState) { g.setAllCheckState(true); via.push('setAllCheckState'); } } catch (e) {}
-    try { g.setCurrent({ itemIndex: 0 }); via.push('setCurrent0'); } catch (e) {}
-    return { ok: true, n, via };
-  } catch (e) { return { ok: false, err: String(e).slice(0, 120) }; }
-}"""
+# ── in-page JS helpers for GLDDOC00300 verify/delete ──
+# 단일 소스는 e2e/product_cycle.py 로 이관했다(제품 경로 4종 사이클과 공유). 문자열은 그대로이며
+# 여기서 재노출해 기존 import 경로(`from e2e.e2e_smoke import BTN_BOX_JS, ...`)를 유지한다.
+from e2e.product_cycle import (  # noqa: E402
+    BTN_BOX_JS,
+    MASTER_DUMP_JS,
+    MASTER_ROWCOUNT_JS,
+    SELECT_MASTER_JS,
+)
 
 
 def _row_is_ours(row: dict) -> bool:

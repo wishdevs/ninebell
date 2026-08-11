@@ -106,13 +106,33 @@ def make_run_query_node():
         await emit_step(events, "run_query", "running")
         t0 = time.monotonic()
 
+        # ⚠ 조회 직전 재확정 게이트(2026-08-07): 작성자·회계일은 폼 리로드/change 캐스케이드가
+        #   **첫 검증 통과 후** 값을 비동기로 되돌릴 수 있는 필드다(작성자 = 로그인 사용자
+        #   재주입, 회계일 = 위젯 기본값 복귀 — 08-03·08-06 라이브 실측). 두 스텝은 멱등이고
+        #   팝업이 없으며 INSTANT 첫 확인이 0ms 라, 조회 버튼을 누르기 직전 시점에 한 번 더
+        #   확정해 '검증과 조회 사이' 되돌림 창을 봉합한다.
+        #   불변식: 이 플로우는 작성자를 항상 비운다(작성자 필터 기능이 생기면 이 게이트 제거).
+        r = await steps.clear_writer(page)
+        if not r.get("ok"):
+            await emit_step(events, "run_query", "failed")
+            return {"error": f"조회 직전 작성자 재확정 실패: {r.get('reason')}"}
+        r = await steps.set_period(page, state.get("period_from"), state.get("period_to"))
+        if not r.get("ok"):
+            await emit_step(events, "run_query", "failed")
+            return {"error": f"조회 직전 회계일 재확정 실패: {r.get('reason')}"}
+
         r = await steps.run_query(page)
         if not r.get("ok"):
             await emit_step(events, "run_query", "failed")
             return {"error": r.get("reason") or "조회 실행 실패"}
 
         rowcount = int(r.get("rowcount", 0))
-        await emit_log(events, f"조회 완료 — 대상 전표 {rowcount}건.", "ok")
+        if rowcount == 0:
+            # 0건은 확정 근거까지 남긴다 — steps.run_query 가 전체 대기(HEAVY)를 소진한
+            # 뒤에만 0건을 인정하므로, 이 로그가 곧 '조회 실패가 아니라 진짜 무데이터' 증빙이다.
+            await emit_log(events, "조회 완료 — 대상 전표 0건(전체 대기 소진 후 확정).", "info")
+        else:
+            await emit_log(events, f"조회 완료 — 대상 전표 {rowcount}건.", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "run_query", "done", _ms(t0))
         return {"master_rowcount": rowcount}

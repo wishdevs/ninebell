@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 
 import pytest
 
@@ -47,8 +48,8 @@ def _logs(frames: list[dict]) -> list[str]:
 async def test_validate_default_all_declares_keys():
     node = make_validate_params_node()
     out = await node({"events": _q(), "params": {}})
-    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월).
-    assert out == {"max_rows": None, "period_from": None, "period_to": None}
+    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월) + 디버그 기본 꺼짐(2026-08-10).
+    assert out == {"max_rows": None, "period_from": None, "period_to": None, "debug_mode": False}
     assert_keys_declared(VoucherReceivableState, out)
 
 
@@ -176,10 +177,28 @@ async def test_set_query_passes_docu_types(monkeypatch):
 
 
 # ── run_query ─────────────────────────────────────────────────────────────────
+def _patch_requery_gate_ok(monkeypatch, calls: list | None = None):
+    """조회 직전 재확정 게이트(작성자·회계일 — 2026-08-07) 스텁 — 기본 성공."""
+
+    async def _writer(page):
+        if calls is not None:
+            calls.append("gate_writer")
+        return {"ok": True}
+
+    async def _period(page, start=None, end=None):
+        if calls is not None:
+            calls.append("gate_period")
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer)
+    monkeypatch.setattr(query.steps, "set_period", _period)
+
+
 async def test_run_query_stores_rowcount(monkeypatch):
     async def _ok(page):
         return {"ok": True, "rowcount": 31}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _ok)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert out == {"master_rowcount": 31}
@@ -190,6 +209,7 @@ async def test_run_query_zero_is_ok(monkeypatch):
     async def _zero(page):
         return {"ok": True, "rowcount": 0}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _zero)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert out == {"master_rowcount": 0}
@@ -199,10 +219,49 @@ async def test_run_query_grid_unreadable_errors(monkeypatch):
     async def _fail(page):
         return {"ok": False, "reason": "rowcount 못 읽음", "rowcount": -1}
 
+    _patch_requery_gate_ok(monkeypatch)
     monkeypatch.setattr(query.steps, "run_query", _fail)
     out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
     assert "error" in out and "못 읽" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_run_query_reconfirms_writer_and_period_before_click(monkeypatch):
+    """⚠ 재확정 게이트(2026-08-07): 작성자·회계일은 첫 검증 통과 **후** 비동기 되돌림이 가능한
+    값이라(기본값 재주입/위젯 복귀 — 08-03·08-06 라이브 실측 계열), 조회 클릭 직전에 한 번 더
+    확정한다. 게이트가 조회보다 먼저 오는 순서를 고정한다."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _ok(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "run_query", _ok)
+    out = await make_run_query_node()(
+        {"events": _q(), "page": _FakePage(), "period_from": "20260701", "period_to": "20260831"}
+    )
+    assert out == {"master_rowcount": 3}
+    assert calls == ["gate_writer", "gate_period", "query"]
+
+
+async def test_run_query_gate_failure_errors_without_querying(monkeypatch):
+    """재확정 게이트 실패(재클리어 소진 후에도 재주입 잔존 등)는 잘못된 조건 조회를 막고 에러."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _writer_fail(page):
+        return {"ok": False, "reason": "'작성자' 비움 확인 실패"}
+
+    async def _query(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer_fail)
+    monkeypatch.setattr(query.steps, "run_query", _query)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert "error" in out and "작성자 재확정" in out["error"]
+    assert "query" not in calls  # 게이트 실패 시 조회로 진행하지 않는다.
 
 
 # ── loop_approvals ────────────────────────────────────────────────────────────
@@ -401,17 +460,315 @@ async def test_loop_short_circuits_on_prior_error():
     assert out == {}
 
 
-# ── 정적 소스 스캔 가드: 결제창 상신/보관 클릭 경로가 소스에 아예 없어야 한다 ──────────
-async def test_source_never_clicks_child_submit_or_archive():
-    src = inspect.getsource(vsteps) + "\n" + inspect.getsource(approvals)
-    # 자식 Page(child) 를 클릭하는 코드가 없어야 한다.
-    assert "mouse_click(child" not in src
-    assert "child.click" not in src
-    assert "child.mouse" not in src
-    # 상단 버튼 탐지 JS 는 읽기 전용 — 클릭 호출이 없어야 한다.
+# ── 정적 소스 스캔 가드: 상신 실클릭은 게이트 뒤 단일 경로뿐, 보관 클릭 경로는 없다 ──────
+# (정책 전환 2026-08-07: 상신은 allow_submit 게이트 뒤에서 steps.click_child_submit 로만.)
+async def test_source_child_clicks_only_via_gated_submit():
+    # 게이트 기본값: 상신 실클릭은 opt-in(3종 빌더가 개방) — 기본 False.
+    assert inspect.signature(make_loop_approvals_node).parameters["allow_submit"].default is False
+    # loop 노드는 자식 Page 를 직접 클릭하지 않는다(상신도 steps.click_child_submit 경유).
+    approvals_src = inspect.getsource(approvals)
+    assert "child.mouse" not in approvals_src
+    assert "child.click" not in approvals_src
+    assert "mouse_click" not in approvals_src
+    # steps 의 child 클릭은 click_child_submit 한 곳뿐이다.
+    steps_src = inspect.getsource(vsteps)
+    submit_src = inspect.getsource(vsteps.click_child_submit)
+    assert steps_src.count("child.mouse") == 1 and submit_src.count("child.mouse") == 1
+    # 클릭 대상은 '상신' 텍스트뿐 — 보관을 고르는 코드 경로가 없어야 한다.
+    assert '== "상신"' in submit_src
+    assert '== "보관"' not in steps_src
+    # 상단 버튼 탐지 JS 는 여전히 읽기 전용 — 클릭 호출이 없어야 한다.
     assert ".click(" not in vjs.CHILD_TOP_BUTTONS_JS
-    # loop 노드는 자식 Page 를 직접 클릭하지 않는다(모든 클릭은 부모 page 대상 steps 경유).
-    assert "mouse_click" not in inspect.getsource(approvals)
+
+
+# ── allow_submit 게이트 개방 경로(행위) ──────────────────────────────────────────
+async def test_loop_allow_submit_clicks_submit_and_logs(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    submits: list = []
+
+    async def _submit(c, **kw):
+        submits.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": 1}
+
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+    q = _q()
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": q, "page": object(), "master_rowcount": 2, "max_rows": 2})
+    assert out["processed"] == 2 and len(submits) == 2  # 건별 — 건마다 상신 1회.
+    assert "전자결재 상신 완료" in out["result"]
+    logs = _logs(_drain(q))
+    assert any("상신 완료" in m for m in logs)
+    assert not any("가상 상신" in m for m in logs)  # 게이트 개방 시 '가상' 문구 금지.
+
+
+async def test_loop_allow_submit_skips_submit_on_refdoc_fatal(monkeypatch):
+    # 카드 실운영 조합(allow_submit=True + on_popup): 참조문서 fatal 이면 **상신이 절대 호출되지
+    # 않고** 런이 중단돼야 한다(리뷰 HIGH 2026-08-07 — 첨부 실패 건이 상신되는 사고 방지).
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _ab(page, idx):
+        return "AB1"
+
+    monkeypatch.setattr(approvals.steps, "read_row_abdocu_no", _ab)
+    submit_calls: list = []
+
+    async def _submit(c, **kw):
+        submit_calls.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+
+    async def _on_popup(c, gw, events):
+        return {"fatal": True, "reason": "참조문서 첨부 실패(테스트)", "outcome": "실패"}
+
+    node = make_loop_approvals_node(on_popup=_on_popup, allow_submit=True)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 1,
+            "max_rows": 1,
+            "payment_map": {"AB1": "GW1"},
+        }
+    )
+    assert "참조문서 첨부 실패" in out["error"] and out["processed"] == 0
+    assert submit_calls == []  # fatal 이면 상신 미호출.
+    assert child.closed is True  # 결제창은 finally 에서 닫힌다.
+
+
+async def test_loop_allow_submit_failure_hard_stops(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _submit(c, **kw):
+        return {"ok": False, "reason": "결제창이 닫히지 않았습니다"}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 2, "max_rows": 2})
+    assert "상신 실패" in out["error"] and out["processed"] == 0
+    assert child.closed is True  # 실패해도 finally 경로에서 결제창은 닫는다.
+
+
+async def test_loop_allow_submit_debug_mode_forces_virtual(monkeypatch):
+    # 디버그 모드(로그인 체크박스, 2026-08-10): allow_submit=True 여도 state.debug_mode 가 True 면
+    # 상신을 클릭하지 않고 종전 가상 상신 경로 그대로 — 재조회·재매핑도 없어야 한다(목록 유지).
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    submits: list = []
+
+    async def _submit(c, **kw):
+        submits.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    rq_calls: list = []
+
+    async def _rq(page, **kw):
+        rq_calls.append(1)
+        return {"ok": True, "rowcount": 0}
+
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+    q = _q()
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node(
+        {"events": q, "page": object(), "master_rowcount": 2, "max_rows": 2, "debug_mode": True}
+    )
+    assert out["processed"] == 2
+    assert submits == [] and rq_calls == []  # 상신 미클릭 + 재조회 없음.
+    assert "실제 상신 없음" in out["result"]
+    logs = _logs(_drain(q))
+    assert any("디버그 모드" in m for m in logs)
+    assert any("가상 상신 완료" in m for m in logs)
+
+
+async def test_loop_allow_submit_remaps_indexes_after_rows_disappear(monkeypatch):
+    # 상신된 행은 조회 필터에서 사라진다(2026-08-07 사용자 리포트) — 남은 대상의 인덱스가
+    # 앞으로 당겨져도(재조회+재매핑) 정확한 행을 잡는지 검증. 재매핑이 없으면 2번째 대상이
+    # FI-C 를 집고 3번째는 범위 밖이 된다.
+    child = _RecordingChild()
+    grid = ["FI-A", "FI-B", "FI-C"]  # 현재 그리드 상태(상신 성공분은 즉시 제거).
+    checked: list[int] = []
+
+    async def _key(page, i):
+        return grid[i] if 0 <= i < len(grid) else None
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, i):
+        checked.append(i)
+        return True
+
+    async def _open(page):
+        return child
+
+    async def _submit(c, **kw):
+        grid.pop(checked[-1])  # 상신 성공 → 그 행이 리스트에서 사라진다.
+        return {"ok": True}
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": len(grid)}
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 3})
+    assert "error" not in out and out["processed"] == 3
+    assert out["processed_docu_nos"] == ["FI-A", "FI-B", "FI-C"]
+    assert checked == [0, 0, 0]  # 상신마다 리스트가 줄어 다음 대상은 항상 맨 위 행이다.
+    assert grid == []
+
+
+async def test_loop_allow_submit_key_mismatch_hard_stops(monkeypatch):
+    # 카드(키 선계획) 조합: 재매핑 위치의 행 키가 예상과 다르면(그리드가 기대만큼 줄지 않은
+    # 경우 등) 확정 불일치로 즉시 중단해야 한다 — 엉뚱한 전표 상신 방지.
+    child = _RecordingChild()
+    grid = ["FI-A", "FI-B"]  # ⚠ 상신해도 줄지 않는 그리드(비정상 상황 시뮬레이션).
+
+    async def _key(page, i):
+        return grid[i] if 0 <= i < len(grid) else None
+
+    async def _ab(page, i):
+        return f"AB{i}"
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, i):
+        return True
+
+    async def _open(page):
+        return child
+
+    async def _submit(c, **kw):
+        return {"ok": True}
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": len(grid)}
+
+    async def _on_popup(c, gw, events):
+        return "첨부"
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "read_row_abdocu_no", _ab)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+
+    node = make_loop_approvals_node(on_popup=_on_popup, allow_submit=True)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 2,
+            "payment_map": {"AB0": "GW0", "AB1": "GW1"},
+        }
+    )
+    # 1건째(FI-A) 상신 후 그리드가 줄지 않았다 — 2건째 재매핑 위치(0행)의 키가 FI-A 라서
+    # 예상(FI-B)과 확정 불일치 → 하드 중단, 처리 건수는 1에서 멈춘다.
+    assert "행 재확인 실패" in out["error"]
+    assert out["processed"] == 1 and out["processed_docu_nos"] == ["FI-A"]
+
+
+async def test_run_query_expected_fast_settles_without_exhausting():
+    # 상신 반영 재조회(2026-08-07): 결제창을 닫는 순간 본창이 자동 갱신돼 클릭 전 값이 이미
+    # 기대값과 같다 — 무변화 HEAVY 소진(~7s)을 물지 않아야 한다(사용자 리포트: ~10s 딜레이).
+    # 단 오버레이(F2 리로드)를 관찰하지 못한 경우 **연속 2회 일치**로 확정한다(라이브 회귀:
+    # 리로드 완료 전 확정 → 다음 체크가 씻겨나가 '행 미선택' 결재 시도).
+    class _RQPage:
+        def __init__(self):
+            self.rowcount_reads = 0
+
+        async def evaluate(self, js_src, arg=None):
+            if arg == 0:  # ROWCOUNT_BY_INDEX_JS(마스터 그리드 0)
+                self.rowcount_reads += 1
+                return 5
+            if "loading" in js_src.lower():  # LOADING_OVERLAY_VISIBLE_JS — 오버레이 없음.
+                return False
+            return True  # js_click(BTN_LOOKUP) 등.
+
+    page = _RQPage()
+    t0 = time.monotonic()
+    out = await vsteps.run_query(page, expected=5)
+    assert out == {"ok": True, "rowcount": 5, "basis": "expected"}
+    assert page.rowcount_reads == 3  # 기준 1회 + 연속 일치 2회 — HEAVY 소진(5회) 아님.
+    assert time.monotonic() - t0 < 5.0  # 오버레이 관찰(≤2.5s)+0.6s 폴 — 소진이면 ~9.4s+.
+
+
+# ── click_child_submit 프리미티브(스텁 자식 Page) ────────────────────────────────
+async def test_click_child_submit_clicks_only_submit_then_confirms_and_closes():
+    class _Mouse:
+        def __init__(self, owner):
+            self._o = owner
+
+        async def click(self, x, y):
+            self._o.clicks.append((x, y))
+
+    class _ConfirmBtn:
+        def __init__(self, owner):
+            self._o = owner
+
+        @property
+        def first(self):
+            return self
+
+        async def click(self, timeout=None):
+            self._o.confirm_clicks += 1
+            self._o._closed = True  # 확인 클릭 → 창 닫힘(성공 신호) 시뮬레이션.
+
+    class _Child:
+        def __init__(self):
+            self.clicks: list = []
+            self.confirm_clicks = 0
+            self._closed = False
+            self.mouse = _Mouse(self)
+
+        async def evaluate(self, js_src, arg=None):
+            return [
+                {"text": "상신", "x": 922, "y": 30, "visible": True},
+                {"text": "보관", "x": 860, "y": 30, "visible": True},
+            ]
+
+        def is_closed(self):
+            return self._closed
+
+        def get_by_role(self, role, name=None):
+            assert (role, name) == ("button", "확인")
+            return _ConfirmBtn(self)
+
+    child = _Child()
+    out = await vsteps.click_child_submit(child, cap_ms=3_000, interval_ms=10)
+    assert out["ok"] is True
+    assert child.clicks == [(922, 30)]  # '상신' 좌표만 클릭(보관 미클릭).
+    assert child.confirm_clicks == 1
+
+
+async def test_click_child_submit_fails_without_submit_button():
+    class _Child:
+        async def evaluate(self, js_src, arg=None):
+            return [{"text": "미리보기", "x": 780, "y": 30, "visible": True}]
+
+        @property
+        def mouse(self):
+            raise AssertionError("버튼 미발견 시 클릭 시도 금지")
+
+    out = await vsteps.click_child_submit(_Child(), cap_ms=500, interval_ms=10)
+    assert out["ok"] is False and "찾지 못했" in out["reason"]
 
 
 # ── open_approval: 결재 클릭 '전에' expect_page 를 등록해야 한다(별도 Page 감지 계약) ──
@@ -706,13 +1063,19 @@ class _VisFakeMouse:
 
 class _VisFakePage:
     """ensure_field_visible 테스트용 — FIELD_LABEL_VISIBLE_JS/EXPAND_TOGGLE_RECTS_JS 를
-    시나리오별로 스텁하고 클릭 좌표를 기록한다(어느 토글까지 시도했는지 검증)."""
+    시나리오별로 스텁하고 클릭 좌표를 기록한다(어느 토글까지 시도했는지 검증).
+
+    (2026-07-31 전환) 라벨 가시화 대기가 고정 1s → 실시간(monotonic) 조건 폴링이 돼,
+    wait_for_timeout 이 가짜 시계를 전진시키고 steps.time.monotonic 를 그 시계로 patch 해야
+    '안 드러나는 토글'의 상한 소진이 실시간 낭비 없이 진행된다(_LogPage.install_clock 선례).
+    """
 
     def __init__(self, *, visible_after_clicks: int, toggle_rects: list[dict]) -> None:
         self.visible_after_clicks = visible_after_clicks
         self.toggle_rects = toggle_rects
         self.clicks: list[tuple[int, int]] = []
         self.mouse = _VisFakeMouse(self)
+        self.clock_ms = 0.0
 
     async def evaluate(self, js_src, arg=None):
         if js_src == vjs.FIELD_LABEL_VISIBLE_JS:
@@ -722,33 +1085,52 @@ class _VisFakePage:
         raise AssertionError(f"unexpected evaluate call: {js_src[:60]!r}")
 
     async def wait_for_timeout(self, ms):
-        return None
+        self.clock_ms += ms  # 가짜 실시간 진행 — monotonic 상한 소진용.
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "app.agents.voucher_receivable.steps.time.monotonic", lambda: self.clock_ms / 1_000
+        )
 
 
-async def test_ensure_field_visible_already_visible_clicks_nothing():
+async def test_ensure_field_visible_already_visible_clicks_nothing(monkeypatch):
     """이미 보이면 어떤 토글도 누르지 않는다(역방향 접힘 방지 — 이미 펼쳐진 토글을 다시
     누르면 접힐 수 있다)."""
     page = _VisFakePage(visible_after_clicks=0, toggle_rects=[{"x": 1, "y": 1}])
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형")
     assert ok is True
     assert page.clicks == []
 
 
-async def test_ensure_field_visible_tries_toggles_left_to_right_until_visible():
+async def test_ensure_field_visible_tries_toggles_left_to_right_until_visible(monkeypatch):
     """숨김 상태면 좌→우 순으로 토글을 하나씩 결과검증형으로 눌러본다(여러 토글 시나리오,
     도메인전문가 실측: 확장 토글이 여러 개일 수 있고 어느 것이 목표 필드를 드러내는지 미리
     알 수 없다). 목표가 보이면 그 이상은 누르지 않는다."""
     rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}, {"x": 300, "y": 10}]
     page = _VisFakePage(visible_after_clicks=2, toggle_rects=rects)
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형")
     assert ok is True
     assert page.clicks == [(100, 10), (200, 10)]  # 세 번째 토글은 누르지 않았다.
 
 
-async def test_ensure_field_visible_gives_up_after_max_toggles():
+async def test_ensure_field_visible_returns_immediately_when_toggle_reveals(monkeypatch):
+    """(전환 검증) 토글이 라벨을 즉시 드러내면 종전 고정 1s 를 기다리지 않고 바로 True —
+    폴링 첫 확인에서 성공하므로 가짜 시계가 전혀 진행되지 않아야 한다."""
+    page = _VisFakePage(visible_after_clicks=1, toggle_rects=[{"x": 100, "y": 10}])
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형")
+    assert ok is True
+    assert page.clicks == [(100, 10)]
+    assert page.clock_ms == 0  # 고정 1s 대기가 사라졌다(조건 충족 즉시 진행).
+
+
+async def test_ensure_field_visible_gives_up_after_max_toggles(monkeypatch):
     """어떤 토글로도 목표 필드가 보이지 않으면 False(무한 클릭 금지, max_toggles 상한)."""
     rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}]
     page = _VisFakePage(visible_after_clicks=99, toggle_rects=rects)
+    page.install_clock(monkeypatch)
     ok = await vsteps.ensure_field_visible(page, "전표유형", max_toggles=2)
     assert ok is False
     assert page.clicks == [(100, 10), (200, 10)]
@@ -1014,3 +1396,55 @@ async def test_loop_checked_rowcount_ok_when_exactly_one(monkeypatch):
     out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
     assert out["processed"] == 1
     assert child.closed is True
+
+
+async def test_loop_lazy_key_reads_only_processed_rows(monkeypatch):
+    """매출/매입(on_popup=None): 사전 전량 스캔 없이 처리 행만 lazy 로 key 를 읽는다
+    (2026-07-30 — 대량 조회에서 전 행 getJsonRows 순회가 체크 리셋을 유발한다는 가설 완화)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    reads: list[int] = []
+
+    async def _key(page, idx):
+        reads.append(idx)
+        return f"FI{idx}"
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 5, "max_rows": 1})
+    assert out["processed"] == 1
+    assert reads == [0]  # 이전엔 range(5) 전량 사전 read.
+
+
+async def test_loop_d7_mismatch_recovers_after_recheck(monkeypatch):
+    """D7 체크행수 불일치([]) 1회차 → 재체크로 [idx] 복구되면 배치가 계속된다."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    seq: list[str] = []
+
+    async def _chk(page):
+        seq.append("chk")
+        # 첫 읽기는 빈 배열(지연 재렌더로 리셋된 상황), 재체크 후 읽기는 정상.
+        return {"ok": True, "rows": []} if len(seq) == 1 else {"ok": True, "rows": [0]}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    q = _q()
+    node = make_loop_approvals_node()
+    out = await node({"events": q, "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert out["processed"] == 1 and "error" not in out
+    logs = _logs(_drain(q))
+    assert any("재체크 후 재확인" in m for m in logs)
+
+
+async def test_loop_d7_mismatch_persists_hard_fails(monkeypatch):
+    """재체크 후에도 체크행수가 1이 아니면 기존대로 하드 실패(안전장치 유지)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _chk(page):
+        return {"ok": True, "rows": []}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert "재체크 후에도" in out["error"] and out["processed"] == 0

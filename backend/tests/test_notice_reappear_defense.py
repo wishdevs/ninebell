@@ -84,7 +84,12 @@ async def test_menu_nav_watches_notice_in_background_after_arrival(monkeypatch):
 
 
 async def test_switch_user_type_dismisses_before_and_after_switch(monkeypatch):
-    """전환 실행 경로: 패널 조작 직전 + 변경적용 reload settle 직후에 NOTICE JS 가 조회된다."""
+    """전환 실행 경로: 패널 조작 직전 + 변경적용 reload settle 직후에 NOTICE JS 가 조회된다.
+
+    (2026-07-31 전환) reload settle 은 networkidle(옴니솔에서 못 잡아 상한 12s 소진 패턴)이
+    아니라 조건 폴링 `_wait_reload_after_apply`(마커 소멸 → 아바타 재출현)다 — 계약(순서)은
+    동일: settle **뒤에** 공지 dismiss, 그 뒤에 재확인 패널 오픈.
+    """
     log: list[str] = []
     page = _LogPage(log)
     page.install_clock(monkeypatch)
@@ -96,28 +101,27 @@ async def test_switch_user_type_dismisses_before_and_after_switch(monkeypatch):
     async def _read(p):
         return next(reads)
 
-    async def _switch(p, target):
+    async def _switch(p, target, **_kw):  # **_kw: 라벨 해석 결과(exact=…)를 무시하는 스텁.
         log.append("switch")
         return True
 
-    async def _idle(p, *, timeout_ms=0):
-        log.append("networkidle")
-        return True
+    async def _settle(p):
+        log.append("reload_settle")
 
     monkeypatch.setattr(auth, "open_user_panel", _panel)
     monkeypatch.setattr(auth, "read_current_user_type", _read)
     monkeypatch.setattr(auth, "_switch_user_type_real", _switch)
-    monkeypatch.setattr(auth.waits, "wait_networkidle", _idle)
+    monkeypatch.setattr(auth, "_wait_reload_after_apply", _settle)
 
     await auth.switch_user_type(page, "회계")
 
     i_switch = log.index("switch")
     # ① 패널 조작(전환 실클릭) 직전 관찰창 dismiss — 직전 화면에서 늦게 뜬 공지 흡수.
     assert "notice_js" in log[:i_switch]
-    # ② 변경적용 reload settle(networkidle) 뒤·재확인 패널 열기 전 dismiss.
-    i_idle = log.index("networkidle")
-    i_repanel = log.index("panel", i_idle)  # settle 후 재확인 패널 오픈.
-    assert "notice_js" in log[i_idle:i_repanel]
+    # ② 변경적용 reload settle(조건 폴링) 뒤·재확인 패널 열기 전 dismiss.
+    i_settle = log.index("reload_settle")
+    i_repanel = log.index("panel", i_settle)  # settle 후 재확인 패널 오픈.
+    assert "notice_js" in log[i_settle:i_repanel]
 
 
 async def test_switch_user_type_warm_path_skips_notice_wait(monkeypatch):

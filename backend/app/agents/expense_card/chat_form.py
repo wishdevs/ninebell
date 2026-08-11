@@ -324,7 +324,9 @@ def make_chat_form_node(timeout_s: int | None = None):
         schema["미검증_검색필드"] = SCAFFOLD_SEARCH_FIELDS
         schema["미검증_드롭다운"] = SCAFFOLD_DROPDOWN_FIELDS
         schema["미검증_텍스트"] = SCAFFOLD_TEXT_FIELDS
-        system = _CHAT_SYSTEM_TMPL.replace("{schema}", json.dumps(schema, ensure_ascii=False, indent=2))
+        # 스키마는 system 프롬프트에만 싣는다(compact — indent 는 토큰 낭비). 종전엔 매 턴
+        # chat_decide 의 context 로도 통째 재전송돼 같은 스키마가 요청당 2번 나갔다.
+        system = _CHAT_SYSTEM_TMPL.replace("{schema}", json.dumps(schema, ensure_ascii=False))
 
         http = new_async_client(timeout=60.0)
         chat_prefix = uuid.uuid4().hex  # 이 노드 인스턴스의 채팅 id 접두(FE upsert 키 안정화).
@@ -515,7 +517,7 @@ def make_chat_form_node(timeout_s: int | None = None):
                             http,
                             system=system,
                             history="\n".join(history.splitlines()[-40:]),  # 최근 40줄만(컨텍스트 비대 방지)
-                            context=schema,
+                            context={},  # 필드 스키마는 system 에 이미 포함 — 중복 전송 금지.
                             shot_b64=b64,
                             tools=CHAT_TOOLS,
                             settings=settings,

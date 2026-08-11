@@ -55,3 +55,11 @@ def test_max_rows_below_one_rejected():
 def test_legacy_keys_ignored():
     p = parse_voucher_card_params({"max_rows": 5, "allow_batch": False, "junk": 1})
     assert p.max_rows == 5 and p.accounting_ym is None
+
+
+def test_debug_flag_parsed_from_top_level_only():
+    # 디버그 모드(2026-08-10) — 공유 규율과 동일: 최상위 params["debug"] 만 읽는다.
+    from app.agents.voucher_card.params import parse_voucher_card_params
+
+    assert parse_voucher_card_params({"voucher": {"max_rows": 1}, "debug": True}).debug is True
+    assert parse_voucher_card_params({}).debug is False

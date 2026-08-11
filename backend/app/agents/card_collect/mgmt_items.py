@@ -14,12 +14,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import time
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, latency, verify
 from nbkit.omnisol.codepicker import _picker_search
+
+logger = logging.getLogger("app.agents.card_collect.mgmt_items")
 
 VEHICLE_LABEL = "업무용차량"
 
@@ -79,16 +83,29 @@ _DETAIL_ROWS_DUMP_JS = r"""() => { try {
   return { ok:true, n, rows: rows.map(r => ({ BGACCT_NM: r.BGACCT_NM, BG_NM: r.BG_NM, NOTE_DC: r.NOTE_DC })) };
 } catch (e) { return { ok:false, err: String(e).slice(0, 100) }; } }"""
 
-# 상세행 클릭 좌표(캔버스 그리드 — 헤더 34px + 행 32px, 프로브 검증 뷰포트 1600×1000 기준).
-# 가시영역 밖 행이면 null — 좌표 클릭이 그리드 밖을 눌러 **행 전환이 조용히 실패**한다
-# (실사용 2026-07-29: 10행 이후 클릭 무효 → 직전 행에 머문 채 필터된 팝업 → '목록에 없음').
+# 상세행 클릭 좌표 — **스크롤 오프셋(getTopItem) 반영**(프로브 확정 2026-07-29: 고정 공식은
+# 그리드가 스크롤되면 idx0 클릭이 idx4 를 짚는 등 **엉뚱한 행을 조용히 선택**한다).
+# getTopItem 반환 형태가 미실측(숫자/객체)이라 방어적으로 파싱하고, 파싱 실패 시 0 으로
+# 폴백 — 어긋난 클릭은 호출부의 getCurrent 재검증 + 쓰기 전 패널 기대값 가드가 잡는다.
 _DETAIL_ROW_CLICK_JS = r"""(idx) => {
-  const g = document.querySelectorAll('.dews-ui-grid')[1];
-  if (!g) return null;
-  const r = g.getBoundingClientRect();
-  const y = r.y + 34 + idx * 32 + 16;
-  if (y > r.y + r.height - 8) return null;
-  return { x: Math.round(r.x + 100), y: Math.round(y) };
+  try {
+    const el = document.querySelectorAll('.dews-ui-grid')[1];
+    if (!el) return null;
+    let top = 0;
+    try {
+      const g = window.jQuery(el).data('dewsControl')._grid;
+      const t = g.getTopItem ? g.getTopItem() : 0;
+      top = (typeof t === 'number') ? t
+        : (t && (t.itemIndex != null ? t.itemIndex
+                 : (t.dataRow != null ? t.dataRow : 0))) || 0;
+    } catch (e) { top = 0; }
+    const off = idx - top;
+    if (off < 0) return null;
+    const r = el.getBoundingClientRect();
+    const y = r.y + 34 + off * 32 + 16;
+    if (y > r.y + r.height - 8) return null;
+    return { x: Math.round(r.x + 100), y: Math.round(y) };
+  } catch (e) { return null; }
 }"""
 
 # 상세행 API 선택(setCurrent) + 현재행 확인 — 좌표 클릭이 불가한(스크롤 밖) 행용.
@@ -127,23 +144,28 @@ async def _read_vehicle_field(page: Any) -> dict:
 
 
 async def _select_detail_row(page: Any, idx: int) -> bool:
-    """상세행 선택 + **현재행 검증**. 가시영역 안이면 좌표 클릭(프로브 실측 경로),
-    밖이면 setCurrent(API) 후 스크롤된 위치를 다시 좌표 클릭해 패널 리바인딩을 유발한다.
-    getCurrent 로 의도한 행이 선택됐는지 확인 — 확인 실패면 False(엉뚱한 행 조작 금지)."""
+    """상세행 선택 + **현재행 검증**.
+
+    프로브 확정(2026-07-29 2차): setCurrent 는 스크롤 상태와 무관하게 항상 정확하고,
+    좌표 클릭은 스크롤 오프셋이 어긋나면 엉뚱한 행을 조용히 선택한다. 그래서 순서는
+    ① setCurrent(스크롤·선택 확정) → ② top-aware 좌표로 그 행을 클릭(패널 리바인딩은
+    클릭에서만 실측 확인) → ③ 클릭이 다른 행을 짚었으면 setCurrent 재고정 →
+    ④ getCurrent==idx 최종 검증(실패면 False — 엉뚱한 행 조작 금지)."""
+    r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
+    if not r.get("ok"):
+        return False
+    await asyncio.sleep(0.5)  # 스크롤 정착 대기.
     box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
     if box:
         await mouse_click(page, box["x"], box["y"])
         await asyncio.sleep(0.8)  # 패널 갱신 대기(프로브 실측 타이밍).
+        if await page.evaluate(_DETAIL_CURRENT_JS) != idx:
+            # 클릭이 다른 행을 짚음(오프셋 계산 어긋남) — 재고정 후 패널 가드에 위임.
+            r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
+            if not r.get("ok"):
+                return False
+            await asyncio.sleep(0.8)
     else:
-        # 스크롤 밖 — setCurrent 로 스크롤·선택 후, 가시화된 좌표를 재계산해 클릭
-        # (패널 리바인딩은 클릭에서만 실측 확인됐다).
-        r = await page.evaluate(_DETAIL_SET_CURRENT_JS, idx)
-        if not r.get("ok"):
-            return False
-        await asyncio.sleep(0.5)
-        box = await page.evaluate(_DETAIL_ROW_CLICK_JS, idx)
-        if box:
-            await mouse_click(page, box["x"], box["y"])
         await asyncio.sleep(0.8)
     cur = await page.evaluate(_DETAIL_CURRENT_JS)
     return cur == idx
@@ -157,19 +179,85 @@ async def _open_vehicle_popup(page: Any) -> dict:
     if not box:
         return {"ok": False, "reason": "업무용차량 돋보기를 찾지 못했습니다(관리항목 패널에 해당 행 없음)"}
     await mouse_click(page, box["x"], box["y"])
-    await asyncio.sleep(1.2)
-    dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS)
+    # 무엇을 기다리나: 차량 팝업 **오픈 + 목록 행 도착**(종전 고정 1.2s 후 1회 덤프). 덤프
+    # ok(팝업+그리드 부착)이고 행이 있으면 즉시 진행. 필터로 정말 0건인 팝업은 상한(1.5s ×
+    # latency 배율, 실시간 monotonic) 소진 후 마지막 덤프로 진행 — 기존 재검색 폴백 수순 유지.
+    dump: dict = {}
+    t0 = time.monotonic()
+    cap_s = latency.budget_ms(1_500) / 1_000
+    while True:
+        dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS) or {}
+        if dump.get("ok") and (dump.get("rows") or []):
+            break
+        if time.monotonic() - t0 >= cap_s:
+            break
+        await asyncio.sleep(0.3)
     if not dump.get("ok"):
+        # 덤프 실패(err)여도 돋보기 클릭으로 팝업은 열렸을 수 있다 — 방치하면 다음 조작 오염.
+        await _close_residual_popup(page)
         return {"ok": False, "reason": f"차량 팝업 덤프 실패: {dump.get('reason') or dump.get('err')}"}
     return dump
 
 
+async def _poll_vehicle_reflected(page: Any, code: str, *, cap_ms: int = 2_400) -> dict:
+    """팝업 적용(더블클릭/'적용') 후 패널 readback 이 ``code`` 로 반영될 때까지 실시간 폴링.
+
+    종전 고정 1.2s 후 1회 readback 대체 — 무엇을 기다리나: 팝업 닫힘 + 관리항목 패널
+    리바인딩으로 업무용차량 값이 배정 코드로 붙는 것(성공 판정과 동일 신호라 조기 진행
+    위험 없음). 반영 즉시 마지막 readback 을 반환하고, 미반영이면 상한(latency 배율 확대,
+    monotonic) 소진 후 마지막 readback 반환 — 호출부의 코드 일치 판정(실패 보고)은 기존
+    그대로. _read_vehicle_field 자체가 스크롤 정착 0.3s 를 포함해 폴 간격을 겸한다.
+    """
+    t0 = time.monotonic()
+    cap_s = latency.budget_ms(cap_ms) / 1_000
+    rb: dict = {}
+    while True:
+        rb = await _read_vehicle_field(page) or {}
+        if rb.get("found") and (rb.get("code") or "") == code:
+            return rb
+        if time.monotonic() - t0 >= cap_s:
+            return rb
+
+
 async def _close_popup(page: Any) -> None:
+    """차량 팝업 닫기 + **팝업 개수 감소** 확인(card_collect steps._close_picker_verified 이식).
+
+    종전(닫기 JS + 고정 0.5s + 예외 무음)은 닫힘을 확인하지 않았다 — 안 닫힌 '업무용 차량'
+    팝업이 남으면 _VEHICLE_POPUP_DUMP_JS(마지막 가시 k-window)와 후속 상세행 클릭이 스테일
+    창을 읽어 조용히 오작동한다(2026-08-07 감사). 미감소는 최소 warn 으로 남긴다(soft —
+    이 닫기는 정리 조치이고 후속 스텝이 각자 자기 조건을 확인한다).
+    """
     try:
+        before = await page.evaluate(js_lib.POPUP_COUNT_JS)
+        if isinstance(before, int) and before <= 0:
+            return  # 닫을 팝업이 없다.
         await page.evaluate(js_lib.PICKER_CLOSE_JS)
-        await asyncio.sleep(0.5)
-    except Exception:  # noqa: BLE001 — 닫기 실패는 다음 오픈 시도에서 드러난다.
-        pass
+        if not isinstance(before, int):
+            await asyncio.sleep(0.5)  # 개수 미확인 세션 — 종전 정착 대기 폴백(확인 불가).
+            return
+        gone = await verify.confirm_popup_count(
+            page, less_than=before, timing=verify.ASYNC,
+            unknown_when=lambda v: not isinstance(v, int),
+        )
+        if not gone:
+            logger.warning("차량 팝업이 닫히지 않았을 수 있습니다 — %s", gone.reason)
+    except Exception:  # noqa: BLE001 — 닫기 실패는 warn 후 다음 오픈 시도에서 드러난다.
+        logger.warning("차량 팝업 닫기 실패(무시) — 다음 오픈 시도에서 드러난다", exc_info=True)
+
+
+async def _close_residual_popup(page: Any) -> None:
+    """실패 분기 정리 — 차량 팝업이 남아 있으면 검증된 닫기(voucher steps._fail_close 이식).
+
+    반영 실패(더블클릭 미적용 등)·덤프 실패 후 팝업을 열어 둔 채 다음 배정으로 넘어가면
+    잔존 팝업이 상세행 선택·돋보기 클릭을 가로채 연쇄 실패하거나 엉뚱한 행을 조작한다.
+    """
+    try:
+        dump = await page.evaluate(_VEHICLE_POPUP_DUMP_JS)
+    except Exception:  # noqa: BLE001 — 잔존 확인 실패가 원래 실패 사유를 덮지 않는다.
+        return
+    if isinstance(dump, dict) and dump.get("reason") == "no-popup":
+        return
+    await _close_popup(page)
 
 
 async def survey_vehicle_targets(page: Any) -> dict:
@@ -271,7 +359,6 @@ async def fill_vehicle(
         rect = await page.evaluate(_POPUP_ROW_RECT_JS, pick_i)
         if rect:
             await page.mouse.dblclick(rect["x"], rect["y"])
-            await asyncio.sleep(1.2)
         else:
             sel = await page.evaluate(js_lib.PICKER_SELECT_JS, pick_i)
             if not sel.get("ok"):
@@ -284,11 +371,14 @@ async def fill_vehicle(
                 failed.append({"row": row_no, "reason": "'적용' 버튼 없음"})
                 continue
             await mouse_click(page, btn["x"], btn["y"])
-            await asyncio.sleep(1.2)
-        rb = await _read_vehicle_field(page)
+        # 반영 폴링(종전 고정 1.2s 후 1회 readback) — 패널 readback 코드 일치가 신호.
+        rb = await _poll_vehicle_reflected(page, str(vehicle.get("code") or ""))
         if rb.get("found") and (rb.get("code") or "") == (vehicle.get("code") or ""):
             done.append(row_no)
         else:
+            # 더블클릭/'적용'이 안 붙었으면 팝업이 열린 채 남았을 수 있다 — 정리하지 않으면
+            # 다음 배정의 행 선택·돋보기 클릭이 잔존 창에 먹혀 연쇄 실패한다(_fail_close 규율).
+            await _close_residual_popup(page)
             failed.append({
                 "row": row_no,
                 "reason": f"반영 확인 실패(기대 {vehicle.get('code')} / 실제 {rb.get('code')!r})",

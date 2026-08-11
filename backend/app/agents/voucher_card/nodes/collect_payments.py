@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 
+from app.agents.voucher_receivable import steps as shared_steps
 from app.live.events import emit_log, emit_step
 from nbkit.patterns import emit_shot
 
@@ -42,6 +43,26 @@ def make_collect_payments_node():
             await emit_step(events, "collect_payments", "done", _ms(t0))
             return {"payment_map": {}, "payment_map_count": 0}
 
+        # 결의서번호(ABDOCU_NO) 보유 행이 0건이면 결재 대상 자체가 없다 — 결의서조회승인
+        # 다중탭을 열 필요 없이 즉시 종료 경로로 보낸다(사용자 확정 2026-07-30: 불필요한
+        # 탭 이동·수집 제거). 판정 실패(ok:False)는 기존 경로(수집 진행)로 폴백.
+        ab = await shared_steps.count_rows_with_abdocu(page)
+        if ab.get("ok") and int(ab.get("withAb", 0)) == 0:
+            await emit_log(
+                events,
+                f"조회 {ab.get('n', 0)}건 모두 결의서번호가 없어(직접 전표) 결재 대상이 "
+                "없습니다 — 결의서조회승인 수집을 생략하고 종료합니다.",
+                "info",
+            )
+            await emit_step(events, "collect_payments", "done", _ms(t0))
+            return {"payment_map": {}, "payment_map_count": 0}
+        if not ab.get("ok"):
+            await emit_log(
+                events,
+                f"결의서번호 사전 판정 실패({ab.get('reason')}) — 기존대로 수집을 진행합니다.",
+                "warn",
+            )
+
         await emit_log(events, "결의서조회승인 탭을 열어 결재번호를 수집합니다…", "action")
         # 화면 도착 확인(하드) — 탭이 안 열렸는데 전표조회승인 화면을 결의서 화면으로 착각하고
         # 조작하면 조회조건이 엉뚱한 폼에 들어간다.
@@ -51,23 +72,34 @@ def make_collect_payments_node():
             return {"error": opened.get("reason") or "결의서조회승인 탭을 열지 못했습니다."}
 
         # 조회폼 세팅 — 각 스텝이 '세팅 → 반영 확인'까지 끝낸 뒤 결과를 돌려준다.
-        # 결의부서/결의자/회계일은 결과 범위만 넓히는 보조 조건이라 실패해도 진행(warn)하지만,
-        # **결의구분=카드는 수집 대상 자체를 정의**하므로 확인 실패 시 조회하지 않고 중단한다
-        # (틀린 결의구분으로 수집된 맵은 loop_approvals 가 전건을 '맵에 없음'으로 건너뛴다).
-        # ⚠ 결의부서는 '보조 조건'이 아니라 **수집 대상을 정의**한다(2026-07-27 라이브 규명):
-        #   전체선택이 안 되면 로그인 부서(예: 회계팀)로 좁혀져, 전표조회승인 대상 행들의
-        #   결의서번호와 하나도 겹치지 않는 맵이 만들어지고(실측: 맵 4건·커버 0건) 전 행이
-        #   '맵에 없음'으로 건너뛰어진다 = 아무것도 처리하지 못한다. 그래서 하드 실패다.
+        # 격상 기준(2026-08-07 사용자 확정): **수집 대상 집합을 정의하는 값**(결의부서·결의자·
+        # 회계일·결의구분)의 확인된 미반영은 전부 하드 실패다 — 조용히 좁혀진/어긋난 범위로
+        # 수집하면 결재번호 맵이 대상과 어긋나 하류가 전 행을 '맵에 없음'으로 건너뛴다
+        # (2026-07-27 결의부서 라이브 규명: 맵 4건·커버 0건). 리더 확인 불가(unknown)만 warn.
         if not await steps.set_collect_dept_all(page):
             await emit_step(events, "collect_payments", "failed")
             return {
                 "error": "결의부서 전체선택을 확인하지 못했습니다 — 로그인 부서로 좁혀진 채 "
                 "수집하면 결재번호 맵이 대상과 어긋나므로 중단합니다.",
             }
-        if not await steps.clear_collect_writer(page):
-            await emit_log(events, "결의자 비움 미확인(로그인 계정으로 좁혀질 수 있음).", "warn")
-        if not await steps.set_collect_period(page, state.get("period_from"), state.get("period_to")):
-            await emit_log(events, "회계일 기간 미확인(화면 기본값=당월으로 진행).", "warn")
+        r = await steps.clear_collect_writer(page)
+        if not r.get("ok"):
+            await emit_step(events, "collect_payments", "failed")
+            return {
+                "error": "결의자 비움을 확인하지 못했습니다(재클리어 소진) — 로그인 계정으로 "
+                f"좁혀진 채 수집하면 맵이 대상과 어긋나므로 중단합니다: {r.get('reason')}",
+            }
+        if r.get("warn"):
+            await emit_log(events, f"결의자 비움 확인 불가(리더) — {r['warn']}", "warn")
+        r = await steps.set_collect_period(page, state.get("period_from"), state.get("period_to"))
+        if not r.get("ok"):
+            await emit_step(events, "collect_payments", "failed")
+            return {
+                "error": "회계일 기간 반영을 확인하지 못했습니다(재세팅 소진) — 두 화면의 "
+                f"기간이 어긋난 수집을 막기 위해 중단합니다: {r.get('reason')}",
+            }
+        if r.get("warn"):
+            await emit_log(events, f"회계일 기간 확인 불가(리더) — {r['warn']}", "warn")
         if not await steps.set_collect_gubun_card(page):
             await emit_step(events, "collect_payments", "failed")
             return {

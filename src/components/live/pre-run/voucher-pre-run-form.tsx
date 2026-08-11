@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import { FormField } from '@/components/ui/form-field';
 import { SectionCard } from '@/components/ui/section-card';
+import { useDebugMode } from '@/lib/debug-mode';
 import type { PreRunFormProps } from './index';
 
 /**
@@ -57,6 +58,7 @@ function seedRange(initial: Record<string, unknown> | undefined): { from: string
 }
 
 export function VoucherPreRunForm({ agent, disabled, initialParams, onStart }: PreRunFormProps) {
+  const debugMode = useDebugMode();
   const [range] = useState(() => seedRange(initialParams));
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);
@@ -84,8 +86,17 @@ export function VoucherPreRunForm({ agent, disabled, initialParams, onStart }: P
           className="text-foreground-tertiary mt-0.5 shrink-0"
         />
         <p className="text-foreground-tertiary text-xs leading-relaxed">
-          지정한 기간의 대상 전표를 순회하며 결제창을 열어 확인합니다.{' '}
-          <b>실제 상신·저장은 하지 않습니다.</b>
+          {debugMode ? (
+            <>
+              <b>디버그 모드 — 상신 버튼을 클릭하지 않습니다.</b> 결제창 확인(가상 상신)까지만
+              수행하며, 전표는 목록에 그대로 남습니다.
+            </>
+          ) : (
+            <>
+              지정한 기간의 대상 전표를 순회하며 결제창을 열어 <b>전자결재로 실제 상신합니다.</b>{' '}
+              전표 저장·삭제는 하지 않습니다.
+            </>
+          )}
         </p>
       </div>
 

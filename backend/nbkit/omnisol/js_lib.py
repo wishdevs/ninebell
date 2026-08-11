@@ -14,6 +14,8 @@ RealGrid 는 캔버스라 DOM 추출이 안 통한다 → 그리드 인스턴스
 
 from __future__ import annotations
 
+from nbkit.browser.detection import DIALOG_SELECTORS
+
 # ══════════════════════════════════════════════════════════════════════════════
 # [A] 코어 — P1 (grid/provider·omnisol/auth·navigator·profile) 가 사용
 # ══════════════════════════════════════════════════════════════════════════════
@@ -42,6 +44,16 @@ GET_JSON_ROWS_JS = """({ index, start, end }) => {
   } catch (e) { return null; }
 }"""
 
+# 그리드[index] 의 화면 bbox 읽기 — 첫 행 실클릭 좌표를 뷰포트와 무관하게 계산하는 근거.
+# (고정 좌표는 뷰포트가 다르면(라이브 1440×900) 빗나간다 — selectors.VIEWPORT 주석 참조.)
+# arg = index. 반환 {x, y, width, height} | null(그리드 없음/0크기 → 호출자가 폴백).
+GRID_RECT_BY_INDEX_JS = (
+    "(index) => { const g = document.querySelectorAll('.dews-ui-grid')[index];"
+    " if (!g) return null; const r = g.getBoundingClientRect();"
+    " if (!r.width || !r.height) return null;"
+    " return { x: r.x, y: r.y, width: r.width, height: r.height }; }"
+)
+
 # 그리드[index] 의 현재 행 앵커링(키보드 폴백 방법B 시작점). arg = {index, itemIndex}.
 # ⚠ setCurrent 는 디테일 로딩을 트리거하지 않는다 — 앵커링 전용. 로딩은 trusted 키보드로.
 SET_CURRENT_BY_INDEX_JS = """({ index, itemIndex }) => {
@@ -53,13 +65,14 @@ SET_CURRENT_BY_INDEX_JS = """({ index, itemIndex }) => {
 
 # ── 메뉴 진입 상태 판별 ────────────────────────────────────────────────────────
 # 그리드가 떴는지 / "메뉴를 찾을 수 없습니다" 권한 팝업인지. {grids, notFound, popup}.
-MENU_CHECK_JS = """() => {
+# 다이얼로그 목록은 detection.DIALOG_SELECTORS 단일 소스를 임베드한다(별도 하드코딩 금지).
+MENU_CHECK_JS = f"""() => {{
   const grids = document.querySelectorAll('.dews-ui-grid').length;
-  const dlg = [...document.querySelectorAll('.k-window, [role=dialog], .modal')].find(x => x.offsetParent !== null);
+  const dlg = [...document.querySelectorAll('{DIALOG_SELECTORS}')].find(x => x.offsetParent !== null);
   const popup = dlg ? (dlg.innerText || '').trim() : '';
   const notFound = /찾을 수 없|권한이 없|접근/.test(popup) && /메뉴|모듈/.test(popup);
-  return { grids, notFound, popup: popup.replace(/\\n+/g, ' ').slice(0, 50) };
-}"""
+  return {{ grids, notFound, popup: popup.replace(/\\n+/g, ' ').slice(0, 50) }};
+}}"""
 
 # ── 프로필(이름·부서·사용자유형) best-effort 추출 ──────────────────────────────
 # 아바타 JS 폴백 클릭 — 실클릭 실패 시에만. 앵커(a.user-pic) 우선, 그다음 기본 아바타 이미지,
@@ -71,13 +84,71 @@ AVATAR_CLICK_JS = (
     "|| [...document.querySelectorAll('header img, img[alt]')].pop(); if (a) a.click(); }"
 )
 
-PROFILE_JS = r"""() => {
+# ── 사용자유형 select 탐색(단일 헬퍼) ──────────────────────────────────────────
+# ⚠ 종전 탐색조건은 "옵션 텍스트에 '사용자' 포함" 이었다. 2026-08-01 라이브 실측에서 옵션이
+#   `회계사용자(예외)` / `인사사용자(예외)` / **`SCM-구매`** 3개로 늘었고 앞으로 더 늘어난다 —
+#   '○○사용자' 접미사 가정은 유형이 추가될수록 깨진다. 그래서 라벨 텍스트에 의존하지 않는
+#   신호를 우선한다:
+#     1순위 `#ch_group` — 실측 확정 id(프로브 e2e/user_type_selector_probe.py). 라벨이 전부
+#           바뀌어도 불변.
+#     2순위 **사용자 패널 스코프 내 select** — 아바타로 여는 패널(.user-info-box 계열)에는
+#           유형 선택기 외의 select 가 없다(실측). id 가 바뀌어도 '패널 안의 select' 라는
+#           구조적 신호는 남는다.
+#     3순위(최후) 옵션 중 '사용자' 포함 — 종전 방식. 위 둘이 실패한 스킨 변경 상황의 안전망일
+#           뿐이며, 이 조건에 미래를 걸지 않는다.
+#   in-page 함수 `__utSelect()` 로 노출하며, 이 파일의 사용자유형 리더 전부가 이걸 쓴다.
+_UT_SELECT_FINDER_JS = r"""
+  const __utSelect = () => {
+    const byId = document.getElementById('ch_group');
+    if (byId && byId.tagName === 'SELECT') return byId;
+    const panel = document.querySelector('.user-info-box, .user-info-change, .user-info');
+    if (panel) {
+      const inPanel = [...panel.querySelectorAll('select')]
+        .filter(s => s.options && s.options.length >= 2);
+      if (inPanel.length) return inPanel[0];
+    }
+    return [...document.querySelectorAll('select')]
+      .find(s => [...s.options].some(o => /사용자/.test(o.text || ''))) || null;
+  };
+"""
+
+# ── 사용자유형 select → kendo 위젯 wrapper 역참조 ──────────────────────────────
+# 화면에 실제로 보이는 것은 hidden select 가 아니라 kendo DropDownList 의 wrapper(.k-dropdown)다.
+# 종전에는 `.k-dropdown` 중 innerText 가 /사용자/ 매치하는 것을 텍스트로 스캔했는데, 현재 선택이
+# `SCM-구매`(‘사용자’ 없음)면 **전부 탈락**해 드롭다운을 못 열었다(H1 근본원인, 2026-08-01 실측:
+# UT_DROPDOWN_BOX_JS→null / UT_DISPLAY_JS→'' 인데 위젯 자체는 정상 렌더).
+# → 표시 라벨과 무관하게 select 에서 위젯을 역참조한다(프로브 검증 원리, via='kendo-widget').
+# kendo API 부재 시 폴백: 인접 형제 `.k-dropdown` → 조상 스코프 스캔(둘 다 텍스트 비의존).
+_UT_WRAPPER_JS = r"""
+  const __utWrapper = (sel) => {
+    try {
+      const w = window.jQuery ? window.jQuery(sel).data('kendoDropDownList') : null;
+      if (w && w.wrapper && w.wrapper[0]) return w.wrapper[0];
+    } catch (e) {}
+    let node = sel.nextElementSibling;
+    for (let i = 0; i < 5 && node; i++) {
+      if (node.classList && node.classList.contains('k-dropdown')) return node;
+      node = node.nextElementSibling;
+    }
+    let anc = sel.parentElement;
+    for (let i = 0; i < 5 && anc; i++) {
+      const found = anc.querySelector('.k-dropdown');
+      if (found) return found;
+      anc = anc.parentElement;
+    }
+    return null;
+  };
+"""
+
+PROFILE_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
   const out = { display_name: "", department: "", user_types: [] };
   const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   // '/' 포함 전체 부서명 포착(예 '인사/기획팀'). '/'가 빠지면 접두부(인사)가 잘린다.
   const deptRe = /([가-힣A-Za-z0-9][가-힣A-Za-z0-9/]*(?:팀|부서|부|실|본부|센터|그룹|사업부|TF))/;
-  const sel = [...document.querySelectorAll('select')]
-    .find(s => [...s.options].some(o => /사용자/.test(o.text || '')));
+  const sel = __utSelect();
   if (sel) out.user_types = [...sel.options].map(o => (o.text || '').trim()).filter(Boolean);
   // 1) 전용 엘리먼트(.dept-name) — 가장 정확(슬래시 포함 전체 부서명, 실측 확인).
   const deptEl = document.querySelector('.user-info .dept-name, .dept-name');
@@ -103,34 +174,119 @@ PROFILE_JS = r"""() => {
   if (nameEl) out.display_name = ((nameEl.innerText || nameEl.textContent) || '').trim().slice(0, 40);
   return out;
 }"""
+)
 
 # ── 사용자유형 전환(실클릭 좌표만 반환; 실제 클릭은 page.mouse) ────────────────
 # ⚠ JS .click()/위젯 .value() 는 더존 변경적용 핸들러를 못 깨운다 → 좌표 실클릭 필수.
+
+# 사용자 패널(아바타로 여는 .user-info-box) 열림 여부 — open_user_panel 을 idempotent 하게
+# 만드는 신호(H0). 아바타 클릭은 **토글**이라 이미 열린 패널을 또 누르면 닫힌다(2026-08-01
+# 실측: ensure_logged_in→read_profile 이 패널을 연 채 남기고, switch_user_type 첫 줄의
+# open_user_panel 이 그것을 닫아 attempt 1 을 통째로 낭비 — 패널 rect 0/0/0/0 확인).
+# ⚠ 컨테이너는 **실측 확인된 `.user-info-box` 하나만** 본다 — 오탐(항상 보이는 헤더 요소를
+# '패널 열림'으로 읽음)은 아바타를 영영 안 눌러 전환 자체를 막지만, 미탐(false)은 종전대로
+# 클릭하는 안전한 퇴화일 뿐이다. 비대칭 위험이라 미검증 셀렉터를 더 얹지 않는다.
+USER_PANEL_OPEN_JS = r"""() => {
+  const box = document.querySelector('.user-info-box');
+  if (!box || box.offsetParent === null) return false;
+  const r = box.getBoundingClientRect();
+  return !!(r.width && r.height);
+}"""
+
 UT_DROPDOWN_BOX_JS = (
-    "() => { const d=[...document.querySelectorAll('.k-dropdown')].find(e=>e.offsetParent!==null"
-    " && /사용자/.test(e.innerText||'')); if(!d) return null; const r=d.getBoundingClientRect();"
-    " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + _UT_WRAPPER_JS
+    + r"""
+  const sel = __utSelect();
+  if (!sel) return null;
+  const w = __utWrapper(sel);
+  if (!w) return null;
+  const r = w.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
 )
-UT_OPTION_BOX_JS = (
-    "(target) => { const li=[...document.querySelectorAll('li.k-item, .k-list li, ul[role=listbox] li')]"
-    ".find(e=>e.offsetParent!==null && new RegExp(target+'사용자').test(e.innerText||''));"
-    " if(!li) return null; const r=li.getBoundingClientRect();"
-    " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
-)
+
+# 열린 드롭다운에서 **라벨 원문**(인자)에 해당하는 li 좌표. 종전 `new RegExp(target+'사용자')`
+# 는 두 가지로 깨졌다: ① 'SCM-구매' 처럼 접미사가 없는 유형은 절대 매칭 불가(실측: li 텍스트
+# 'SCM-구매 3'), ② 라벨의 정규식 메타문자('(예외)' 의 괄호 등)가 패턴으로 해석된다.
+# → 정규식 삽입 폐기. 공백 축약 정규화 후 ① 완전일치 → ② 접두일치(나머지가 공백/숫자뿐 —
+#   실측된 인덱스 접미사 ' 3' 만 허용) → ③ 포함 순으로 좁히고, **후보가 정확히 1개일 때만**
+#   좌표를 돌려준다(0개=미발견, 2개 이상=모호 → 임의 선택 금지).
+UT_OPTION_BOX_JS = r"""(label) => {
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const want = norm(label);
+  if (!want) return null;
+  const items = [...document.querySelectorAll('li.k-item, .k-list li, ul[role=listbox] li')]
+    .filter(e => e.offsetParent !== null)
+    .map(e => ({ el: e, text: norm(e.innerText) }));
+  let hit = items.filter(o => o.text === want);
+  if (hit.length !== 1) {
+    hit = items.filter(
+      o => o.text.startsWith(want) && /^[\s\d]*$/.test(o.text.slice(want.length))
+    );
+  }
+  if (hit.length !== 1) hit = items.filter(o => o.text.includes(want));
+  if (hit.length !== 1) return null;
+  const r = hit[0].el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}"""
+
 UT_APPLY_BOX_JS = (
     "() => { const a=[...document.querySelectorAll('button.apply, button')].find(e=>e.offsetParent!==null"
     " && (e.innerText||'').trim()==='변경적용'); if(!a) return null; const r=a.getBoundingClientRect();"
     " return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)}; }"
 )
+
+# 드롭다운 **표시 텍스트**(선택 반영 확인용). kendo wrapper 의 innerText 가 1순위,
+# 위젯/wrapper 부재(kendo API 없음·스킨 변경) 시에는 native select 의 선택 옵션 텍스트로
+# 폴백한다 — kendo 는 항목 선택 시 하부 select 를 갱신하므로 '선택이 반영됐는가' 신호로 동등.
 UT_DISPLAY_JS = (
-    "() => { const d=[...document.querySelectorAll('.k-dropdown')].find(e=>e.offsetParent!==null"
-    " && /사용자/.test(e.innerText||'')); return d?(d.innerText||'').trim():''; }"
-)
-# 현재 사용자유형 읽기(전환 안 함) — 숨은 native select 의 선택 옵션 텍스트.
-USER_TYPE_READ_JS = """() => {
-  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => /사용자/.test(o.text)));
-  return sel ? sel.options[sel.selectedIndex].text.trim() : '?';
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + _UT_WRAPPER_JS
+    + r"""
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const sel = __utSelect();
+  if (!sel) return '';
+  const w = __utWrapper(sel);
+  if (w) { const t = norm(w.innerText); if (t) return t; }
+  const o = sel.options[sel.selectedIndex];
+  return o ? norm(o.text) : '';
 }"""
+)
+
+# 현재 사용자유형 읽기(전환 안 함) — select 의 선택 옵션 텍스트. 없으면 '?'.
+USER_TYPE_READ_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
+  const sel = __utSelect();
+  if (!sel) return '?';
+  const o = sel.options[sel.selectedIndex];
+  return o ? String(o.text || '').replace(/\s+/g, ' ').trim() : '?';
+}"""
+)
+
+# 옵션 목록 리더 — 매칭·진단의 **단일 소스**. 유형이 추가돼도 코드를 고칠 필요가 없게,
+# 별칭 해석(auth.resolve_user_type_label)과 로그가 모두 이 반환값만 본다.
+# 반환 {selectId, selectedIndex, options:[라벨…]} | null(선택기 없음 = 패널 미개방 등).
+USER_TYPE_OPTIONS_JS = (
+    "() => {\n"
+    + _UT_SELECT_FINDER_JS
+    + r"""
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const sel = __utSelect();
+  if (!sel) return null;
+  return {
+    selectId: sel.id || '',
+    selectedIndex: sel.selectedIndex,
+    options: [...sel.options].map(o => norm(o.text)),
+  };
+}"""
+)
 
 # ── 공장(플랜트) 확인 — 조회 폼 값 또는 타이틀에 '나인벨' 포함 여부 ──────────────
 PLANT_CHECK_JS = (
@@ -438,12 +594,23 @@ def picker_btn_js(field_id: str) -> str:
     }}"""
 
 
+# 코드피커 팝업 로케이터 프리앰블 — "최근 열린 non-법인카드 k-window"(피커 팝업은 항상
+# 마지막에 열린다) 탐색 + 공백 정리 헬퍼 c. PICKER_* 상수 전부가 이 프리앰블을 공유한다 —
+# CARD_WIN/picker_btn_js 선례처럼 탐색 규칙을 여기 한 곳에만 둔다(9회 복붙 제거).
+_PICKER_POP_PREAMBLE = (
+    "  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();\n"
+    "  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)\n"
+    "    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];"
+)
+
+
+def _picker_pop_js(params: str, body: str) -> str:
+    """PICKER_* 상수 빌더 — 프리앰블(팝업 로케이터 p + 헬퍼 c) 1곳 + 본문 결합."""
+    return f"({params}) => {{\n{_PICKER_POP_PREAMBLE}\n{body}\n}}"
+
+
 # 코드피커 팝업(최근 열린 non-법인카드 k-window) keyword 검색 세팅. 인자 q.
-PICKER_SEARCH_JS = """(q) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_SEARCH_JS = _picker_pop_js("q", """  if (!p) return { ok:false, reason:'no-pop' };
   // 팝업별 검색창 id 상이: 예산단위/계정=#keyword, 프로젝트=#s_search_key, 거래처=#customTextBox.
   // 알려진 id 우선(card 동작 보존), 없으면 search_key/keyword/customText 접미·접두 → 첫 보이는 text input.
   const kw = p.querySelector('#keyword') || p.querySelector('#s_search_key')
@@ -457,31 +624,21 @@ PICKER_SEARCH_JS = """(q) => {
   // 셀 에디터(showEditor)로 연 팝업(거래처 customTextBox 등)은 포커스가 그리드 캔버스에 있어
   // focus 없이 Enter 를 누르면 검색이 트리거되지 않는다(프로브 trip_probe3 실측 2026-07-06).
   kw.focus();
-  return { ok:true, field: kw.id || '(no-id)' };
-}"""
+  return { ok:true, field: kw.id || '(no-id)' };""")
 
 # 코드피커 팝업 옵션 읽기(인자 [codeField,nameField,limit]). 반환 {rows, options:[{code,name}]}.
-PICKER_READ_JS = """([codeField, nameField, limit]) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { rows:-1, reason:'no-pop' };
+PICKER_READ_JS = _picker_pop_js("[codeField, nameField, limit]", """  if (!p) return { rows:-1, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const n = g.getDataSource().getRowCount(); const out = [];
     for (let i=0; i<Math.min(n, limit||n); i++) out.push({
       i, code: String(g.getValue(i, codeField)), name: String(g.getValue(i, nameField)) });
     return { rows:n, options: out };
-  } catch(e) { return { rows:-1, err:String(e).slice(0,60) }; }
-}"""
+  } catch(e) { return { rows:-1, err:String(e).slice(0,60) }; }""")
 
 # 코드피커 팝업 다중필드 전량 읽기(인자 [fields, limit]). limit 0/null = 전량.
 # getJsonRows(0, n-1) 로 로드분 전량을 읽는다(예산단위 2천여행/프로젝트 500행 캡). 반환
 # {rows, options:[{i, <field>: str|null,...}]}. '법인카드' 창 제외 필터는 PICKER_READ_JS 와 동일.
-PICKER_READ_MULTI_JS = """([fields, limit]) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { rows:-1, reason:'no-pop' };
+PICKER_READ_MULTI_JS = _picker_pop_js("[fields, limit]", """  if (!p) return { rows:-1, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     const ds = g.getDataSource();
     const n = ds.getRowCount();
@@ -490,75 +647,45 @@ PICKER_READ_MULTI_JS = """([fields, limit]) => {
     const out = rows.slice(0, Math.min(rows.length, cap)).map((r,i)=>{
       const o = { i }; for (const f of fields) o[f] = r[f]==null?null:String(r[f]); return o; });
     return { rows:n, options: out };
-  } catch(e) { return { rows:-1, err:String(e).slice(0,80) }; }
-}"""
+  } catch(e) { return { rows:-1, err:String(e).slice(0,80) }; }""")
 
 # 코드피커 팝업 행 선택(인자 rowIndex). setCurrent + setSelection.
-PICKER_SELECT_JS = """(row) => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_SELECT_JS = _picker_pop_js("row", """  if (!p) return { ok:false, reason:'no-pop' };
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
     g.setCurrent({ itemIndex: row, fieldName: g.getColumns()[1].fieldName });
     g.setSelection({ startRow: row, endRow: row, startColumn: 0, endColumn: 0 });
     return { ok:true };
-  } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }
-}"""
+  } catch(e) { return { ok:false, err:String(e).slice(0,60) }; }""")
 
 # 코드피커 팝업 닫기(실패 경로에서 열린 채 남으면 다음 코드피커가 이 팝업을 읽어 오작동).
-PICKER_CLOSE_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return false;
+PICKER_CLOSE_JS = _picker_pop_js("", """  if (!p) return false;
   const x = p.querySelector('.k-i-close, .k-window-action, [aria-label*=Close], [title*=닫기]');
   if (x) { x.click(); return true; }
   const b = [...p.querySelectorAll('button')].filter(e=>e.offsetParent!==null)
     .find(e => /닫기|취소|close/i.test(c(e.innerText)));
   if (b) { b.click(); return true; }
-  return false;
-}"""
+  return false;""")
 
 # 코드피커 팝업 '적용/확인' 버튼 좌표.
-PICKER_APPLY_BTN_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return null;
+PICKER_APPLY_BTN_JS = _picker_pop_js("", """  if (!p) return null;
   const b = [...p.querySelectorAll('button')].filter(x=>x.offsetParent!==null).find(x=>/적용|확인|선택/.test(c(x.innerText)));
   if (!b) return null; const r = b.getBoundingClientRect();
-  return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2), text:c(b.innerText) };
-}"""
+  return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2), text:c(b.innerText) };""")
 
 # 코드피커 팝업 그리드의 중심 좌표(휠 스크롤 로딩용). 반환 {x,y} | null.
-PICKER_GRID_RECT_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return null;
+PICKER_GRID_RECT_JS = _picker_pop_js("", """  if (!p) return null;
   const g = p.querySelector('.dews-ui-grid'); if (!g) return null;
   const r = g.getBoundingClientRect();
-  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
-}"""
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };""")
 
 # 코드피커 팝업 그리드 행 수(스크롤 로딩 진행 판정).
-PICKER_ROWCOUNT_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return -1;
+PICKER_ROWCOUNT_JS = _picker_pop_js("", """  if (!p) return -1;
   try { const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
-    return g.getDataSource().getRowCount(); } catch(e) { return -2; }
-}"""
+    return g.getDataSource().getRowCount(); } catch(e) { return -2; }""")
 
 # 코드피커 팝업 그리드 마지막 행 setCurrent + 포커스 — ArrowDown 으로 다음 페이지 로드 트리거.
 # (프로브 2026-07-02: 휠은 1,318행 정체, setCurrent(끝행)+ArrowDown 은 라운드당 +500 결정적.)
-PICKER_FOCUS_LAST_JS = """() => {
-  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
-  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
-    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
-  if (!p) return { ok:false, reason:'no-pop' };
+PICKER_FOCUS_LAST_JS = _picker_pop_js("", """  if (!p) return { ok:false, reason:'no-pop' };
   try { const gridEl = p.querySelector('.dews-ui-grid');
     const g = window.jQuery(gridEl).data('dewsControl')._grid;
     const n = g.getDataSource().getRowCount();
@@ -568,8 +695,7 @@ PICKER_FOCUS_LAST_JS = """() => {
     const focusable = gridEl.querySelector('[tabindex], canvas, .k-grid-content') || gridEl;
     focusable.focus && focusable.focus();
     return { ok:true, row: n-1 };
-  } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }
-}"""
+  } catch(e) { return { ok:false, err: String(e).slice(0,100) }; }""")
 
 
 # ── 모달/토스트 관찰 공용 JS — card_collect 에서 승격(2026-07-05) ──────────────────
@@ -683,15 +809,22 @@ FIELD_DISPLAY_JS = r"""(label) => {
   return inp ? inp.value : null;
 }"""
 
-# 현재 화면에 떠 있는(visible) k-window 팝업 개수. 반환 int.
+# 현재 화면에 떠 있는(visible) **업무** k-window 팝업 개수. 반환 int.
 # ⚠ 팝업 생명주기 검증용(2026-07-24 실측): 조회조건 피커(부서·전자결재상태·전표유형)들은 전부
 #   '최상단 k-window'를 대상으로 조작한다(POPUP_CHECK_ROWS/APPLY 등). 앞 피커의 '적용' 후
 #   팝업이 실제로 닫혔는지 검증하지 않으면(고정대기만) 느린 세션에서 부서 팝업(46개)이 남고,
 #   다음 피커(전자결재상태) 돋보기 클릭이 그 팝업 뒤라 먹혀 새 팝업이 안 뜨는데도 최상단(=부서)
 #   그리드가 ready 라 오판 → 46행 부서 팝업을 읽어 '저장' 못 찾는 오류가 났다. 열기=개수 증가,
 #   닫기=개수 감소를 검증해 스테일 팝업 오독을 차단한다.
+# ⚠ 공지 팝업 제외(2026-08-07 무결성 감사): 공지 레이어도 .k-window 인데 **화면 로드 ~1.5s 뒤
+#   비동기 렌더**라(NOTICE_POPUP_BOXES_JS 참조) 피커 개수 관찰 도중에 떠 '열림/닫힘' 델타를
+#   오염시킨다(공지 출현을 피커 열림으로, 공지 잔존을 피커 미닫힘으로 오판). 고유 앵커
+#   #close-today-chk 로만 식별해 제외한다(광범위 매칭 금지 규율 동일).
 POPUP_COUNT_JS = r"""() => {
-  return [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null).length;
+  return [...document.querySelectorAll('.k-window')]
+    .filter(w => w.offsetParent !== null)
+    .filter(w => !w.querySelector('#close-today-chk'))
+    .length;
 }"""
 
 # 화면에 지정 텍스트가 **보이는지** — 화면/탭 전환·다이얼로그 렌더 확인용. arg = text.

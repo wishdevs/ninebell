@@ -19,11 +19,13 @@ import {
   RiOrganizationChart,
   RiWallet3Line,
   RiBrainLine,
+  RiBookOpenLine,
   RiGitCommitLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
 import { IS_DEV_ENV } from '@/lib/env';
+import { useDebugMode } from '@/lib/debug-mode';
 import { roleAtLeast } from '@/lib/auth/permissions';
 import { usePermissions } from '@/hooks/use-permissions';
 import { cn } from '@/lib/utils';
@@ -48,6 +50,7 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   budget: RiWallet3Line,
   learning: RiBrainLine,
   changelog: RiGitCommitLine,
+  manual: RiBookOpenLine,
 };
 
 export function Sidebar() {
@@ -88,11 +91,14 @@ export function Sidebar() {
 
 function SidebarInner({ pathname }: { pathname: string | null }) {
   const { has, role } = usePermissions();
+  const debugMode = useDebugMode();
 
   // 게이트 평가: permission이면 보유 여부, minRole이면 롤 계층, 없으면 전원 노출.
   const isVisible = (item: NavItem): boolean => {
     // 개발전용 메뉴는 프로덕션 빌드에서 숨긴다(제작용 디버그).
     if (item.devOnly && !IS_DEV_ENV) return false;
+    // 디버그 전용 메뉴는 디버그 모드(로그인 체크박스)에서만 노출.
+    if (item.debugOnly && !debugMode) return false;
     if (item.permission) return has(item.permission);
     if (item.minRole) return roleAtLeast(role, item.minRole);
     return true;
@@ -116,6 +122,8 @@ function SidebarInner({ pathname }: { pathname: string | null }) {
       <div className="flex-1 overflow-x-hidden overflow-y-auto">
         <nav className="flex flex-col gap-4 px-4 pt-4 pb-6">
           {NAV_GROUPS.map((group) => {
+            // 디버그 전용 그룹(개발)은 디버그 모드가 아니면 통째로 숨긴다.
+            if (group.debugOnly && !debugMode) return null;
             const visibleItems = group.items.filter(isVisible);
             // 그룹 내 표시 항목이 0개면 헤더까지 통째로 숨긴다.
             if (visibleItems.length === 0) return null;

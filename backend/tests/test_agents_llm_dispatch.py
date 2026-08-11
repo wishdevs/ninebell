@@ -119,11 +119,11 @@ def test_decls_to_openai_tools_fills_missing_parameters():
 async def test_dispatch_chat_decide_selects_provider(monkeypatch):
     seen: dict[str, tuple] = {}
 
-    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None):
+    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None, max_output_tokens=None):
         seen["gemini"] = (key, model, base)
         return "g_tool", {"p": 1}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["etribe"] = (model, base)
         return "e_tool", {"p": 2}
 
@@ -148,7 +148,7 @@ async def test_dispatch_chat_decide_selects_provider(monkeypatch):
 async def test_dispatch_defaults_to_gemini_without_provider_attr(monkeypatch):
     called = {"gemini": False}
 
-    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None):
+    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None, max_output_tokens=None):
         called["gemini"] = True
         return None, {}
 
@@ -168,7 +168,7 @@ async def test_dispatch_generate_text_selects_provider(monkeypatch):
         seen["gemini"] = {"key": key, "thinking_budget": thinking_budget}
         return "g텍스트"
 
-    async def fake_e(http, model, base, *, system, user, temperature, max_output_tokens):
+    async def fake_e(http, model, base, *, system, user, temperature, max_output_tokens, token=None):
         seen["etribe"] = {"model": model, "max": max_output_tokens}
         return "e텍스트"
 
@@ -192,7 +192,7 @@ async def test_dispatch_multimodal_gate_blocks_shot_when_disabled(monkeypatch):
     # 텍스트 전용 ETRIBE 서버(etribe_multimodal=False) — 이미지 400 방지를 위해 shot 차단.
     seen: dict[str, Any] = {}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["shot"] = shot
         return None, {}
 
@@ -208,7 +208,7 @@ async def test_dispatch_multimodal_gate_blocks_shot_when_disabled(monkeypatch):
 async def test_dispatch_multimodal_gate_passes_shot_when_enabled(monkeypatch):
     seen: dict[str, Any] = {}
 
-    async def fake_e(http, model, base, system, history, context, shot, tools):
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
         seen["shot"] = shot
         return None, {}
 
@@ -294,6 +294,44 @@ async def test_etribe_chat_decide_bad_arguments_json_returns_empty_args():
     )
     assert name == "submit"
     assert args == {}  # 파싱 실패 → 빈 args(호출부 계약 유지: dict 보장).
+
+
+async def test_etribe_chat_decide_max_output_tokens_overrides_default():
+    """max_output_tokens 명시 시 결정 상한 _DECIDE_MAX_TOKENS 대신 그 값이 나간다(미명시=기본)."""
+    http = FakeHttp([_resp(200, _tool_resp("ask", "{}"))])
+    await ET.etribe_chat_decide(
+        http, "m", "http://b", "s", "h", {}, None, [{"name": "ask"}], max_output_tokens=16_384
+    )
+    assert http.bodies[0]["max_tokens"] == 16_384
+
+    http2 = FakeHttp([_resp(200, _tool_resp("ask", "{}"))])
+    await ET.etribe_chat_decide(http2, "m", "http://b", "s", "h", {}, None, [{"name": "ask"}])
+    assert http2.bodies[0]["max_tokens"] == ET._DECIDE_MAX_TOKENS
+
+
+async def test_dispatch_chat_decide_threads_max_output_tokens(monkeypatch):
+    """디스패처가 max_output_tokens 를 두 프로바이더 구현에 그대로 전달한다."""
+    seen: dict[str, Any] = {}
+
+    async def fake_g(http, key, model, base, system, history, context, shot, tools, thinking_budget=None, max_output_tokens=None):
+        seen["gemini"] = max_output_tokens
+        return None, {}
+
+    async def fake_e(http, model, base, system, history, context, shot, tools, max_output_tokens=None, token=None):
+        seen["etribe"] = max_output_tokens
+        return None, {}
+
+    monkeypatch.setattr(LLM, "gemini_chat_decide", fake_g)
+    monkeypatch.setattr(LLM, "etribe_chat_decide", fake_e)
+    await LLM.chat_decide(
+        object(), system="s", history="", context={}, shot_b64=None, tools=[],
+        settings=_settings("gemini"), max_output_tokens=16_384,
+    )
+    await LLM.chat_decide(
+        object(), system="s", history="", context={}, shot_b64=None, tools=[],
+        settings=_settings("etribe"), max_output_tokens=16_384,
+    )
+    assert seen == {"gemini": 16_384, "etribe": 16_384}
 
 
 # ── JSON 모드 폴백(네이티브 툴콜 미지원 서버) ─────────────────────────────────
