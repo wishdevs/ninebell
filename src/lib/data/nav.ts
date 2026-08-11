@@ -59,8 +59,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: 'Workspace',
     items: [
       { href: '/agents', label: '에이전트', icon: 'agents', permission: 'agents:read' },
-      // 로그인한 모든 사용자에게 노출(게이트 없음 — /agents·/runs 읽기는 모든 롤의 암묵 권한).
-      { href: '/assistant', label: 'AI 어시스턴트', icon: 'assistant' },
+      // AI 어시스턴트는 사이드바에서 뺐다(사용자 결정 2026-08-11). 우하단 플로팅 런처도 함께
+      // 내렸다(app/(app)/layout.tsx). 화면 자체(/assistant)와 패널 코드는 그대로라 주소로는 들어간다.
       // 에이전트별 사용 설명서 — 로그인한 전원 노출(게이트 없음).
       { href: '/manual', label: '메뉴얼', icon: 'manual' },
       // 릴리스 단위 변경 기록 — 디버그 모드에서만 노출(사용자 결정 2026-08-07).
