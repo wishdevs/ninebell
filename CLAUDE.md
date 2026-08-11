@@ -27,7 +27,10 @@
 
 ## 배포
 - main 푸시는 두 배포를 동시에 트리거한다: GitHub Actions → AWS ECR/ECS (ninebell.hynro.com) + GitLab `ax` 리모트 → 온프렘 (nb.hynro.com)
-- 온프렘은 기동 시 alembic upgrade 자동, AWS 는 마이그레이션 수동 — 신규 마이그레이션이 있으면 서비스와 같은 VPC 에서 일회성 ECS 태스크로 `alembic stamp <현재 스키마 rev>` 후 `alembic upgrade head` 를 돌려야 앱 크래시를 막는다 (AWS CLI 프로파일 `ax-prod`, 클러스터 ninebell-dashboard-test)
+- 마이그레이션은 **양쪽 다 기동 시 자동**이다 — `backend/docker-entrypoint.sh` 가 `alembic upgrade head` 후 CMD 를 exec 하고, 온프렘·AWS 두 이미지가 이 스크립트를 공유한다(2026-07-29 `bab95a1` 로 비대칭 해소, 2026-08-11 v2.1.0 배포에서 0031·0033·0034 자동 적용 확인). 배포 시 사람이 할 일은 없다
+- ⚠ 옛 절차였던 `alembic stamp` 는 **돌리지 말 것** — `DEV_CREATE_ALL=1`(현재 0) 로 테이블만 만들어져 `alembic_version` 이 비었던 초기 부트스트랩 1회용이다. 지금 stamp 하면 리비전이 어긋나 마이그레이션이 건너뛰어진다
+- 실패하면 앱이 뜨지 않고 ECS 재시작 루프가 된다(`set -e`) — CloudWatch `/ecs/ninebell-dashboard-test/api` 에서 alembic 로그를 먼저 본다 (AWS CLI 프로파일 `ax-prod`, 클러스터 ninebell-dashboard-test)
+- api 는 인메모리 세션·HITL 큐 때문에 `desired_count=1` 고정이다 — 늘리면 마이그레이션 동시 실행 경합이 생기므로, 수평 확장 시 마이그레이션을 배포 파이프라인의 별도 잡으로 빼야 한다
 - 루트 `.dockerignore` 는 backend/ 를 제외하므로 AWS api 빌드는 `infra/aws/docker/api.Dockerfile.dockerignore` 로 우회한다 — 지우지 말 것
 
 ## 커밋 후 절차

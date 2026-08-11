@@ -41,7 +41,11 @@ resource "aws_ecs_task_definition" "api" {
     image     = "${aws_ecr_repository.api.repository_url}:${var.api_image_tag}"
     essential = true
 
-    command = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", tostring(var.container_port_api)]
+    # ⚠ --proxy-headers 필수 — 없으면 전 요청의 클라이언트 IP 가 ALB IP 로 잡혀 IP 레이트리미터가
+    #   전사 공용 카운터가 된다(api.Dockerfile:27-33 경고). 이 command 는 이미지 CMD 를 덮어쓰므로
+    #   플래그를 여기서도 유지해야 한다. ENTRYPOINT(docker-entrypoint.sh)는 덮이지 않아
+    #   alembic upgrade head 는 이 명령 앞에 그대로 실행된다.
+    command = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", tostring(var.container_port_api), "--proxy-headers"]
 
     linuxParameters = { initProcessEnabled = true }
 
