@@ -87,16 +87,16 @@ async def test_favorite_agent_kind_crud_roundtrip(client, make_user, auth_as):
 
     created = await client.post(
         "/me/favorites",
-        json={"kind": "agent", "code": "card-chat", "name": "법인카드 승인내역 정리 — 대화형"},
+        json={"kind": "agent", "code": "corporate-card", "name": "법인카드 승인내역 정리 — 대화형"},
     )
     assert created.status_code == 201
     item = created.json()
     assert item["kind"] == "agent"
-    assert item["code"] == "card-chat"
+    assert item["code"] == "corporate-card"
     fav_id = item["id"]
 
     listed = await client.get("/me/favorites?kind=agent")
-    assert [i["code"] for i in listed.json()["items"]] == ["card-chat"]
+    assert [i["code"] for i in listed.json()["items"]] == ["corporate-card"]
 
     deleted = await client.delete(f"/me/favorites/{fav_id}")
     assert deleted.status_code == 204

@@ -185,7 +185,7 @@ async def reorder_org_units(body: ReorderIn, db: DbSession, _actor: RequireAdmin
 # ── 에이전트 접근 관리 ─────────────────────────────────────────────────────────
 @router.get("/agent-access")
 async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
-    """실 에이전트(백엔드 agents 테이블 = card-chat 등)별 사용 가능 조직구분.
+    """실 에이전트(백엔드 agents 테이블 = corporate-card 등)별 사용 가능 조직구분.
 
     access_configured=false 면 '최초 모두 선택'으로 전체 조직구분 id(+미지정)를 반환한다.
     '미지정'(조직 미배정 사용자 허용)은 ORG_NONE_SENTINEL 로 orgUnitIds 끝에 표현한다.

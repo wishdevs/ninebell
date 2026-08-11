@@ -33,7 +33,7 @@ async def test_agents_read_allowed_for_user_role(client, make_user, auth_as):
 async def test_agent_detail_includes_flowgraph(client, make_user, auth_as):
     uid = await make_user("alice", "user")
     auth_as(uid)
-    resp = await client.get("/agents/card-chat")
+    resp = await client.get("/agents/corporate-card")
     assert resp.status_code == 200
     data = resp.json()
     assert "flowGraph" in data

@@ -1,7 +1,7 @@
 """에이전트별 세부설정 테스트 — 선언 스키마·실효값·admin PATCH·런 파라미터 주입.
 
 - effective_settings: 저장값 없음=스키마 기본값, 부분 저장=오버레이(미지 키 무시).
-- GET /agents: 스키마 있는 에이전트(card-chat)만 settings/settingsSchema 포함.
+- GET /agents: 스키마 있는 에이전트(corporate-card)만 settings/settingsSchema 포함.
 - PATCH /agents/{id}/settings: admin 200(값 반영), user 403, 범위 밖·미지 키·스키마 없음 400,
   없는 에이전트 404.
 - POST /runs/collect: 실효 설정이 params 로 평탄화 주입되고 body.params 가 우선한다.
@@ -19,13 +19,13 @@ from app.services.agent_settings import effective_settings
 
 # ── effective_settings(순수 함수) ────────────────────────────────────────────
 def test_effective_settings_defaults_when_no_stored():
-    assert effective_settings("card-chat", None) == {"acct_cutoff_day": 9}
+    assert effective_settings("corporate-card", None) == {"acct_cutoff_day": 9}
 
 
 def test_effective_settings_overlays_stored_and_ignores_unknown():
     # 저장값이 기본값을 덮고, 스키마에 없는 키(legacy_key)는 무시된다.
     stored = {"acct_cutoff_day": 4, "legacy_key": "x"}
-    assert effective_settings("card-chat", stored) == {"acct_cutoff_day": 4}
+    assert effective_settings("corporate-card", stored) == {"acct_cutoff_day": 4}
 
 
 def test_effective_settings_empty_for_schemaless_agent():
@@ -37,7 +37,7 @@ def test_effective_settings_empty_for_schemaless_agent():
 async def test_get_agents_includes_settings_for_card_chat(client, make_user, auth_as):
     uid = await make_user("s-reader", "admin")
     auth_as(uid)
-    r = await client.get("/agents/card-chat")
+    r = await client.get("/agents/corporate-card")
     assert r.status_code == 200
     body = r.json()
     assert body["settings"] == {"acct_cutoff_day": 9}  # 저장값 없음 → 스키마 기본값.
@@ -67,12 +67,12 @@ async def test_patch_settings_admin_ok_and_reflected(client, make_user, auth_as)
     uid = await make_user("s-admin", "admin")
     auth_as(uid)
     r = await client.patch(
-        "/agents/card-chat/settings", json={"settings": {"acct_cutoff_day": 4}}
+        "/agents/corporate-card/settings", json={"settings": {"acct_cutoff_day": 4}}
     )
     assert r.status_code == 200
     assert r.json()["settings"] == {"acct_cutoff_day": 4}
     # 재조회에서도 저장값이 유지된다.
-    r2 = await client.get("/agents/card-chat")
+    r2 = await client.get("/agents/corporate-card")
     assert r2.json()["settings"] == {"acct_cutoff_day": 4}
 
 
@@ -81,7 +81,7 @@ async def test_patch_settings_user_forbidden_403(client, make_user, auth_as):
     uid = await make_user("s-user", "user")
     auth_as(uid)
     r = await client.patch(
-        "/agents/card-chat/settings", json={"settings": {"acct_cutoff_day": 4}}
+        "/agents/corporate-card/settings", json={"settings": {"acct_cutoff_day": 4}}
     )
     assert r.status_code == 403
 
@@ -93,7 +93,7 @@ async def test_patch_settings_invalid_value_400(client, make_user, auth_as, bad)
     uid = await make_user(f"s-bad-{bad}", "admin")
     auth_as(uid)
     r = await client.patch(
-        "/agents/card-chat/settings", json={"settings": {"acct_cutoff_day": bad}}
+        "/agents/corporate-card/settings", json={"settings": {"acct_cutoff_day": bad}}
     )
     assert r.status_code == 400
     assert "회계시점 결정일" in r.json()["detail"]
@@ -103,7 +103,7 @@ async def test_patch_settings_invalid_value_400(client, make_user, auth_as, bad)
 async def test_patch_settings_unknown_key_400(client, make_user, auth_as):
     uid = await make_user("s-unk", "admin")
     auth_as(uid)
-    r = await client.patch("/agents/card-chat/settings", json={"settings": {"nope": 1}})
+    r = await client.patch("/agents/corporate-card/settings", json={"settings": {"nope": 1}})
     assert r.status_code == 400
     assert "알 수 없는 설정" in r.json()["detail"]
 
@@ -157,7 +157,7 @@ async def _fake_browser_factory():
 
 @pytest.fixture
 def capture_run_params(sm):
-    """card-chat 을 캡처용 가짜 워크플로우로 배선하고 params 캡처 리스트를 돌려준다."""
+    """corporate-card 을 캡처용 가짜 워크플로우로 배선하고 params 캡처 리스트를 돌려준다."""
     captured: list[dict] = []
     register_workflow("settings-wf", lambda: _CaptureGraph(captured))
     fastapi_app.state.browser_factory = _fake_browser_factory
@@ -166,7 +166,7 @@ def capture_run_params(sm):
         from app.models import Agent
 
         async with sm() as s:
-            a = (await s.execute(select(Agent).where(Agent.id == "card-chat"))).scalar_one()
+            a = (await s.execute(select(Agent).where(Agent.id == "corporate-card"))).scalar_one()
             a.workflow_id = "settings-wf"
             await s.commit()
 
@@ -200,7 +200,7 @@ async def test_run_params_body_cannot_override_settings(
     uid = await make_user("s-run2", "admin")
     auth_as(uid)
     ok = await client.patch(
-        "/agents/card-chat/settings", json={"settings": {"acct_cutoff_day": 4}}
+        "/agents/corporate-card/settings", json={"settings": {"acct_cutoff_day": 4}}
     )
     assert ok.status_code == 200
     r = await client.post(

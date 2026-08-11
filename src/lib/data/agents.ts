@@ -147,7 +147,7 @@ export interface Intervention {
 /**
  * 에이전트별 세부설정 한 항목의 스키마(백엔드 settingsSchema 원소).
  * 관리자 '에이전트 관리' 화면이 이 스키마만 보고 폼을 자동 렌더한다.
- * 현재는 number 타입만 지원한다(예: card-chat 의 acct_cutoff_day).
+ * 현재는 number 타입만 지원한다(예: corporate-card 의 acct_cutoff_day).
  */
 export interface AgentSettingDef {
   key: string;
@@ -229,10 +229,6 @@ export function filterVisibleAgents<T extends { workflowId?: string }>(agents: r
   return agents.filter((a) => !a.workflowId || !HIDDEN_WORKFLOW_IDS.has(a.workflowId));
 }
 
-/**
- * 디버그 전용 워크플로우 — 결의서입력(resolution)에서 일반 모드엔 숨기고 디버그 모드에만
- * 노출하는 종류(출장·경조·학자금). 법인카드(card-collect)는 두 모드 모두 노출된다.
- */
 /**
  * 일반 모드에서 숨길 워크플로우 — **현재 비어 있다**(전 종류 상시 노출, 사용자 확정 2026-08-11).
  * 출장(국내·해외)·경조금·학자금은 검증이 끝나 일반 사용자에게도 공개했다.
