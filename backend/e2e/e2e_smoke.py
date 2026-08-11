@@ -1,7 +1,7 @@
-"""HEADED Playwright smoke test for the card-chat agent — reusable, two phases.
+"""HEADED Playwright smoke test for the corporate-card agent — reusable, two phases.
 
 Phase 1 (dashboard): drives the REAL product UI at :3101 — login, navigate to
-  /agents/card-chat, click 실행, wait for the HITL grid card, click 입력 완료
+  /agents/corporate-card, click 실행, wait for the HITL grid card, click 입력 완료
   (accepting whatever is prefilled — single-click submit, no confirm gate),
   wait for terminal result, report whether the result indicates
   a real save (입력·저장) or a no-op (반영 0건).
@@ -149,8 +149,8 @@ async def phase1() -> dict:
         print(f"[P1] logged in, url={page.url}", flush=True)
         await page.wait_for_timeout(2000)
 
-        print("[P1] goto /agents/card-chat", flush=True)
-        await page.goto(f"{FRONTEND_BASE}/agents/card-chat")
+        print("[P1] goto /agents/corporate-card", flush=True)
+        await page.goto(f"{FRONTEND_BASE}/agents/corporate-card")
         await page.wait_for_timeout(1500)
 
         # '실행' 버튼은 상단 컨트롤 + 라이브 스테이지 중앙 CTA 두 곳에 있다(동작 동일).

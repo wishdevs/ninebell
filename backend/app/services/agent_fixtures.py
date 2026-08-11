@@ -1,6 +1,6 @@
 """에이전트 시드 픽스처 — 프론트 `src/lib/data/agents.ts`·`flows.ts` 이식.
 
-사용자 요청으로 **card-chat(결의서 입력 - 카드, workflow=card-collect)**
+사용자 요청으로 **corporate-card(결의서 입력 - 카드, workflow=card-collect)**
 1개만 남긴다(나머지 4개 outbound-test·card-expense·card-md·bom-lookup 제거).
 
 타임스탬프는 프론트와 동일 앵커(NOW_ANCHOR = 2026-06-30T14:00:00+09:00 = 05:00Z)에서
@@ -126,10 +126,10 @@ AGENT_GROUP_FIXTURES: list[dict] = [
 ]
 
 
-# ── 1개 에이전트 (card-chat 만 유지) ─────────────────────────────────────────
+# ── 1개 에이전트 (corporate-card 만 유지) ─────────────────────────────────────────
 AGENT_FIXTURES: list[dict] = [
     {
-        "id": "card-chat",
+        "id": "corporate-card",
         "workflow_id": "card-collect",  # 실행 레지스트리 워크플로우 id(유일 실동작).
         "group_id": "resolution",  # '결의서입력' 그룹 소속.
         # 형제 스타일(출장(국내/자차)·경조금·학자금 = 문서종류명)에 맞춰 '카드' → '법인카드'.

@@ -1,6 +1,6 @@
 """에이전트 실행 통계 — serialize_agent 가 픽스처 목업이 아니라 agent_runs 실 이력을 집계한다.
 
-이전엔 card-chat 픽스처의 하드코딩(run_count=23 등)이 표시됐다. 이제 실 실행 이력에서
+이전엔 corporate-card 픽스처의 하드코딩(run_count=23 등)이 표시됐다. 이제 실 실행 이력에서
 실행수·성공률·평균시간·최근실행을 계산한다(실행 없으면 0/None).
 """
 
@@ -45,8 +45,8 @@ async def _add_run(sm, *, rid, agent_id, user_id, status, started, dur_s) -> Non
 
 async def test_agent_stats_from_real_runs(client, make_user, auth_as, sm):
     uid = await make_user("stats-user", "super_admin")
-    # ⚠ agent_runs.agent_id 에는 **workflow_id** 가 저장된다(runs.py — card-chat 의 실제 저장값은
-    #   "card-collect"). 종전 테스트가 Agent.id("card-chat")로 심어 실런타임 키 미스매치(통계
+    # ⚠ agent_runs.agent_id 에는 **workflow_id** 가 저장된다(runs.py — corporate-card 의 실제 저장값은
+    #   "card-collect"). 종전 테스트가 Agent.id("corporate-card")로 심어 실런타임 키 미스매치(통계
     #   영원히 0)를 못 잡았다(회귀 2026-08-10).
     # 성공 2(60s·120s) + 실패 1(30s) + 진행중 1(미완).
     await _add_run(sm, rid="r1", agent_id="card-collect", user_id=uid, status="succeeded", started=_T0, dur_s=60)
@@ -55,7 +55,7 @@ async def test_agent_stats_from_real_runs(client, make_user, auth_as, sm):
     await _add_run(sm, rid="r4", agent_id="card-collect", user_id=uid, status="running", started=_T0 + timedelta(hours=3), dur_s=None)
 
     auth_as(uid)
-    body = (await client.get("/agents/card-chat")).json()
+    body = (await client.get("/agents/corporate-card")).json()
     assert body["runCount"] == 4  # 전체(진행중 포함)
     assert body["successRate"] == 66.7  # 2/(2+1)
     assert body["avgSeconds"] == 70  # (60+120+30)/3 완료 런 평균
@@ -80,7 +80,7 @@ async def test_list_agents_stats_scoped_per_agent(client, make_user, auth_as, sm
     auth_as(uid)
     rows = (await client.get("/agents")).json()
     by_id = {a["id"]: a for a in rows}
-    assert by_id["card-chat"]["runCount"] == 1
+    assert by_id["corporate-card"]["runCount"] == 1
     assert by_id["trip-domestic"]["runCount"] == 0
 
 
@@ -94,7 +94,7 @@ async def test_all_real_agents_visible_in_list(client, make_user, auth_as):
     rows = (await client.get("/agents")).json()
     ids = {a["id"] for a in rows}
     # 카드·국내출장·해외출장·경조금·학자금 전부 노출(학자금 2026-07-15 라이브 10/10 검증 완료).
-    assert {"card-chat", "trip-domestic", "trip-overseas", "family-event", "scholarship"} <= ids
+    assert {"corporate-card", "trip-domestic", "trip-overseas", "family-event", "scholarship"} <= ids
 
 
 async def test_exposed_agent_detail_returns_200(client, make_user, auth_as):
@@ -115,5 +115,5 @@ async def test_hidden_mechanism_excludes_from_list_and_404s_detail(client, make_
     rows = (await client.get("/agents")).json()
     ids = {a["id"] for a in rows}
     assert "scholarship" not in ids  # 주입한 숨김 id 는 목록에서 제외
-    assert "card-chat" in ids  # 나머지는 정상 노출
+    assert "corporate-card" in ids  # 나머지는 정상 노출
     assert (await client.get("/agents/scholarship")).status_code == 404  # 상세 존재 자체 숨김

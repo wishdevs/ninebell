@@ -13,6 +13,7 @@ import {
   QUESTION_SHORT,
   type QuestionAnswers,
   type QuestionKey,
+  defaultAnswers,
 } from './question-flow';
 import {
   defaultInvoiceRange,
@@ -33,7 +34,7 @@ import {
 } from './model';
 
 // 답 타입·완료 판정은 question-flow.ts 로 옮겼지만 뒤 단계들이 이 경로로 import 하므로 그대로 내보낸다.
-export { emptyAnswers, answersComplete };
+export { emptyAnswers, defaultAnswers, answersComplete };
 export type { QuestionAnswers };
 
 interface QuestionsStepProps {
@@ -196,7 +197,7 @@ export function QuestionsStep({ value, onChange, onNext }: QuestionsStepProps) {
         onClick={() => setEntryMode('portal')}
         className="text-foreground-tertiary hover:text-foreground self-start text-[length:var(--text-caption)] transition-colors outline-none"
       >
-        ‹ 증빙유형 바로 선택
+        증빙유형 코드로 바로 선택
       </button>
 
       <div ref={rowsRef} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto">

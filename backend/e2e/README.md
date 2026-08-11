@@ -36,7 +36,7 @@ E2E_FRONTEND=http://localhost:3101 E2E_USERID=이트라이브2 E2E_PASSWORD=1111
 제품 UI(:3101)를 그대로 몬다.
 
 1. `http://localhost:3101` → 로그인 폼(`#userid`/`#password`) 채우고 **로그인**.
-2. `/agents/card-chat` 이동 → **실행** 버튼 클릭.
+2. `/agents/corporate-card` 이동 → **실행** 버튼 클릭.
 3. 사용자 개입(그리드) 카드가 뜰 때까지 대기(백엔드가 ERP 를 헤드리스로 구동, ~30–90s).
 4. **입력 완료** 클릭(프리필된 값 그대로 제출 — "그냥 완료").
 5. 종료 상태(다시 실행 버튼) 대기 → 결과 텍스트 파싱.

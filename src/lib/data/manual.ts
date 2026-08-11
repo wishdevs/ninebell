@@ -7,7 +7,7 @@
  *
  * 새 비-에이전트 문서는 아래에 한 줄 추가하면 목록·고유 주소(/manual/{id})가 바로 생긴다.
  * 본문은 아직 전 문서 공통 "준비 중" — 콘텐츠 소스가 정해지면 id 로 연결한다.
- * ⚠ id 는 에이전트 id 와 같은 주소 공간을 쓴다 — 에이전트 id(card-chat 등)와 겹치지 않게 지을 것.
+ * ⚠ id 는 에이전트 id 와 같은 주소 공간을 쓴다 — 에이전트 id(corporate-card 등)와 겹치지 않게 지을 것.
  */
 
 export interface ManualDocMeta {
@@ -157,7 +157,7 @@ export const MANUAL_CONTENT: Record<string, ManualContent> = {
       }
     ]
   },
-  'card-chat':   {
+  'corporate-card':   {
     "intro": "법인카드로 결제한 내역을 더존 옴니솔에서 자동으로 불러오는 에이전트입니다. 건별로 예산계정과 적요만 확인해 주면, 카드 결의서 작성부터 저장까지 자동으로 처리됩니다.",
     "sections": [
       {
@@ -167,7 +167,7 @@ export const MANUAL_CONTENT: Record<string, ManualContent> = {
           "이 에이전트는 미리 입력할 것이 없습니다. 실행 버튼만 누르면 바로 시작됩니다."
         ],
         "image": {
-          "src": "/manual-assets/card-chat/01-chat-1630.png",
+          "src": "/manual-assets/corporate-card/01-chat-1630.png",
           "alt": "법인카드 에이전트 화면",
           "caption": "접속 직후 — 실행을 누르면 카드 내역을 불러옵니다."
         }
@@ -193,7 +193,7 @@ export const MANUAL_CONTENT: Record<string, ManualContent> = {
           "표 아래에 전체 몇 건 중 몇 건을 채웠는지 표시됩니다. 아직 안 채운 줄이 있으면 눌러서 바로 이동할 수 있고, 모든 줄이 채워져야 '입력 완료' 버튼을 누를 수 있습니다."
         ],
         "image": {
-          "src": "/manual-assets/card-chat/02-grid-1630.png",
+          "src": "/manual-assets/corporate-card/02-grid-1630.png",
           "alt": "법인카드 승인내역 확인 표",
           "caption": "확인 화면 예시 — 파란 AI 표시는 자동으로 채워진 줄, '과세 → 불공'은 세금 공제가 안 되어 자동으로 바뀐 줄, 빨간 테두리는 직접 채워야 하는 줄, 체크한 줄은 저장에서 빠집니다."
         },

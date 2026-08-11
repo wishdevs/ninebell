@@ -1,7 +1,7 @@
 """P3-4 org_units 라우터 테스트 — 조직구분 CRUD + 에이전트 접근(agent-access).
 
 전 엔드포인트 admin+ 게이트(require_role_min). user 롤은 403. seed_all 로 조직구분 7종·
-card-chat 에이전트가 미리 있다.
+corporate-card 에이전트가 미리 있다.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ async def test_agent_access_unconfigured_returns_all(client, make_user, auth_as)
     container_ids = {o["id"] for o in _containers(rows)}
     r = await client.get("/agent-access")
     assert r.status_code == 200
-    card = next(a for a in r.json() if a["agentId"] == "card-chat")
+    card = next(a for a in r.json() if a["agentId"] == "corporate-card")
     # access_configured=false(시드 기본) → 전체 접근대상 + '미지정' 허용.
     assert len(card["orgUnitIds"]) == len(own_ids) + 1
     assert card["orgUnitIds"][-1] == "__none__"
@@ -106,11 +106,11 @@ async def test_set_agent_access_replaces_and_marks_configured(client, make_user,
     uid = await make_user("u-admin4", "admin")
     auth_as(uid)
     leaf_a, leaf_b = (o["id"] for o in _leaves(await _org_rows(client))[:2])
-    r = await client.patch("/agent-access/card-chat", json={"orgUnitIds": [leaf_a, leaf_b]})
+    r = await client.patch("/agent-access/corporate-card", json={"orgUnitIds": [leaf_a, leaf_b]})
     assert r.status_code == 200
     assert set(r.json()["orgUnitIds"]) == {leaf_a, leaf_b}
     # 이제 configured → GET 이 축소된 목록 반환.
-    after = next(a for a in (await client.get("/agent-access")).json() if a["agentId"] == "card-chat")
+    after = next(a for a in (await client.get("/agent-access")).json() if a["agentId"] == "corporate-card")
     assert set(after["orgUnitIds"]) == {leaf_a, leaf_b}
 
 
@@ -127,7 +127,7 @@ async def test_set_agent_access_all_invalid_422(client, make_user, auth_as):
     uid = await make_user("u-admin6", "admin")
     auth_as(uid)
     # 비어있지 않은데 전부 무효 id → 조용히 전체 해제 않고 422(stale 목록 방지).
-    r = await client.patch("/agent-access/card-chat", json={"orgUnitIds": ["ghost1", "ghost2"]})
+    r = await client.patch("/agent-access/corporate-card", json={"orgUnitIds": ["ghost1", "ghost2"]})
     assert r.status_code == 422
 
 
@@ -137,16 +137,16 @@ async def test_set_agent_access_unassigned_sentinel_roundtrip(client, make_user,
     auth_as(uid)
     (leaf,) = (o["id"] for o in _leaves(await _org_rows(client))[:1])
     r = await client.patch(
-        "/agent-access/card-chat", json={"orgUnitIds": [leaf, "__none__"]}
+        "/agent-access/corporate-card", json={"orgUnitIds": [leaf, "__none__"]}
     )
     assert r.status_code == 200
     assert r.json()["orgUnitIds"] == [leaf, "__none__"]
     after = next(
-        a for a in (await client.get("/agent-access")).json() if a["agentId"] == "card-chat"
+        a for a in (await client.get("/agent-access")).json() if a["agentId"] == "corporate-card"
     )
     assert after["orgUnitIds"] == [leaf, "__none__"]
     # 센티널 해제 시 allow_unassigned 도 꺼진다.
-    r2 = await client.patch("/agent-access/card-chat", json={"orgUnitIds": [leaf]})
+    r2 = await client.patch("/agent-access/corporate-card", json={"orgUnitIds": [leaf]})
     assert r2.json()["orgUnitIds"] == [leaf]
 
 
@@ -154,7 +154,7 @@ async def test_set_agent_access_only_unassigned_is_valid(client, make_user, auth
     """센티널만 있는 요청도 유효(미지정 사용자만 허용) — 422 가 아니다."""
     uid = await make_user("u-admin8", "admin")
     auth_as(uid)
-    r = await client.patch("/agent-access/card-chat", json={"orgUnitIds": ["__none__"]})
+    r = await client.patch("/agent-access/corporate-card", json={"orgUnitIds": ["__none__"]})
     assert r.status_code == 200
     assert r.json()["orgUnitIds"] == ["__none__"]
 

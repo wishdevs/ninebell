@@ -4,12 +4,14 @@ description: >-
   Standard operating procedure for building a new 더존 옴니솔(Douzone OmniEsol)
   browser-automation agent end to end — feasibility gate → PROCESS.md 플로우 명세 →
   headless 읽기/쓰기 경로 검증 → 자가수정 루프 → 실저장 E2E 사이클 → LangGraph 통합 →
-  운영. Use this WHENEVER the user asks to build, add, automate, 자동화, or 플로우 구축 a
+  운영. **입력은 텍스트 플로우 + Playwright codegen 녹화**(사용자가 한 번 시연) — 녹화가
+  경로·버튼을 확정하고, 프로브는 녹화가 못 잡는 것만 실측한다.
+  Use this WHENEVER the user asks to build, add, automate, 자동화, or 플로우 구축 a
   new 옴니솔 / 결의서입력(GLDDOC00300) / ERP screen flow in this repo — even if they jump
   straight to "write the agent". Start at the feasibility gate, not at code. Also
   use when debugging or extending an existing agent's PROCESS.md / graph / e2e cycle.
 origin: 나인벨 옴니솔 자동화 대시보드 — flow-buildout 표준절차 (2026-07)
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # 옴니솔 플로우 구축 표준절차 (flow-buildout SOP)
@@ -90,15 +92,39 @@ version: "1.0.0"
 가정하지 않는다(`RESOLUTIONS.md` 예정 행은 계획일 뿐 증거 아님). 산출물: 진행/중단 판단 + 진입
 경로 메모. → **`references/0-feasibility-gate.md`** (필수 입력 게이트)
 
-### 1. 플로우 명세 md (PROCESS.md 초안) → 구조화된 flow.md
-사용자가 구술한 화면/업무 스텝을 그대로 MD 로. 미확정 기술요소(셀렉터·좌표·필드id·컬럼)는
-`검증: ❓`. 업무 결정(값 규칙·기본값)은 D1…Dn 으로 명시. **비가역 액션 표시.** 성공조건·실패조건을
-스텝마다 적는다. `RESOLUTIONS.md` 에 새 행 등록, 형제 PROCESS.md 크로스링크.
-→ **`references/1-process-md-template.md`** (실제 헤딩 스켈레톤 + ❓/✅ 규칙)
+### 1. 텍스트 플로우 + **녹화 시연** → PROCESS.md 초안 (핵심 단계)
+**코드도, 프로브도 아니고 여기서 시작한다.** 사용자에게 두 가지를 받는다:
+
+1. **텍스트 플로우** — 업무 순서를 말/글로(무엇을 왜 하는지, 값 규칙, 예외).
+2. **Playwright codegen 녹화** — 사용자가 그 플로우를 **실제로 한 번 클릭**한 기록.
+
+```bash
+cd backend && .venv/bin/playwright codegen "https://erp.ninebell.co.kr" \
+  --target python-async -o e2e/artifacts/<flow>_codegen.py
+```
+브라우저를 닫으면 파일이 저장된다. 새 창(EAP 등)도 창별로 기록된다.
+
+**녹화를 파싱해 PROCESS.md 초안을 만든다** — 텍스트 플로우가 *의도*를, 녹화가 *경로*를 준다.
+녹화로 확정된 것은 처음부터 `검증: ✅`(근거: 녹화 파일 경로+라인)로 적고, 단계 2 프로브 대상에서
+뺀다. 남은 ❓ 만 프로브가 푼다. 나머지 규율은 종전과 같다: 업무 결정 D1…Dn, **비가역 액션 표시**,
+스텝별 성공/실패 조건, `RESOLUTIONS.md` 행 등록, 형제 PROCESS.md 크로스링크.
+→ **`references/1-process-md-template.md`**(헤딩 스켈레톤 + ❓/✅ 규칙),
+  **`references/1b-codegen-recording.md`**(녹화 운용·파싱·한계 — **필독**)
+
+⚠ **녹화 파일에는 로그인 비밀번호가 평문으로 남는다.** `e2e/artifacts/` 는 gitignore 이므로
+  그 밖으로 옮기거나 커밋하지 않는다(작업 종료 시 삭제 권장).
+
+⚠ **녹화가 대신해 주지 못하는 것**(반드시 프로브로 실측 — 실측 2026-08-07 EAP 취소 e2e):
+  · **캔버스 그리드(RealGrid) 셀 입력** — 좌표 클릭으로만 남아 재현 불가(dewsControl API 필요)
+  · **성공 판정 신호** — 저장/적용이 실제로 됐는지(모달·토스트·재조회)는 녹화에 없다
+  · **타이밍·재시도 규율** — 사람이 기다린 시간은 기록되지 않는다
+  · **리스트/그리드 행 구조** — 클릭 한 번은 잡히지만 행 셀렉터·컬럼 매핑은 별도 덤프 필요
+    (EAP 취소: 사이드바 메뉴 id 는 녹화로 즉시 확정, 행 구조는 `li.listChk` 진단 프로브로 확정)
 
 ### 2. 읽기 경로 검증 (부작용 없음) → 데이터 추출 성공
-헤드리스로 실제 화면을 열어 DOM/그리드/버튼/좌표를 **전량 덤프**하고, 각 읽기 스텝을 실행해
-동작(데이터 존재 여부 포함)을 확인. 부작용 0. → **prober 에 위임.** prober 는 확정된 셀렉터/컬럼/
+**녹화가 확정한 구간(단계 1 에서 ✅ 된 메뉴 경로·버튼·팝업·다이얼로그)은 건너뛴다.** 남은 ❓
+(캔버스 셀·행 구조·컬럼 매핑·데이터 존재·성공 신호)만 헤드리스로 덤프·실행해 확인. 부작용 0.
+→ **prober 에 위임**(프로브 지시에 "녹화로 확정된 것: …, 확인할 것: …" 를 명시해 중복 실측을 막는다). prober 는 확정된 셀렉터/컬럼/
 데이터 예시를 반환. 기존 프리미티브(nbkit js_lib/selectors, 기존 `*_probe.py`)를 재사용.
 
 ### 3. 쓰기 경로 검증 (격리된 테스트 계정에서만) → 등록 성공
@@ -160,6 +186,7 @@ PROCESS.md 버전 관리. → **`references/8-operations.md`**
 
 - `references/0-feasibility-gate.md` — 단계 0 체크리스트(로그인·2FA·CAPTCHA·robots·테스트 계정·진입경로)
 - `references/1-process-md-template.md` — 단계 1 PROCESS.md 스켈레톤·D결정·❓/✅·비가역 표시
+- `references/1b-codegen-recording.md` — 단계 1 녹화 운용(실행·파싱·한계·보안)
 - `references/4-self-correction.md` — 단계 4 재시도 상한·원인 분류·변경 이력
 - `references/5-e2e-cycle.md` — 단계 5·7 실저장 사이클·가드레일·teardown·flakiness
 - `references/8-operations.md` — 단계 8 셀렉터 드리프트·트레이스·버전관리

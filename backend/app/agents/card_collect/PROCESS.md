@@ -185,8 +185,8 @@ login → user_type(회계) → menu_nav → set_gubun(카드) → add_row → s
 
 ## 통합 방향(⑥, 확정)
 
-- 프론트 **기존 `card-chat` 에이전트("법인카드 지결 — 대화형 폼 채움")를 card_collect 로 교체**(사용자 확정).
-  - `WORKFLOW_BY_AGENT['card-chat'] = 'card-collect'` 로 매핑 변경(현재 'expense-card-chat').
+- 프론트 **기존 `corporate-card` 에이전트("법인카드 지결 — 대화형 폼 채움")를 card_collect 로 교체**(사용자 확정).
+  - `WORKFLOW_BY_AGENT['corporate-card'] = 'card-collect'` 로 매핑 변경(현재 'expense-card-chat').
   - `register_workflow('card-collect', …)` 등록. `step-defs.ts` 에 card-collect 단계 정의 추가.
   - 에이전트 이름/설명을 다건 정리형에 맞게 갱신. 기존 expense-card-chat 그래프는 보존(다른 종류 재활용 가능).
   - 대화형 UX: 리스트 요약 채팅 보고 → 건별 예산단위/계정/프로젝트 입력 + 적요 추천(HITL 루프) → 일괄적용 → F7 저장.
@@ -242,7 +242,7 @@ login → user_type(회계) → menu_nav → set_gubun(카드) → add_row → s
 - [x] 헤드리스 10회 반복 테스트(저장 직전까지) — **10/10 PASS(avg 55s)**
 - [x] 리뷰 반영·회귀 수정 후 **최종 코드 10회 재검증 — 10/10 PASS(avg 56.7s, 2026-07-02)**
 - [x] LangGraph 노드/그래프(`graph.py`) + registry 등록 (`card-collect`)
-- [x] 프론트 매핑(card-chat→card-collect)·step-defs·에이전트 메타 (HITL은 chat/choice 인프라 재사용)
+- [x] 프론트 매핑(corporate-card→card-collect)·step-defs·에이전트 메타 (HITL은 chat/choice 인프라 재사용)
 - [~] 리뷰 반영 후 회귀 재검증(갱신 fill_codepicker N=3) — 진행 중
 - [ ] 최종 1회 실저장 검증(사람 확인)
 
