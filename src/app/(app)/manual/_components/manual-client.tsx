@@ -7,8 +7,9 @@ import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import Image from 'next/image';
 import type { Agent } from '@/lib/data/agents';
-import { GENERAL_MANUAL_SECTIONS, findGeneralDoc } from '@/lib/data/manual';
+import { GENERAL_MANUAL_SECTIONS, MANUAL_CONTENT, findGeneralDoc } from '@/lib/data/manual';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 
 /** 왼쪽 분류의 한 섹션 — 지금은 에이전트 그룹에서 파생하지만, 항목이 에이전트가 아니어도 된다. */
@@ -136,10 +137,11 @@ export function ManualClient({ docId }: { docId?: string }) {
                 </div>
               </nav>
 
-              {/* 본문 — 선택된 문서 헤딩 + 공백(준비 중) 본문. */}
-              <section className="min-h-[420px] p-6">
+              {/* 본문 — 선택된 문서 헤딩 + 공백(준비 중) 본문. 하단 여백을 넉넉히 둬
+                  끝까지 스크롤해도 마지막 문단이 화면 바닥에 붙지 않게 한다(2026-08-10). */}
+              <section className="min-h-[420px] p-6 pb-28">
                 {selected ? (
-                  <div className="flex flex-col gap-2">
+                  <article className="flex max-w-[960px] flex-col gap-2">
                     {selected.sectionLabel ? (
                       <p className="text-foreground-tertiary text-[length:var(--text-caption)] font-medium tracking-[0.08em] uppercase">
                         {selected.sectionLabel}
@@ -148,10 +150,102 @@ export function ManualClient({ docId }: { docId?: string }) {
                     <h2 className="text-foreground text-[length:var(--text-heading)] leading-tight font-semibold tracking-tight">
                       {selected.title}
                     </h2>
-                    <p className="text-muted-foreground mt-4 text-sm leading-relaxed">
-                      문서 준비 중입니다.
-                    </p>
-                  </div>
+                    {(() => {
+                      const content = docId ? MANUAL_CONTENT[docId] : undefined;
+                      if (!content) {
+                        return (
+                          <p className="text-muted-foreground mt-4 text-sm leading-relaxed">
+                            문서 준비 중입니다.
+                          </p>
+                        );
+                      }
+                      return (
+                        <div className="mt-3 flex flex-col gap-10">
+                          <p className="text-foreground-secondary text-[16px] leading-[1.8]">
+                            {content.intro}
+                          </p>
+                          {content.sections.map((sec, secIndex) => (
+                            <section key={sec.title} className="flex flex-col gap-3">
+                              {/* 스텝 배지 — 제목의 수동 번호("1.") 대신 자동 번호를 원형으로. */}
+                              <h3 className="text-foreground flex items-center gap-2.5 text-[17px] font-semibold tracking-tight">
+                                <span className="bg-accent/10 text-accent grid size-7 shrink-0 place-items-center rounded-full text-[14px] font-bold">
+                                  {secIndex + 1}
+                                </span>
+                                {sec.title}
+                              </h3>
+                              {sec.paragraphs?.map((para) =>
+                                para.startsWith('⚠') ? (
+                                  // 경고 문단(⚠ 접두) — 본문에 묻히지 않게 콜아웃 박스로 격상.
+                                  <div
+                                    key={para.slice(0, 24)}
+                                    className="border-warning/40 bg-warning/10 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3"
+                                  >
+                                    <RiErrorWarningLine
+                                      size={17}
+                                      aria-hidden
+                                      className="text-warning mt-1 shrink-0"
+                                    />
+                                    <p className="text-foreground text-[15px] leading-[1.7]">
+                                      {para.replace(/^⚠\s*/, '')}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <p
+                                    key={para.slice(0, 24)}
+                                    className="text-foreground-secondary text-[15px] leading-[1.8]"
+                                  >
+                                    {para}
+                                  </p>
+                                ),
+                              )}
+                              {sec.image ? (
+                                <figure className="flex flex-col gap-1.5">
+                                  {/* 메뉴얼 스크린샷은 1630×1000 캡처 규격(public/manual-assets) — 960 컨테이너에 축소 표시. */}
+                                  <Image
+                                    unoptimized
+                                    src={sec.image.src}
+                                    alt={sec.image.alt}
+                                    width={1630}
+                                    height={1000}
+                                    className="border-border h-auto w-full rounded-[var(--radius-md)] border"
+                                  />
+                                  {sec.image.caption ? (
+                                    <figcaption className="text-foreground-tertiary pt-0.5 text-[13px] leading-relaxed">
+                                      {sec.image.caption}
+                                    </figcaption>
+                                  ) : null}
+                                </figure>
+                              ) : null}
+                              {sec.fields ? (
+                                <dl className="border-border divide-border divide-y rounded-[var(--radius-md)] border">
+                                  {sec.fields.map((field) => (
+                                    <div
+                                      key={field.name}
+                                      className="grid grid-cols-[8.5rem_1fr] gap-4 px-4 py-3.5"
+                                    >
+                                      <dt className="flex flex-col items-start gap-1">
+                                        <span className="text-foreground text-[15px] font-semibold">
+                                          {field.name}
+                                        </span>
+                                        {field.tag ? (
+                                          <span className="bg-muted text-foreground-tertiary rounded-full px-2 py-0.5 text-[11px]">
+                                            {field.tag}
+                                          </span>
+                                        ) : null}
+                                      </dt>
+                                      <dd className="text-foreground-secondary text-[15px] leading-[1.7]">
+                                        {field.desc}
+                                      </dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
+                            </section>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </article>
                 ) : docId ? (
                   <EmptyState
                     title="문서를 찾을 수 없습니다"
