@@ -8,6 +8,7 @@
  * 여기 두고 questions-step.tsx 가 그대로 다시 내보낸다(기존 import 경로 유지).
  */
 
+import { defaultInvoiceRange } from './model';
 import type { IssueState, NondeductReason, SplitChoice, TaxKind } from './model';
 
 // ── 답 ──────────────────────────────────────────────────────────────────────
@@ -23,8 +24,30 @@ export interface QuestionAnswers {
   nondeduct: NondeductReason | null;
 }
 
+/**
+ * 빈 답 — **무효화 프리미티브**다. 발행 여부를 바꿀 때 뒤 답을 지우는 데 재사용되므로
+ * (questions-step 의 pickIssue) 여기에 프리셋을 넣으면 안 된다. 시작 상태는 defaultAnswers.
+ */
 export function emptyAnswers(): QuestionAnswers {
   return { issue: null, invoiceFrom: '', invoiceTo: '', split: null, tax: null, nondeduct: null };
+}
+
+/**
+ * 시작 상태 — 가장 흔한 증빙유형 **03 세금계산서** 조합을 미리 골라 둔다
+ * (발행 후 · 비용분할 안 함 · 과세, 사용자 확정 2026-08-11).
+ * 코드 그리드부터 고르게 하면 코드를 아는 사람만 빨랐다. 이제 질문 화면이 답이 채워진 채
+ * 열리고, 다른 건이면 해당 행만 눌러 바꾸면 된다.
+ */
+export function defaultAnswers(): QuestionAnswers {
+  const range = defaultInvoiceRange();
+  return {
+    issue: 'after',
+    invoiceFrom: range.from,
+    invoiceTo: range.to,
+    split: 'single',
+    tax: 'taxable',
+    nondeduct: null,
+  };
 }
 
 /** 다음 단계로 갈 수 있는가 — 이 경로의 마지막 질문까지 답이 채워졌는지. */

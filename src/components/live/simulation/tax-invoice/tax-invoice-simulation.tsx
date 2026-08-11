@@ -13,7 +13,7 @@ import {
   type SplitMode,
   type SplitRow,
 } from './model';
-import { QuestionsStep, emptyAnswers, type QuestionAnswers } from './questions-step';
+import { QuestionsStep, defaultAnswers, type QuestionAnswers } from './questions-step';
 import { InvoiceListStep } from './invoice-list-step';
 import { EntryStep, type SelectionSummary } from './entry-step';
 import { SplitStep } from './split-step';
@@ -30,7 +30,7 @@ type Stage = 'questions' | 'list' | 'entry' | 'split' | 'summary';
  */
 export function TaxInvoiceSimulation({ agent }: SimulationPanelProps) {
   const [stage, setStage] = useState<Stage>('questions');
-  const [answers, setAnswers] = useState<QuestionAnswers>(emptyAnswers);
+  const [answers, setAnswers] = useState<QuestionAnswers>(defaultAnswers);
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set<number>());
   const [entry, setEntry] = useState<EntryValues>(emptyEntry);
   const [splitRows, setSplitRows] = useState<readonly SplitRow[]>([]);
@@ -86,7 +86,7 @@ export function TaxInvoiceSimulation({ agent }: SimulationPanelProps) {
 
   const reset = () => {
     setStage('questions');
-    setAnswers(emptyAnswers());
+    setAnswers(defaultAnswers());
     setSelected(new Set<number>());
     setEntry(emptyEntry());
     setSplitRows([]);
