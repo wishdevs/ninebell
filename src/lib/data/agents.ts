@@ -237,16 +237,38 @@ export function filterVisibleAgents<T extends { workflowId?: string }>(agents: r
 export const DEBUG_ONLY_WORKFLOW_IDS: ReadonlySet<string> = new Set([]);
 
 /**
+ * 일반 모드에서 숨길 **에이전트 id** — 실행 워크플로우가 없어 workflowId 로는 못 거르는 건.
+ * (`DEBUG_ONLY_WORKFLOW_IDS` 는 workflowId 매칭이라 workflow_id=null 인 에이전트엔 무력하다.)
+ *
+ * · `tax-invoice` — 세금계산서. 화면 흐름만 확인하는 **시뮬레이션**이고 실 옴니솔 조회·저장이
+ *   아직 없다(workflow_id=null). 완성된 자동화로 오해되지 않게 일반 모드에서 감춘다
+ *   (사용자 지정 2026-08-12). 자동화가 붙어 정식 공개할 때 이 한 줄을 지운다.
+ */
+export const DEBUG_ONLY_AGENT_IDS: ReadonlySet<string> = new Set(['tax-invoice']);
+
+/** 일반 모드에서 감출 대상인지 — 목록 필터와 상세 URL 게이트가 함께 쓰는 단일 판정. */
+export function isDebugOnlyAgent(agent: { id: string; workflowId?: string }): boolean {
+  return (
+    DEBUG_ONLY_AGENT_IDS.has(agent.id) ||
+    (!!agent.workflowId && DEBUG_ONLY_WORKFLOW_IDS.has(agent.workflowId))
+  );
+}
+
+/**
  * 디버그 모드 여부에 따라 에이전트를 걸러낸다.
  *  · 디버그 모드: 아무것도 숨기지 않는다.
- *  · 일반 모드: `DEBUG_ONLY_WORKFLOW_IDS` 에 등록된 것만 숨긴다(현재 없음 → 전부 통과).
+ *  · 일반 모드: `DEBUG_ONLY_AGENT_IDS`(id) 또는 `DEBUG_ONLY_WORKFLOW_IDS`(workflowId) 등록분을 숨긴다.
+ *
+ * ⚠ 이 필터는 **화면 표시 전용**이다 — 서버는 여전히 내려주므로 보안 경계가 아니다
+ *   (디버그 모드 자체가 localStorage 클라이언트 플래그다). 권한으로 막아야 하는 것은
+ *   백엔드 hidden(`agent_visibility.HIDDEN_AGENT_IDS`)을 쓴다.
  */
-export function filterByDebugMode<T extends { workflowId?: string }>(
+export function filterByDebugMode<T extends { id: string; workflowId?: string }>(
   agents: readonly T[],
   debugMode: boolean,
 ): T[] {
   if (debugMode) return [...agents];
-  return agents.filter((a) => !a.workflowId || !DEBUG_ONLY_WORKFLOW_IDS.has(a.workflowId));
+  return agents.filter((a) => !isDebugOnlyAgent(a));
 }
 
 /** 헤드리스 브라우저 슬롯을 점유한 상태(라이브 세션). */

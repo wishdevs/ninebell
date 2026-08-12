@@ -5,7 +5,7 @@
 
 ## 개발 환경
 - PostgreSQL 17 도커 컨테이너 `dashboard-pg` = localhost:5434 (5432/8000 은 다른 프로젝트가 점유)
-- 백엔드 uvicorn :8010 — `--reload` 아님. 백엔드 코드를 고치면 재기동해야 반영된다
+- 백엔드 uvicorn :8010 — 로컬 개발은 `--reload` 로 띄운다(2026-08-12 전환). `.py` 를 고치면 WatchFiles 가 자동 재기동한다. ⚠ 재기동은 프로세스를 갈아끼우므로 **인메모리 세션·HITL 큐가 날아간다** — 라이브 실행/개입 중에 백엔드 파일을 고치지 말 것<br>  `cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload` (로그: `backend/logs/uvicorn-dev.log`, gitignore)
 - 프론트 dev :3101, `NEXT_PUBLIC_API_BASE=http://localhost:8010` (.env.local)
 - LLM 키/모델은 `backend/.env` (GEMINI_API_KEY 등, gitignore)
 - 로컬 부트스트랩 관리자 = admin/1111 (super_admin, env `LOCAL_ADMIN_PASSWORD` 로 교체)
@@ -14,6 +14,7 @@
 ## 안전 경계
 - 실제 전표 저장(F7/BTN_SAVE)은 원칙적으로 미실행 — 폼 채움·적용까지만. 예외는 사용자가 저장 자동화를 명시 승인한 플로우(card_collect 등)뿐이다
 - 상신(결재)은 원칙적으로 클릭하지 않는다. 예외는 **회계전표(voucher) 3종**(외상매출/외상매입/미지급금카드)으로, 결제창에서 실제 상신까지 실행한다 (2026-08-07 사용자 승인 — `backend/e2e/eap_approval_cancel_probe.py` 로 결재취소→상신취소→임시보관 삭제가 되어 가역이다). 그 외 에이전트는 여전히 상신 금지이며, 보관 버튼은 어느 에이전트도 클릭하지 않는다
+- 그 회수 경로는 2026-08-12 부터 에이전트로도 있다 — `eap-approval-cancel`(`backend/app/agents/eap_cancel/`, hidden). 상신문서함 '진행' 목록을 HITL 로 띄우고 **체크한 문서만** 결재취소→상신취소→삭제한다(비가역). 실행 경로는 관리자 + 회계전표 3종 상세의 디버그 버튼뿐이다
 - e2e 반복 테스트는 실저장→검증→삭제(F6)→잔존 0 확인 사이클로 한다. 삭제 수단이 없는 화면은 비가역 동사 직전에서 멈춘다
 
 ## 플로우 구축 절차

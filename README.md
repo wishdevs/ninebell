@@ -50,10 +50,13 @@ python3.13 -m venv .venv
 .venv/bin/playwright install chromium        # 실제 옴니솔 로그인에 필요(최초 1회)
 cp .env.example .env                          # AUTH_SECRET, DATABASE_URL, SUPER_ADMIN_OMNISOL_IDS 등
 .venv/bin/alembic upgrade head                # 스키마 + 시드
-.venv/bin/uvicorn app.main:app --port 8010    # startup 에서 seed 자동 실행
+.venv/bin/uvicorn app.main:app --port 8010 --reload   # startup 에서 seed 자동 실행
 ```
 
-빠른 개발(마이그레이션 없이): `DEV_CREATE_ALL=1 .venv/bin/uvicorn app.main:app --port 8010`.
+`--reload` 는 `.py` 변경 시 자동 재기동한다. 재기동은 인메모리 세션·HITL 큐를 버리므로
+라이브 실행 중에는 백엔드 파일을 고치지 않는다(배포 이미지는 `--reload` 없이 뜬다).
+
+빠른 개발(마이그레이션 없이): `DEV_CREATE_ALL=1 .venv/bin/uvicorn app.main:app --port 8010 --reload`.
 로컬 시스템 관리자: `admin` / `1111`(env `LOCAL_ADMIN_PASSWORD` 로 재정의, 프로덕션 필수).
 
 ### 3) 프론트엔드

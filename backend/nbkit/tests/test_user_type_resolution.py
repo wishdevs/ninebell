@@ -66,7 +66,25 @@ class _UtPage:
 
     # ── 시계(가짜) — monotonic 상한 폴링이 실시간 낭비 없이 진행되게 ──────────────
     def install_clock(self, monkeypatch) -> None:
+        """monotonic 을 가짜 시계에 묶고, **실시간 sleep 도 그 시계를 밀도록** 함께 대체한다.
+
+        ⚠ `time.monotonic` 패치는 전역이다(`auth.time` 은 time 모듈 그 자체) — asyncio
+        이벤트 루프의 시계(`loop.time()`)까지 같이 얼어붙는다. 그 상태에서 **진짜**
+        `asyncio.sleep` 을 만나면 타이머 만기(`frozen + delay`)가 영원히 오지 않아 루프가
+        `selectors.select` 에서 잠들고 테스트가 끝나지 않는다.
+        2026-08-07 '시간축 실시간화'(c9248ff)로 폴 대기가 `page.wait_for_timeout` →
+        `verify.DEFAULT_SLEEP`(=asyncio.sleep) 로 바뀌면서 이 파일의 전환 테스트 4종이
+        정확히 그 무한 대기에 빠졌다(2026-08-12 확인).
+        그래서 sleep 이음매도 함께 가로채 **즉시 반환 + 시계 전진**으로 바꾼다 —
+        `wait_for_timeout` 과 같은 의미이고, 프로덕션의 실시간 폴 규율은 그대로 둔다.
+        """
         monkeypatch.setattr("nbkit.omnisol.auth.time.monotonic", lambda: self.clock_ms / 1_000)
+
+        async def _advance(seconds: float) -> None:
+            self.clock_ms += seconds * 1_000
+
+        # 호출부가 전부 `verify.DEFAULT_SLEEP(...)`(모듈 속성 조회)이라 이 한 곳이면 덮인다.
+        monkeypatch.setattr("nbkit.omnisol.verify.DEFAULT_SLEEP", _advance)
 
     async def wait_for_timeout(self, ms):
         self.clock_ms += ms
