@@ -46,6 +46,15 @@ const CLEANUP_WORKFLOWS: Record<string, string> = {
   scholarship: 'hakjagum-grant-cleanup',
 };
 
+// 전자결재 상신 취소(hidden) — 실제 상신을 실행하는 회계전표 3종에서만, 디버그 모드에서만
+// 노출한다(2026-08-12). 상신문서함의 '진행' 문서를 목록으로 띄우고 체크한 건만 취소한다.
+const APPROVAL_CANCEL_WORKFLOW = 'eap-approval-cancel';
+const APPROVAL_CANCEL_AGENTS = new Set([
+  'voucher-trade-receivable',
+  'voucher-trade-payable',
+  'voucher-card-payable',
+]);
+
 function statusAt(pos: number, current: number): StepStatus {
   return pos < current ? 'done' : pos === current ? 'active' : 'pending';
 }
@@ -249,6 +258,12 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
                 패널로 실행한다(본인 작성·미결 문서 전량 가드 통과 시에만 F6 삭제). */}
             {!isLive && debugMode && CLEANUP_WORKFLOWS[agent.id] ? (
               <CleanupButton onRun={() => startRun(CLEANUP_WORKFLOWS[agent.id])} />
+            ) : null}
+            {/* 전자결재 상신 취소(디버그, 2026-08-12) — 상신을 실제로 실행하는 회계전표 3종에만
+                노출. 실행하면 상신문서함 '진행' 목록을 개입으로 띄우고, 체크한 문서만
+                결재취소 → 상신취소 → 삭제까지 처리한다(비가역). */}
+            {!isLive && debugMode && APPROVAL_CANCEL_AGENTS.has(agent.id) ? (
+              <ApprovalCancelButton onRun={() => startRun(APPROVAL_CANCEL_WORKFLOW)} />
             ) : null}
             <LiveControls
               enabled={isLive}
@@ -488,6 +503,34 @@ function CleanupButton({ onRun }: { onRun: () => void }) {
     <Button size="sm" variant="secondary" onClick={() => setConfirm(true)}>
       <RiDeleteBinLine size={14} aria-hidden />
       테스트 문서 정리
+    </Button>
+  );
+}
+
+/**
+ * 전자결재 상신 취소 버튼(디버그 전용, 2026-08-12) — 실행하면 상신문서함의 '진행' 문서를
+ * 개입(체크박스)으로 띄운다. 실제 취소는 체크한 문서에만 일어나지만, 결재취소→상신취소→삭제는
+ * 비가역이라 실행 자체를 인라인 확인으로 한 번 막는다.
+ */
+function ApprovalCancelButton({ onRun }: { onRun: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  if (confirm) {
+    return (
+      <InlineConfirm
+        question="상신문서 목록을 불러올까요? (취소는 체크한 문서에만 실행됩니다)"
+        confirmLabel="목록 불러오기"
+        onConfirm={() => {
+          setConfirm(false);
+          onRun();
+        }}
+        onCancel={() => setConfirm(false)}
+      />
+    );
+  }
+  return (
+    <Button size="sm" variant="secondary" onClick={() => setConfirm(true)}>
+      <RiSkipBackLine size={14} aria-hidden />
+      전자결재 상신 취소
     </Button>
   );
 }

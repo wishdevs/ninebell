@@ -746,8 +746,42 @@ def _cleanup_fixture(cleanup_id: str, doc_name: str, gubun_label: str) -> dict:
     }
 
 
+# ── 전자결재 상신 취소(디버그 전용, 2026-08-12) — hidden 워크플로우 ──────────────
+# voucher 3종이 실제 상신한 문서를 회수하는 경로(결재취소 → 상신취소 → 삭제). 취소 3단계는
+# 비가역이라 HITL(multiselect)로 상신문서함의 '진행' 문서를 제시하고 체크한 건만 처리한다.
+# hidden=True: 목록/상세 비노출(404), 실행은 관리자 + 프론트 디버그 모드 버튼뿐.
+_EAP_CANCEL_FIXTURE: dict = {
+    "id": "eap-approval-cancel",
+    "workflow_id": "eap-approval-cancel",
+    "group_id": None,
+    "hidden": True,
+    "name": "전자결재 상신 취소",
+    "description": (
+        "전자결재 상신문서함에서 '진행' 상태 문서를 조회해 목록으로 보여주고, "
+        "사용자가 체크한 문서만 결재취소 → 상신취소 → 삭제까지 처리합니다(비가역)."
+    ),
+    "drive": "browser",
+    "interaction": "autonomous",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    "timeout_seconds": 600,
+    "elapsed_seconds": 0,
+    "current_action": "대기 중 — 실행을 누르면 시작합니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": None,
+    "steps": [],
+    "logs": [],
+}
+
+
 AGENT_FIXTURES.extend(
     [
+        _EAP_CANCEL_FIXTURE,
         _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
         _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),
         _cleanup_fixture("card-collect-cleanup", "법인카드", "카드"),

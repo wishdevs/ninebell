@@ -13,6 +13,7 @@ from app.live.registry import register_workflow
 
 from .card_collect.graph import build_card_collect_graph
 from .common.cleanup import build_doc_cleanup_graph
+from .eap_cancel.graph import build_eap_cancel_graph
 from .expense_card import build_expense_card_chat_graph
 from .gyeongjo_grant.graph import GYEONGJO_GUBUN_LABEL, build_gyeongjo_grant_graph
 from .hakjagum_grant.graph import HAKJAGUM_GUBUN_LABEL, build_hakjagum_grant_graph
@@ -58,6 +59,13 @@ for _cid, _label, _fg in (
     _cleanup_graph = build_doc_cleanup_graph(_label, _fg)
     register_workflow(_cid, (lambda g: (lambda: g))(_cleanup_graph), delay_scale=0.4)
 
+_eap_cancel_graph = build_eap_cancel_graph()
+# 전자결재 상신 취소(디버그, 사용자 요청 2026-08-12) — voucher 3종이 실제 상신한 문서를
+# 회수하는 경로. e2e/eap_approval_cancel_probe.py 를 프로덕션 그래프로 이식했다.
+# ⚠ delay_scale 을 주지 않는다(=1.0, 무배율). 취소 3단계는 비가역이고, 프로브가 PASS 한
+# 타이밍이 실시간 그대로였다 — 검증된 타이밍에서 벗어날 이득이 없다.
+register_workflow("eap-approval-cancel", lambda: _eap_cancel_graph)
+
 _gyeongjo_grant_graph = build_gyeongjo_grant_graph()
 # 국내/해외출장과 동일 detail 스키마·프리미티브 재사용(단건) → 같은 delay_scale(0.4). env 우선.
 register_workflow("gyeongjo-grant", lambda: _gyeongjo_grant_graph, delay_scale=0.4)
@@ -83,6 +91,7 @@ register_workflow("voucher-card", lambda: _voucher_card_graph, delay_scale=0.4)
 
 __all__ = [
     "build_card_collect_graph",
+    "build_eap_cancel_graph",
     "build_expense_card_chat_graph",
     "build_gyeongjo_grant_graph",
     "build_hakjagum_grant_graph",
