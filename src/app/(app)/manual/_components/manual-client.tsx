@@ -8,8 +8,9 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode } from '@/lib/data/agents';
 import { GENERAL_MANUAL_SECTIONS, MANUAL_CONTENT, findGeneralDoc } from '@/lib/data/manual';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 
 /** 왼쪽 분류의 한 섹션 — 지금은 에이전트 그룹에서 파생하지만, 항목이 에이전트가 아니어도 된다. */
@@ -57,6 +58,7 @@ function manualSections(agents: readonly Agent[]): ManualSection[] {
  */
 export function ManualClient({ docId }: { docId?: string }) {
   const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
+  const debugMode = useDebugMode();
 
   return (
     <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-6">
@@ -84,11 +86,12 @@ export function ManualClient({ docId }: { docId?: string }) {
         />
       ) : (
         (() => {
-          const sections = manualSections(data ?? []);
+          // 에이전트 목록과 **동일 노출 규칙**(위 주석의 계약) — 디버그 전용 에이전트는
+          // 일반 모드에서 목차·본문 어디에도 나오지 않는다(직접 /manual/{id} 도 미해석).
+          const docAgents = filterByDebugMode(data ?? [], debugMode);
+          const sections = manualSections(docAgents);
           // 선택 해석: 에이전트 문서 → 정적(비-에이전트) 문서 순 — 같은 주소 공간(/manual/{id}).
-          const selectedAgent = docId
-            ? (data ?? []).find((agent) => agent.id === docId)
-            : undefined;
+          const selectedAgent = docId ? docAgents.find((agent) => agent.id === docId) : undefined;
           const selectedGeneral = !selectedAgent && docId ? findGeneralDoc(docId) : undefined;
           const selected = selectedAgent
             ? { sectionLabel: selectedAgent.group?.name, title: selectedAgent.name }
