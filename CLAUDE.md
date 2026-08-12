@@ -5,7 +5,7 @@
 
 ## 개발 환경
 - PostgreSQL 17 도커 컨테이너 `dashboard-pg` = localhost:5434 (5432/8000 은 다른 프로젝트가 점유)
-- 백엔드 uvicorn :8010 — `--reload` 아님. 백엔드 코드를 고치면 재기동해야 반영된다
+- 백엔드 uvicorn :8010 — 로컬 개발은 `--reload` 로 띄운다(2026-08-12 전환). `.py` 를 고치면 WatchFiles 가 자동 재기동한다. ⚠ 재기동은 프로세스를 갈아끼우므로 **인메모리 세션·HITL 큐가 날아간다** — 라이브 실행/개입 중에 백엔드 파일을 고치지 말 것<br>  `cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload` (로그: `backend/logs/uvicorn-dev.log`, gitignore)
 - 프론트 dev :3101, `NEXT_PUBLIC_API_BASE=http://localhost:8010` (.env.local)
 - LLM 키/모델은 `backend/.env` (GEMINI_API_KEY 등, gitignore)
 - 로컬 부트스트랩 관리자 = admin/1111 (super_admin, env `LOCAL_ADMIN_PASSWORD` 로 교체)

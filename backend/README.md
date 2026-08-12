@@ -20,10 +20,10 @@ cp .env.example .env                     # 값 채우기 (AUTH_SECRET, DATABASE_
 ```bash
 # PostgreSQL 준비 후:
 .venv/bin/alembic upgrade head           # 스키마 생성
-.venv/bin/uvicorn app.main:app --port 8000   # startup 에서 seed 자동 실행
+.venv/bin/uvicorn app.main:app --port 8000 --reload   # startup 에서 seed 자동 실행
 
 # DB/Alembic 없이 빠른 개발:
-DEV_CREATE_ALL=1 .venv/bin/uvicorn app.main:app --port 8000
+DEV_CREATE_ALL=1 .venv/bin/uvicorn app.main:app --port 8000 --reload
 ```
 
 ## 테스트
