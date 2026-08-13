@@ -94,6 +94,57 @@ def _sample_rows() -> list[dict]:
     ]
 
 
+def _shallow_rows() -> list[dict]:
+    """얕은 BOM 실측(ZJ90-130, 2026-08-13) — 4레벨 부품이 **없고** SET(3레벨)이 곧 구매 대상.
+    화면 실측: 17행 = 프로젝트1 + 장비1 + 외주조립 SET 15(요청잔량 1)."""
+    return [
+        _grid_row(0),
+        _grid_row(1, ITEM_CD="2261", ITEM_NM="프로젝트", WBS_NM="ZJ90-130,  8CH BS PROCESS"),
+        _grid_row(
+            2, ITEM_CD="328-20773", ITEM_NM="PROCESS, 8CH BS", ITEM_SPEC_DC="X8-01.2M4F",
+            UNIT_DC="SYS", BOM_QT="1", WBS_NM="PO-2026-06-8668",
+        ),
+        _grid_row(
+            3, ITEM_CD="ZJ90-130-PROCESS-BUFFER", ITEM_NM="Process-Buffer Assy",
+            UNIT_DC="SET", BOM_QT="1", RMND_QT="1", VEND_NM="외주조립-BUFFER", PUR_FG="Y",
+        ),
+        _grid_row(
+            3, ITEM_CD="ZJ90-130-PROCESS-ELECTRIC", ITEM_NM="Process-Electric Part",
+            UNIT_DC="SET", BOM_QT="1", RMND_QT="1", VEND_NM="외주조립-ELECTRIC", PUR_FG="Y",
+        ),
+    ]
+
+
+def test_assemble_shallow_bom_uses_set_row_as_its_own_part():
+    """⚠ 회귀(2026-08-13 라이브 실패): 4레벨 부품이 없는 프로젝트에서 parts=0 이 되어
+    read_bom 이 '부품(리프) 행을 조립하지 못했습니다'로 하드 실패했다. 자식 없는 SET 은
+    그 행 자체가 부품 1건이다(발주단위=SET, 구매 대상=SET)."""
+    bom = planner.assemble_planner_bom(
+        _shallow_rows(), {"code": "2261", "name": "ZJ90-130,  8CH BS PROCESS"}
+    )
+    modules = bom["machines"][0]["modules"]
+    assert len(modules) == 2
+    for module in modules:
+        assert len(module["parts"]) == 1
+        part = module["parts"][0]
+        assert part["itemCode"] == module["itemCode"]  # SET 자신이 구매 대상
+        assert part["remainQty"] == 1 and part["purchasable"] is True
+
+    summary = planner.summarize_bom(bom, 17)
+    assert summary["parts"] == 2 and summary["purchasableParts"] == 2  # read_bom 하드 실패 해제
+    assert bom["project"]["wbs"] == "PO-2026-06-8668"  # 프로젝트 라벨 행 WBS 오염 방지 유지
+
+
+def test_deep_bom_keeps_real_leaves_only():
+    """깊은 BOM(CX85-137)은 종전 그대로 — SET 자신을 부품으로 넣지 않는다(중복 방지)."""
+    bom = planner.assemble_planner_bom(
+        _sample_rows(), {"code": "2297", "name": "CX85-137, 12CH PROCESS"}
+    )
+    modules = bom["machines"][0]["modules"]
+    assert [len(m["parts"]) for m in modules] == [2, 1]
+    assert all(p["itemCode"] != m["itemCode"] for m in modules for p in m["parts"])
+
+
 def test_assemble_planner_bom_maps_levels_to_contract_shape():
     bom = planner.assemble_planner_bom(
         _sample_rows(), {"code": "2297", "name": "CX85-137, 12CH PROCESS"}
@@ -311,6 +362,102 @@ async def test_pick_project_timeout_fails_node(monkeypatch):
     out = await make_pick_project_node()({"events": events, "page": _Page()})
     assert "시간 초과" in out["error"]
     assert_keys_declared(PurchaseOrderState, out)
+
+
+# ── 사전 선택(실행 전 폼 params) — 개입 없이 바로 적용, 실패 시 개입 폴백(2026-08-13) ──
+_PRESELECT = {
+    "purchase_order": {
+        "project_no": "2297",
+        "project_name": "CX85-137, 12CH PROCESS",
+        "keyword": "CX85-137",
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_pick_project_preselection_skips_hitl(monkeypatch):
+    # 실행 전 폼이 고른 프로젝트가 있으면 개입(hitl 프레임) 없이 바로 적용·조회하고 끝난다.
+    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
+    events = _q()
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
+    )
+    assert out["project"] == {"code": "2297", "name": "CX85-137, 12CH PROCESS"}
+    assert calls["apply"] == [("CX85-137", "2297")]  # 폼이 준 검색어로 적용.
+    assert calls["lookup"] == 1
+    assert not [f for f in _frames(events) if "hitl" in f]  # 개입 프레임 0.
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+@pytest.mark.asyncio
+async def test_pick_project_preselection_falls_back_to_hitl_when_apply_fails(monkeypatch):
+    # 카탈로그 스냅샷이 낡아 도움창에서 못 잡는 경우 — 하드 실패가 아니라 검색 개입으로 폴백.
+    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW], apply_ok=False)
+    events = _q()
+    task = asyncio.create_task(
+        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT})
+    )
+    frame = await _next_hitl(events)
+    assert frame["kind"] == "search" and frame["options"] == []
+    assert calls["apply"] == [("CX85-137", "2297")]  # 사전 선택은 시도했다.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_pick_project_preselection_hard_fails_when_bom_not_loaded(monkeypatch):
+    # 적용은 됐는데 BOM 미로드 — 다른 프로젝트를 골라도 안 풀리므로 개입 없이 즉시 중단.
+    _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW], bom_rows=0)
+    events = _q()
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
+    )
+    assert "BOM 그리드가 로드되지 않았습니다" in out["error"]
+    assert not [f for f in _frames(events) if "hitl" in f]
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+@pytest.mark.asyncio
+async def test_pick_project_without_params_opens_hitl(monkeypatch):
+    # params 없음(폼 미사용) — 종전 그대로 검색 개입을 띄운다(사전 선택 도입 회귀 방어).
+    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
+    events = _q()
+    task = asyncio.create_task(make_pick_project_node()({"events": events, "page": _Page()}))
+    frame = await _next_hitl(events)
+    assert frame["kind"] == "search" and calls["apply"] == []
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+# ── 실행 전 폼 params 파싱 ────────────────────────────────────────────────────
+def test_purchase_order_params_reads_nested_and_flat():
+    from app.agents.purchase_order.params import parse_purchase_order_params
+
+    nested = parse_purchase_order_params(_PRESELECT)
+    flat = parse_purchase_order_params(_PRESELECT["purchase_order"])
+    assert nested.project_no == flat.project_no == "2297"
+    assert nested.has_preselection and flat.has_preselection
+
+
+def test_purchase_order_params_derives_keyword_from_name_comma_prefix():
+    # 폼이 keyword 를 안 주면 프로젝트명의 콤마 앞 토큰으로 유도한다(도움창 검증 경로).
+    from app.agents.purchase_order.params import parse_purchase_order_params
+
+    p = parse_purchase_order_params(
+        {"purchase_order": {"project_no": "2297", "project_name": "CX85-137, 12CH PROCESS"}}
+    )
+    assert p.keyword == "CX85-137" and p.has_preselection
+
+
+def test_purchase_order_params_absent_means_hitl():
+    from app.agents.purchase_order.params import parse_purchase_order_params
+
+    for raw in (None, {}, {"purchase_order": {}}, {"purchase_order": {"project_no": "  "}}):
+        assert parse_purchase_order_params(raw).has_preselection is False
 
 
 # ── read_bom 노드 ─────────────────────────────────────────────────────────────

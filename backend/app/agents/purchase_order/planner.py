@@ -92,6 +92,23 @@ def _bool_yn(row: dict, key: str, *, default: bool = True) -> bool:
     return str(v).strip().upper() != "N"
 
 
+def _part_from_row(row: dict) -> dict:
+    """부품(리프) 한 건 — LEVEL_PART 행과 '자식 없는 SET' 행이 함께 쓰는 단일 변환."""
+    return {
+        "itemCode": _text(row, "itemCode"),
+        "name": _text(row, "name"),
+        "spec": _text(row, "spec"),
+        "unit": _text(row, "unit"),
+        "bomQty": _num(row, "bomQty"),
+        "remainQty": _num(row, "remainQty"),
+        "unitPrice": _num(row, "unitPrice"),
+        "amount": _num(row, "amount"),
+        "vendorClass": _text(row, "vendorClass"),
+        "account": _text(row, "account"),
+        "purchasable": _bool_yn(row, "purchasable"),
+    }
+
+
 def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
     """트리그리드 행(level+fields) → plannerBom(공유 계약 shape).
 
@@ -99,10 +116,18 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
     1(프로젝트 라벨 행)은 건너뛰고, 2=machine / 3=SET / 4=part 로 조립한다. 계층이 깨진
     행(machine 없는 module, module 없는 part)은 버린다 — 조립을 죽이는 것보다 낫고, 요약
     카운트로 드러난다.
+
+    ⚠ **얕은 BOM**(사용자 리포트 2026-08-13, ZJ90-130): 프로젝트에 따라 4레벨 부품이 아예
+      없고 SET(레벨 3)이 곧 구매 대상인 경우가 있다(외주조립 SET — 17행 = 프로젝트1+장비1+SET15,
+      요청잔량 1). 이때 parts 가 전부 비어 `summarize_bom.parts == 0` 이 되어 read_bom 이 하드
+      실패했다. 이제 **자식이 없는 SET 은 그 행 자체를 부품 1건으로** 담는다(발주단위=그 SET,
+      구매 대상=그 SET). 깊은 BOM(CX85-137: SET 아래 부품 337건)은 종전 그대로다.
     """
     machines: list[dict] = []
     cur_machine: dict | None = None
     cur_module: dict | None = None
+    # 자식 없는 SET 을 자기 자신으로 채우기 위해 (모듈, 원본행) 쌍을 들고 간다.
+    module_rows: list[tuple[dict, dict]] = []
     wbs = str(project.get("wbs") or "").strip()
 
     for row in rows:
@@ -135,25 +160,17 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
                 "parts": [],
             }
             cur_machine["modules"].append(cur_module)
+            module_rows.append((cur_module, row))
         elif level == LEVEL_PART:
             if cur_module is None:
                 continue
-            cur_module["parts"].append(
-                {
-                    "itemCode": _text(row, "itemCode"),
-                    "name": _text(row, "name"),
-                    "spec": _text(row, "spec"),
-                    "unit": _text(row, "unit"),
-                    "bomQty": _num(row, "bomQty"),
-                    "remainQty": _num(row, "remainQty"),
-                    "unitPrice": _num(row, "unitPrice"),
-                    "amount": _num(row, "amount"),
-                    "vendorClass": _text(row, "vendorClass"),
-                    "account": _text(row, "account"),
-                    "purchasable": _bool_yn(row, "purchasable"),
-                }
-            )
+            cur_module["parts"].append(_part_from_row(row))
         # level 0(루트)·1(프로젝트 라벨)·미상(-1)은 조립 대상 아님.
+
+    # 얕은 BOM 보정 — 자식(레벨 4)이 없는 SET 은 그 행 자체가 구매 대상이다(docstring 참조).
+    for module, row in module_rows:
+        if not module["parts"]:
+            module["parts"].append(_part_from_row(row))
 
     return {
         "project": {
