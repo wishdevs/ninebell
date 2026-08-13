@@ -821,7 +821,10 @@ def _placeholder_fixture(agent_id: str, name: str, group_id: str) -> dict:
 AGENT_FIXTURES.extend(
     [
         _placeholder_fixture("item-bulk-register", "품목일괄등록", "purchase"),
+        # 구매발주 = 실 연동 대상(SCM-구매 사용자유형, PUOPRQ00200 실측 진행 중 — agents/purchase_order/PROCESS.md).
+        # 구매발주 데모 = 정적 BOM 픽스처로 화면 흐름을 확정한 계획서 시뮬레이션(2026-08-13 분리).
         _placeholder_fixture("purchase-order", "구매발주", "purchase"),
+        _placeholder_fixture("purchase-order-demo", "구매발주 데모", "purchase"),
         _EAP_CANCEL_FIXTURE,
         _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
         _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),

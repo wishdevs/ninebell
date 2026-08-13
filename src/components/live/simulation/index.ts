@@ -21,7 +21,8 @@ export interface SimulationPanelProps {
 
 export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProps>> = {
   'tax-invoice': TaxInvoiceSimulation,
-  'purchase-order': PurchaseOrderSimulation,
+  // 데모 전용 — 실 연동 구매발주(purchase-order)는 SCM-구매 실측 후 pre-run 으로 승격 예정.
+  'purchase-order-demo': PurchaseOrderSimulation,
 };
 
 /**
@@ -29,4 +30,4 @@ export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProp
  * 우측 열로는 좁다. 여기 등록된 agentId 는 agent-detail-client 가 layoutLevel 을
  * 'full'(그리드 개입과 동일 — 라이브 대기 스테이지 숨김)로 올린다. 나머지는 종전 split.
  */
-export const FULL_WIDTH_SIMULATION_AGENTS: ReadonlySet<string> = new Set(['purchase-order']);
+export const FULL_WIDTH_SIMULATION_AGENTS: ReadonlySet<string> = new Set(['purchase-order-demo']);
