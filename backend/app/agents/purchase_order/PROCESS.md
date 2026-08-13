@@ -44,8 +44,9 @@
 - **D5-보충 BOM 레벨 정정(프로브 실측)**: 트리그리드는 **5레벨**(`ds.getLevel()` 0-idx:
   0=프로젝트/1=장비/2=모듈/3=**SET**/4=부품). 사용자 용어 '3레벨'(발주단위 선택 대상)은
   **getLevel()==3 인 SET 행 15개**에 대응(화면 표시 레벨순번과 xlsx 는 중간 레벨 1개가
-  접혀 4단으로 보였음). 구매요청만 필터 = 리프 337 + 구조 17 = 354행(xlsx 와 일치).
-  CX85-137 리프 392(무필터)·ZJ90-130(PJT_NO 2261) 리프 55.
+  접혀 4단으로 보였음). 구매요청만 필터 = **리프(level 4) 336 + 구조 18 = 354행**
+  (Phase A 스모크 재실측 2026-08-13 — 337 은 `PUR_FG='Y'` 행수로 비리프 1행을 포함한 값이다.
+  xlsx 354행과 총량 일치). CX85-137 리프 392(무필터)·ZJ90-130(PJT_NO 2261) 리프 55.
 - **D6 구매사유 기본값**: 외주조립 모듈이면 `[프로젝트명] [부품명]`(예:
   `CX85-137 · 12CH PROCESS BUFFER`, 복수면 `·` 연결), 그 외 빈 값 — 사용자 수정 가능(계획서에서 확정).
 - **D7 셀프 결재(화면 ②)**: 공장=**나인벨**, ①에서 등록한 항목 선택 → 셀프 결재. ⚠ 비가역 —
@@ -154,6 +155,12 @@ D1(실행 중 HITL)의 구현 레시피. 선례 = `grid` kind(card_collect)가 �
 
 ## 검증 로그
 
+- 2026-08-13 Phase A 구현·검증: 그래프(login→user_type→menu_nav→pick_project[search HITL]→
+  read_bom→plan[planner HITL]→report, 쓰기 0) + runs.py plan 필드 + 픽스처 승격 + 프론트
+  planner 배선(LivePlannerCard — 데모 컴포넌트 파라미터화 재사용). 리뷰 py/ts 승인. 실 ERP
+  API 스모크 SUCCESS(runId 5ead434882…): read_bom stale-grid 레이스를 내용 기반 대기
+  (`wait_bom_filtered` — count+mvY 시그니처·연속 2폴)로 수정 후 354행·SET 15·부품 336 정합,
+  plan 왕복·notice 재방출 라이브 확인. pytest 1680 passed·tsc 클린.
 - 2026-08-13 읽기 프로브(`backend/e2e/purchase_order_{discover,menu_entry,bom_grid}_probe.py`,
   부작용 0): D2·D3 ✅(SCM-구매 라벨·전환, 딥링크 3종, 기본값 나인벨), D10 부분✅(프로젝트 도움창
   `#keyword`, PJT_NO/PJT_NM, CX85-137=코드 2297 1건), D4/D5 정정(체크박스 초기값 둘 다 체크 —

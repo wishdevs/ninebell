@@ -100,10 +100,25 @@ VOUCHER_RECEIVABLE = MenuSchema(
     master_id_field=None,
 )
 
+# 프로젝트BOM구매요청[나인벨](SCM-구매) — purchase_order 라이브 읽기 프로브로 확정(2026-08-13).
+# 딥링크 3종 중 화면 ①. navigate_menu 무수정 진입 실측(grids_required=1 — 화면의 플랫
+# .dews-ui-grid 2개 기준. BOM 본체는 .dews-ui-treegrid 로 별개 위젯이라 카운트 대상 아님).
+PURCHASE_ORDER_BOM = MenuSchema(
+    key="purchase-order-bom",
+    menu_id="PUOPRQ00200_X20616",
+    deeplink="/PU/PUOPRQ00200_X20616",
+    label="프로젝트BOM구매요청[나인벨]",
+    user_type=USER_TYPE_SCM,
+    grids_expected=1,
+    detail_service_url=None,  # 읽기 그래프(Phase A) — 트리그리드 루프 리더로 수집.
+    master_id_field=None,
+)
+
 MENU_MAP: dict[str, MenuSchema] = {
     BOM_COLLECTION.key: BOM_COLLECTION,
     EXPENSE_CARD.key: EXPENSE_CARD,
     VOUCHER_RECEIVABLE.key: VOUCHER_RECEIVABLE,
+    PURCHASE_ORDER_BOM.key: PURCHASE_ORDER_BOM,
 }
 
 

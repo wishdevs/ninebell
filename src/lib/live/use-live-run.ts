@@ -25,6 +25,7 @@ import type {
   LiveRunState,
   LiveStepState,
   LiveWindow,
+  PlanSubmit,
   UseLiveRunReturn,
 } from './types';
 
@@ -454,9 +455,15 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
     return postHitl(runIdRef.current, decisionId, { rows });
   }, []);
 
+  const sendPlan = useCallback((decisionId: string, plan: PlanSubmit): Promise<boolean> => {
+    // 계획서(kind=planner) 확정 제출 — sendRows 와 동일하게 낙관적으로 개입을 닫는다.
+    dispatch({ type: 'clearHitl' });
+    return postHitl(runIdRef.current, decisionId, { plan });
+  }, []);
+
   const selectWindow = useCallback((window: LiveWindow): void => {
     dispatch({ type: 'selectWindow', window });
   }, []);
 
-  return { ...state, sendHitl, sendChat, finishChat, sendQuery, sendRows, selectWindow };
+  return { ...state, sendHitl, sendChat, finishChat, sendQuery, sendRows, sendPlan, selectWindow };
 }

@@ -1,66 +1,51 @@
 /**
- * 구매발주 계획서 — 프론트 더미 시뮬레이션 모델(타입·픽스처 로드·파생 헬퍼).
+ * 구매발주 계획서 — 모델(타입·파생 헬퍼). 데모(정적 픽스처)와 라이브 개입(kind=planner,
+ * hitl.plannerBom)이 **같은 조각**을 쓰도록 BOM 을 인자로 받는다 — 정적 전역 의존 없음.
  *
- * 백엔드 자동화 그래프는 아직 없다. 이 화면은 옴니솔 구매발주 3화면(프로젝트BOM구매요청 →
- * 구매요청처리 → 구매발주일괄입력)의 **반복 루프 입력**(발주단위 묶음 + 구매사유·납기 +
- * 거래처 지정)을 계획서 한 장으로 먼저 확정하기 위한 시뮬레이션이며, 실행 API 를 타지 않는다.
- * 실제 연동 시 BOM 픽스처는 프로젝트BOM구매요청 조회 결과로, 거래처 검색은 ERP 카탈로그로
- * 교체한다.
+ * BOM shape 는 백/프론트 공유 계약(lib/live/types 의 PlannerBom = 데모 픽스처
+ * purchase-order-bom.json 과 동일)이다. 호출부는 createPlanBom() 으로 파생 컨텍스트
+ * (모듈 평탄화·맵)를 만들어 헬퍼에 넘긴다 — 데모 루트는 정적 JSON 을, LivePlannerCard 는
+ * hitl.plannerBom 을 주입한다.
  *
  * 상태의 단일 소스는 units 배열이다 — 모듈→발주단위 매핑·거래처 그룹·합계는 전부 여기서
  * 파생한다(중복 배정은 파생 맵으로 강제). 파생 헬퍼는 순수 함수다 — 단 newOrderUnit 은
  * 모듈 레벨 시퀀스(unitIdSeq)를 증가시키는 예외로, 이벤트 핸들러에서만 호출해야 한다.
  */
 
-import raw from '@/lib/data/purchase-order-bom.json';
+import type {
+  PlannerBom,
+  PlannerBomMachine,
+  PlannerBomModule,
+  PlannerBomPart,
+  PlanSubmit,
+} from '@/lib/live/types';
 import { subtractLeadDays } from './dates';
 
-// ── BOM 픽스처 타입 ──────────────────────────────────────────────────────────
+// ── BOM 타입(와이어 계약 별칭 — 단일 정의는 lib/live/types) ─────────────────
 
-export interface BomPart {
-  itemCode: string;
-  name: string;
-  spec: string;
-  unit: string;
-  bomQty: number;
-  remainQty: number;
-  unitPrice: number;
-  amount: number;
-  /** 품목거래처명 — '가공품'/'판금품'은 의사 거래처(실거래처 지정 필요), 그 외는 실거래처. */
-  vendorClass: string;
-  account: string;
-  purchasable: boolean;
-}
+export type BomPart = PlannerBomPart;
+export type BomModule = PlannerBomModule;
+export type BomMachine = PlannerBomMachine;
+export type PurchaseOrderBom = PlannerBom;
 
-export interface BomModule {
-  itemCode: string;
-  name: string;
-  spec: string;
-  unit: string;
-  bomQty: number;
-  parts: BomPart[];
-}
-
-export interface BomMachine {
-  itemCode: string;
-  name: string;
-  spec: string;
-  unit: string;
-  modules: BomModule[];
-}
-
-export interface PurchaseOrderBom {
+/** BOM 1건에서 파생한 계획서 컨텍스트 — 헬퍼·컴포넌트가 공유하는 조회 구조. */
+export interface PlanBom {
   project: { code: string; name: string; wbs: string };
-  machines: BomMachine[];
+  machines: readonly BomMachine[];
+  /** 3레벨 모듈(SET, 발주단위 선택 단위) — 전 장비 평탄화, BOM 순서 유지. */
+  modules: readonly BomModule[];
+  moduleMap: ReadonlyMap<string, BomModule>;
 }
 
-export const BOM: PurchaseOrderBom = raw;
-
-/** 데모 픽스처는 장비 1대 고정 — 3레벨 모듈(15개)이 계획서의 선택 단위다. */
-export const MACHINE: BomMachine = BOM.machines[0];
-export const MODULES: readonly BomModule[] = MACHINE.modules;
-
-const MODULE_MAP: ReadonlyMap<string, BomModule> = new Map(MODULES.map((m) => [m.itemCode, m]));
+export function createPlanBom(raw: PurchaseOrderBom): PlanBom {
+  const modules = raw.machines.flatMap((m) => m.modules);
+  return {
+    project: raw.project,
+    machines: raw.machines,
+    modules,
+    moduleMap: new Map(modules.map((m) => [m.itemCode, m])),
+  };
+}
 
 /**
  * 모듈 표기 = 품목명 + spec 병기 — 품목명이 '제조2팀'처럼 중복되는 행이 있어
@@ -186,8 +171,8 @@ export function nextUnitSeq(units: readonly OrderUnit[]): number {
   return units.reduce((mx, u) => Math.max(mx, u.seq), 0) + 1;
 }
 
-export function modulesOf(unit: OrderUnit): BomModule[] {
-  return unit.moduleCodes.map((c) => MODULE_MAP.get(c)).filter((m): m is BomModule => m != null);
+export function modulesOf(bom: PlanBom, unit: OrderUnit): BomModule[] {
+  return unit.moduleCodes.map((c) => bom.moduleMap.get(c)).filter((m): m is BomModule => m != null);
 }
 
 /** 모듈 → 배정된 발주 seq. 중복 배정 불가를 이 파생 맵으로 강제한다(풀 체크박스 비활성). */
@@ -207,11 +192,12 @@ const OUTSOURCED_PREFIX = '외주조립-';
  * 빼도 문구는 남는다 — 사용자가 자유 수정 가능.
  */
 export function defaultPurchaseReasonOf(
+  bom: PlanBom,
   project: { code: string; name: string },
   moduleCodes: readonly string[],
 ): string {
   const names = moduleCodes
-    .map((c) => MODULE_MAP.get(c)?.name ?? '')
+    .map((c) => bom.moduleMap.get(c)?.name ?? '')
     .filter((n) => n.startsWith(OUTSOURCED_PREFIX))
     .map((n) => n.slice(OUTSOURCED_PREFIX.length));
   if (names.length === 0) return '';
@@ -219,8 +205,8 @@ export function defaultPurchaseReasonOf(
 }
 
 /** 카드 헤더 모듈 요약 — '외주조립-BUFFER 외 2'. */
-export function unitModuleSummary(unit: OrderUnit): string {
-  const mods = modulesOf(unit);
+export function unitModuleSummary(bom: PlanBom, unit: OrderUnit): string {
+  const mods = modulesOf(bom, unit);
   if (mods.length === 0) return '';
   const first = mods[0].name;
   return mods.length === 1 ? first : `${first} 외 ${mods.length - 1}`;
@@ -297,8 +283,8 @@ export interface CountAmount {
   amount: number;
 }
 
-export function unitTotals(unit: OrderUnit): CountAmount {
-  const mods = modulesOf(unit);
+export function unitTotals(bom: PlanBom, unit: OrderUnit): CountAmount {
+  const mods = modulesOf(bom, unit);
   return {
     parts: mods.reduce((s, m) => s + m.parts.length, 0),
     amount: mods.reduce((s, m) => s + moduleAmount(m), 0),
@@ -306,8 +292,11 @@ export function unitTotals(unit: OrderUnit): CountAmount {
 }
 
 /** 풀 선택 툴바 요약 — '모듈 N개 · 부품 M개 · 금액 X원 선택'. */
-export function selectionTotals(codes: ReadonlySet<string>): CountAmount & { modules: number } {
-  const mods = MODULES.filter((m) => codes.has(m.itemCode));
+export function selectionTotals(
+  bom: PlanBom,
+  codes: ReadonlySet<string>,
+): CountAmount & { modules: number } {
+  const mods = bom.modules.filter((m) => codes.has(m.itemCode));
   return {
     modules: mods.length,
     parts: mods.reduce((s, m) => s + m.parts.length, 0),
@@ -322,19 +311,19 @@ export interface PlanTotals extends CountAmount {
   unassignedVendors: number;
 }
 
-export function planTotalsOf(units: readonly OrderUnit[]): PlanTotals {
+export function planTotalsOf(bom: PlanBom, units: readonly OrderUnit[]): PlanTotals {
   let vendorGroups = 0;
   let unassignedVendors = 0;
   let parts = 0;
   let amount = 0;
   for (const u of units) {
-    const groups = vendorGroupsOf(modulesOf(u));
+    const groups = vendorGroupsOf(modulesOf(bom, u));
     vendorGroups += groups.length;
     // 미지정 판정은 기본값 적용 후(effective) 기준 — 기본 거래처가 있으면 지정으로 본다.
     unassignedVendors += groups.filter(
       (g) => g.isPseudo && !effectiveVendorOf(u, g.vendorClass),
     ).length;
-    const t = unitTotals(u);
+    const t = unitTotals(bom, u);
     parts += t.parts;
     amount += t.amount;
   }
@@ -354,7 +343,7 @@ export interface PlanGate {
  * 전부 지정(기본값 적용 후 기준 — 가공품·판금품은 기본 거래처가 있어 통과).
  * 미배정 모듈은 허용(확정을 막지 않는다 — 남은 모듈은 다음 발주로 돌린다).
  */
-export function planGateOf(units: readonly OrderUnit[]): PlanGate {
+export function planGateOf(bom: PlanBom, units: readonly OrderUnit[]): PlanGate {
   const hints: string[] = [];
   if (units.length === 0) hints.push('발주단위를 1개 이상 만드세요.');
   const noReason = units.filter((u) => !u.purchaseReason.trim()).map((u) => u.seq);
@@ -362,7 +351,7 @@ export function planGateOf(units: readonly OrderUnit[]): PlanGate {
   const noDue = units.filter((u) => !u.dueDate).map((u) => u.seq);
   if (noDue.length > 0) hints.push(`납기예정일 미입력 — 발주 ${noDue.join('·')}`);
   const unassigned = units.flatMap((u) =>
-    vendorGroupsOf(modulesOf(u))
+    vendorGroupsOf(modulesOf(bom, u))
       .filter((g) => g.isPseudo && !effectiveVendorOf(u, g.vendorClass))
       .map((g) => `발주 ${u.seq} ${g.vendorClass}`),
   );
@@ -370,28 +359,33 @@ export function planGateOf(units: readonly OrderUnit[]): PlanGate {
   return { ready: hints.length === 0, hints };
 }
 
-// ── 실행 페이로드(확정 미리보기) ─────────────────────────────────────────────
+// ── 실행 페이로드(확정 제출) ─────────────────────────────────────────────────
 
 /**
- * 에이전트 실행 파라미터 미리보기 — 확정 시 접이식 pre 로 보여준다.
- * project 는 사용자가 선택한 값이며, 거래처 그룹의 vendor/dueDate/note 는 오버라이드가
- * 없으면 파생 기본값(effectiveVendorOf·vendorDueOf·defaultNoteOf)으로 접어 넣는다.
- * wbs 는 데모 픽스처가 프로젝트 1건뿐이라 BOM 값을 그대로 쓴다.
+ * 에이전트 실행 파라미터(PlanSubmit) — 데모는 확정 미리보기 pre 로, 라이브는
+ * POST /runs/hitl 의 plan 으로 제출한다. project 는 사용자가 선택한 값이며, 거래처
+ * 그룹의 vendor/dueDate/note 는 오버라이드가 없으면 파생 기본값(effectiveVendorOf·
+ * vendorDueOf·defaultNoteOf)으로 접어 넣는다. wbs 는 BOM 값을 그대로 쓴다.
  */
 export function buildPlanPayload(
+  bom: PlanBom,
   project: { code: string; name: string },
   units: readonly OrderUnit[],
-): object {
+): PlanSubmit {
   return {
     project: { code: project.code, name: project.name },
-    wbs: BOM.project.wbs,
+    wbs: bom.project.wbs,
     units: units.map((u) => {
-      const groups = vendorGroupsOf(modulesOf(u));
+      const groups = vendorGroupsOf(modulesOf(bom, u));
       return {
         seq: u.seq,
         purchaseReason: u.purchaseReason,
         dueDate: u.dueDate,
-        modules: modulesOf(u).map((m) => ({ itemCode: m.itemCode, name: m.name, spec: m.spec })),
+        modules: modulesOf(bom, u).map((m) => ({
+          itemCode: m.itemCode,
+          name: m.name,
+          spec: m.spec,
+        })),
         vendorGroups: groups.map((g) => {
           const edit = u.vendorEdits[g.vendorClass];
           return {

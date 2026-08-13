@@ -128,6 +128,47 @@ class GridRowIn(BaseModel):
     noteEdited: bool = False
 
 
+# ── 구매발주 계획서(kind 'planner') 제출 서브모델 — 프론트 buildPlanPayload shape 미러 ──
+# GridRowIn 선례: 경계(Pydantic)에서 필드·상한을 강제해야 model_dump 로 노드까지 온전히
+# 도달한다(모델에 없는 필드는 조용히 버려진다 — 2026-07-05 회귀).
+class PlanModuleIn(BaseModel):
+    # 발주단위로 묶인 모듈(SET) 식별 — 트리그리드 레벨 3 행.
+    itemCode: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=255)
+    spec: str = Field(default="", max_length=255)
+
+
+class PlanVendorGroupIn(BaseModel):
+    # 발주단위 내 거래처 그룹 — 의사 거래처(가공품·판금품)는 실거래처(vendor) 확정 필수
+    # (서버 경량 검증은 노드 planner.validate_plan — 여기는 형태·상한만).
+    vendorClass: str = Field(min_length=1, max_length=64)
+    vendor: str | None = Field(default=None, max_length=128)
+    parts: int = Field(default=0, ge=0)
+    amount: float = Field(default=0, ge=0)  # 합계 표시값(파생 계산 없음 — 프론트 산출 그대로)
+    dueDate: str = Field(default="", max_length=16)
+    note: str = Field(default="", max_length=200)
+
+
+class PlanUnitIn(BaseModel):
+    seq: int = Field(ge=1)
+    purchaseReason: str = Field(default="", max_length=200)
+    dueDate: str = Field(default="", max_length=16)
+    modules: list[PlanModuleIn] = Field(default_factory=list, max_length=100)
+    vendorGroups: list[PlanVendorGroupIn] = Field(default_factory=list, max_length=100)
+
+
+class PlanProjectIn(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=255)
+
+
+class PlanIn(BaseModel):
+    # 구매발주 계획서 확정 제출(kind 'planner') — 발주단위 최대 50개.
+    project: PlanProjectIn
+    wbs: str = Field(default="", max_length=64)
+    units: list[PlanUnitIn] = Field(default_factory=list, max_length=50)
+
+
 class HitlDecision(BaseModel):
     runId: str | None = Field(default=None, max_length=40)
     decisionId: str = Field(min_length=1, max_length=64)
@@ -139,6 +180,8 @@ class HitlDecision(BaseModel):
     done: bool | None = None  # 대화형 폼 '선택 완료' 신호
     # 그리드 HITL 일괄 제출 — 행별 예산단위·프로젝트·적요·건너뜀(최대 500행).
     rows: list[GridRowIn] | None = Field(default=None, max_length=500)
+    # 구매발주 계획서 확정 제출(kind 'planner') — buildPlanPayload shape 그대로.
+    plan: PlanIn | None = None
 
 
 def _browser_factory(request: Request):
@@ -307,6 +350,9 @@ async def hitl(body: HitlDecision, user: CurrentUser):
         "done": body.done,
         # 그리드 일괄 제출은 plain dict 목록으로 채널에 전달(노드가 서버검증 후 반영).
         "rows": [r.model_dump() for r in body.rows] if body.rows is not None else None,
+        # 계획서 제출도 payload 에 **동시 추가** — 모델에만 있고 여기 빠지면 조용히 유실된다
+        # (2026-07-05 grid 회귀 선례). 노드(plan)가 validate_plan 후 수락한다.
+        "plan": body.plan.model_dump() if body.plan is not None else None,
     }
     return {"ok": resolve_hitl(body.decisionId, payload)}
 

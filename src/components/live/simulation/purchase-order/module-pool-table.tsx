@@ -6,10 +6,12 @@ import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
-import { MODULES, moduleAmount, selectionTotals, vendorMixOf, type BomModule } from './model';
+import { moduleAmount, selectionTotals, vendorMixOf, type BomModule, type PlanBom } from './model';
 import { MiniChip, PartsTable, RowCheckbox, SimSectionHeader, Td, Th } from './ui';
 
 interface ModulePoolTableProps {
+  /** 주입된 BOM 컨텍스트(데모 픽스처 또는 hitl.plannerBom) — 모듈 풀의 원천. */
+  bom: PlanBom;
   /** 모듈 itemCode → 배정된 발주 seq(파생) — 배정된 모듈은 선택 불가. */
   assigned: ReadonlyMap<string, number>;
   selected: ReadonlySet<string>;
@@ -27,6 +29,7 @@ interface ModulePoolTableProps {
  * 이미 배정된 모듈은 체크박스 비활성 + '발주 N' 배지로 상태를 보인다.
  */
 export function ModulePoolTable({
+  bom,
   assigned,
   selected,
   onToggle,
@@ -45,13 +48,13 @@ export function ModulePoolTable({
 
   // 전체선택 대상 = 미배정 모듈만.
   const freeCodes = useMemo(
-    () => MODULES.filter((m) => !assigned.has(m.itemCode)).map((m) => m.itemCode),
-    [assigned],
+    () => bom.modules.filter((m) => !assigned.has(m.itemCode)).map((m) => m.itemCode),
+    [bom, assigned],
   );
   const allChecked = freeCodes.length > 0 && freeCodes.every((c) => selected.has(c));
   const someChecked = !allChecked && freeCodes.some((c) => selected.has(c));
 
-  const sel = useMemo(() => selectionTotals(selected), [selected]);
+  const sel = useMemo(() => selectionTotals(bom, selected), [bom, selected]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -81,7 +84,7 @@ export function ModulePoolTable({
             </tr>
           </thead>
           <tbody>
-            {MODULES.map((m) => (
+            {bom.modules.map((m) => (
               <ModuleRow
                 key={m.itemCode}
                 module={m}

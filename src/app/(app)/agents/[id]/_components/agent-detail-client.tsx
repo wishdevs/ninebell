@@ -157,7 +157,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const preRunActive = usePreRun && !isLive;
   const panelWide = interventionActive || preRunActive;
   // 개입 레이아웃 레벨(3) — 개입 콘텐츠(kind)별로 라이브화면 노출·크기 + 개입 패널 크기를 정한다.
-  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때)
+  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때),
+  //         planner(구매발주 계획서 — 대형 트리 테이블이라 grid 와 동일 취급)
   //  split: 작은 라이브(좌측) + 넓은 개입   — choice, 실행 전 입력 폼
   //  live : 라이브 크게 + 작은 패널          — 모니터링 + **chat 개입**(화면을 보면서
   //         대화해야 하므로 채팅창은 작게, 라이브를 크게 — 사용자 요청 2026-07-29)
@@ -170,7 +171,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     ? FULL_WIDTH_SIMULATION_AGENTS.has(agent.id)
       ? 'full'
       : 'split'
-    : interventionActive && run.hitl?.kind === 'grid'
+    : interventionActive && (run.hitl?.kind === 'grid' || run.hitl?.kind === 'planner')
       ? 'full'
       : interventionActive && run.hitl?.kind === 'chat'
         ? 'live'

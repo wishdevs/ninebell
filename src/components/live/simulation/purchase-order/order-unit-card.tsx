@@ -13,9 +13,9 @@ import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
-import { CatalogCombobox } from '@/components/live/pre-run/catalog-combobox';
+import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
 import { formatInteger } from '@/lib/data/format';
-import { VENDOR_FAVORITES, searchVendors } from './catalog';
+import { VENDOR_FAVORITES, searchVendors, vendorSearchPoolOf } from './catalog';
 import {
   defaultNoteOf,
   effectiveVendorOf,
@@ -26,12 +26,15 @@ import {
   vendorDueOf,
   vendorGroupsOf,
   type OrderUnit,
+  type PlanBom,
   type VendorEdit,
   type VendorGroup,
 } from './model';
 import { PartsTable, Td, Th } from './ui';
 
 interface OrderUnitCardProps {
+  /** 주입된 BOM 컨텍스트 — 모듈 조회·거래처 검색 풀의 원천. */
+  bom: PlanBom;
   unit: OrderUnit;
   /** 구매사유·납기 등 단순 필드 패치(불변 업데이트는 호출부 소유). */
   onPatch: (patch: Partial<Pick<OrderUnit, 'purchaseReason' | 'dueDate'>>) => void;
@@ -50,6 +53,7 @@ interface OrderUnitCardProps {
  * (실거래처·납기 오버라이드·비고)만 vendorEdits 에 저장한다(기본값 복제 저장 금지).
  */
 export function OrderUnitCard({
+  bom,
   unit,
   onPatch,
   onVendorPatch,
@@ -57,9 +61,11 @@ export function OrderUnitCard({
   onRemove,
 }: OrderUnitCardProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const modules = useMemo(() => modulesOf(unit), [unit]);
+  const modules = useMemo(() => modulesOf(bom, unit), [bom, unit]);
   const groups = useMemo(() => vendorGroupsOf(modules), [modules]);
-  const totals = useMemo(() => unitTotals(unit), [unit]);
+  const totals = useMemo(() => unitTotals(bom, unit), [bom, unit]);
+  // 실거래처 검색 풀 — 주입된 BOM 에서 파생(자주쓰는 + 등장 실거래처).
+  const vendorPool = useMemo(() => vendorSearchPoolOf(bom.modules), [bom]);
 
   return (
     <section className="border-border bg-surface flex flex-col gap-3 rounded-[var(--radius-md)] border p-4">
@@ -67,7 +73,7 @@ export function OrderUnitCard({
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill label={`발주 ${unit.seq}`} variant="info" />
         <span className="text-foreground text-[length:var(--text-body)] font-semibold">
-          {unitModuleSummary(unit)}
+          {unitModuleSummary(bom, unit)}
         </span>
         <span className="text-foreground-tertiary text-[11px] tabular-nums">
           부품 {totals.parts} · {formatInteger(totals.amount)}원
@@ -162,6 +168,7 @@ export function OrderUnitCard({
                 unit={unit}
                 group={g}
                 defaultNote={defaultNoteOf(unit, g.vendorClass, groups)}
+                vendorPool={vendorPool}
                 onVendorPatch={onVendorPatch}
               />
             ))}
@@ -177,10 +184,18 @@ interface VendorGroupRowProps {
   group: VendorGroup;
   /** 비고 기본 문구(파생) — 오버라이드가 없을 때 표시되고 페이로드에도 접힌다. */
   defaultNote: string;
+  /** 실거래처 검색 풀(BOM 파생) — 의사 거래처 지정 콤보박스 재료. */
+  vendorPool: readonly ComboOption[];
   onVendorPatch: (vendorClass: string, patch: VendorEdit) => void;
 }
 
-function VendorGroupRow({ unit, group: g, defaultNote, onVendorPatch }: VendorGroupRowProps) {
+function VendorGroupRow({
+  unit,
+  group: g,
+  defaultNote,
+  vendorPool,
+  onVendorPatch,
+}: VendorGroupRowProps) {
   const [expanded, setExpanded] = useState(false);
   const edit = unit.vendorEdits[g.vendorClass];
   // 유효 거래처 = 오버라이드 ?? 기본값(가공품 → 해룡, 판금품 → 알파테크) — 파생만, 저장 안 함.
@@ -216,7 +231,7 @@ function VendorGroupRow({ unit, group: g, defaultNote, onVendorPatch }: VendorGr
                   value={vendor ?? { code: '', name: '' }}
                   placeholder="거래처 지정"
                   favorites={[...VENDOR_FAVORITES]}
-                  search={(q) => Promise.resolve(searchVendors(q))}
+                  search={(q) => Promise.resolve(searchVendors(vendorPool, q))}
                   onSelect={(opt) =>
                     onVendorPatch(g.vendorClass, { vendor: { code: opt.code, name: opt.name } })
                   }
