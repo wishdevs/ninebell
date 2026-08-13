@@ -103,6 +103,17 @@ export function useCurrentUser(): CurrentUser {
   return ctx.state.user;
 }
 
+/**
+ * `useCurrentUser`의 선택적 버전 — 제공자 밖이면 null 을 반환한다.
+ * /manual 처럼 로그인(앱 셸 = UserProvider 안)/비로그인(공개 크롬) 양쪽에서
+ * 렌더되는 화면이 "로그인 여부" 분기에 쓴다. 제공자 안에서는 인증 완료 후에만
+ * children 이 렌더되므로 항상 사용자를 반환한다.
+ */
+export function useOptionalCurrentUser(): CurrentUser | null {
+  const ctx = useContext(UserContext);
+  return ctx?.state.status === 'authenticated' ? ctx.state.user : null;
+}
+
 /** 프로필 수정 등으로 캐시된 현재 사용자를 갱신하는 setter. */
 export function useSetCurrentUser(): (user: CurrentUser) => void {
   const ctx = useContext(UserContext);

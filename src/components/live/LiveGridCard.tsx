@@ -1,11 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RiCheckLine, RiErrorWarningLine, RiSearchLine, RiTableLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { Spinner } from '@/components/ui/spinner';
+import {
+  cardOwnerOf,
+  groupRowsByOwner,
+  OwnerBar,
+  OwnerGroupHeaderRow,
+  type OwnerGroup,
+} from '@/components/live/grid-owner-filter';
 import { fetchNoteSuggest } from '@/lib/api/me-codes';
 import { useFavorites } from '@/lib/live/use-favorites';
 import type {
@@ -159,6 +166,9 @@ const TX_COLUMNS: { key: TxColumnKey; header: string; align?: 'right' }[] = [
   { key: 'vatType', header: '부가세구분' },
 ];
 
+/** 전체 컬럼 수 = 번호 + 읽기 컬럼 + 예산계정·프로젝트·적요·제외 — 그룹 헤더 행 colSpan 용. */
+const GRID_COL_COUNT = TX_COLUMNS.length + 5;
+
 /** 예산단위 변경 → 계정 맞춤 적요 재추천 디바운스(ms). 빠른 연속 변경 시 마지막만 조회. */
 const NOTE_SUGGEST_DEBOUNCE_MS = 250;
 
@@ -181,8 +191,9 @@ function acctCodeOf(code: string, option?: BudgetUnitOption): string {
  */
 export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const rows = hitl.rows ?? [];
-  // 표시용 정렬본(승인·거래시간). 제출/편집은 no 키 기반이라 원본 rows 순서와 무관.
-  const displayRows = sortGridRows(rows);
+  // 표시용: 정렬(승인·거래시간) 후 소유자(카드명 괄호 이름)별 그룹. 제출/편집은 no 키 기반이라
+  // 원본 rows 순서·필터와 무관 — 필터/그룹핑은 렌더 전용이다.
+  const ownerGroups = groupRowsByOwner(sortGridRows(rows));
   const bFavList = hitl.budgetUnits?.favorites ?? [];
   const bMineList = hitl.budgetUnits?.mine ?? [];
   const bAllList = hitl.budgetUnits?.all ?? [];
@@ -194,6 +205,9 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 선택한 사용자 — '' = 전체. **보기와 처리 범위를 함께** 정한다(사용자 확정 2026-08-13):
+  // 고른 사용자의 행만 화면에 보이고, 저장도 그 범위 안에서만 일어난다.
+  const [owner, setOwner] = useState('');
   // 예산계정 맞춤 적요 조회 중인 행(미세 로딩 표시). 행 no → 조회 중 여부.
   const [suggesting, setSuggesting] = useState<Record<number, boolean>>({});
   const tableWrapRef = useRef<HTMLDivElement>(null);
@@ -212,6 +226,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     setEdits(initEdits(hitl.rows ?? []));
     setSubmitted(false);
     setError(null);
+    setOwner('');
     bFav.reset(hitl.budgetUnits?.favorites ?? []);
     pFav.reset(hitl.projects?.favorites ?? []);
     void bFav.loadIds();
@@ -250,20 +265,35 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
 
   const disabled = busy || submitted;
 
+  // ── 보기 축 ── owner='' 면 전체. 가려도 검증·저장 대상은 그대로다
+  // (저장에서 빼는 축은 아래 '처리 대상' — 행별 '제외' 체크가 단일 소스).
+  const visibleGroups = owner ? ownerGroups.filter((g) => g.owner === owner) : ownerGroups;
+  // 그룹 첫 행 앞에 헤더 행을 끼워 넣기 위한 매핑 — 행 렌더 블록 구조를 바꾸지 않기 위한 평탄화.
+  const headerBeforeNo = new Map<number, OwnerGroup>();
+  for (const g of visibleGroups) if (g.rows[0]) headerBeforeNo.set(g.rows[0].no, g);
+  const displayRows = visibleGroups.flatMap((g) => g.rows);
+
+  // 범위 안에서 행별 '제외'를 묶어 켜고 끄는 단축 — 그룹헤더 토글이 유일한 사용처다.
+  const setSkipForRows = useCallback((nos: readonly number[], skip: boolean) => {
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const no of nos) next[no] = { ...next[no], skip };
+      return next;
+    });
+  }, []);
+
   const setRow = useCallback((no: number, patch: Partial<RowEdit>) => {
     setEdits((prev) => ({ ...prev, [no]: { ...prev[no], ...patch } }));
   }, []);
 
-  const applyAll = useCallback(
-    (patch: Partial<RowEdit>) => {
-      setEdits((prev) => {
-        const next = { ...prev };
-        for (const r of rows) if (!next[r.no]?.skip) next[r.no] = { ...next[r.no], ...patch };
-        return next;
-      });
-    },
-    [rows],
-  );
+  /** 일괄 지정 — **현재 처리 범위(선택한 사용자) 안**의 비제외 행에만 적용한다. */
+  const applyAll = (patch: Partial<RowEdit>) => {
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const r of displayRows) if (!next[r.no]?.skip) next[r.no] = { ...next[r.no], ...patch };
+      return next;
+    });
+  };
 
   /**
    * 예산단위(=예산계정) 변경 시 그 계정 맞춤 적요를 디바운스로 조회해 채운다.
@@ -349,22 +379,34 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     return !!e && e.budgetUnitCode !== '' && e.note.trim().length > 0;
   };
 
-  const nonSkip = rows.filter((r) => !edits[r.no]?.skip);
+  // 처리 대상 = **선택한 사용자 범위 안** + 행별 '제외' 미체크(사용자 확정 2026-08-13:
+  // 사용자를 고르면 그 사용자만 처리한다). 범위 밖 행은 edits 를 건드리지 않고 제출 시
+  // skip 으로 나가므로, 전체로 되돌리면 원래 제외 상태가 그대로 살아난다.
+  const inScope = (r: LiveGridRow): boolean => !owner || cardOwnerOf(r.card) === owner;
+  const isSkipped = (r: LiveGridRow): boolean => !!edits[r.no]?.skip || !inScope(r);
+
+  const nonSkip = rows.filter((r) => !isSkipped(r));
   const validCount = nonSkip.filter((r) => isRowValid(r.no)).length;
   const allValid = nonSkip.length > 0 && validCount === nonSkip.length;
   const skipCount = rows.length - nonSkip.length;
+  // 범위 밖은 검증 대상이 아니므로 첫 무효 행은 언제나 현재 화면 안에 있다.
   const firstInvalidNo = nonSkip.find((r) => !isRowValid(r.no))?.no ?? null;
 
-  // 오류 내비게이션 — 첫 무효 행으로 스크롤 + 그 행 예산단위 select 에 포커스.
-  const jumpToFirstInvalid = useCallback(() => {
-    if (firstInvalidNo == null) return;
+  const scrollToRow = useCallback((no: number) => {
     const rowEl = tableWrapRef.current?.querySelector<HTMLTableRowElement>(
-      `tr[data-row-no="${firstInvalidNo}"]`,
+      `tr[data-row-no="${no}"]`,
     );
     if (!rowEl) return;
     rowEl.scrollIntoView({ block: 'center' });
     rowEl.querySelector<HTMLSelectElement>('select')?.focus();
-  }, [firstInvalidNo]);
+  }, []);
+
+  // 오류 내비게이션 — 첫 무효 행으로 스크롤 + 그 행 예산단위 select 에 포커스.
+  // (범위 밖 행은 검증하지 않으므로 대상은 항상 현재 화면에 렌더돼 있다.)
+  const jumpToFirstInvalid = useCallback(() => {
+    if (firstInvalidNo == null) return;
+    scrollToRow(firstInvalidNo);
+  }, [firstInvalidNo, scrollToRow]);
 
   async function submit() {
     if (!allValid || disabled) return;
@@ -372,7 +414,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
     setError(null);
     const payload: GridRowSubmit[] = rows.map((r) => {
       const e = edits[r.no];
-      if (e.skip) {
+      // 범위 밖(다른 사용자) 행도 skip 으로 내려 이번 실행에서 처리되지 않게 한다.
+      if (isSkipped(r)) {
         return { no: r.no, budgetUnit: null, project: null, note: e.note.trim(), skip: true };
       }
       const b = budgetByCode.get(e.budgetUnitCode);
@@ -428,7 +471,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
         </div>
       ) : null}
 
-      {/* 일괄 지정 — 비제외 행 전체에 같은 예산단위·프로젝트·적요를 한 번에 채운다(이후 개별 수정 가능). */}
+      {/* 일괄 지정 — **처리 범위 안**의 비제외 행에 같은 예산단위·프로젝트·적요를 한 번에
+          채운다(이후 개별 수정 가능). 사용자를 고르면 그 사용자 행만 대상이 된다. */}
       <BulkBar
         budgetFavs={bFavList}
         budgetMineExclFav={bMineExclFav}
@@ -441,7 +485,8 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
           const nd = isNondeductibleAcct(budgetByCode.get(code)?.bgacctNm);
           setEdits((prev) => {
             const next = { ...prev };
-            for (const r of rows) {
+            // 처리 범위(선택한 사용자) 안의 비제외 행만 — 범위 밖은 이번에 저장하지 않는다.
+            for (const r of displayRows) {
               if (next[r.no]?.skip) continue;
               next[r.no] = {
                 ...next[r.no],
@@ -452,12 +497,24 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
             return next;
           });
           // 일괄 지정도 동일하게 각 행 계정 맞춤 적요를 재추천(비제외 행만, 행별 보호규칙 유지).
-          for (const r of rows) if (!edits[r.no]?.skip) scheduleNoteSuggest(r.no, code, r.merchant);
+          for (const r of displayRows)
+            if (!edits[r.no]?.skip) scheduleNoteSuggest(r.no, code, r.merchant);
         }}
         onBulkProject={(code, name, wbsNo) =>
           applyAll({ projectCode: code, projectName: name, projectWbsNo: wbsNo })
         }
         onBulkNote={(note) => applyAll({ note, noteSource: null })}
+      />
+
+      {/* 사용자(카드 소유자) 선택 — **보기와 처리 범위를 함께** 정한다. 고른 사용자의 행만
+          보이고 저장도 그 범위뿐이며, 범위 안에서 행별 '제외'로 더 뺄 수 있다. */}
+      <OwnerBar
+        groups={ownerGroups}
+        owner={owner}
+        totalCount={rows.length}
+        scopedCount={nonSkip.length}
+        manualExcludedCount={displayRows.filter((r) => edits[r.no]?.skip).length}
+        onOwnerChange={setOwner}
       />
 
       {/* 출처 배지 범례 — 툴팁 없이도 배지 의미를 알 수 있게 한 줄로 상시 노출. */}
@@ -497,7 +554,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                 vat: '과세',
               };
               const rowInvalid = !e.skip && !isRowValid(r.no);
-              return (
+              const rowTr = (
                 <tr
                   key={r.no}
                   data-row-no={r.no}
@@ -661,6 +718,27 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
                   </Td>
                 </tr>
               );
+              // 소유자 그룹 첫 행 앞에 그룹 헤더 행(소유자 · 건수 · 금액 합)을 끼워 넣는다.
+              const group = headerBeforeNo.get(r.no);
+              return group ? (
+                <Fragment key={r.no}>
+                  <OwnerGroupHeaderRow
+                    group={group}
+                    colSpan={GRID_COL_COUNT}
+                    includedCount={group.rows.filter((gr) => !edits[gr.no]?.skip).length}
+                    disabled={disabled}
+                    onToggleAll={(include) =>
+                      setSkipForRows(
+                        group.rows.map((gr) => gr.no),
+                        !include,
+                      )
+                    }
+                  />
+                  {rowTr}
+                </Fragment>
+              ) : (
+                rowTr
+              );
             })}
           </tbody>
         </table>
@@ -676,6 +754,10 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
             {validCount}행
           </span>{' '}
           입력 완료
+          {owner ? (
+            // 범위 고지 — 이번 저장은 이 사용자 행만 대상이다(나머지는 처리되지 않는다).
+            <span className="text-foreground-tertiary"> — {owner} 행만 처리</span>
+          ) : null}
           {nonSkip.length - validCount > 0 ? (
             <>
               {' '}
@@ -1265,57 +1347,58 @@ function ProjectOptionRow({ option, onClick }: { option: ProjectOption; onClick:
 
 // ── 프리셀렉트 출처 배지(AI / 기본) ──────────────────────────────────
 
-const SOURCE_META: Record<PrefillSource, { label: string; title: string; cls: string }> = {
-  ai: { label: 'AI', title: 'AI 추천으로 미리 선택됨', cls: 'bg-accent/15 text-accent' },
+/**
+ * 출처 배지 — **AI · 학습 2종만** 노출한다(사용자 확정 2026-08-13: 5종은 너무 복잡).
+ *
+ * 백엔드 출처값(ai/learned/seed/lookup/mirror/default/dict)을 두 묶음으로 접는다:
+ *   AI  = ai(AI 추천) · lookup(예산계정 변경에 맞춘 적요 재추천) — **모델이 고른 값, 확인 필요**
+ *   학습 = learned(과거 내 확정) · seed(전사 기초자료 관례) — **과거 실적에서 나온 값**
+ * 나머지(default 기본지정 · mirror 승인취소 상계 · dict 사전 해석)는 **배지 없음** —
+ * 근거가 있는 값만 표시해 시선을 아낀다. 세부 출처는 배지 툴팁에 그대로 남는다.
+ */
+const SOURCE_BADGE: Partial<Record<PrefillSource, { group: 'ai' | 'learned'; title: string }>> = {
+  ai: { group: 'ai', title: 'AI 추천으로 미리 선택됨 — 확인 후 필요시 수정' },
+  lookup: {
+    group: 'ai',
+    title: '예산계정 변경에 맞춰 실시간 재추천된 적요 — 확인 후 필요시 수정',
+  },
   learned: {
-    label: '학습',
+    group: 'learned',
     title: '과거 이 가맹점에 확정했던 선택으로 미리 채움(개입 학습)',
-    cls: 'bg-success/15 text-success',
   },
   seed: {
-    label: '전사',
+    group: 'learned',
     title: '전사 기초자료(과거 법인카드 실적)의 이 가맹점 관례로 미리 채움',
-    cls: 'bg-info/15 text-info',
-  },
-  lookup: {
-    label: '추천',
-    title: '예산계정 변경에 맞춰 실시간 재추천된 적요 — 확인 후 필요시 수정',
-    cls: 'bg-warning/15 text-warning',
-  },
-  mirror: {
-    label: '취소',
-    title: '승인취소 — 원거래와 같은 분류로 자동 채움(상계)',
-    cls: 'bg-danger/15 text-danger',
-  },
-  default: {
-    label: '기본',
-    title: '기본지정으로 미리 선택됨',
-    cls: 'bg-muted text-foreground-tertiary',
   },
 };
 
+const BADGE_GROUP: Record<'ai' | 'learned', { label: string; cls: string }> = {
+  ai: { label: 'AI', cls: 'bg-accent/15 text-accent' },
+  learned: { label: '학습', cls: 'bg-success/15 text-success' },
+};
+
+/** 두 묶음에 속하지 않는 출처(기본지정·상계·사전)는 아무것도 렌더하지 않는다. */
 function SourceBadge({ source }: { source: PrefillSource }) {
-  const meta = SOURCE_META[source] ?? SOURCE_META.default;
+  const meta = SOURCE_BADGE[source];
+  if (!meta) return null;
+  const g = BADGE_GROUP[meta.group];
   return (
     <span
       title={meta.title}
       className={cn(
         'shrink-0 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[9px] font-semibold tracking-wide',
-        meta.cls,
+        g.cls,
       )}
     >
-      {meta.label}
+      {g.label}
     </span>
   );
 }
 
 /** 출처 배지 범례 — 그리드 상단 한 줄. 툴팁에 의존하지 않고 배지 의미를 상시 노출한다. */
 const LEGEND_ITEMS: { source: PrefillSource; desc: string }[] = [
-  { source: 'ai', desc: 'AI 추천' },
-  { source: 'learned', desc: '과거 내 확정(개입 학습)' },
-  { source: 'seed', desc: '전사 기초자료 관례' },
-  { source: 'lookup', desc: '예산계정 맞춤 재추천' },
-  { source: 'default', desc: '기본지정' },
+  { source: 'ai', desc: 'AI 추천 — 확인 필요' },
+  { source: 'learned', desc: '과거 확정·실적 기반' },
 ];
 
 function SourceLegend() {
@@ -1328,6 +1411,7 @@ function SourceLegend() {
           {desc}
         </span>
       ))}
+      <span className="text-foreground-tertiary">배지 없음 — 기본지정</span>
     </div>
   );
 }

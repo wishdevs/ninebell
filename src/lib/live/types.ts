@@ -33,7 +33,15 @@ export type ChatRole = 'user' | 'assistant' | 'system';
  * 알 수 없는 종류가 와도 무너지지 않도록 문자열 유니온으로 열어 둔다.
  */
 export type LiveHitlKind =
-  'confirm' | 'select' | 'multiselect' | 'input' | 'search' | 'chat' | 'grid' | (string & {});
+  | 'confirm'
+  | 'select'
+  | 'multiselect'
+  | 'input'
+  | 'search'
+  | 'chat'
+  | 'grid'
+  | 'planner'
+  | (string & {});
 
 // ── 서브 페이로드 ────────────────────────────────────────────────────
 
@@ -115,6 +123,86 @@ export interface HitlBudgetUnits {
   all?: BudgetUnitOption[];
 }
 
+// ── 계획서 개입(kind=planner) — 구매발주 BOM 계약 ───────────────────
+
+/**
+ * 발주 계획서 BOM 리프(부품, 트리그리드 getLevel()==4).
+ * 데모 픽스처(src/lib/data/purchase-order-bom.json)와 **동일 shape** — 백/프론트 공유 계약.
+ */
+export interface PlannerBomPart {
+  itemCode: string;
+  name: string;
+  spec: string;
+  unit: string;
+  bomQty: number;
+  remainQty: number;
+  unitPrice: number;
+  amount: number;
+  /** 품목거래처명 — '가공품'/'판금품'은 의사 거래처(실거래처 지정 필요), 그 외는 실거래처. */
+  vendorClass: string;
+  account: string;
+  purchasable: boolean;
+}
+
+/** 3레벨 모듈(SET) — 발주단위로 묶는 선택 단위(getLevel()==3). */
+export interface PlannerBomModule {
+  itemCode: string;
+  name: string;
+  spec: string;
+  unit: string;
+  bomQty: number;
+  parts: PlannerBomPart[];
+}
+
+/** 장비(레벨 1). 레벨 2 구조행은 계층 접힘이라 modules 로 평탄화되어 온다. */
+export interface PlannerBomMachine {
+  itemCode: string;
+  name: string;
+  spec: string;
+  unit: string;
+  modules: PlannerBomModule[];
+}
+
+/** kind=planner 프레임의 plannerBom — 프로젝트 + 장비→모듈→부품 트리. */
+export interface PlannerBom {
+  project: { code: string; name: string; wbs: string };
+  machines: PlannerBomMachine[];
+}
+
+/** 계획 제출의 발주단위 모듈(식별 3필드). */
+export interface PlanUnitModule {
+  itemCode: string;
+  name: string;
+  spec: string;
+}
+
+/** 계획 제출의 거래처 그룹 — 오버라이드가 없으면 파생 기본값으로 접힌 최종값. */
+export interface PlanVendorGroup {
+  vendorClass: string;
+  /** 유효 거래처명 — 의사 거래처는 지정/기본 거래처, 실거래처는 vendorClass 그대로. 미지정 null. */
+  vendor: string | null;
+  parts: number;
+  amount: number;
+  dueDate: string;
+  note: string;
+}
+
+/** 계획 제출의 발주단위 1건 — 구매요청 저장 1회(발주번호 1건)에 해당. */
+export interface PlanUnit {
+  seq: number;
+  purchaseReason: string;
+  dueDate: string;
+  modules: PlanUnitModule[];
+  vendorGroups: PlanVendorGroup[];
+}
+
+/** kind=planner 제출 계획(POST /runs/hitl plan) — 데모 buildPlanPayload 반환 shape 그대로. */
+export interface PlanSubmit {
+  project: { code: string; name: string };
+  wbs: string;
+  units: PlanUnit[];
+}
+
 /** 그리드 개입의 프로젝트 보기 — 자주쓰는 + ERP 검색 결과(질의 후 채워짐). */
 export interface HitlProjects {
   favorites?: ProjectOption[];
@@ -141,6 +229,8 @@ export interface LiveHitl {
   budgetUnits?: HitlBudgetUnits;
   /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). */
   projects?: HitlProjects;
+  /** kind=planner — 발주 계획서 BOM(프로젝트 + 장비→모듈→부품). */
+  plannerBom?: PlannerBom;
   /** 재개입 공지 — 직전 저장(F7) 실패 사유+조치(왜 다시 선택해야 하는지). 첫 진입엔 없음. */
   notice?: string;
 }
@@ -228,6 +318,8 @@ export interface HitlPayload {
   done?: boolean;
   /** kind=grid 일괄 제출 — 행별 예산단위·프로젝트·적요·제외. */
   rows?: GridRowSubmit[];
+  /** kind=planner 제출 — 발주 계획(발주단위·거래처 그룹). */
+  plan?: PlanSubmit;
 }
 
 // ── UI 상태 ──────────────────────────────────────────────────────────
@@ -307,6 +399,8 @@ export interface LiveRunActions {
   sendQuery: (decisionId: string, query: string) => Promise<boolean>;
   /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). */
   sendRows: (decisionId: string, rows: GridRowSubmit[]) => Promise<boolean>;
+  /** 계획서 개입(kind=planner) — 발주 계획 확정 제출(실행 재개, 낙관적 clearHitl). */
+  sendPlan: (decisionId: string, plan: PlanSubmit) => Promise<boolean>;
   /** 라이브 뷰 창 수동 전환(부모창/자식창 탭). 자식 창은 열릴 때 자동 활성화된다. */
   selectWindow: (window: LiveWindow) => void;
 }

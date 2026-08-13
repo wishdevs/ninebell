@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  RiBookOpenLine,
   RiBugLine,
   RiArrowLeftSLine,
   RiArrowRightSLine,
@@ -16,6 +15,7 @@ import {
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
+import { ManualLink } from '@/components/ui/manual-link';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { cn } from '@/lib/utils';
 import { type Agent, type StepStatus } from '@/lib/data/agents';
@@ -157,7 +157,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const preRunActive = usePreRun && !isLive;
   const panelWide = interventionActive || preRunActive;
   // 개입 레이아웃 레벨(3) — 개입 콘텐츠(kind)별로 라이브화면 노출·크기 + 개입 패널 크기를 정한다.
-  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때)
+  //  full : 라이브화면 숨김 + 개입 전체폭  — grid(카드처럼 입력 항목이 그리드일 때),
+  //         planner(구매발주 계획서 — 대형 트리 테이블이라 grid 와 동일 취급)
   //  split: 작은 라이브(좌측) + 넓은 개입   — choice, 실행 전 입력 폼
   //  live : 라이브 크게 + 작은 패널          — 모니터링 + **chat 개입**(화면을 보면서
   //         대화해야 하므로 채팅창은 작게, 라이브를 크게 — 사용자 요청 2026-07-29)
@@ -170,7 +171,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
     ? FULL_WIDTH_SIMULATION_AGENTS.has(agent.id)
       ? 'full'
       : 'split'
-    : interventionActive && run.hitl?.kind === 'grid'
+    : interventionActive && (run.hitl?.kind === 'grid' || run.hitl?.kind === 'planner')
       ? 'full'
       : interventionActive && run.hitl?.kind === 'chat'
         ? 'live'
@@ -245,14 +246,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             <h1 className="text-foreground text-[length:var(--text-heading)] leading-tight font-semibold tracking-tight">
               {agent.name}
             </h1>
-            {/* 사용 설명서 진입점 — 헤딩 옆에서 항상 보이는 필 형태 링크. */}
-            <Link
-              href={`/manual/${agent.id}`}
-              className="border-border bg-surface text-foreground-secondary hover:text-foreground inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-[length:var(--text-body-sm)] font-medium shadow-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-            >
-              <RiBookOpenLine size={14} aria-hidden />
-              메뉴얼
-            </Link>
+            <ManualLink docId={agent.id} />
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">

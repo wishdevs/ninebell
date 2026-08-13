@@ -28,16 +28,25 @@ def test_group_slot_unknown_for_zero_time():
     assert grouping.group_slot("00:00:00") == "?"
     assert grouping.group_slot(None) == "?"
     assert grouping.group_slot("08:10:06") == "조식"
-    assert grouping.group_slot("12:30:00") == "중식"
+    # 중식 폐지(2026-08-13) — 점심도 석식 슬롯이다.
+    assert grouping.group_slot("12:30:00") == "석식"
     assert grouping.group_slot("18:30:00") == "석식"
 
 
 def test_group_key_splits_same_merchant_by_slot():
-    """같은 가맹점이라도 점심/저녁은 분류가 갈린다(김치도가 실측) — 슬롯으로 나눈다."""
+    """시간대로 계정이 갈리면 슬롯을 나눈다 — 중식 폐지 후 남은 갈림은 조식 ↔ 석식이다."""
+    breakfast = grouping.group_key(_row("김치도가 상대원점", tm="08:10:06"))
+    dinner = grouping.group_key(_row("김치도가 상대원점", tm="18:50:03"))
+    assert breakfast[0] == dinner[0]
+    assert breakfast != dinner
+
+
+def test_group_key_merges_lunch_and_dinner_after_lunch_slot_retired():
+    """⚠ 규정 변경(2026-08-13): 점심·저녁이 같은 석식 계정이 되어 **한 그룹**으로 묶인다
+    (종전엔 중식/석식으로 갈려 대표행 AI 판단이 두 번 돌았다)."""
     lunch = grouping.group_key(_row("김치도가 상대원점", tm="11:53:15"))
     dinner = grouping.group_key(_row("김치도가 상대원점", tm="18:50:03"))
-    assert lunch[0] == dinner[0]
-    assert lunch != dinner
+    assert lunch == dinner
 
 
 # ── 취소 미러 매칭 ────────────────────────────────────────────────────────────

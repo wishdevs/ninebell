@@ -198,20 +198,20 @@ CHECK_ROWS_JS = f"""(indices) => {{
 
 
 # '카드' 서브팝업에서 owners 중 하나와 일치하는 행만 체크(본인 카드 우선 선택, 사용자 요청
-# 2026-07-04). 매칭 3경로: ① CARD_OWNR_NM/KOR_NM/PARTNER_NM 정규화 정확일치,
-# ② 행의 어느 문자열 값이든 '(이름)' 포함 — 실측(프로브 2026-07-29) 결과 이 ERP 는
-# CARD_OWNR_NM/KOR_NM 을 개인카드에서도 채우지 않고, 소유자 표기는 카드명
-# FINPRODUCT_NM("국민법인카드(석대현)-2826")의 괄호에만 존재한다(PARTNER_NM 은 개인카드에
-# 한해 실명). owners 는 이름 변형 배열(로그인ID·프로필 순수 이름·"이름 직책") — 패널 이름이
-# "석대현 프로"처럼 직책을 달고 있어 단일 키로는 못 잡는 표기 대응(사용자 요청 2026-07-29).
+# 2026-07-04). 매칭은 **카드명 FINPRODUCT_NM 괄호 '(이름)' 포함 단일 경로**
+# (예: "국민법인카드(정원호)-8883"). 과거의 "소유자/관리사원 컬럼은 비어 있다"(2026-07-29 실측)
+# 전제는 2026-08-13 실측으로 반증됐다: 공용카드 행 FINPRODUCT_NM='국민법인카드(제조본부)-1884' 이
+# KOR_NM='정원호' 를 채워 오고, 개인카드 PARTNER_NM 에도 실명이 실린다 — 그래서 종전의
+# CARD_OWNR_NM/KOR_NM/PARTNER_NM 정확일치·행 전체 필드 '(이름)' 스캔은 남의 카드를 오탐했다
+# (owners=['정원호'] 가 2장 매칭, 정답 1장). 소유자 표기의 단일소스는 카드명 괄호뿐이다.
+# '(' + 이름 + ')' 부분문자열 방식은 유지 — '(정원호외2)' 같은 변형 오탐을 막는 기존 규율.
+# owners 는 이름 변형 배열(로그인ID·프로필 순수 이름·"이름 직책", steps.owner_name_variants).
 # 반환 {ok, n(전체), matched(체크수), names(매칭 카드명 최대 10)}.
 # matched==0 처리(폴백/중단)는 호출부(steps.select_all_cards)의 own_only 가 결정한다.
 CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
   const c = s => String(s==null?'':s).replace(/\\s+/g,'').toLowerCase();
   const keys = (Array.isArray(owners)?owners:[owners]).map(c).filter(k=>k);
   const parens = keys.map(k => '(' + k + ')');
-  const inAnyField = r => Object.values(r).some(v =>
-    (typeof v === 'string' || typeof v === 'number') && parens.some(p => c(v).includes(p)));
   const sub = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
     .filter(w=>!/법인카드/.test(String((w.querySelector('.k-window-title')||{}).innerText||'').replace(/\\s+/g,' ').trim())).slice(-1)[0];
   if (!sub) return { ok:false, reason:'no-sub' };
@@ -230,9 +230,8 @@ CARD_SUB_SELECT_BY_NAME_JS = """(owners) => {
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i] || {};
       if (allNames.length < 10) allNames.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());
-      const exact = keys.some(k =>
-        c(r.CARD_OWNR_NM) === k || c(r.KOR_NM) === k || c(r.PARTNER_NM) === k);
-      if (keys.length && (exact || inAnyField(r))) {
+      const nm = c(r.FINPRODUCT_NM);
+      if (keys.length && parens.some(p => nm.includes(p))) {
         g.setChecked ? g.setChecked(i, true) : g.checkRow && g.checkRow(i, true);
         matched++;
         if (names.length < 10) names.push(String(r.FINPRODUCT_NM || r.CARD_NO || '').trim());

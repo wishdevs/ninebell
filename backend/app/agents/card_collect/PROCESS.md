@@ -118,9 +118,13 @@ login → user_type(회계) → menu_nav → set_gubun(카드) → add_row → s
    - 카드번호 **돋보기**(`dews-multicodepicker-button` 중 `.icon-search`, ≈(619,190)) 실클릭
      → **'카드' 서브팝업**(k-window '카드', 746×535, 카드 5장) 오픈.
    - **선택 분기(2026-07-31)**: 일반 모드 = **본인 카드만**(로그인ID·이름·"이름 직책" ↔
-     카드명 괄호 '(이름)'/소유자 컬럼 매칭, 매칭 0장이면 폴백 없이 중단) / 로그인 시
+     **카드명 FINPRODUCT_NM 괄호 '(이름)'만** 매칭 — 소유자/관리사원/거래처 컬럼은 보지
+     않는다(2026-08-13 오탐 반증으로 제한), 매칭 0장이면 전체선택 폴백(2026-08-03)) / 로그인 시
      **디버그 모드** 체크 = 종전 **전체선택**(`checkAll(true)`). runs.py 가 params.debug 를
      불리언 강제 주입(기본 false=본인만).
+   - 검증 로그(2026-08-13): 실그리드 6행 덤프에서 공용카드 '국민법인카드(제조본부)-1884' 가
+     KOR_NM='정원호' 를 실어 와 owners=['정원호'] 오탐 matched=2 → 괄호 제한 후 matched=1
+     ('국민법인카드(정원호)-8883') — 스텁 pytest `tests/test_card_collect_js_match.py`.
    - 체크 후 → **'적용'** 버튼(≈(685,688)) 실클릭.
 10. **승인일 기간 설정**   검증: ✅
     - 위젯 = `dews-periodpicker`(input `period_startinput`/`period_endinput`, 기본=오늘~오늘).

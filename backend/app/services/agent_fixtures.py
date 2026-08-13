@@ -786,6 +786,90 @@ _EAP_CANCEL_FIXTURE: dict = {
 }
 
 
+# ── 구매발주 계획 플로우 그래프 (purchase-order 그래프의 사람용 요약, Phase A) ──────
+# 읽기 + 계획서 HITL 까지 — 저장(F7)·결재 없음. 발주단위 반복 실행(쓰기)은 Phase B 에서
+# 그래프·플로우를 함께 확장한다(PROCESS.md 남은 작업).
+PURCHASE_ORDER_FLOW: dict = {
+    "nodes": [
+        {"id": "access", "kind": "start", "status": "done", "title": "구매요청 화면 접속", "sub": "SCM-구매 · PUOPRQ00200", **_col(0)},
+        {"id": "project", "kind": "step", "status": "active", "title": "프로젝트 선택", "sub": "도움창 검색(사용자 개입)", **_col(1)},
+        {"id": "query", "kind": "step", "status": "pending", "title": "BOM 조회(F2)", "sub": "이동요청 해제 · 구매요청만", **_col(2)},
+        {"id": "read", "kind": "step", "status": "pending", "title": "BOM 트리 읽기", "sub": "장비·모듈(SET)·부품 조립", **_col(3)},
+        {"id": "plan", "kind": "step", "status": "pending", "title": "발주 계획서 작성", "sub": "발주단위·사유·납기·거래처(사용자 개입)", **_col(4)},
+        {"id": "confirm", "kind": "decision", "status": "pending", "title": "계획 검증", "sub": "사유·납기·의사 거래처 확정 확인", **_col(5)},
+        {"id": "report", "kind": "end", "status": "pending", "title": "계획 확정 반환", "sub": "ERP 저장 없음(Phase A)", **_col(6)},
+    ],
+    "edges": [
+        {"id": "e-access-project", "source": "access", "target": "project"},
+        {"id": "e-project-query", "source": "project", "target": "query"},
+        {"id": "e-query-read", "source": "query", "target": "read"},
+        {"id": "e-read-plan", "source": "read", "target": "plan"},
+        {"id": "e-plan-confirm", "source": "plan", "target": "confirm"},
+        {"id": "e-confirm-plan", "source": "confirm", "target": "plan", "label": "보완 ↩", "kind": "loop"},
+        {"id": "e-confirm-report", "source": "confirm", "target": "report", "label": "통과", "kind": "branch"},
+    ],
+}
+
+
+# ── 구매발주 — 실동작 승격(purchase-order 워크플로우, Phase A 2026-08-13) ─────────
+# placeholder 를 제자리 승격한다(agent id "purchase-order" 유지 — 프론트/시드 연속성).
+# steps 의 key 는 build_purchase_order_graph 노드 등록 순서와 1:1(진행 하이라이트 정합).
+# HITL 두 스텝(pick_project·plan)에 intervention — pick_project 는 kind 'search'(split),
+# plan 은 신규 kind 'planner'(full). hidden=False 유지(placeholder 와 동일).
+_PURCHASE_ORDER_FIXTURE: dict = {
+    "id": "purchase-order",
+    "workflow_id": "purchase-order",
+    "group_id": "purchase",
+    "hidden": False,
+    "name": "구매발주",
+    "description": (
+        "프로젝트를 검색해 BOM 을 불러오고, 모듈(SET)을 발주단위로 묶어 구매사유·납기예정일과 "
+        "거래처를 계획서로 확정합니다. 현재는 계획 확정까지만 진행하며 ERP 저장은 하지 않습니다."
+    ),
+    "handoff_note": (
+        "이 실행은 발주 계획 확정까지입니다 — ERP 에는 아무것도 저장하지 않았습니다. "
+        "구매요청 저장·셀프 결재·발주 적용 자동화는 쓰기 실측 후 개방됩니다(Phase B). "
+        "그때까지는 확정된 계획서를 참고해 옴니솔에서 직접 발주단위별 저장을 진행해 주세요."
+    ),
+    "drive": "browser",
+    "interaction": "autonomous",
+    "target_system": "더존 옴니솔",
+    "target_url": "erp.ninebell.co.kr",
+    "status": "idle",
+    "progress": 0,
+    # 계획서 개입(plan)은 최대 30분 대기(PLAN_TIMEOUT_S) — HITL 대기는 런 예산에서 제외되지만
+    # 표시용 상한은 넉넉히 잡는다.
+    "timeout_seconds": 600,
+    "elapsed_seconds": 0,
+    "current_action": "대기 중 — 실행을 누르면 시작합니다",
+    "run_count": 0,
+    "success_rate": 0.0,
+    "avg_seconds": 0,
+    "last_run_at": None,
+    "flow_graph": PURCHASE_ORDER_FLOW,
+    "steps": [
+        {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
+        {"key": "user_type", "label": "SCM-구매 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 'SCM-구매'로 전환"},
+        {"key": "menu_nav", "label": "프로젝트BOM구매요청 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "구매(PU) > 프로젝트BOM구매요청[나인벨](PUOPRQ00200) 진입"},
+        {
+            "key": "pick_project", "label": "프로젝트 선택", "skill": "codepicker", "status": "pending",
+            "intervention": True,
+            "phase": "프로젝트",
+            "detail": "프로젝트 도움창을 검색해 발주할 프로젝트를 선택(사용자 개입) → 적용·반영 확인·조회(F2)",
+        },
+        {"key": "read_bom", "label": "BOM 읽기", "skill": "grid-read", "status": "pending", "phase": "BOM", "detail": "이동요청 해제(구매요청만) → 조회(F2) → 트리그리드 전량 읽기 → 계획서 BOM 조립"},
+        {
+            "key": "plan", "label": "발주 계획서 작성", "skill": "grid-input", "status": "pending",
+            "intervention": True,
+            "phase": "계획",
+            "detail": "발주단위 묶음 + 구매사유·납기예정일 + 거래처 확정을 계획서로 제출(사용자 개입, 최대 30분)",
+        },
+        {"key": "report", "label": "계획 확정 반환", "skill": "grid-read", "status": "pending", "phase": "완료", "detail": "확정된 계획을 결과로 반환 — ERP 저장 없음(저장 자동화는 쓰기 실측 후 개방)"},
+    ],
+    "logs": [],
+}
+
+
 # ── 구매팀 — 자리만 잡은 빈 에이전트(사용자 지정 2026-08-12) ─────────────────────
 # 업무 정의 전이라 설명·현재동작·단계·플로우를 **비워 둔다**. workflow_id=None 이라 실행
 # 컨트롤은 비활성이고(프론트 canRun=false), steps/flow_graph 가 비어 워크플로우 탭에
@@ -821,7 +905,10 @@ def _placeholder_fixture(agent_id: str, name: str, group_id: str) -> dict:
 AGENT_FIXTURES.extend(
     [
         _placeholder_fixture("item-bulk-register", "품목일괄등록", "purchase"),
-        _placeholder_fixture("purchase-order", "구매발주", "purchase"),
+        # 구매발주 = Phase A 실동작 승격(2026-08-13 — 읽기 그래프 + 계획서 HITL, 저장 없음).
+        # 구매발주 데모 = 정적 BOM 픽스처로 화면 흐름을 확정한 계획서 시뮬레이션(2026-08-13 분리).
+        _PURCHASE_ORDER_FIXTURE,
+        _placeholder_fixture("purchase-order-demo", "구매발주 데모", "purchase"),
         _EAP_CANCEL_FIXTURE,
         _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
         _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),

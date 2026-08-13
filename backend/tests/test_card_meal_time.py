@@ -4,8 +4,9 @@
 중식 계정인데 18시 이후 17건). 근본 제약은 **learned(개인 확정)가 AI 를 우회**한다는 점이라
 프롬프트로는 고칠 수 없고, 계정 확정 **이후** 교정만이 전 경로를 덮는다.
 
-경계(사용자 확정): 조식 ~11:00 / 중식 11:00~15:00 / **석식 15:00~**(15~17시도 석식).
-야식 계정은 ERP 카탈로그에 없어(실측 0건) 22시 이후도 석식으로 둔다.
+경계(사규 변경 2026-08-13 — **중식 폐지**): 조식 ~11:00 / **석식 11:00~**.
+종전 중식 구간(11~15시)도 석식으로 처리한다. 야식 계정은 ERP 카탈로그에 없어(실측 0건)
+22시 이후도 석식으로 둔다. 기존 '복리후생비-중식' 계정은 교정 대상으로 남아 석식이 된다.
 """
 
 from __future__ import annotations
@@ -35,10 +36,10 @@ _CANDS = [
     [
         ("08:10:00", meal_time.BREAKFAST),
         ("10:59:59", meal_time.BREAKFAST),
-        ("11:00:00", meal_time.LUNCH),
-        ("12:07:00", meal_time.LUNCH),
-        ("14:56:00", meal_time.LUNCH),
-        ("15:00:00", meal_time.DINNER),   # ⚠ 사용자 확정: 15시부터 석식
+        ("11:00:00", meal_time.DINNER),   # ⚠ 중식 폐지(2026-08-13): 11시부터 석식
+        ("12:07:00", meal_time.DINNER),   # 점심 결제도 석식
+        ("14:56:00", meal_time.DINNER),
+        ("15:00:00", meal_time.DINNER),
         ("16:10:00", meal_time.DINNER),
         ("18:33:18", meal_time.DINNER),
         ("23:30:00", meal_time.DINNER),   # 야식 계정이 없어 석식 유지
@@ -69,12 +70,19 @@ async def test_account_slot_ignores_non_time_accounts():
 
 
 # ── 교정 ─────────────────────────────────────────────────────────────────────
-async def test_corrects_dinner_account_on_lunch_time():
-    """감사 29건: 석식 계정인데 오전/점심 결제 → 중식으로."""
+async def test_dinner_account_stays_on_lunch_time():
+    """중식 폐지(2026-08-13): 점심 결제도 석식이므로 석식 계정은 **그대로 둔다**.
+    (종전엔 이 경우 중식으로 되돌렸다 — 규정 변경으로 폐기된 동작.)"""
     budget = {"code": "D1", "bgacctNm": "(판)복리후생비-석식 (연장근무 식대)"}
+    assert meal_time.correct_budget(budget, "12:07:00", _CANDS) == (None, None)
+
+
+async def test_corrects_lunch_account_on_lunch_time():
+    """⚠ 규정 변경 핵심: **점심시각의 중식 계정도 석식으로** 교정한다."""
+    budget = {"code": "L1", "bgacctNm": "(판)복리후생비-중식"}
     fixed, why = meal_time.correct_budget(budget, "12:07:00", _CANDS)
-    assert fixed["code"] == "L1"
-    assert "석식→중식" in why and "12:07:00" in why
+    assert fixed["code"] == "D1"
+    assert "중식→석식" in why and "12:07:00" in why
 
 
 async def test_corrects_lunch_account_on_dinner_time():
@@ -85,10 +93,10 @@ async def test_corrects_lunch_account_on_dinner_time():
 
 
 async def test_correction_keeps_cost_prefix():
-    """(판)/(제) 접두는 비용구분이라 **반드시 유지**한다 — 판관 계정이 제조로 튀면 안 된다."""
-    budget = {"code": "PD", "bgacctNm": "(제)복리후생비-석식 (연장근무 식대)"}
+    """(판)/(제) 접두는 비용구분이라 **반드시 유지**한다 — 제조 계정이 판관으로 튀면 안 된다."""
+    budget = {"code": "PL", "bgacctNm": "(제)복리후생비-중식"}
     fixed, _ = meal_time.correct_budget(budget, "12:00:00", _CANDS)
-    assert fixed["code"] == "PL"  # (제) 중식 — (판)로 넘어가지 않는다
+    assert fixed["code"] == "PD"  # (제) 석식 — (판)로 넘어가지 않는다
 
 
 async def test_correction_prefers_plain_account_over_variant():
@@ -112,6 +120,7 @@ async def test_no_correction_when_sibling_missing():
     """갈 곳이 없으면 **원본을 그대로 둔다**(임의 변경 금지)."""
     budget = {"code": "L1", "bgacctNm": "(판)복리후생비-중식"}
     only_lunch = [{"code": "L1", "bgacctNm": "(판)복리후생비-중식"}]
+    # 석식 계정이 카탈로그에 없으면 중식이라도 그대로 둔다(갈 곳 없음 — 임의 변경 금지).
     assert meal_time.correct_budget(budget, "19:00:00", only_lunch) == (None, None)
 
 
@@ -134,12 +143,20 @@ async def test_plain_coupang_still_online_shopping():
     assert rule is not None and rule.category == "온라인쇼핑"
 
 
-async def test_delivery_anchor_gets_time_corrected():
-    """배달앱 앵커(중식)가 저녁 결제에서 석식으로 확정되는 end-to-end 경로."""
+async def test_delivery_anchor_is_dinner_and_survives_lunch_time():
+    """배달앱 앵커는 이제 **석식**(중식 폐지) — 점심·저녁 어느 결제든 석식으로 남는다."""
     rule = match_merchant("쿠팡이츠")
-    budget = {"code": "L1", "bgacctNm": f"(판){rule.acct}"}
-    fixed, why = meal_time.correct_budget(budget, "20:15:00", _CANDS)
-    assert fixed["code"] == "D1" and "중식→석식" in why
+    assert "석식" in (rule.acct or "")
+    budget = {"code": "D1", "bgacctNm": f"(판){rule.acct} (연장근무 식대)"}
+    assert meal_time.correct_budget(budget, "12:30:00", _CANDS) == (None, None)
+    assert meal_time.correct_budget(budget, "20:15:00", _CANDS) == (None, None)
+
+
+async def test_delivery_anchor_gets_corrected_to_breakfast_before_11():
+    """11시 이전 배달은 조식으로 교정된다(조식 슬롯은 유지)."""
+    budget = {"code": "D1", "bgacctNm": "(판)복리후생비-석식 (연장근무 식대)"}
+    fixed, why = meal_time.correct_budget(budget, "08:40:00", _CANDS)
+    assert fixed["code"] == "B1" and "석식→조식" in why
 
 
 # ── prefill 배선: learned 를 포함해 **모든 경로**가 교정된다 ────────────────────

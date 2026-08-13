@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   RiArrowDownSLine,
   RiArrowRightSLine,
@@ -9,11 +9,12 @@ import {
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
+import { Spinner } from '@/components/ui/spinner';
 import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
 import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
-import { PROJECT_FAVORITES, searchProjects } from './catalog';
-import { BOM, MACHINE, MODULES, type OrderUnit, type PlanGate, type PlanTotals } from './model';
+import { projectFavoritesOf, searchProjects } from './catalog';
+import type { OrderUnit, PlanBom, PlanGate, PlanTotals } from './model';
 import { StatTile } from './ui';
 
 /**
@@ -42,61 +43,89 @@ const FIXED_CHIPS: readonly string[] = [
   '이동출고 공용자재 → 이동입고 프로젝트',
 ];
 
-// 픽스처 전체 합계 — 정적이라 렌더마다 다시 계산하지 않는다.
-const TOTAL_PARTS = MODULES.reduce((s, m) => s + m.parts.length, 0);
-const TOTAL_AMOUNT = MODULES.reduce((s, m) => s + m.parts.reduce((a, p) => a + p.amount, 0), 0);
-
 interface PlanHeaderProps {
+  /** 주입된 BOM 컨텍스트(데모 픽스처 또는 hitl.plannerBom) — 칩·전체 합계의 원천. */
+  bom: PlanBom;
   /** 선택된 프로젝트 — null 이면 미선택(호출부가 본문 대신 empty-state 를 그린다). */
   project: { code: string; name: string } | null;
-  onProjectSelect: (opt: ComboOption) => void;
-  onProjectClear: () => void;
-  /** 프로젝트 변경/해제 확인 바 — 작성 중 발주단위가 있을 때만 값이 온다(초기화 경고). */
-  resetConfirm: { question: string; onConfirm: () => void; onCancel: () => void } | null;
+  /**
+   * 프로젝트 선택 UI(데모 전용) — 있으면 콤보박스+초기화 확인 바를 그린다. 라이브 개입은
+   * 개입 1(search)이 프로젝트를 이미 확정했으므로 미전달 — 프로젝트명을 표시만 한다.
+   */
+  picker?: {
+    onSelect: (opt: ComboOption) => void;
+    onClear: () => void;
+    /** 프로젝트 변경/해제 확인 바 — 작성 중 발주단위가 있을 때만 값이 온다(초기화 경고). */
+    resetConfirm: { question: string; onConfirm: () => void; onCancel: () => void } | null;
+  };
   totals: PlanTotals;
   /** 발주단위에 배정된 모듈 수(파생) — 미배정 스탯 계산용. */
   assignedModules: number;
+  /**
+   * 자동 실행 단계 스트립·고정 설정 칩 표시(기본 true — 데모). 라이브 개입에선 워크플로우
+   * 탭·실행 파라미터가 같은 정보를 대신하므로 끈다.
+   */
+  showFlowSteps?: boolean;
 }
 
 export function PlanHeader({
+  bom,
   project,
-  onProjectSelect,
-  onProjectClear,
-  resetConfirm,
+  picker,
   totals,
   assignedModules,
+  showFlowSteps = true,
 }: PlanHeaderProps) {
-  const unassignedModules = MODULES.length - assignedModules;
+  const unassignedModules = bom.modules.length - assignedModules;
+  // BOM 전체 합계 — 주입 BOM 이 바뀔 때만 재계산.
+  const bomTotals = useMemo(
+    () => ({
+      parts: bom.modules.reduce((s, m) => s + m.parts.length, 0),
+      amount: bom.modules.reduce((s, m) => s + m.parts.reduce((a, p) => a + p.amount, 0), 0),
+    }),
+    [bom],
+  );
+  const projectFavorites = useMemo(() => projectFavoritesOf(bom), [bom]);
+  const machine = bom.machines[0];
   return (
     <div className="flex flex-col gap-3">
-      {/* 프로젝트 선택(사용자 지정) + 컨텍스트 칩 — 데모 카탈로그는 픽스처 프로젝트 1건. */}
+      {/* 프로젝트 선택(데모) 또는 확정 프로젝트 표시(라이브) + 컨텍스트 칩. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span className="w-72 max-w-full min-w-0">
-          <CatalogCombobox
-            value={project ?? { code: '', name: '' }}
-            placeholder="프로젝트 선택"
-            favorites={[...PROJECT_FAVORITES]}
-            search={(q) => Promise.resolve(searchProjects(q))}
-            onSelect={onProjectSelect}
-            onClear={onProjectClear}
-          />
-        </span>
-        {resetConfirm ? (
+        {picker ? (
+          <span className="w-72 max-w-full min-w-0">
+            <CatalogCombobox
+              value={project ?? { code: '', name: '' }}
+              placeholder="프로젝트 선택"
+              favorites={projectFavorites}
+              search={(q) => Promise.resolve(searchProjects(projectFavorites, q))}
+              onSelect={picker.onSelect}
+              onClear={picker.onClear}
+            />
+          </span>
+        ) : project ? (
+          <span className="text-foreground text-[length:var(--text-body)] font-semibold">
+            {project.name}
+          </span>
+        ) : null}
+        {picker?.resetConfirm ? (
           <InlineConfirm
-            question={resetConfirm.question}
+            question={picker.resetConfirm.question}
             confirmLabel="초기화"
-            onConfirm={resetConfirm.onConfirm}
-            onCancel={resetConfirm.onCancel}
+            onConfirm={picker.resetConfirm.onConfirm}
+            onCancel={picker.resetConfirm.onCancel}
           />
         ) : project ? (
           <>
             <ContextChip>{project.code}</ContextChip>
-            {/* WBS 는 데모 픽스처가 프로젝트 1건뿐이라 BOM 값을 그대로 보인다. */}
-            <ContextChip>WBS {BOM.project.wbs}</ContextChip>
-            <ContextChip>장비 {MACHINE.name}</ContextChip>
-            {FIXED_CHIPS.map((c) => (
-              <ContextChip key={c}>{c}</ContextChip>
-            ))}
+            {/* WBS 는 주입 BOM 이 프로젝트 1건 단위라 BOM 값을 그대로 보인다. */}
+            <ContextChip>WBS {bom.project.wbs}</ContextChip>
+            {machine ? (
+              <ContextChip>
+                장비 {machine.name}
+                {bom.machines.length > 1 ? ` 외 ${bom.machines.length - 1}` : ''}
+              </ContextChip>
+            ) : null}
+            {showFlowSteps ? FIXED_CHIPS.map((c) => <ContextChip key={c}>{c}</ContextChip>) : null}
           </>
         ) : null}
       </div>
@@ -104,36 +133,38 @@ export function PlanHeader({
       {project ? (
         <>
           {/* 자동 실행 단계 스트립(읽기 전용) — '이 계획서' 단계만 accent. */}
-          <ol className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            {FLOW_STEPS.map((s, i) => (
-              <li key={s.label} className="flex items-center gap-1.5">
-                {i > 0 ? (
-                  <span aria-hidden className="text-foreground-tertiary">
-                    →
+          {showFlowSteps ? (
+            <ol className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {FLOW_STEPS.map((s, i) => (
+                <li key={s.label} className="flex items-center gap-1.5">
+                  {i > 0 ? (
+                    <span aria-hidden className="text-foreground-tertiary">
+                      →
+                    </span>
+                  ) : null}
+                  <span
+                    className={cn(
+                      'rounded-full px-2 py-0.5 whitespace-nowrap',
+                      s.planner
+                        ? 'bg-accent/10 text-accent font-semibold'
+                        : 'bg-muted/60 text-foreground-secondary',
+                    )}
+                  >
+                    {STEP_MARKS[i]} {s.label}
+                    <span className={s.planner ? undefined : 'text-foreground-tertiary'}>
+                      {s.planner ? ' · 이 계획서' : ' · 자동'}
+                    </span>
                   </span>
-                ) : null}
-                <span
-                  className={cn(
-                    'rounded-full px-2 py-0.5 whitespace-nowrap',
-                    s.planner
-                      ? 'bg-accent/10 text-accent font-semibold'
-                      : 'bg-muted/60 text-foreground-secondary',
-                  )}
-                >
-                  {STEP_MARKS[i]} {s.label}
-                  <span className={s.planner ? undefined : 'text-foreground-tertiary'}>
-                    {s.planner ? ' · 이 계획서' : ' · 자동'}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ol>
+          ) : null}
 
           {/* 요약 스탯 — 발주단위·미배정은 계획 진행에 따라 라이브 갱신. */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            <StatTile label="모듈" value={`${MODULES.length}`} />
-            <StatTile label="부품" value={`${TOTAL_PARTS}`} />
-            <StatTile label="총 요청금액" value={`${formatInteger(TOTAL_AMOUNT)}원`} />
+            <StatTile label="모듈" value={`${bom.modules.length}`} />
+            <StatTile label="부품" value={`${bomTotals.parts}`} />
+            <StatTile label="총 요청금액" value={`${formatInteger(bomTotals.amount)}원`} />
             <StatTile label="발주단위" value={`${totals.units}`} />
             <StatTile
               label="미배정 모듈"
@@ -158,14 +189,24 @@ function ContextChip({ children }: { children: React.ReactNode }) {
 // ── D. 하단 요약 + 확정 ──────────────────────────────────────────────────────
 
 interface PlanFooterProps {
+  bom: PlanBom;
   totals: PlanTotals;
   assignedModules: number;
   gate: PlanGate;
   onConfirm: () => void;
+  /** 제출 전송 중(라이브) — 버튼 비활성 + 스피너. 데모는 미전달(즉시 확정). */
+  busy?: boolean;
 }
 
-export function PlanFooter({ totals, assignedModules, gate, onConfirm }: PlanFooterProps) {
-  const unassigned = MODULES.length - assignedModules;
+export function PlanFooter({
+  bom,
+  totals,
+  assignedModules,
+  gate,
+  onConfirm,
+  busy = false,
+}: PlanFooterProps) {
+  const unassigned = bom.modules.length - assignedModules;
   return (
     <div className="border-border flex flex-col gap-2 border-t pt-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -184,9 +225,18 @@ export function PlanFooter({ totals, assignedModules, gate, onConfirm }: PlanFoo
             </span>
           ) : null}
         </p>
-        <Button size="sm" onClick={onConfirm} disabled={!gate.ready}>
-          <RiCheckboxCircleLine size={14} aria-hidden />
-          계획 확정
+        <Button size="sm" onClick={onConfirm} disabled={!gate.ready || busy}>
+          {busy ? (
+            <>
+              <Spinner size={14} />
+              전송 중…
+            </>
+          ) : (
+            <>
+              <RiCheckboxCircleLine size={14} aria-hidden />
+              계획 확정
+            </>
+          )}
         </Button>
       </div>
       {/* 미충족 항목 힌트 — 버튼이 왜 비활성인지 그 자리에서 알려준다. */}
