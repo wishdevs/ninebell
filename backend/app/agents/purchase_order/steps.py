@@ -36,6 +36,7 @@ APPLY_CLOSE_CAP_MS = 5_000  # '적용' 후 팝업 닫힘 상한
 FIELD_REFLECT_CAP_MS = 5_000  # 적용 후 메인 필드 반영 상한
 BOM_LOAD_CAP_MS = 40_000  # 조회(F2) 후 트리그리드 로드 상한(리프 337 스케일 실측 대비)
 CHECKBOX_SETTLE_MS = 500  # 체크박스 클릭 후 상태 재확인 간격
+CHECKBOX_RETRIES = 3  # 체크박스 클릭 재시도 상한 — F2 직후 클릭 간헐 유실(wbs 프로브 실측)
 POLL_MS = 300  # 관찰 폴 간격(실시간)
 MAX_SEARCH_RESULTS = 30  # 개입 카드 options 상한
 
@@ -148,18 +149,26 @@ async def apply_project(page: Any, keyword: str, pjt_no: str) -> dict:
 
 
 async def set_checkbox(page: Any, label: str, want_checked: bool) -> dict:
-    """체크박스를 want_checked 로 보장(label[for] 직결) — 다르면 클릭 후 재확인."""
+    """체크박스를 want_checked 로 보장(label[for] 직결) — 다르면 클릭 후 재확인.
+
+    클릭은 CHECKBOX_RETRIES 회까지 재시도 — 그리드 로드 직후 클릭이 간헐 유실된다
+    (2026-08-13 wbs 프로브 실측 1회: F2 직후 첫 클릭 미반영). 매 시도 전 상태를 다시 읽어
+    이미 원하는 상태면 즉시 수락한다(더블 토글 방지).
+    """
     rect = await page.evaluate(js.CHECKBOX_RECT_JS, label)
     if not rect:
         return {"ok": False, "reason": f"'{label}' 체크박스를 찾지 못했습니다."}
     if rect["checked"] == want_checked:
         return {"ok": True, "unchanged": True, "id": rect.get("id")}
-    await page.mouse.click(rect["x"], rect["y"])
-    await verify.DEFAULT_SLEEP(CHECKBOX_SETTLE_MS / 1000)
-    rect2 = await page.evaluate(js.CHECKBOX_RECT_JS, label)
-    if not (rect2 and rect2["checked"] == want_checked):
-        return {"ok": False, "reason": f"'{label}' 체크박스를 {'체크' if want_checked else '해제'}하지 못했습니다."}
-    return {"ok": True, "id": rect2.get("id")}
+    for _ in range(CHECKBOX_RETRIES):
+        await page.mouse.click(rect["x"], rect["y"])
+        await verify.DEFAULT_SLEEP(CHECKBOX_SETTLE_MS / 1000)
+        rect2 = await page.evaluate(js.CHECKBOX_RECT_JS, label)
+        if rect2 and rect2["checked"] == want_checked:
+            return {"ok": True, "id": rect2.get("id")}
+        if rect2:
+            rect = rect2  # 리플로우로 좌표가 바뀌었을 수 있어 갱신 후 재클릭.
+    return {"ok": False, "reason": f"'{label}' 체크박스를 {'체크' if want_checked else '해제'}하지 못했습니다."}
 
 
 async def click_lookup(page: Any) -> dict:

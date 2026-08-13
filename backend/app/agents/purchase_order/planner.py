@@ -7,9 +7,11 @@ plannerBom 은 프론트 데모 픽스처(src/lib/data/purchase-order-bom.json)�
      "bomQty","parts": [{"itemCode","name","spec","unit","bomQty","remainQty","unitPrice",
      "amount","vendorClass","account","purchasable"}]}]}]}
 
-레벨 매핑(트리그리드 getLevel, 0-idx — 프로브 실측 2026-08-13):
-  0=프로젝트 / 1=장비(machine) / 2=모듈(구조행 — 계층 접힘, machine 아래로 평탄화) /
-  3=SET(module, 발주단위 선택 단위) / 4=부품(part, 리프).
+레벨 매핑(트리그리드 ds.getLevel, 0-idx — levelmap 프로브 재실측 2026-08-13):
+  0=루트 / 1=프로젝트(라벨 행) / 2=장비(machine) / 3=SET(module, 발주단위 선택 단위) /
+  4=부품(part, 리프).
+  ⚠ 이전 '0=프로젝트/1=장비/2=구조행' 매핑은 시프트된 grid.getValue 로 만든 오독이었다 —
+  필드는 반드시 ds.getValue 로 읽어야 레벨과 같은 행이다(js.TREEGRID_READ_JS 참조).
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ FIELD_CANDIDATES: dict[str, tuple[str, ...]] = {
 # TREEGRID_READ_JS 에 넘길 읽기 대상 필드(후보 전체 합집합 — 순서 고정으로 재현성 확보).
 READ_FIELDS: list[str] = sorted({f for cands in FIELD_CANDIDATES.values() for f in cands})
 
-LEVEL_MACHINE = 1
+LEVEL_MACHINE = 2  # 장비 — levelmap 재실측(1 은 프로젝트 라벨 행)
 LEVEL_MODULE = 3  # SET — 발주단위 선택 단위
 LEVEL_PART = 4  # 리프
 
@@ -93,8 +95,8 @@ def _bool_yn(row: dict, key: str, *, default: bool = True) -> bool:
 def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
     """트리그리드 행(level+fields) → plannerBom(공유 계약 shape).
 
-    rows 는 TREEGRID_READ_JS 반환의 rows(그리드 표시 순서 — 계층 순서 보존). 레벨 0(프로젝트)·
-    2(구조행)는 건너뛰고, 3(SET)은 가장 최근 레벨 1(machine) 아래로 평탄화한다. 계층이 깨진
+    rows 는 TREEGRID_READ_JS 반환의 rows(그리드 표시 순서 — 계층 순서 보존). 레벨 0(루트)·
+    1(프로젝트 라벨 행)은 건너뛰고, 2=machine / 3=SET / 4=part 로 조립한다. 계층이 깨진
     행(machine 없는 module, module 없는 part)은 버린다 — 조립을 죽이는 것보다 낫고, 요약
     카운트로 드러난다.
     """
@@ -105,7 +107,10 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
 
     for row in rows:
         level = row.get("level")
-        if not wbs:
+        # wbs 픽은 machine(레벨 2) 이상에서만 — 실측(2026-08-13 wbs·levelmap 프로브): 프로젝트
+        # 라벨 행(레벨 1)의 WBS_NM 은 프로젝트명('CX85-137, 12CH PROCESS')이고, 실제
+        # WBS('PO-2026-07-4136')는 레벨 2~4 전 행에 실린다. 앞 행을 집으면 wbs 가 오염된다.
+        if not wbs and isinstance(level, int) and level >= LEVEL_MACHINE:
             wbs = _text(row, "wbs")
         if level == LEVEL_MACHINE:
             cur_machine = {
@@ -148,7 +153,7 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
                     "purchasable": _bool_yn(row, "purchasable"),
                 }
             )
-        # level 0(프로젝트)·2(구조행)·미상(-1)은 조립 대상 아님.
+        # level 0(루트)·1(프로젝트 라벨)·미상(-1)은 조립 대상 아님.
 
     return {
         "project": {

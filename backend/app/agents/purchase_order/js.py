@@ -124,17 +124,26 @@ TREEGRID_MV_SIG_JS = r"""() => {
     const ds = g.getDataSource();
     const count = ds.getRowCount();
     let mvY = 0;
-    for (let i = 0; i < count; i++) {
-      try { if (g.getValue(i, 'MV_FG') === 'Y') mvY++; } catch (e) {}
+    // ds 인덱스 공간: 0=숨은 루트, 데이터 행은 1..count(경계 프로브 실측 — TREEGRID_READ_JS 참조).
+    for (let i = 1; i <= count; i++) {
+      // ds.getValue — 레벨과 같은 인덱스 공간(grid 쪽 getValue 는 한 행 앞섬, TREEGRID_READ_JS 참조).
+      try { if (ds.getValue(i, 'MV_FG') === 'Y') mvY++; } catch (e) {}
     }
     return { count, mvY };
   } catch (e) { return null; }
 }"""
 
-# BOM 트리그리드 전량 읽기 — ⚠ getJsonRows 는 트리그리드에서 null(플랫 전용 API, 실측).
-# `getLevel(i)` + `getValue(i, field)` 루프가 유일한 경로(410행 실측 성공). 지정 필드만 읽어
-# 페이로드를 제한한다(전량 42열 × 400행은 불필요). arg = fields(string[]).
-# 레벨(0-idx): 0=프로젝트 / 1=장비 / 2=모듈(구조) / 3=SET(발주단위 선택 단위) / 4=부품(리프).
+# BOM 트리그리드 전량 읽기 — ⚠ getJsonRows(범위형)는 트리그리드에서 null(플랫 전용 API, 실측).
+# ⚠⚠ 인덱스 공간(2026-08-13 levelmap 프로브 실측): 트리그리드에서 `grid.getValue(i, f)` 는
+#   `ds.getLevel(i)` 보다 **한 행 앞선 데이터**를 돌려준다(모듈이 첫 부품으로 밀리는 시프트의
+#   원인). 레벨과 같은 인덱스 공간은 **ds.getValue(i, f)**(= ds.getJsonRow(i)) — 반드시 ds 로
+#   읽는다. 지정 필드만 읽어 페이로드를 제한한다. arg = fields(string[]).
+# 레벨(0-idx, ds 정합 실측): 0=루트 / 1=프로젝트(라벨 행) / 2=장비 / 3=SET(발주단위 선택 단위)
+# / 4=부품(리프). — 이전 '0=프로젝트/1=장비/2=구조행' 매핑은 시프트된 g.getValue 로 만든 오독.
+# ⚠ 루프 경계(2026-08-13 경계 프로브 실측): ds 인덱스 0 은 **숨은 루트**(필드 undefined)이고
+#   데이터 행은 1..count 다 — ds.getLevel(count)==4, ds.getValue(count,'ITEM_CD') 가 마지막
+#   부품(CX85-137 에선 'CM0SP-ZRVB-M002-0' BUFFER Z-ROBOT R)을 돌려준다. 0..count-1 로 돌면
+#   마지막 부품 1행이 떨어져 리프 337→336 으로 준다(모듈15 parts 2→1).
 TREEGRID_READ_JS = r"""(fields) => {
   try {
     const el = document.querySelector('.dews-ui-treegrid');
@@ -143,12 +152,12 @@ TREEGRID_READ_JS = r"""(fields) => {
     const ds = g.getDataSource();
     const count = ds.getRowCount();
     const rows = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 1; i <= count; i++) {
       let level = -1;
       try { level = ds.getLevel(i); } catch (e) {}
       const row = { i, level };
       for (const f of fields) {
-        try { row[f] = g.getValue(i, f); } catch (e) { row[f] = null; }
+        try { row[f] = ds.getValue(i, f); } catch (e) { row[f] = null; }
       }
       rows.push(row);
     }

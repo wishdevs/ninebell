@@ -1,8 +1,9 @@
 """read_bom — 이동요청 해제 → 조회(F2) → 트리그리드 전량 읽기 → plannerBom 조립.
 
-'구매요청만' 뷰(이동요청 해제 = MV_FG='N' 리프 + 구조행, CX85-137 실측 354행/리프 337 스케일)
-로 좁힌 뒤 getLevel/getValue 루프 리더(getJsonRows 는 트리그리드에서 null)로 전량 읽는다.
-레벨 매핑·의사거래처 분류는 planner.assemble_planner_bom(순수 함수)이 담당.
+'구매요청만' 뷰(이동요청 해제 = MV_FG='N' 리프 + 상위 행, CX85-137 실측 354행 = 구조 17 + 리프 337)
+로 좁힌 뒤 ds.getLevel/ds.getValue 루프 리더(getJsonRows 는 트리그리드에서 null, grid.getValue
+는 한 행 앞섬 — js.TREEGRID_READ_JS 참조)로 전량 읽는다. 레벨 매핑·의사거래처 분류는
+planner.assemble_planner_bom(순수 함수)이 담당.
 """
 
 from __future__ import annotations

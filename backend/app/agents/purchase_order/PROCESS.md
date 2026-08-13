@@ -41,12 +41,15 @@
   순서대로: SET 레벨 모듈 선택(1개 이상) → 납기예정일 + 구매사유 입력 → 저장(= 구매요청 저장
   1회 = 발주번호 1건). ⚠ 비가역. 선택 **세터** — 검증: ❓ (체크 getter 는 확정 —
   `getCheckedItems()`/`checkChildren()`; 세터는 쓰기 프로브에서 실클릭 좌표로. setValue 우회 금지).
-- **D5-보충 BOM 레벨 정정(프로브 실측)**: 트리그리드는 **5레벨**(`ds.getLevel()` 0-idx:
-  0=프로젝트/1=장비/2=모듈/3=**SET**/4=부품). 사용자 용어 '3레벨'(발주단위 선택 대상)은
-  **getLevel()==3 인 SET 행 15개**에 대응(화면 표시 레벨순번과 xlsx 는 중간 레벨 1개가
-  접혀 4단으로 보였음). 구매요청만 필터 = **리프(level 4) 336 + 구조 18 = 354행**
-  (Phase A 스모크 재실측 2026-08-13 — 337 은 `PUR_FG='Y'` 행수로 비리프 1행을 포함한 값이다.
-  xlsx 354행과 총량 일치). CX85-137 리프 392(무필터)·ZJ90-130(PJT_NO 2261) 리프 55.
+- **D5-보충 BOM 레벨 재정정(levelmap 프로브 2026-08-13)**: 트리그리드는 **5레벨**
+  (`ds.getLevel()` 0-idx: **0=루트/1=프로젝트(라벨 행)/2=장비/3=SET/4=부품**). 사용자 용어
+  '3레벨'(발주단위 선택 대상)은 **getLevel()==3 인 SET 행 15개**('외주조립-*' 등)에 대응.
+  구매요청만 필터 = **프로젝트 1 + 장비 1 + SET 15 + 리프 337 = 354행**(xlsx 와 일치.
+  루트는 count 밖 — ds 인덱스 0 의 숨은 루트, 데이터 행은 1..count. 한때 '리프 336' 으로
+  기록했던 것은 0..count-1 루프가 마지막 행을 놓친 경계 아티팩트 — boundary 프로브로 정정).
+  CX85-137 리프 392(무필터)·ZJ90-130(PJT_NO 2261) 리프 55 — 두 수치는 0-베이스 루프 실측이라
+  경계 아티팩트 ±1 가능(재실측 시 393/56 예상, 게이트에 미사용). ⚠ 필드 읽기는 반드시
+  `ds.getValue` — `grid.getValue` 는 한 행 앞섬(아래 'BOM 트리그리드 실측' 인덱스 공간 함정).
 - **D6 구매사유 기본값**: 외주조립 모듈이면 `[프로젝트명] [부품명]`(예:
   `CX85-137 · 12CH PROCESS BUFFER`, 복수면 `·` 연결), 그 외 빈 값 — 사용자 수정 가능(계획서에서 확정).
 - **D7 셀프 결재(화면 ②)**: 공장=**나인벨**, ①에서 등록한 항목 선택 → 셀프 결재. ⚠ 비가역 —
@@ -102,10 +105,17 @@
   (플랫)와 다른 신규 위젯 타입. 접근: `$('.dews-ui-treegrid').data('dewsControl')._grid`.
 - 데이터 컬럼 42개 — 엑셀 내보내기 헤더와 일치(fieldName 상세는 프로브 아티팩트
   `backend/e2e/artifacts/purchase_order_bom_grid_results.json`).
-- **레벨 판정**: `ds.getLevel(itemIndex)` (0-idx: 0=프로젝트/1=장비/2=모듈/3=부품 — 화면 표시
-  LV_SQ 는 +1). **부모 연결**: `ds.getParent(itemIndex)` 또는 필드 `UP_PJTBOM_UID_NO`.
-- **전량 읽기**: `ds.getJsonRows(0, N-1)` 는 트리그리드에서 **null 반환**(플랫 전용 API — 실측).
-  `for i in range(rowCount): getLevel(i) + g.getValue(i, field)` 루프가 유일한 경로(410행 실측 성공).
+- **레벨 판정**: `ds.getLevel(itemIndex)` — 0-idx **0=루트/1=프로젝트(라벨 행)/2=장비/3=SET/
+  4=부품** (levelmap 프로브 재실측 2026-08-13, `/tmp/po-live-refix/levelmap-probe.json`).
+  **부모 연결**: `ds.getParent(itemIndex)` 또는 필드 `UP_PJTBOM_UID_NO`.
+- ⚠ **인덱스 공간 함정(2026-08-13 blocker 실측)**: 트리그리드에서 `grid.getValue(i, f)` 는
+  `ds.getLevel(i)` 보다 **한 행 앞선 데이터**를 돌려준다 — 이 조합으로 읽으면 모듈이 '첫
+  부품'으로, 마지막 부품이 '다음 SET 헤더'로 밀린다(스모크 산출물 대조로 발견). 필드는
+  반드시 **`ds.getValue(i, f)`**(= `ds.getJsonRow(i)`) 로 읽어야 레벨과 같은 행이다.
+  이전 '0=프로젝트/1=장비/2=구조행(접힘)' 매핑은 이 시프트가 만든 오독이었다.
+- **전량 읽기**: `ds.getJsonRows(0, N-1)`(범위형)는 트리그리드에서 **null 반환**(플랫 전용 API —
+  실측). `for i in 1..rowCount: ds.getLevel(i) + ds.getValue(i, field)` 루프가 유일한 경로
+  (**1..count 포함** — 0 은 숨은 루트, 마지막 데이터 행은 i==count. boundary 프로브 실측).
 - **체크 API**: `getCheckedItems()` / `getCheckedRows()` / `checkChildren()`(부모 체크 → 자식
   전파, D9 '하위 전체 선택'과 부합). 단일 행 체크 **세터는 미확정** — 쓰기 프로브에서 실클릭으로.
 
@@ -173,3 +183,14 @@ D1(실행 중 HITL)의 구현 레시피. 선례 = `grid` kind(card_collect)가 �
   직결) + MV_FG 필터 의미 수치 정합(410/354/73), '초기화: 예' 다이얼로그 미발생 정정,
   BOM 5레벨 정정(SET=getLevel 3, 발주단위 선택 대상). 미해소: 팝업 소멸 근본 원인(완화책으로
   대체), 이동요청만 시나리오 구조행 17 세부 구성(영향 적음).
+- 2026-08-13 트리그리드 리더 blocker 수정·재검증: ① 인덱스 시프트(`grid.getValue` 가
+  `ds.getLevel` 보다 한 행 앞섬 — 모듈이 첫 부품으로, 마지막 부품이 다음 SET 헤더로 밀림) →
+  `ds.getValue` 단일 인덱스 공간으로 교체, ② ds 경계(0=숨은 루트, 데이터 1..count — 0-베이스
+  루프가 마지막 리프 유실, '리프 336' 오독의 원인) → 루프 1..count 포함으로 수정, ③ wbs 픽
+  레벨 2+ 한정(프로젝트 라벨 행 WBS_NM=프로젝트명 오염 차단), ④ `set_checkbox` 클릭 유실
+  재시도(상한 3, F2 직후 1회 실측). 근거 프로브: idx/boundary(`/tmp/po-live-refix/*.json`,
+  부작용 0). 재스모크 SUCCESS(runId f1956abb…, 53.8s): 모듈 15개 = `CX85-137-PROCESS-001..015`
+  정확 일치, SET 헤더 parts 혼입 0, 마지막 모듈 parts 2(Z-ROBOT L/R), **리프 337**(=PUR_FG Y,
+  xlsx 픽스처와 모듈별 완전 일치), wbs=`PO-2026-07-4136`, plan 왕복·notice 재방출 PASS.
+  회귀 방지: JS 소스 계약 트립와이어 테스트(단일 인덱스 공간·1..count 경계) 추가.
+  pytest 1685 passed·tsc 클린.

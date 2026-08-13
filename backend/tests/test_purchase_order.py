@@ -1,7 +1,7 @@
 """구매발주(purchase-order) Phase A — 그래프·픽스처·plannerBom 조립·계획 검증·HITL 왕복.
 
 Phase A 는 **쓰기 없음**(저장 F7·결재 0줄)이 안전 계약이라 규율이 네 겹이다:
-  (1) plannerBom 조립은 순수 함수 — 레벨 매핑(1=장비/3=SET/4=부품, 0·2 스킵)과
+  (1) plannerBom 조립은 순수 함수 — 레벨 매핑(2=장비/3=SET/4=부품, 0=루트·1=프로젝트 라벨 스킵)과
       의사 거래처(가공품·판금품) 분류가 공유 계약 shape 대로 나와야 프론트가 그대로 먹는다.
   (2) 계획 제출 검증 — units≥1 · 각 unit purchaseReason·dueDate · 미지정 의사 거래처 없음.
   (3) HitlDecision.plan 왕복 — 모델 필드 + payload dict **동시** 추가(한쪽 누락 = 조용한
@@ -15,6 +15,7 @@ import asyncio
 
 import pytest
 
+from app.agents.purchase_order import js as js_mod
 from app.agents.purchase_order import planner
 from app.agents.purchase_order import steps as steps_mod
 from app.agents.purchase_order.graph import PurchaseOrderState, build_purchase_order_graph
@@ -67,9 +68,14 @@ def _grid_row(level: int, **fields) -> dict:
 
 def _sample_rows() -> list[dict]:
     return [
-        _grid_row(0, ITEM_CD="2297", ITEM_NM="CX85-137, 12CH PROCESS", WBS_NM="PO-2026-07-4136"),
-        _grid_row(1, ITEM_CD="328-22376", ITEM_NM="PROCESS, 12CH_HC", ITEM_SPEC_DC="X1-01", UNIT_DC="SYS"),
-        _grid_row(2, ITEM_CD="STRUCT-1", ITEM_NM="구조행(접힘 레벨)"),  # 스킵 — machine 아래로 평탄화.
+        # levelmap 재실측(2026-08-13): 0=루트(필드 비어 있음) / 1=프로젝트 라벨 행(WBS_NM 이
+        # 프로젝트명 — wbs 오염원) / 2=장비 / 3=SET / 4=부품.
+        _grid_row(0),
+        _grid_row(1, ITEM_CD="2297", ITEM_NM="프로젝트", WBS_NM="CX85-137, 12CH PROCESS"),
+        _grid_row(
+            2, ITEM_CD="328-22376", ITEM_NM="PROCESS, 12CH_HC", ITEM_SPEC_DC="X1-01",
+            UNIT_DC="SYS", WBS_NM="PO-2026-07-4136",
+        ),
         _grid_row(3, ITEM_CD="SET-001", ITEM_NM="외주조립-BUFFER", ITEM_SPEC_DC="Assy", UNIT_DC="SET", BOM_QT="1"),
         _grid_row(
             4, ITEM_CD="12P-B00B2-3", ITEM_NM="Buffer Top Plate", ITEM_SPEC_DC="(외주조립)",
@@ -98,7 +104,7 @@ def test_assemble_planner_bom_maps_levels_to_contract_shape():
         "name": "CX85-137, 12CH PROCESS",
         "wbs": "PO-2026-07-4136",
     }
-    # machine(레벨 1) 1개 — 레벨 2 구조행은 machine 아래로 평탄화(모듈로 잡히지 않는다).
+    # machine(레벨 2) 1개 — 레벨 0(루트)·1(프로젝트 라벨)은 조립 대상이 아니다.
     assert len(bom["machines"]) == 1
     machine = bom["machines"][0]
     assert machine["itemCode"] == "328-22376" and machine["unit"] == "SYS"
@@ -128,7 +134,7 @@ def test_assemble_planner_bom_drops_orphan_rows():
     rows = [
         _grid_row(4, ITEM_CD="orphan-part", ITEM_NM="고아 부품"),
         _grid_row(3, ITEM_CD="orphan-set", ITEM_NM="고아 SET"),
-        _grid_row(1, ITEM_CD="M-1", ITEM_NM="장비"),
+        _grid_row(2, ITEM_CD="M-1", ITEM_NM="장비"),
         _grid_row(3, ITEM_CD="SET-1", ITEM_NM="모듈"),
         _grid_row(4, ITEM_CD="P-1", ITEM_NM="부품"),
     ]
@@ -437,6 +443,70 @@ async def test_wait_bom_filtered_times_out_on_persistent_stale(monkeypatch):
     monkeypatch.setattr(steps_mod.latency, "budget_ms", lambda ms: 1)
     page = _SigPage([_STALE_SIG])
     assert await steps_mod.wait_bom_filtered(page, dict(_STALE_SIG)) == -1
+
+
+# ── 트리그리드 읽기 JS — 인덱스 시프트 회귀 방지(2026-08-13 경계 프로브 실측) ─────
+def test_treegrid_read_js_reads_level_and_fields_from_same_index_space():
+    """레벨과 필드가 다른 행에서 오면(과거: ds.getLevel + g.getValue 혼용) 모듈이 첫 부품으로
+    밀리는 시프트가 재발한다 — 소스 계약 트립와이어: 필드는 반드시 ds 로 읽는다."""
+    src = js_mod.TREEGRID_READ_JS
+    assert "ds.getLevel(i)" in src and "ds.getValue(i, f)" in src
+    assert "g.getValue" not in src  # 그리드(view) 인덱스 혼용 금지 — 한 행 앞선 데이터.
+    # ds 인덱스 0 은 숨은 루트, 데이터 행은 1..count — 0-베이스 루프는 마지막 부품을 떨군다.
+    assert "let i = 1; i <= count" in src
+
+
+def test_treegrid_mv_sig_js_uses_ds_index_space():
+    src = js_mod.TREEGRID_MV_SIG_JS
+    assert "ds.getValue(i, 'MV_FG')" in src
+    assert "g.getValue" not in src
+    assert "let i = 1; i <= count" in src
+
+
+# ── set_checkbox — 클릭 유실 재시도(2026-08-13 wbs 프로브 실측) ────────────────
+class _CheckboxPage:
+    """CHECKBOX_RECT_JS 평가마다 checked 시퀀스를 재생(마지막 값 반복). None = 미발견."""
+
+    def __init__(self, checked_seq):
+        self.seq = list(checked_seq)
+        self.evals = 0
+        self.clicks = 0
+        self.mouse = self
+
+    async def evaluate(self, script, arg=None):
+        v = self.seq[min(self.evals, len(self.seq) - 1)]
+        self.evals += 1
+        if v is None:
+            return None
+        return {"x": 10, "y": 10, "checked": v, "id": "s_move_chk"}
+
+    async def click(self, x, y):
+        self.clicks += 1
+
+
+@pytest.mark.asyncio
+async def test_set_checkbox_retries_lost_click_then_succeeds():
+    # 재현: F2 직후 첫 클릭이 유실돼 상태가 그대로(True) — 재클릭으로 해제에 도달해야 한다.
+    page = _CheckboxPage([True, True, False])
+    out = await steps_mod.set_checkbox(page, "이동요청", False)
+    assert out["ok"] is True and out.get("unchanged") is None
+    assert page.clicks == 2  # 유실 1회 + 성공 1회.
+
+
+@pytest.mark.asyncio
+async def test_set_checkbox_fails_after_retry_cap():
+    page = _CheckboxPage([True])  # 끝내 안 바뀜.
+    out = await steps_mod.set_checkbox(page, "이동요청", False)
+    assert out["ok"] is False and "해제하지 못했습니다" in out["reason"]
+    assert page.clicks == steps_mod.CHECKBOX_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_set_checkbox_unchanged_short_circuits_without_click():
+    page = _CheckboxPage([False])
+    out = await steps_mod.set_checkbox(page, "이동요청", False)
+    assert out == {"ok": True, "unchanged": True, "id": "s_move_chk"}
+    assert page.clicks == 0
 
 
 # ── plan 노드(검증 위반 재방출 → 유효 제출 수락) ────────────────────────────────
