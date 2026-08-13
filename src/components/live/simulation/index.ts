@@ -13,6 +13,7 @@
 import type { ComponentType } from 'react';
 import type { Agent } from '@/lib/data/agents';
 import { TaxInvoiceSimulation } from './tax-invoice/tax-invoice-simulation';
+import { PurchaseOrderSimulation } from './purchase-order/purchase-order-simulation';
 
 export interface SimulationPanelProps {
   agent: Agent;
@@ -20,4 +21,12 @@ export interface SimulationPanelProps {
 
 export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProps>> = {
   'tax-invoice': TaxInvoiceSimulation,
+  'purchase-order': PurchaseOrderSimulation,
 };
+
+/**
+ * 전체폭이 필요한 시뮬레이션 — 대형 트리 테이블(구매발주 BOM 등)은 split 레이아웃의
+ * 우측 열로는 좁다. 여기 등록된 agentId 는 agent-detail-client 가 layoutLevel 을
+ * 'full'(그리드 개입과 동일 — 라이브 대기 스테이지 숨김)로 올린다. 나머지는 종전 split.
+ */
+export const FULL_WIDTH_SIMULATION_AGENTS: ReadonlySet<string> = new Set(['purchase-order']);
