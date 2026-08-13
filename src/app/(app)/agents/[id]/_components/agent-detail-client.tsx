@@ -27,7 +27,7 @@ import {
   useRunTerminalNotification,
 } from '@/lib/live/use-hitl-notification';
 import { PRE_RUN_FORMS } from '@/components/live/pre-run';
-import { SIMULATION_PANELS } from '@/components/live/simulation';
+import { FULL_WIDTH_SIMULATION_AGENTS, SIMULATION_PANELS } from '@/components/live/simulation';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -164,8 +164,12 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 시뮬레이션 패널도 실행 전 폼과 같은 split — 좌측에 대기 상태 라이브 스테이지를 두어
   // 실행형 에이전트와 같은 화면 구조를 유지한다(사용자 요청 2026-08-04). 실행이 없으므로
   // 스테이지는 항상 '라이브 화면 없음' 대기 화면이고 중앙 CTA 는 숨긴다(onStart 미전달).
+  // 단, 대형 트리 테이블 패널(FULL_WIDTH_SIMULATION_AGENTS — 구매발주 등)은 그리드 개입과
+  // 동일하게 full — 대기 스테이지를 숨기고 패널이 전체폭을 쓴다.
   const layoutLevel: 'full' | 'split' | 'live' = SimulationPanel
-    ? 'split'
+    ? FULL_WIDTH_SIMULATION_AGENTS.has(agent.id)
+      ? 'full'
+      : 'split'
     : interventionActive && run.hitl?.kind === 'grid'
       ? 'full'
       : interventionActive && run.hitl?.kind === 'chat'

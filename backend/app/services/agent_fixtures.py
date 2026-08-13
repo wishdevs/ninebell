@@ -123,6 +123,13 @@ AGENT_GROUP_FIXTURES: list[dict] = [
         "description": "외상매입·매출, 미지급금 등 회계전표를 종류별로 대신 입력합니다.",
         "sort_order": 1,
     },
+    # 구매팀(사용자 지정 2026-08-12) — 자리만 잡은 그룹. 업무 정의 전이라 설명은 비워 둔다.
+    {
+        "id": "purchase",
+        "name": "구매팀",
+        "description": None,
+        "sort_order": 2,
+    },
 ]
 
 
@@ -779,8 +786,42 @@ _EAP_CANCEL_FIXTURE: dict = {
 }
 
 
+# ── 구매팀 — 자리만 잡은 빈 에이전트(사용자 지정 2026-08-12) ─────────────────────
+# 업무 정의 전이라 설명·현재동작·단계·플로우를 **비워 둔다**. workflow_id=None 이라 실행
+# 컨트롤은 비활성이고(프론트 canRun=false), steps/flow_graph 가 비어 워크플로우 탭에
+# 없는 계획을 그리지 않는다(세금계산서 관례 — 그래프 없이 계획을 그리면 거짓이 된다).
+# 그래프를 붙일 때 workflow_id·steps·flow_graph·description 을 채워 실동작으로 승격한다.
+def _placeholder_fixture(agent_id: str, name: str, group_id: str) -> dict:
+    return {
+        "id": agent_id,
+        "workflow_id": None,
+        "group_id": group_id,
+        "hidden": False,
+        "name": name,
+        "description": "",
+        "drive": "browser",
+        "interaction": "autonomous",
+        "target_system": "더존 옴니솔",
+        "target_url": "erp.ninebell.co.kr",
+        "status": "idle",
+        "progress": 0,
+        "timeout_seconds": 240,
+        "elapsed_seconds": 0,
+        "current_action": "",
+        "run_count": 0,
+        "success_rate": 0.0,
+        "avg_seconds": 0,
+        "last_run_at": None,
+        "flow_graph": None,
+        "steps": [],
+        "logs": [],
+    }
+
+
 AGENT_FIXTURES.extend(
     [
+        _placeholder_fixture("item-bulk-register", "품목일괄등록", "purchase"),
+        _placeholder_fixture("purchase-order", "구매발주", "purchase"),
         _EAP_CANCEL_FIXTURE,
         _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
         _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),
