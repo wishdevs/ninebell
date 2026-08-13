@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
+import { ManualLink } from '@/components/ui/manual-link';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { useCurrentUser, useSetCurrentUser } from '@/app/(app)/providers/user-provider';
@@ -45,6 +46,7 @@ export function AccountClient() {
       <PageHeader
         caption="개인"
         title="계정 설정"
+        titleAdornment={<ManualLink docId="account-settings" />}
         description="내 이메일을 관리합니다. 이름·부서는 옴니솔 프로필과 동기화되며, 로그인 아이디와 역할은 관리자만 변경할 수 있습니다."
       />
 

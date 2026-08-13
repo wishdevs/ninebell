@@ -8,6 +8,13 @@ interface PageHeaderProps {
   caption?: ReactNode;
   /** Optional supporting description below the title. */
   description?: ReactNode;
+  /**
+   * Optional inline slot rendered as a sibling of the `<h1>`, right beside the
+   * title — e.g. a `<ManualLink>` pill. Unlike `action`, this stays glued to the
+   * heading instead of being pushed to the far edge, and it is kept outside the
+   * `<h1>` so the accessible heading name is the title alone.
+   */
+  titleAdornment?: ReactNode;
   /** Optional right-aligned action slot — e.g. a primary button. */
   action?: ReactNode;
   /** Override the outer `<header>` className when callers need extra spacing. */
@@ -30,7 +37,20 @@ interface PageHeaderProps {
  * paragraphs stay scannable. Pass a styled `ReactNode` for the rare cases
  * that need a wider/narrower clamp.
  */
-export function PageHeader({ title, caption, description, action, className }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  caption,
+  description,
+  titleAdornment,
+  action,
+  className,
+}: PageHeaderProps) {
+  const heading = (
+    <h1 className="text-[length:var(--text-section)] leading-tight font-semibold tracking-tight">
+      {title}
+    </h1>
+  );
+
   const text = (
     <div className={cn('grid', action ? 'gap-1.5' : 'gap-2')}>
       {caption ? (
@@ -38,9 +58,14 @@ export function PageHeader({ title, caption, description, action, className }: P
           {caption}
         </p>
       ) : null}
-      <h1 className="text-[length:var(--text-section)] leading-tight font-semibold tracking-tight">
-        {title}
-      </h1>
+      {titleAdornment ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+          {heading}
+          {titleAdornment}
+        </div>
+      ) : (
+        heading
+      )}
       {description ? (
         <p className="text-muted-foreground max-w-2xl text-sm leading-relaxed">{description}</p>
       ) : null}
