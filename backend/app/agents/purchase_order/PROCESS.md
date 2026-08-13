@@ -110,6 +110,28 @@
 | 7 | self_approve | D7 셀프 결재 — **승인 전 게이트 닫힘** (버튼 위치도 미확인) | ❓ | ⚠ |
 | 8 | po_batch | D8·D9 구매발주일괄입력 — 진입·상단 구조만 확인 | ✅진입 | ⚠ |
 
+## HITL 통합 설계(2026-08-13 인프라 탐색 — hitl-map)
+
+D1(실행 중 HITL)의 구현 레시피. 선례 = `grid` kind(card_collect)가 밟은 6군데.
+
+- **개입 2회**: ① 프로젝트 선택 — 기존 `search`/`select` 계열 재사용(query 왕복 루프 =
+  card_collect `collect.py:326-392` 패턴, layoutLevel 'split' 유지 — 라이브 화면 보임).
+  ② 계획서 — **신규 kind `planner`**, layoutLevel 'full'(그리드 개입과 동일).
+- **백엔드 변경점**: `runs.py` `HitlDecision` 에 `plan` 필드 + **:301-310 payload dict 에도
+  동시 추가**(누락 시 조용히 버려짐 — 2026-07-05 grid 회귀 선례). `hitl.py` 는 무변경
+  (`**extra` 가 확장점). 노드는 `open_hitl_channel` + 매 턴 프레임 전체 재방출.
+  픽스처는 workflow_id·steps 채우고 HITL 두 스텝에 `intervention: True`.
+- **프론트 변경점**: `types.ts`(kind 유니온·프레임 extras·제출 payload·액션 4곳),
+  `use-live-run.ts` `sendPlan`(sendRows 옆, 낙관적 clearHitl), `live-side-panel.tsx:94-113`
+  kind 분기, `agent-detail-client.tsx:173` 'full' 조건에 planner 추가,
+  신규 `LivePlannerCard`(데모 `simulation/purchase-order/*` 조각 재사용 — 데모 패널과 실
+  개입은 agentId 가 달라 공존).
+- **운영 제약(실측)**: 응답 스키마는 폐쇄형(7키) — plan 제출 필드에 `max_length` 명시(rows=500
+  선례). hitl 프레임은 DB 미저장·세션 버퍼 상주(400행 ≈ 150-300KB, 재방출 비용 감수).
+  HITL 대기 기본 600초/1회(계획서 대기는 `timeout_s` 상향 — 대기 중 런 예산은 자동 정지),
+  타임아웃 시 런 failed(재개 없음). 탭 닫으면 즉시 취소. ⚠ 로컬 `--reload` 는 개입 중
+  `.py` 수정 시 큐가 날아간다. 백/프론트 **동시 배포 필수**(백엔드 선배포 = 제출 버튼 없는 카드).
+
 ## 남은 작업(라이브 ERP 필요 — flow-buildout 표준절차)
 
 - [ ] 계획서 백엔드 계약 설계·구현(프로젝트 검색 + BOM 조회 — 읽기 경로는 실측 완료로 착수 가능)
