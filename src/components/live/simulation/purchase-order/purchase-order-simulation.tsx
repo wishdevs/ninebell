@@ -129,14 +129,17 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
   return (
     // 헤더는 실행 전 입력 폼(pre-run)과 같은 문법 — 시뮬레이션 배지·더미 언급은 UI 에
     // 노출하지 않는다(2026-08-05 사용자 확정, tax-invoice 와 동일).
+    // 카드를 뷰포트에 고정하지 않는다(lg:h-full·overflow 금지) — 내부스크롤 중첩이 생겨
+    // 전체 컨텐츠는 페이지 스크롤로 흐르게 한다(2026-08-13 사용자 지적). 자체 스크롤은
+    // 목록성 영역(모듈 풀 max-h·페이로드 pre)만 갖는다.
     <SectionCard
       caption="실행 전 입력"
       title={`${agent.name} 계획서`}
       description="프로젝트 BOM 조회와 이동요청 저장은 에이전트가 자동 처리합니다. 이 계획서에서는 반복 루프 입력 — 발주단위(모듈 묶음)·구매사유·납기예정일과 거래처 지정 — 을 한 번에 작성합니다."
       density="comfortable"
-      className="lg:h-full lg:min-h-0 lg:overflow-hidden"
+      className="lg:self-start"
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-1">
+      <div className="flex flex-col gap-5">
         <PlanHeader
           project={project}
           onProjectSelect={(opt) => requestProject({ code: opt.code, name: opt.name })}
