@@ -78,9 +78,11 @@ def is_cancel(row: dict) -> bool:
 
 
 def group_slot(time_str: str | None) -> str:
-    """그룹 키용 시간 슬롯 — 조식/중식/석식 또는 '?'(시각 미상·판독 불가).
+    """그룹 키용 시간 슬롯 — 조식/석식 또는 '?'(시각 미상·판독 불가).
 
     00:00 표기는 자정 결제가 아니라 시각 미전달이므로 별도 슬롯으로 묶는다.
+    ⚠ 중식 폐지(사규 변경 2026-08-13)로 점심·저녁이 **같은 슬롯**이 됐다 — 계정이 같아졌으니
+      나눌 이유가 없다(같은 가맹점의 점심·저녁이 한 그룹으로 묶여 AI 호출도 줄어든다).
     """
     s = str(time_str or "")
     if not s or _ZERO_TIME_RE.match(s):
@@ -89,8 +91,8 @@ def group_slot(time_str: str | None) -> str:
 
 
 def group_key(row: dict) -> tuple[str, str]:
-    """(정규화 가맹점, 시간 슬롯) — 같은 가맹점이라도 점심/저녁은 분류가 갈리므로 슬롯을 나눈다
-    (실측: 김치도가 점심=중식 / 저녁=야근식대)."""
+    """(정규화 가맹점, 시간 슬롯) — 같은 가맹점이라도 시간대로 분류가 갈리면 슬롯을 나눈다.
+    중식 폐지 후 남은 갈림은 **조식 ↔ 석식**뿐이다(점심·저녁은 같은 석식 계정)."""
     return (norm_merchant(row.get("TRAN_NM")), group_slot(row.get("TRAN_TM")))
 
 

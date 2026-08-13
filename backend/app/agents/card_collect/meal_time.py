@@ -6,11 +6,15 @@
   이후 11시 결제도 계속 석식으로 굳는다 — AI 프롬프트에 거래시각을 넣어도 그 경로는 손댈 수
   없다. 그래서 **어느 경로로 정해졌든 마지막에 한 번** 시각과 대조해 형제 계정으로 바꾼다.
 
-경계(사용자 확정 2026-07-27):
-  · ~11:00      조식
-  · 11:00~15:00 중식
-  · 15:00~      석식   ← 15~17시 구간도 석식(사용자 확정)
+경계(사규 변경 2026-08-13 — **중식 폐지**):
+  · ~11:00  조식
+  · 11:00~  석식   ← 종전 중식 구간(11~15시)도 이제 석식으로 처리한다
   야식 계정은 ERP 카탈로그에 **없어**(실측: 2,321건 중 0건) 22시 이후도 석식으로 둔다.
+
+⚠ 중식 폐지의 구현(2026-08-13): `slot_for_time` 은 더 이상 중식을 반환하지 않지만, 중식은
+  `_SLOTS`(계정 판별)에 **그대로 남긴다** — 그래야 learned/AI/seed 가 고른 기존 '복리후생비-중식'
+  계정이 시간대 계정으로 인식돼 이 교정에서 석식으로 바뀐다. 목록에서 빼면 '교정 대상 아님'이
+  되어 중식이 그대로 저장된다(정반대 결과).
 
 ⚠ 교정 대상은 **이미 식대 시간대 계정인 행**뿐이다. 간식·회식·업무·음료 등은 시간대가 아니라
   성격 구분이라 건드리지 않는다(잘못 건드리면 정상 분류를 깬다).
@@ -26,11 +30,11 @@ BREAKFAST = "조식"
 LUNCH = "중식"
 DINNER = "석식"
 
-# 경계(시). 조식 < LUNCH_FROM ≤ 중식 < DINNER_FROM ≤ 석식.
-LUNCH_FROM_HOUR = 11
-DINNER_FROM_HOUR = 15
+# 경계(시). 조식 < DINNER_FROM_HOUR ≤ 석식. (중식 구간은 2026-08-13 사규 변경으로 폐지)
+DINNER_FROM_HOUR = 11
 
-# 시간대 계열 슬롯(이 셋 사이에서만 치환한다).
+# 시간대 계열 슬롯 — **중식 포함**. 시각→중식 매핑은 폐지됐지만, 기존 중식 계정을 교정 대상으로
+# 인식하려면 여기 남아 있어야 한다(모듈 docstring 참조).
 _SLOTS = (BREAKFAST, LUNCH, DINNER)
 # 계정명에 이 문자열이 들어가면 그 슬롯의 식대 계정으로 본다(정규화 후 부분일치).
 # ⚠ 실제 표기 예: '(판)복리후생비-석식 (연장근무 식대)', '(판) 복리후생비_조식(IMP)' —
@@ -40,18 +44,17 @@ _TIME_RE = re.compile(r"^\s*(\d{1,2})\s*:\s*(\d{2})")
 
 
 def slot_for_time(time_str: str | None) -> str | None:
-    """거래시각('HH:MM:SS')이 속한 식사 슬롯. 시각을 못 읽으면 None(교정하지 않음)."""
+    """거래시각('HH:MM:SS')이 속한 식사 슬롯. 시각을 못 읽으면 None(교정하지 않음).
+
+    ⚠ 2026-08-13 사규 변경으로 **중식은 반환하지 않는다** — 11시 이후는 전부 석식이다.
+    """
     m = _TIME_RE.match(str(time_str or ""))
     if not m:
         return None
     hour = int(m.group(1))
     if hour < 0 or hour > 23:
         return None
-    if hour < LUNCH_FROM_HOUR:
-        return BREAKFAST
-    if hour < DINNER_FROM_HOUR:
-        return LUNCH
-    return DINNER
+    return BREAKFAST if hour < DINNER_FROM_HOUR else DINNER
 
 
 def account_slot(bgacct_nm: str | None) -> str | None:
