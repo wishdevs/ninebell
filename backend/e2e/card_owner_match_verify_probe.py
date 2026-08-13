@@ -184,6 +184,16 @@ async def run() -> None:
             print(f"[case 1] owner={POSITIVE_OWNER!r} (양성)")
             case1 = await _run_case(page, POSITIVE_OWNER)
             print("  ", case1["raw"], "| checked FINPRODUCT_NM:", case1["checked_rows"].get("names"))
+            # ── 게이트(2026-08-13): 관찰 로그가 아니라 하드 실패로 판정한다 — FINPRODUCT_NM
+            # 괄호 제한 수정의 실화면 검증. 종전 버그는 KOR_NM='정원호' 공용카드가 함께 걸려
+            # matched=2 였다(정답 1장: '국민법인카드(정원호)-8883').
+            raw1 = case1["raw"]
+            names1 = [str(n) for n in (case1["checked_rows"].get("names") or []) if n]
+            assert raw1.get("ok") is True, f"양성 케이스 실행 실패: {raw1}"
+            assert raw1.get("matched") == 1, f"matched != 1 (오탐/미탐): {raw1}"
+            assert len(names1) == 1 and all(f"({POSITIVE_OWNER})" in n for n in names1), (
+                f"매칭 카드명에 '({POSITIVE_OWNER})' 아님: {names1}"
+            )
 
             print(f"[case 2] owner={NEGATIVE_OWNER!r} (음성 대조)")
             case2 = await _run_case(page, NEGATIVE_OWNER)
