@@ -12,8 +12,11 @@ HITL·실패 문구는 nodes/ 가 담당한다.
    `latency.budget_ms` 로 확대 — 명목 카운터(page.wait_for_timeout 누산)는 delay_scale 로
    관찰창이 붕괴한다.
 
-🔁 팝업 불안정 완화책(프로브 표준 채택): 같은 도움창 인스턴스에서 2회째 검색 시 간헐 소멸
-   (비결정적) — **팝업당 검색 1회**, 결과 미확보 시 재오픈 재시도(상한 POPUP_RETRIES=2).
+🔁 도움창 검색 시퀀스(2026-08-14 재실측 — 물리 Enter 가 '검색'에서 '창 닫기(적용류)'로
+   바뀌어 전면 재확립): 열기 → 그리드 준비 폴 → **실타이핑**(오픈 직후 #keyword 가
+   포커스+전체선택이라 프리필을 교체) → **합성 Enter**(SEARCH_KEY_EVENT_JS) → 결과 변화
+   감지. 물리 Enter·JS 세터+합성 Enter 조합은 팝업이 죽는다(실측). 팝업당 검색 1회,
+   결과 미확보 시 재오픈 재시도(상한 POPUP_RETRIES).
 """
 
 from __future__ import annotations
@@ -30,10 +33,11 @@ logger = logging.getLogger(__name__)
 
 POPUP_RETRIES = 2  # 도움창 재오픈 재시도 상한(팝업당 검색 1회 완화책)
 POPUP_OPEN_CAP_MS = 5_000  # 도움창 출현 상한
-POPUP_INIT_SETTLE_MS = 1_000  # 팝업 출현 후 내부 초기화 정착 — 프로브 1s 실측(없으면 검색이 팝업을 죽인다)
-SEARCH_SETTLE_CAP_MS = 6_000  # 검색 후 결과/소멸 판정 상한
-MIN_SEARCH_SETTLE_MS = 1_500  # Enter 후 판정 전 최소 정착(프로브 1.5s 실측 — 일시 숨김·이전 스냅샷 오독 방지)
+POPUP_BOOT_CAP_MS = 8_000  # 출현 후 내부 그리드 준비(부팅) 상한 — 준비 전 입력이 팝업을 죽인다
+POPUP_INIT_SETTLE_MS = 1_000  # 그리드 준비 후 정착(프리필 자동검색·포커스 안정화, 프로브 실측)
+SEARCH_SETTLE_CAP_MS = 6_000  # 합성 Enter 후 결과 변화/소멸 판정 상한(응답 실측 ~1s)
 VANISH_CONFIRM_POLLS = 2  # 팝업 소멸 판정에 필요한 연속 빈 폴 수(일시 숨김 오판 방지)
+TYPE_DELAY_MS = 40  # 실타이핑 키 간격(실시간) — 프로브 검증값
 APPLY_CLOSE_CAP_MS = 5_000  # '적용' 후 팝업 닫힘 상한
 FIELD_REFLECT_CAP_MS = 5_000  # 적용 후 메인 필드 반영 상한
 BOM_LOAD_CAP_MS = 40_000  # 조회(F2) 후 트리그리드 로드 상한(리프 337 스케일 실측 대비)
@@ -61,9 +65,31 @@ async def _poll(page: Any, script: str, pred, cap_ms: int, arg: Any = None):
         waited += POLL_MS
 
 
-async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_RETRIES) -> dict:
-    """프로젝트 도움창 열기 → 검색 1회 → 결과 읽기. 팝업 소멸 시 재오픈 재시도(상한 retries).
+async def _type_keyword(page: Any, keyword: str) -> bool:
+    """#keyword 를 실타이핑으로 교체하고 값 반영을 검증한다.
 
+    1차: 오픈 직후 자동 포커스+전체선택 상태를 믿고 바로 타이핑(프로브 실측 경로).
+    2차: 값 불일치 시 트리플클릭(입력 전체선택) 후 재타이핑.
+    """
+    for tries in range(2):
+        if tries == 1:
+            kwbox = await page.evaluate(js.KEYWORD_BOX_JS)
+            if not kwbox:
+                return False
+            await page.mouse.click(kwbox["x"], kwbox["y"], click_count=3)
+        await page.keyboard.type(keyword, delay=TYPE_DELAY_MS)
+        val = await page.evaluate(js.KEYWORD_VALUE_JS)
+        if str(val).strip() == keyword:
+            return True
+    return False
+
+
+async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_RETRIES) -> dict:
+    """프로젝트 도움창 열기 → 검색 1회 → 결과 읽기. 실패 시 재오픈 재시도(상한 retries).
+
+    시퀀스(2026-08-14 재실측 확정 — 프로브 po_trigger_matrix):
+      열기 → 그리드 준비 폴(부팅 전 입력 금지) → 정착 → 프리필 자동검색 잔상 스냅샷
+      → 실타이핑 교체 → 합성 Enter(물리 Enter 는 창을 닫는다) → **결과 변화** 감지.
     반환 {"ok", "rows": [{PJT_NO,PJT_NM,START_DT,END_DT,RSPNBER_EMP_NM,PJT_ST_NM}], "attempt"}.
     rows 는 상위 MAX_SEARCH_RESULTS 행. 0건 검색도 ok(빈 rows) — 팝업은 열린 채 유지된다.
     """
@@ -76,21 +102,35 @@ async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_
         if not opened:
             logger.debug("open_and_search_once: 도움창 미출현(attempt=%d)", attempt)
             continue
-        # ⚠ 정착 대기 2개는 완화책의 일부다(프로브 1s/1.5s 실측 — 2026-08-14 라이브 회귀):
-        #   이식 때 재시도 로직만 가져오고 이 대기들을 빼자 ①팝업 초기화 중 검색이 꽂혀
-        #   팝업이 죽고 ②검색 직후 일시 숨김을 '소멸'로 오판해, 재시도 2회가 0.5초 만에
-        #   소진되며 사전 선택·HITL 검색이 전부 실패했다.
-        await verify.DEFAULT_SLEEP(POPUP_INIT_SETTLE_MS / 1000)
-        if not await page.evaluate(js.SET_KEYWORD_JS, keyword):
-            logger.debug("open_and_search_once: #keyword 미발견(attempt=%d)", attempt)
+        # 부팅 준비 — 셸(.k-window)이 아니라 내부 그리드 존재까지. 준비 전 입력은 팝업을 죽인다.
+        booted = await _poll(
+            page,
+            js.READ_POPUP_GRID_JS,
+            lambda g: isinstance(g, dict) and g.get("ok"),
+            POPUP_BOOT_CAP_MS,
+            MAX_SEARCH_RESULTS,
+        )
+        if not booted:
+            logger.debug("open_and_search_once: 그리드 미준비(attempt=%d)", attempt)
+            await close_popup(page)
             continue
-        await page.keyboard.press("Enter")
-        await verify.DEFAULT_SLEEP(MIN_SEARCH_SETTLE_MS / 1000)
-        # 검색 후 판정: 그리드 읽힘(ok) 또는 팝업 소멸(재시도). 결과 0건도 유효한 응답이다.
-        # 소멸은 연속 VANISH_CONFIRM_POLLS 폴 동안 비어 있어야 확정 — 단발 숨김은 무시.
-        waited = MIN_SEARCH_SETTLE_MS
+        await verify.DEFAULT_SLEEP(POPUP_INIT_SETTLE_MS / 1000)
+        # 프리필 자동검색 잔상 스냅샷 — 오픈 시 메인 필드 텍스트로 자동 검색이 돌아 있다.
+        pre = await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS)
+        pre_ids = tuple(r.get("PJT_NO") for r in (pre.get("rows") or [])) if pre.get("ok") else ()
+
+        if not await _type_keyword(page, keyword):
+            logger.debug("open_and_search_once: 검색어 타이핑 실패(attempt=%d)", attempt)
+            await close_popup(page)
+            continue
+        await page.evaluate(js.SEARCH_KEY_EVENT_JS)
+
+        # 수락 = 결과가 잔상과 달라짐(응답 도착). 상한 도달 시 그리드가 살아 있으면 현재 결과
+        # 수락(프리필 검색어 = 요청 검색어라 결과가 동일한 정당 케이스). 소멸은 연속 2폴 확정.
+        waited = 0
         cap = latency.budget_ms(SEARCH_SETTLE_CAP_MS)
         empty_polls = 0
+        last_rows: list | None = None
         while True:
             wins = await page.evaluate(js.WIN_STATE_JS)
             if not wins:
@@ -101,12 +141,17 @@ async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_
                 empty_polls = 0
                 grid = await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS)
                 if grid.get("ok"):
-                    return {"ok": True, "attempt": attempt, "rows": grid.get("rows") or []}
+                    last_rows = grid.get("rows") or []
+                    ids = tuple(r.get("PJT_NO") for r in last_rows)
+                    if ids != pre_ids:
+                        return {"ok": True, "attempt": attempt, "rows": last_rows}
             if waited >= cap:
+                if last_rows is not None:
+                    return {"ok": True, "attempt": attempt, "rows": last_rows}
                 break
             await verify.DEFAULT_SLEEP(POLL_MS / 1000)
             waited += POLL_MS
-    return {"ok": False, "reason": "프로젝트 도움창이 검색 후 계속 소멸했습니다(재시도 상한 도달)."}
+    return {"ok": False, "reason": "프로젝트 도움창 검색이 계속 실패했습니다(재시도 상한 도달)."}
 
 
 async def close_popup(page: Any) -> None:

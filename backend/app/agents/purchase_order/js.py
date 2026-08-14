@@ -20,11 +20,38 @@ WIN_STATE_JS = r"""() => {
 }"""
 
 # 프로젝트 도움창 검색어 입력(#keyword — 네이티브 setter + input 이벤트). arg = q.
+# ⚠ 검색 자동화에 쓰지 말 것(2026-08-14 실측): 이 세터 + SEARCH_KEY_EVENT_JS 조합은 팝업이
+#   죽는다. 검색은 **실타이핑**(오픈 직후 #keyword 포커스+전체선택 → keyboard.type 교체)
+#   + 합성 Enter 만 생존이 확인됐다(steps.open_and_search_once). 값 검증용으로만 남긴다.
 SET_KEYWORD_JS = r"""(q) => {
   const i = document.querySelector('#keyword');
   if (!i) return false;
   const s = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(i), 'value').set;
   s.call(i, q); i.dispatchEvent(new Event('input', { bubbles: true })); i.focus();
+  return true;
+}"""
+
+# #keyword 현재 값 — 실타이핑 교체가 반영됐는지 검증.
+KEYWORD_VALUE_JS = r"""() => (document.querySelector('#keyword') || {}).value || ''"""
+
+# #keyword 중심 좌표 — 실타이핑 폴백(트리플클릭 전체선택) 대상.
+KEYWORD_BOX_JS = r"""() => {
+  const i = document.querySelector('#keyword');
+  if (!i || i.offsetParent === null) return null;
+  const r = i.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+}"""
+
+# 합성 Enter(untrusted KeyboardEvent) — 위젯의 검색 리스너만 발화한다.
+# ⚠ **물리 Enter 금지**(2026-08-14 실측): 다이얼로그 기본 버튼(적용)이 발화해 창이 닫힌다.
+#   2026-08-13 프로브에선 물리 Enter 가 검색이었으나 ERP 동작이 바뀌었다(어제 7/8 → 오늘 0/10).
+#   합성 이벤트는 untrusted 라 기본 버튼을 발화시키지 않고 위젯 keydown 리스너만 돌린다.
+SEARCH_KEY_EVENT_JS = r"""() => {
+  const i = document.querySelector('#keyword');
+  if (!i) return false;
+  for (const t of ['keydown', 'keypress', 'keyup']) {
+    i.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+  }
   return true;
 }"""
 
