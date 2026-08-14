@@ -276,25 +276,32 @@ interface RowCheckboxProps {
 /** 컴팩트 체크박스(테이블 셀 전용) — org-access 트리 체크박스와 동일한 톤·모양을 축소해 재사용. */
 function RowCheckbox({ checked, indeterminate = false, onClick, label }: RowCheckboxProps) {
   return (
+    // 터치 타깃 36px(버튼) / 시각 박스 16px(내부 span) 분리 — 16px 박스는 손가락으로 누르기
+    // 어렵다. -m-2.5 가 커진 만큼을 상쇄해 w-10 헤더 열 폭과 행 높이는 그대로다.
     <button
       type="button"
       role="checkbox"
       aria-checked={indeterminate ? 'mixed' : checked}
       aria-label={label}
       onClick={onClick}
-      className={cn(
-        'flex size-4 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border transition-colors',
-        'focus-visible:ring-accent/50 focus-visible:ring-2 focus-visible:outline-none',
-        checked || indeterminate
-          ? 'border-accent bg-accent text-white'
-          : 'border-border-strong bg-surface hover:border-border',
-      )}
+      className="group -m-2.5 flex size-9 shrink-0 items-center justify-center p-2.5 focus-visible:outline-none"
     >
-      {checked ? (
-        <RiCheckLine size={11} aria-hidden />
-      ) : indeterminate ? (
-        <span aria-hidden className="h-[2px] w-[8px] bg-white" />
-      ) : null}
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-4 items-center justify-center rounded-[var(--radius-sm)] border transition-colors',
+          'group-focus-visible:ring-accent/50 group-focus-visible:ring-2',
+          checked || indeterminate
+            ? 'border-accent bg-accent text-white'
+            : 'border-border-strong bg-surface group-hover:border-border',
+        )}
+      >
+        {checked ? (
+          <RiCheckLine size={11} aria-hidden />
+        ) : indeterminate ? (
+          <span aria-hidden className="h-[2px] w-[8px] bg-white" />
+        ) : null}
+      </span>
     </button>
   );
 }

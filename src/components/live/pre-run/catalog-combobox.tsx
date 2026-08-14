@@ -206,9 +206,12 @@ function OptionRow({ option, onClick }: { option: ComboOption; onClick: () => vo
     <button
       type="button"
       onClick={onClick}
-      className="hover:bg-muted/60 flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)]"
+      className="hover:bg-muted/60 flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)]"
     >
-      <span className="flex min-w-0 items-center gap-1.5">
+      {/* 두 줄 구성(모바일 회귀 2026-08-14): 종전엔 이름과 sub(WBS 등)가 한 줄을 나눠 쓰고
+          sub 가 shrink-0 라, 좁은 폭에서 정작 식별자인 이름이 '12C…' 로 뭉개졌다. 이름을
+          한 줄로 온전히 주고 sub 를 아래 줄로 내린다(형제 BudgetCombobox 와 같은 문법). */}
+      <span className="flex w-full min-w-0 items-center gap-1.5">
         {option.codeLabel ? (
           <span className="text-foreground-tertiary bg-muted/60 shrink-0 rounded-[3px] px-1 py-px font-mono text-[length:var(--text-caption)] tabular-nums">
             {option.codeLabel}
@@ -222,7 +225,9 @@ function OptionRow({ option, onClick }: { option: ComboOption; onClick: () => vo
         ) : null}
       </span>
       {option.sub ? (
-        <span className="text-foreground-tertiary shrink-0 truncate">{option.sub}</span>
+        <span className="text-foreground-tertiary w-full truncate text-[length:var(--text-body-sm)]">
+          {option.sub}
+        </span>
       ) : null}
     </button>
   );

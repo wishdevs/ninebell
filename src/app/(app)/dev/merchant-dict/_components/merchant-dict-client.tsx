@@ -109,11 +109,12 @@ export function MerchantDictClient() {
       ) : (
         <SectionCard>
           <div className="overflow-x-auto">
-            <table className="w-full text-[length:var(--text-body-sm)]">
+            <table className="w-full min-w-[880px] text-[length:var(--text-body-sm)]">
               <thead>
                 <tr>
                   <Th>카테고리</Th>
-                  <Th>키워드</Th>
+                  {/* 칩이 여러 개라 좁으면 한 줄에 하나씩 쌓인다 — 열 최소 폭 확보(모바일). */}
+                  <Th className="min-w-[280px]">키워드</Th>
                   <Th>계정</Th>
                   <Th>구분</Th>
                   <Th>출처</Th>

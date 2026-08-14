@@ -34,7 +34,9 @@ export function FilterPill({
       <SelectTrigger
         aria-label={ariaLabel}
         className={cn(
-          'h-9 gap-1.5 rounded-full px-3.5 font-normal',
+          // w-fit: 툴바가 모바일에서 flex-col 이라 자식이 stretch 되면 칩이 전체 폭으로 늘어나
+          // justify-between 이 라벨과 값을 화면 양끝으로 갈라놓는다(별개 컨트롤처럼 읽힘).
+          'h-9 w-fit gap-1.5 rounded-full px-3.5 font-normal',
           active
             ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15 hover:border-accent/50 data-[state=open]:bg-accent/15'
             : 'text-foreground-secondary',

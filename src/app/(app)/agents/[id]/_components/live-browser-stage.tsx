@@ -78,7 +78,11 @@ export function LiveBrowserStage({
   const showChildPip = hasChild && activeWindow === 'child';
   return (
     // 카드 폭 = min(셀폭, (셀높이 − 크롬)×16/9). 하단 바 제거로 비-화면 높이가 크롬(≈48px)만 남는다.
-    <div className="[container-type:size] flex min-h-0 items-start justify-center lg:h-full">
+    // ⚠ container-type:size 는 **lg 이상에서만** 건다(모바일 겹침 회귀 2026-08-14):
+    //   size 컨테인먼트는 블록 축까지 가둬 높이를 '내용 없음'으로 계산한다. lg:h-full 이 없는
+    //   모바일에선 이 래퍼가 높이 0 으로 접혀, 안의 스테이지 카드가 다음 그리드 행(실행 전 입력
+    //   폼)과 겹쳐 그려졌다. cqw/cqh 를 쓰는 곳도 lg: 뿐이라 모바일엔 컨테인먼트가 필요 없다.
+    <div className="flex min-h-0 items-start justify-center lg:[container-type:size] lg:h-full">
       <section className="border-border bg-surface flex min-h-0 w-full max-w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:w-[min(100cqw,calc((100cqh-48px)*16/10))]">
         {/* 브라우저 크롬 */}
         <div className="border-border bg-surface-raised flex items-center gap-3 border-b px-3 py-2.5">

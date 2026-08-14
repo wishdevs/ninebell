@@ -20,7 +20,7 @@ export function ManualLink({ docId, className }: ManualLinkProps) {
     <Link
       href={`/manual/${docId}`}
       className={cn(
-        'border-border bg-surface text-foreground-secondary hover:text-foreground inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-[length:var(--text-body-sm)] font-medium shadow-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5',
+        'border-border bg-surface text-foreground-secondary hover:text-foreground inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[length:var(--text-body-sm)] font-medium shadow-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5',
         className,
       )}
     >

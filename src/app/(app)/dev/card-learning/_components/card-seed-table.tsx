@@ -130,7 +130,7 @@ export function CardSeedTable() {
       ) : (
         <SectionCard>
           <div className="overflow-x-auto">
-            <table className="w-full text-[length:var(--text-body-sm)]">
+            <table className="w-full min-w-[680px] text-[length:var(--text-body-sm)]">
               <thead>
                 <tr>
                   <Th>가맹점</Th>

@@ -141,7 +141,9 @@ function OrgUnitsTab({ status, error, orgUnits, onReload, onOrgsChanged }: OrgUn
           제거 — 플로팅 채팅 버튼과 겹치지 않게). 저장/되돌리기는 항상 렌더하되 변경 없음·저장 중엔 비활성. */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-muted-foreground min-w-0 flex-1 text-[length:var(--text-body-sm)]">
+          {/* 모바일에선 w-full 로 한 줄을 독점해 버튼 그룹을 다음 줄로 내린다 — flex-1(basis:0)
+              만 두면 최소폭 기여가 0 이라 390px 에서 문구가 ~65px 컬럼으로 눌려 7줄이 됐다. */}
+          <p className="text-muted-foreground w-full min-w-0 text-[length:var(--text-body-sm)] sm:w-auto sm:flex-1">
             조직 구조는 ERP 조직도에서 동기화됩니다. 여기서는 각 팀의 비용구분만 설정할 수 있습니다.
           </p>
           <div className="flex flex-wrap items-center gap-2">
