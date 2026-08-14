@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
 import type { PlanSubmit } from '@/lib/live/types';
 import { projectFavoritesOf, searchProjects } from './catalog';
-import type { OrderUnit, PlanBom, PlanGate, PlanTotals } from './model';
+import type { PlanBom, PlanGate, PlanTotals } from './model';
 import { Td, Th } from './ui';
 
 /**
@@ -376,13 +376,13 @@ export function PlanReviewView({
 // ── 확정 뷰 — 배너 + 발주단위 요약 + 실행 페이로드 미리보기 ──────────────────
 
 interface ConfirmedViewProps {
-  units: readonly OrderUnit[];
+  /** 확정된 제출 페이로드 — 요약도 이 값에서 그린다(검토 화면과 같은 문자열 보장). */
+  payload: PlanSubmit;
   totals: PlanTotals;
-  payload: object;
   onEdit: () => void;
 }
 
-export function ConfirmedView({ units, totals, payload, onEdit }: ConfirmedViewProps) {
+export function ConfirmedView({ totals, payload, onEdit }: ConfirmedViewProps) {
   const [openPayload, setOpenPayload] = useState(false);
   return (
     <div className="flex flex-col gap-3">
@@ -406,10 +406,10 @@ export function ConfirmedView({ units, totals, payload, onEdit }: ConfirmedViewP
 
       {/* 발주단위 한 줄 요약 — 페이로드를 펼치지 않아도 결과를 훑을 수 있게. */}
       <ul className="flex flex-col gap-1">
-        {units.map((u) => (
-          <li key={u.id} className="text-foreground-secondary text-[length:var(--text-body-sm)]">
+        {payload.units.map((u) => (
+          <li key={u.seq} className="text-foreground-secondary text-[length:var(--text-body-sm)]">
             <b className="text-foreground">발주 {u.seq}</b> — {u.purchaseReason} · 납기 {u.dueDate}{' '}
-            · 모듈 {u.moduleCodes.length}개
+            · 모듈 {u.modules.length}개
           </li>
         ))}
       </ul>

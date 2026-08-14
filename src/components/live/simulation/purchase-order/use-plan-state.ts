@@ -77,7 +77,7 @@ export function usePlanState(
     if (codes.length === 0 || project == null) return;
     setUnits((prev) => [
       ...prev,
-      newOrderUnit(nextUnitSeq(prev), codes, defaultPurchaseReasonOf(bom, project, codes)),
+      newOrderUnit(nextUnitSeq(prev), codes, defaultPurchaseReasonOf(bom, codes)),
     ]);
     setSelected(new Set<string>());
   };

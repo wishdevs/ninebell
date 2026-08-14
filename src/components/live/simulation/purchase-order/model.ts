@@ -186,22 +186,39 @@ export function assignedSeqMap(units: readonly OrderUnit[]): ReadonlyMap<string,
 const OUTSOURCED_PREFIX = '외주조립-';
 
 /**
- * 구매사유 기본값 — 발주단위에 외주조립 모듈이 있으면 '[프로젝트 명] [외주조립 부품명]'
- * (예: 'CX85-137 · 12CH PROCESS BUFFER'), 여러 개면 부품명을 '·' 로 잇는다. 외주조립
- * 모듈이 없으면 빈 값(직접 입력). 발주단위 생성 시 1회 채우는 초기값이라 이후 모듈을
- * 빼도 문구는 남는다 — 사용자가 자유 수정 가능.
+ * 구매사유 기본값 — 발주단위의 **외주조립 모듈명만**(예: 'BUFFER·ELECTRIC PANNEL'),
+ * 여러 개면 '·' 로 잇는다. 외주조립 모듈이 없으면 빈 값(직접 입력). 발주단위 생성 시 1회
+ * 채우는 초기값이라 이후 모듈을 빼도 문구는 남는다 — 사용자가 자유 수정 가능.
+ *
+ * ⚠ 여기엔 프로젝트명이 들어가지 않는다 — 입력란은 **모듈명만** 받고, 프로젝트와의 결합은
+ *   최종 계획서(finalPurchaseReasonOf → buildPlanPayload)에서 한다(사용자 확정 2026-08-14).
  */
 export function defaultPurchaseReasonOf(
   bom: PlanBom,
-  project: { code: string; name: string },
   moduleCodes: readonly string[],
 ): string {
-  const names = moduleCodes
+  return moduleCodes
     .map((c) => bom.moduleMap.get(c)?.name ?? '')
     .filter((n) => n.startsWith(OUTSOURCED_PREFIX))
-    .map((n) => n.slice(OUTSOURCED_PREFIX.length));
-  if (names.length === 0) return '';
-  return `${project.code} · ${project.name} ${names.join('·')}`;
+    .map((n) => n.slice(OUTSOURCED_PREFIX.length))
+    .join('·');
+}
+
+/** 구매사유·비고에 붙는 프로젝트 접두 — '코드 · 프로젝트명'. */
+function projectPrefixOf(project: { code: string; name: string }): string {
+  return [project.code.trim(), project.name.trim()].filter(Boolean).join(' · ');
+}
+
+/**
+ * 최종 구매사유 = **[프로젝트 코드 · 명] + [입력한 모듈명]**(사용자 규칙 2026-08-14).
+ * 입력란은 모듈명만 받고, ERP 로 나가는 완성 문자열은 여기서 만든다 — 프로젝트를 바꾸면
+ * 접두가 자동으로 따라온다. 최종 계획서 표기와 제출 페이로드가 이 함수를 공유한다.
+ */
+export function finalPurchaseReasonOf(
+  project: { code: string; name: string },
+  unit: OrderUnit,
+): string {
+  return [projectPrefixOf(project), unit.purchaseReason.trim()].filter(Boolean).join(' ');
 }
 
 /** 카드 헤더 모듈 요약 — '외주조립-BUFFER 외 2'. */
@@ -280,16 +297,18 @@ export function defaultNoteOf(
 }
 
 /**
- * 최종 비고 = **구매사유 + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
+ * 최종 비고 = **최종 구매사유 + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
  * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 대괄호로 묶여 붙거나 안 붙는다.
- *   예) 'CX85 1차 발주 [가공품 거래처(해룡) 직배송]' / 메시지 없으면 'CX85 1차 발주'
+ *   예) 'CX85-137 · 12CH PROCESS BUFFER [가공품 거래처(해룡) 직배송]'
  *
- * 메시지는 오버라이드(사용자 입력) 우선, 없으면 defaultNoteOf 파생. 둘 중 빈 값은 빠지므로
- * 가공품 그룹(메시지 없음)은 구매사유만, 메시지를 지운 그룹도 구매사유만 남는다(대괄호도
- * 함께 사라진다 — 빈 '[]' 를 남기지 않는다).
+ * 앞부분은 **구매사유 필드에 들어가는 것과 같은 완성 문자열**(finalPurchaseReasonOf)이다 —
+ * 두 필드가 어긋나지 않게 한 함수를 공유한다. 메시지는 오버라이드(사용자 입력) 우선, 없으면
+ * defaultNoteOf 파생. 빈 값은 빠지므로 가공품 그룹(메시지 없음)과 메시지를 지운 그룹은
+ * 구매사유만 남는다(대괄호도 함께 사라진다 — 빈 '[]' 를 남기지 않는다).
  * 최종 계획서 표기와 제출 페이로드가 이 함수 하나를 공유한다(표기 = 전달값).
  */
 export function finalNoteOf(
+  project: { code: string; name: string },
   unit: OrderUnit,
   vendorClass: string,
   groups: readonly VendorGroup[],
@@ -297,7 +316,9 @@ export function finalNoteOf(
   const message = (
     unit.vendorEdits[vendorClass]?.note ?? defaultNoteOf(unit, vendorClass, groups)
   ).trim();
-  return [unit.purchaseReason.trim(), message && `[${message}]`].filter(Boolean).join(' ');
+  return [finalPurchaseReasonOf(project, unit), message && `[${message}]`]
+    .filter(Boolean)
+    .join(' ');
 }
 
 // ── 합계 ─────────────────────────────────────────────────────────────────────
@@ -406,7 +427,7 @@ export function buildPlanPayload(
       const groups = vendorGroupsOf(modulesOf(bom, u));
       return {
         seq: u.seq,
-        purchaseReason: u.purchaseReason,
+        purchaseReason: finalPurchaseReasonOf(project, u),
         dueDate: u.dueDate,
         modules: modulesOf(bom, u).map((m) => ({
           itemCode: m.itemCode,
@@ -423,7 +444,7 @@ export function buildPlanPayload(
             parts: g.parts.length,
             amount: g.amount,
             dueDate: edit?.dueDate || vendorDueOf(u.dueDate, g.vendorClass),
-            note: finalNoteOf(u, g.vendorClass, groups),
+            note: finalNoteOf(project, u, g.vendorClass, groups),
           };
         }),
       };

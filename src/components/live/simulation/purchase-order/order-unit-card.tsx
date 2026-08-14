@@ -101,7 +101,7 @@ export function OrderUnitCard({
               id={`${unit.id}-reason`}
               value={unit.purchaseReason}
               onChange={(e) => onPatch({ purchaseReason: e.target.value })}
-              placeholder="예: 12CH PROCESS 1차 발주"
+              placeholder="예: BUFFER·ELECTRIC PANNEL"
               maxLength={200}
               className="h-9 text-[12px]"
             />
