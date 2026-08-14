@@ -19,6 +19,8 @@ interface ModulePoolTableProps {
   onToggleAll: (codes: readonly string[], next: boolean) => void;
   /** 선택된 모듈들을 발주단위로 묶는다(호출부가 선택 해제까지 처리). */
   onGroup: () => void;
+  /** 만들어진 발주단위 수 — 하단 요약(발주단위 스탯)용. */
+  unitCount: number;
 }
 
 /**
@@ -35,6 +37,7 @@ export function ModulePoolTable({
   onToggle,
   onToggleAll,
   onGroup,
+  unitCount,
 }: ModulePoolTableProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set<string>());
 
@@ -55,6 +58,17 @@ export function ModulePoolTable({
   const someChecked = !allChecked && freeCodes.some((c) => selected.has(c));
 
   const sel = useMemo(() => selectionTotals(bom, selected), [bom, selected]);
+
+  // 전체 요약(BOM 기준) — 종전 헤더의 스탯 타일 5개를 하단 선택 바로 옮긴 값(사용자 요청
+  // 2026-08-14). 선택 요약과 같은 글자 크기로, 구분선 오른쪽에 붙인다.
+  const bomTotals = useMemo(
+    () => ({
+      parts: bom.modules.reduce((s, m) => s + m.parts.length, 0),
+      amount: bom.modules.reduce((s, m) => s + m.parts.reduce((a, p) => a + p.amount, 0), 0),
+    }),
+    [bom],
+  );
+  const unassigned = bom.modules.length - assigned.size;
 
   return (
     <section className="flex flex-col gap-3">
@@ -127,6 +141,24 @@ export function ModulePoolTable({
           ) : (
             <span className="text-foreground-tertiary"> 선택</span>
           )}
+          {/* 전체 요약 — 선택 요약과 같은 크기로, 세로 구분선 오른쪽에 잇는다. */}
+          <span aria-hidden className="text-border-strong mx-2">
+            |
+          </span>
+          <span className="text-foreground-tertiary">
+            모듈 <SummaryNum>{bom.modules.length}</SummaryNum> · 부품{' '}
+            <SummaryNum>{bomTotals.parts}</SummaryNum> · 총 요청금액{' '}
+            <SummaryNum>{formatInteger(bomTotals.amount)}</SummaryNum>원 · 발주단위{' '}
+            <SummaryNum>{unitCount}</SummaryNum> · 미배정{' '}
+            <span
+              className={cn(
+                'font-semibold tabular-nums',
+                unassigned > 0 ? 'text-warning' : 'text-success',
+              )}
+            >
+              {unassigned}
+            </span>
+          </span>
         </p>
         <Button size="sm" onClick={onGroup} disabled={sel.modules === 0}>
           <RiStackLine size={14} aria-hidden />
@@ -135,6 +167,11 @@ export function ModulePoolTable({
       </div>
     </section>
   );
+}
+
+/** 하단 요약의 숫자 — 선택 요약과 같은 톤·굵기(글자 크기는 부모가 정한다). */
+function SummaryNum({ children }: { children: React.ReactNode }) {
+  return <span className="text-foreground-secondary font-semibold tabular-nums">{children}</span>;
 }
 
 interface ModuleRowProps {
@@ -159,12 +196,21 @@ function ModuleRow({
   const mix = vendorMixOf(m);
   return (
     <>
+      {/* 행 상태 3단(사용자 요청 2026-08-14) — 진하기 순서로 읽히게 한다:
+          배정됨(가장 흐림·클릭 불가) < 기본 < 호버 < 선택됨(가장 진함).
+          종전엔 선택이 bg-accent/5, 호버가 surface-raised 로 둘 다 거의 안 보였고
+          배정된 행은 기본 행과 색이 같아 '왜 안 눌리지'가 되기 쉬웠다. */}
       <tr
         className={cn(
-          'border-border/50 border-t align-middle',
-          !isAssigned && 'row-hover cursor-pointer',
-          checked && 'bg-accent/5',
+          'border-border/50 border-t align-middle transition-colors',
+          isAssigned
+            ? 'bg-muted/40 text-foreground-tertiary cursor-not-allowed'
+            : checked
+              ? 'bg-accent/10 hover:bg-accent/15 cursor-pointer'
+              : 'hover:bg-muted/60 cursor-pointer',
         )}
+        aria-selected={checked}
+        aria-disabled={isAssigned || undefined}
         onClick={isAssigned ? undefined : onToggle}
       >
         <Td className="py-0 text-center">
@@ -194,14 +240,34 @@ function ModuleRow({
               )}
             </button>
             <span className="flex min-w-0 flex-col">
-              <span className="text-foreground font-medium">
-                {m.name} <span className="text-foreground-secondary font-normal">· {m.spec}</span>
+              <span
+                className={cn(
+                  'font-medium',
+                  isAssigned ? 'text-foreground-tertiary' : 'text-foreground',
+                )}
+              >
+                {m.name}{' '}
+                <span
+                  className={cn(
+                    'font-normal',
+                    isAssigned ? 'text-foreground-tertiary' : 'text-foreground-secondary',
+                  )}
+                >
+                  · {m.spec}
+                </span>
               </span>
               <span className="text-foreground-tertiary font-mono text-[10px]">{m.itemCode}</span>
             </span>
           </span>
         </Td>
-        <Td className="text-foreground-secondary text-right tabular-nums">{m.parts.length}</Td>
+        <Td
+          className={cn(
+            'text-right tabular-nums',
+            isAssigned ? 'text-foreground-tertiary' : 'text-foreground-secondary',
+          )}
+        >
+          {m.parts.length}
+        </Td>
         <Td>
           <span className="flex flex-wrap items-center gap-1">
             {mix.pseudoCounts.map((p) => (
@@ -212,7 +278,12 @@ function ModuleRow({
             {mix.realKinds > 0 ? <MiniChip>실거래처 {mix.realKinds}종</MiniChip> : null}
           </span>
         </Td>
-        <Td className="text-foreground-secondary text-right whitespace-nowrap tabular-nums">
+        <Td
+          className={cn(
+            'text-right whitespace-nowrap tabular-nums',
+            isAssigned ? 'text-foreground-tertiary' : 'text-foreground-secondary',
+          )}
+        >
           {formatInteger(moduleAmount(m))}
         </Td>
         <Td className="whitespace-nowrap">

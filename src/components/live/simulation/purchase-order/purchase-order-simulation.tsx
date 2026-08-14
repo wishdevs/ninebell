@@ -87,8 +87,6 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
                 }
               : null,
           }}
-          totals={plan.totals}
-          assignedModules={plan.assigned.size}
         />
 
         {project == null ? (
@@ -114,9 +112,10 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
               onToggle={plan.toggle}
               onToggleAll={plan.toggleAll}
               onGroup={plan.groupSelected}
+              unitCount={plan.totals.units}
             />
 
-            <section className="flex flex-col gap-3">
+            <section className="flex flex-col gap-4">
               <SimSectionHeader
                 title="발주단위 — 구매사유·납기·거래처 지정"
                 prompt="발주단위마다 구매사유와 납기예정일을 입력하고, 가공품·판금품 그룹에 실거래처를 지정하세요. 그룹별 납기·비고는 필요할 때만 덮어씁니다."

@@ -141,7 +141,10 @@ class Settings(BaseSettings):
     screencast_max_height: int = 800
     screencast_every_nth_frame: int = 2
     # HITL(사용자 개입) 대기 상한(초). collect_rows/chat_form 대화 한 턴·저장 확인 공통 소스.
-    hitl_timeout_s: int = 600
+    # 600 → 1800 (사용자 요청 2026-08-14): 구매발주 계획서처럼 발주단위·거래처·납기를 여러 건
+    # 채우는 개입은 10분 안에 못 끝낸다. 대기 시간은 런 활동 예산에서 제외되므로(아래
+    # run_active_budget_s) 상한을 늘려도 자동화 구간 무한 루프 보호는 그대로다.
+    hitl_timeout_s: int = 1800
     # 런 전역 활동 시간 예산(초) — **HITL 대기 시간을 제외한 활동 시간** 기준. 사용자가
     # 그리드/채팅 응답을 오래 고민하는 것은 정당(턴당 hitl_timeout_s 상한이 별도)하므로 세지
     # 않고, 자동화 구간이 무한히 도는 것만 제한한다(세마포어 슬롯·Chromium 메모리 무기한

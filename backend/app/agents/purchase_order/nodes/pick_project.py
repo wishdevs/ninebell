@@ -117,6 +117,14 @@ def make_pick_project_node():
                 await emit_step(events, STEP, "failed")
                 return {"error": res["reason"]}
             # 적용 실패(카탈로그 스냅샷이 낡아 도움창에 없는 등) — 개입으로 직접 고르게 한다.
+            # ⚠ 서버 로그에도 남긴다(2026-08-14): 종전엔 사유가 SSE 로그 프레임에만 있어
+            #   런이 살아 있는 동안 원인을 사후 조회할 방법이 없었다(DB logs 는 종료 시 기록).
+            logger.warning(
+                "purchase-order 사전 선택 적용 실패 — pjt_no=%s keyword=%r reason=%s",
+                pre.project_no,
+                pre.keyword,
+                res.get("reason"),
+            )
             await emit_log(
                 events,
                 f"선택한 프로젝트를 적용하지 못했습니다({res['reason']}) — "

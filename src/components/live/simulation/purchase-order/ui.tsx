@@ -181,7 +181,7 @@ export function PartsTable({ parts }: { parts: readonly BomPart[] }) {
         </thead>
         <tbody>
           {parts.map((p) => (
-            <tr key={p.itemCode} className="border-border/40 border-t align-middle">
+            <tr key={p.itemCode} className="border-border-subtle border-t align-middle">
               <Td className="text-foreground-tertiary font-mono whitespace-nowrap">{p.itemCode}</Td>
               <Td className="text-foreground-secondary">{p.name}</Td>
               <Td className="text-foreground-tertiary">{p.spec}</Td>

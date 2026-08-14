@@ -15,14 +15,17 @@ import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
 import { projectFavoritesOf, searchProjects } from './catalog';
 import type { OrderUnit, PlanBom, PlanGate, PlanTotals } from './model';
-import { StatTile } from './ui';
 
 /**
- * A(헤더 컨텍스트·자동 단계·스탯)와 D(하단 요약·확정)를 한 파일에 둔다 — 둘 다
- * 파생 합계(PlanTotals)를 그리는 요약 표면이라 재료가 같다.
+ * A(헤더 컨텍스트·자동 단계)와 D(하단 요약·확정)를 한 파일에 둔다 — 둘 다 계획 상태를
+ * 둘러싼 요약 표면이라 재료가 같다.
+ *
+ * ⚠ 종전 헤더의 요약 스탯 5개(모듈·부품·총 요청금액·발주단위·미배정)는 2026-08-14 사용자
+ *   요청으로 **모듈 풀 하단 선택 바**(module-pool-table)로 옮겼다 — 선택 요약 옆에서 같은
+ *   글자 크기로 읽는 편이 시선 이동이 짧다.
  */
 
-// ── A. 헤더 — 프로젝트 컨텍스트 + 자동 실행 단계 + 요약 스탯 ─────────────────
+// ── A. 헤더 — 프로젝트 컨텍스트 + 자동 실행 단계 ─────────────────────────────
 
 /**
  * 옴니솔 구매발주 4단계 — ①③ 은 에이전트가 자동 고정으로 처리하고, ②④ 의 입력을
@@ -58,9 +61,6 @@ interface PlanHeaderProps {
     /** 프로젝트 변경/해제 확인 바 — 작성 중 발주단위가 있을 때만 값이 온다(초기화 경고). */
     resetConfirm: { question: string; onConfirm: () => void; onCancel: () => void } | null;
   };
-  totals: PlanTotals;
-  /** 발주단위에 배정된 모듈 수(파생) — 미배정 스탯 계산용. */
-  assignedModules: number;
   /**
    * 자동 실행 단계 스트립·고정 설정 칩 표시(기본 true — 데모). 라이브 개입에선 워크플로우
    * 탭·실행 파라미터가 같은 정보를 대신하므로 끈다.
@@ -68,23 +68,7 @@ interface PlanHeaderProps {
   showFlowSteps?: boolean;
 }
 
-export function PlanHeader({
-  bom,
-  project,
-  picker,
-  totals,
-  assignedModules,
-  showFlowSteps = true,
-}: PlanHeaderProps) {
-  const unassignedModules = bom.modules.length - assignedModules;
-  // BOM 전체 합계 — 주입 BOM 이 바뀔 때만 재계산.
-  const bomTotals = useMemo(
-    () => ({
-      parts: bom.modules.reduce((s, m) => s + m.parts.length, 0),
-      amount: bom.modules.reduce((s, m) => s + m.parts.reduce((a, p) => a + p.amount, 0), 0),
-    }),
-    [bom],
-  );
+export function PlanHeader({ bom, project, picker, showFlowSteps = true }: PlanHeaderProps) {
   const projectFavorites = useMemo(() => projectFavoritesOf(bom), [bom]);
   const machine = bom.machines[0];
   return (
@@ -159,19 +143,6 @@ export function PlanHeader({
               ))}
             </ol>
           ) : null}
-
-          {/* 요약 스탯 — 발주단위·미배정은 계획 진행에 따라 라이브 갱신. */}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            <StatTile label="모듈" value={`${bom.modules.length}`} />
-            <StatTile label="부품" value={`${bomTotals.parts}`} />
-            <StatTile label="총 요청금액" value={`${formatInteger(bomTotals.amount)}원`} />
-            <StatTile label="발주단위" value={`${totals.units}`} />
-            <StatTile
-              label="미배정 모듈"
-              value={`${unassignedModules}`}
-              tone={unassignedModules > 0 ? 'warning' : 'success'}
-            />
-          </div>
         </>
       ) : null}
     </div>

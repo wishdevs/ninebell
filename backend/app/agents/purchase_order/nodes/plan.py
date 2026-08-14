@@ -33,7 +33,8 @@ PROMPT = (
     "납기·비고를 확정한 뒤 계획을 제출하세요. 이 실행은 계획 확정까지만 진행하며 "
     "ERP 저장은 하지 않습니다."
 )
-PLAN_TIMEOUT_S = 1800  # 계획 작성 전용 상한(30분) — config.hitl_timeout_s(600) 오버라이드.
+PLAN_TIMEOUT_S = 1800  # 계획 작성 전용 상한(30분). 2026-08-14 부터 config.hitl_timeout_s
+#                      기본값도 1800 이라 값은 같지만, 전역을 낮춰도 이 개입은 지키도록 명시 유지.
 
 
 def _ms(t0: float) -> int:

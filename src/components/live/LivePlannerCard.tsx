@@ -77,8 +77,6 @@ function PlannerBody({
 
   return (
     <div className="flex flex-col gap-4">
-      <PlannerHeader title={hitl.title} prompt={hitl.prompt} />
-
       {/* 재개입 공지 — 서버 검증이 계획을 거부한 사유(hitl.notice, LiveGridCard 와 동일 계약). */}
       {hitl.notice ? (
         <div className="border-danger/30 bg-danger/10 text-danger flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
@@ -89,13 +87,7 @@ function PlannerBody({
         </div>
       ) : null}
 
-      <PlanHeader
-        bom={bom}
-        project={project}
-        totals={plan.totals}
-        assignedModules={plan.assigned.size}
-        showFlowSteps={false}
-      />
+      <PlanHeader bom={bom} project={project} showFlowSteps={false} />
 
       <ModulePoolTable
         bom={bom}
@@ -104,9 +96,10 @@ function PlannerBody({
         onToggle={plan.toggle}
         onToggleAll={plan.toggleAll}
         onGroup={plan.groupSelected}
+        unitCount={plan.totals.units}
       />
 
-      <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-4">
         <SimSectionHeader
           title="발주단위 — 구매사유·납기·거래처 지정"
           prompt="발주단위마다 구매사유와 납기예정일을 입력하고, 가공품·판금품 그룹에 실거래처를 지정하세요. 그룹별 납기·비고는 필요할 때만 덮어씁니다."
