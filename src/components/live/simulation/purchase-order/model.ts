@@ -261,27 +261,39 @@ export function vendorDueOf(unitDue: string, vendorClass: string): string {
 }
 
 /**
- * 그룹 기본 비고 = **[구매사유] + [비고 메시지]**(사용자 규칙 2026-08-14) — 발주 리스트의
- * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 붙거나 안 붙는다.
- *   가공품 그룹  → 구매사유만.
- *   그 외 그룹  → 구매사유 + '가공품 거래처(해룡) 직배송'. 괄호 안은 그 발주단위 가공품
- *                그룹의 유효 거래처명 동적 표기(가공품 그룹이 없으면 괄호 생략). 사유:
- *                가공품 외 거래처가 제작품을 가공품 제작처로 직배송하고, 거기서 조립해
- *                모듈 단위로 받는다.
- * 파생값이라 구매사유를 고치면 오버라이드 전까지 함께 따라온다. 사용자가 비고를 직접
- * 수정하면 그 텍스트가 그대로 최종값이다(지움 포함 — 기존 오버라이드 의미 유지).
+ * 그룹 기본 **비고 메시지** — 가공품 외 그룹은 '가공품 거래처(해룡) 직배송'. 괄호 안은 그
+ * 발주단위 가공품 그룹의 유효 거래처명 동적 표기(가공품 그룹이 없으면 괄호 생략). 사유:
+ * 가공품 외 거래처가 제작품을 가공품 제작처로 직배송하고, 거기서 조립해 모듈 단위로 받는다.
+ *
+ * ⚠ 여기엔 구매사유가 들어가지 않는다 — 입력란은 **메시지만** 받고, 구매사유와의 결합은
+ *   최종 계획서(finalNoteOf → buildPlanPayload)에서 한다(사용자 확정 2026-08-14).
  */
 export function defaultNoteOf(
   unit: OrderUnit,
   vendorClass: string,
   groups: readonly VendorGroup[],
 ): string {
-  const reason = unit.purchaseReason.trim();
-  if (vendorClass === PROCESSED_CLASS) return reason;
+  if (vendorClass === PROCESSED_CLASS) return '';
   const hasProcessed = groups.some((g) => g.vendorClass === PROCESSED_CLASS);
   const name = hasProcessed ? effectiveVendorOf(unit, PROCESSED_CLASS)?.name : undefined;
-  const message = name ? `가공품 거래처(${name}) 직배송` : '가공품 거래처 직배송';
-  return [reason, message].filter(Boolean).join(' ');
+  return name ? `가공품 거래처(${name}) 직배송` : '가공품 거래처 직배송';
+}
+
+/**
+ * 최종 비고 = **[구매사유] + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
+ * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 붙거나 안 붙는다.
+ *
+ * 메시지는 오버라이드(사용자 입력) 우선, 없으면 defaultNoteOf 파생. 둘 중 빈 값은 빠지므로
+ * 가공품 그룹(메시지 없음)은 구매사유만, 메시지를 지운 그룹도 구매사유만 남는다.
+ * 최종 계획서 표기와 제출 페이로드가 이 함수 하나를 공유한다(표기 = 전달값).
+ */
+export function finalNoteOf(
+  unit: OrderUnit,
+  vendorClass: string,
+  groups: readonly VendorGroup[],
+): string {
+  const message = unit.vendorEdits[vendorClass]?.note ?? defaultNoteOf(unit, vendorClass, groups);
+  return [unit.purchaseReason.trim(), message.trim()].filter(Boolean).join(' ');
 }
 
 // ── 합계 ─────────────────────────────────────────────────────────────────────
@@ -372,8 +384,11 @@ export function planGateOf(bom: PlanBom, units: readonly OrderUnit[]): PlanGate 
 /**
  * 에이전트 실행 파라미터(PlanSubmit) — 데모는 확정 미리보기 pre 로, 라이브는
  * POST /runs/hitl 의 plan 으로 제출한다. project 는 사용자가 선택한 값이며, 거래처
- * 그룹의 vendor/dueDate/note 는 오버라이드가 없으면 파생 기본값(effectiveVendorOf·
- * vendorDueOf·defaultNoteOf)으로 접어 넣는다. wbs 는 BOM 값을 그대로 쓴다.
+ * 그룹의 vendor/dueDate 는 오버라이드가 없으면 파생 기본값(effectiveVendorOf·
+ * vendorDueOf)으로 접어 넣는다. wbs 는 BOM 값을 그대로 쓴다.
+ *
+ * ⚠ note 는 **최종 비고**(finalNoteOf = 구매사유 + 비고 메시지)다 — 입력란이 받은
+ *   메시지가 아니라 ERP 에 들어갈 완성 문자열이며, 최종 계획서 표기와 같은 값이다.
  */
 export function buildPlanPayload(
   bom: PlanBom,
@@ -404,7 +419,7 @@ export function buildPlanPayload(
             parts: g.parts.length,
             amount: g.amount,
             dueDate: edit?.dueDate || vendorDueOf(u.dueDate, g.vendorClass),
-            note: edit?.note ?? defaultNoteOf(u, g.vendorClass, groups),
+            note: finalNoteOf(u, g.vendorClass, groups),
           };
         }),
       };
