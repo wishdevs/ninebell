@@ -1,6 +1,9 @@
 """변경사항(릴리스 노트) CRUD API — /changelog (조회 전원 / 편집 관리자).
 
 일반 사용자는 released 만 보고, draft 는 관리자 전용이다. version 중복은 409.
+
+⚠ 테스트 버전은 **실배포에 쓰이지 않는 값**(vX.Y.Z-test…)만 쓴다 — 시드가 실 릴리스 파일을
+등록하므로 실 버전을 쓰면 그 버전을 배포하는 날 409 로 깨진다(v2.0.0·v3.0.0 실제 발생).
 """
 
 from __future__ import annotations
@@ -94,34 +97,34 @@ async def test_draft_hidden_from_normal_user(client, make_user, auth_as):
 async def test_list_sorted_by_released_at_desc(client, make_user, auth_as):
     uid = await make_user("cl-admin3", "admin")
     auth_as(uid)
-    await _create(client, version="v3.0.0", releasedAt="2026-01-01")
-    await _create(client, version="v3.1.0", releasedAt="2026-06-01")
+    await _create(client, version="v0.0.3-test-a", releasedAt="2026-01-01")
+    await _create(client, version="v0.0.3-test-b", releasedAt="2026-06-01")
 
-    items = (await client.get("/changelog?q=v3.")).json()["items"]
-    assert [it["version"] for it in items] == ["v3.1.0", "v3.0.0"]
+    items = (await client.get("/changelog?q=v0.0.3-test")).json()["items"]
+    assert [it["version"] for it in items] == ["v0.0.3-test-b", "v0.0.3-test-a"]
 
 
 async def test_major_fix_flag_and_filter(client, make_user, auth_as):
     uid = await make_user("cl-admin-major", "admin")
     auth_as(uid)
-    major = await _create(client, version="v7.0.0", hasMajorFix=True, releasedAt="2026-03-01")
-    minor = await _create(client, version="v7.1.0", releasedAt="2026-03-02")
+    major = await _create(client, version="v0.0.4-test-major", hasMajorFix=True, releasedAt="2026-03-01")
+    minor = await _create(client, version="v0.0.4-test-minor", releasedAt="2026-03-02")
     assert major["hasMajorFix"] is True
     assert minor["hasMajorFix"] is False  # 생략 시 기본 False
 
-    only_major = (await client.get("/changelog?q=v7.&hasMajorFix=true")).json()["items"]
-    assert [it["version"] for it in only_major] == ["v7.0.0"]
+    only_major = (await client.get("/changelog?q=v0.0.4-test&hasMajorFix=true")).json()["items"]
+    assert [it["version"] for it in only_major] == ["v0.0.4-test-major"]
 
-    only_minor = (await client.get("/changelog?q=v7.&hasMajorFix=false")).json()["items"]
-    assert [it["version"] for it in only_minor] == ["v7.1.0"]
+    only_minor = (await client.get("/changelog?q=v0.0.4-test&hasMajorFix=false")).json()["items"]
+    assert [it["version"] for it in only_minor] == ["v0.0.4-test-minor"]
 
     # 파라미터 생략 시 필터 없음.
-    assert len((await client.get("/changelog?q=v7.")).json()["items"]) == 2
+    assert len((await client.get("/changelog?q=v0.0.4-test")).json()["items"]) == 2
 
     # PATCH 로 해제 가능(전체 교체 규약 — 생략하면 False 로 돌아간다).
     r = await client.patch(
         f"/changelog/{major['id']}",
-        json={"version": "v7.0.0", "title": "t", "bodyMd": "b"},
+        json={"version": "v0.0.4-test-major", "title": "t", "bodyMd": "b"},
     )
     assert r.status_code == 200 and r.json()["hasMajorFix"] is False
 
@@ -134,7 +137,7 @@ async def test_released_at_is_a_calendar_date_not_an_instant(client, make_user, 
     """
     uid = await make_user("cl-admin-date", "admin")
     auth_as(uid)
-    entry = await _create(client, version="v8.0.0", releasedAt="2026-07-28")
+    entry = await _create(client, version="v0.0.5-test", releasedAt="2026-07-28")
     assert entry["releasedAt"] == "2026-07-28"  # 시각·오프셋 없이 날짜 그대로
 
     # 받은 값을 그대로 되보내는 왕복을 3번 — 하루도 밀리지 않아야 한다.

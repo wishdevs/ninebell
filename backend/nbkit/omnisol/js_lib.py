@@ -45,7 +45,7 @@ GET_JSON_ROWS_JS = """({ index, start, end }) => {
 }"""
 
 # 그리드[index] 의 화면 bbox 읽기 — 첫 행 실클릭 좌표를 뷰포트와 무관하게 계산하는 근거.
-# (고정 좌표는 뷰포트가 다르면(라이브 1440×900) 빗나간다 — selectors.VIEWPORT 주석 참조.)
+# (고정 좌표는 뷰포트가 다르면(라이브 1920×1200) 빗나간다 — selectors.VIEWPORT 주석 참조.)
 # arg = index. 반환 {x, y, width, height} | null(그리드 없음/0크기 → 호출자가 폴백).
 GRID_RECT_BY_INDEX_JS = (
     "(index) => { const g = document.querySelectorAll('.dews-ui-grid')[index];"
