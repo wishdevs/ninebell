@@ -332,7 +332,9 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 events,
                 decision_id=decision_id,
                 kind="grid",
-                title="승인내역 정리",
+                # 프론트 GridHeader 가 '· 승인내역 정리'를 덧붙이므로 여기엔 **에이전트 이름만**
+                # 넣는다 — '승인내역 정리'를 넣으면 '승인내역 정리 · 승인내역 정리'가 된다.
+                title="법인카드",
                 prompt=(
                     "행별로 예산단위·프로젝트·적요를 입력한 뒤 '입력 완료'를 누르세요. "
                     "과세 행은 법인카드(01), 나머지는 법인카드(불공)(02)으로 자동 전환해 "
