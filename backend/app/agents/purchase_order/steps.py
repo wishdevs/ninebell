@@ -30,8 +30,10 @@ logger = logging.getLogger(__name__)
 
 POPUP_RETRIES = 2  # 도움창 재오픈 재시도 상한(팝업당 검색 1회 완화책)
 POPUP_OPEN_CAP_MS = 5_000  # 도움창 출현 상한
+POPUP_INIT_SETTLE_MS = 1_000  # 팝업 출현 후 내부 초기화 정착 — 프로브 1s 실측(없으면 검색이 팝업을 죽인다)
 SEARCH_SETTLE_CAP_MS = 6_000  # 검색 후 결과/소멸 판정 상한
-MIN_SEARCH_SETTLE_MS = 1_200  # 검색 후 결과 수락 최소 정착(프로브 1.5s 실측 — 이전 결과 스냅샷 오독 방지)
+MIN_SEARCH_SETTLE_MS = 1_500  # Enter 후 판정 전 최소 정착(프로브 1.5s 실측 — 일시 숨김·이전 스냅샷 오독 방지)
+VANISH_CONFIRM_POLLS = 2  # 팝업 소멸 판정에 필요한 연속 빈 폴 수(일시 숨김 오판 방지)
 APPLY_CLOSE_CAP_MS = 5_000  # '적용' 후 팝업 닫힘 상한
 FIELD_REFLECT_CAP_MS = 5_000  # 적용 후 메인 필드 반영 상한
 BOM_LOAD_CAP_MS = 40_000  # 조회(F2) 후 트리그리드 로드 상한(리프 337 스케일 실측 대비)
@@ -74,24 +76,33 @@ async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_
         if not opened:
             logger.debug("open_and_search_once: 도움창 미출현(attempt=%d)", attempt)
             continue
+        # ⚠ 정착 대기 2개는 완화책의 일부다(프로브 1s/1.5s 실측 — 2026-08-14 라이브 회귀):
+        #   이식 때 재시도 로직만 가져오고 이 대기들을 빼자 ①팝업 초기화 중 검색이 꽂혀
+        #   팝업이 죽고 ②검색 직후 일시 숨김을 '소멸'로 오판해, 재시도 2회가 0.5초 만에
+        #   소진되며 사전 선택·HITL 검색이 전부 실패했다.
+        await verify.DEFAULT_SLEEP(POPUP_INIT_SETTLE_MS / 1000)
         if not await page.evaluate(js.SET_KEYWORD_JS, keyword):
             logger.debug("open_and_search_once: #keyword 미발견(attempt=%d)", attempt)
             continue
         await page.keyboard.press("Enter")
+        await verify.DEFAULT_SLEEP(MIN_SEARCH_SETTLE_MS / 1000)
         # 검색 후 판정: 그리드 읽힘(ok) 또는 팝업 소멸(재시도). 결과 0건도 유효한 응답이다.
-        waited = 0
+        # 소멸은 연속 VANISH_CONFIRM_POLLS 폴 동안 비어 있어야 확정 — 단발 숨김은 무시.
+        waited = MIN_SEARCH_SETTLE_MS
         cap = latency.budget_ms(SEARCH_SETTLE_CAP_MS)
+        empty_polls = 0
         while True:
             wins = await page.evaluate(js.WIN_STATE_JS)
             if not wins:
-                break  # 팝업 소멸 — 재오픈 재시도
-            grid = await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS)
-            if grid.get("ok") and waited >= MIN_SEARCH_SETTLE_MS:
-                # 최소 정착 대기 후 읽음 — Enter 직후 이전 결과 스냅샷 오독 방지.
-                return {"ok": True, "attempt": attempt, "rows": grid.get("rows") or []}
-            if waited >= cap:
+                empty_polls += 1
+                if empty_polls >= VANISH_CONFIRM_POLLS:
+                    break  # 팝업 소멸 확정 — 재오픈 재시도
+            else:
+                empty_polls = 0
+                grid = await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS)
                 if grid.get("ok"):
                     return {"ok": True, "attempt": attempt, "rows": grid.get("rows") or []}
+            if waited >= cap:
                 break
             await verify.DEFAULT_SLEEP(POLL_MS / 1000)
             waited += POLL_MS
