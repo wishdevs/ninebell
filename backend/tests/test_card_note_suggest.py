@@ -68,6 +68,78 @@ async def test_suggest_note_category_uses_account_name(sm):
     assert res == {"note": "차량유지비-관리", "source": "category"}  # 접두 제거된 계정명.
 
 
+async def test_suggest_note_category_uses_company_convention_across_merchants(sm):
+    """⚠ 회귀(사용자 지적 2026-08-14): 같은 석식인데 학습 적요는 '직원 야근식대(법인카드)',
+    기본 적요는 계정명 '복리후생비-석식'으로 갈렸다. 여러 가맹점에 걸친 **전사 관례**가
+    있으면 계정명 대신 그 관례를 기본값으로 쓴다(학습/시드/기본이 한 표현으로 수렴)."""
+    async with sm() as s:
+        # 같은 적요가 서로 다른 가맹점 8곳에 걸쳐 쓰인다 = 그 계정의 비용 성격.
+        for i in range(8):
+            s.add(CardSeedNote(
+                norm_merchant=f"식당{i}", merchant=f"식당{i}", acct_code="CONV1",
+                note="직원 야근식대(법인카드)", count=40,
+            ))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="처음보는식당", acct_code="CONV1",
+            acct_name="(판)복리후생비-석식 (연장근무 식대)",
+        )
+    assert res == {"note": "직원 야근식대(법인카드)", "source": "category"}
+
+
+async def test_suggest_note_category_ignores_convention_from_few_merchants(sm):
+    """가맹점이 적으면 '관례'가 아니라 그 가맹점의 서비스다 — 계정명을 쓴다(2026-07-24 규율).
+    지배율 100% 라도 가맹점 다양성 하한을 못 넘으면 채택하지 않는다."""
+    async with sm() as s:
+        for i in range(2):  # 2곳뿐 — ACCT_NOTE_MIN_MERCHANTS 미만.
+            s.add(CardSeedNote(
+                norm_merchant=f"세차장{i}", merchant=f"세차장{i}", acct_code="CONV2",
+                note="세차비(법인카드)", count=99,
+            ))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="처음보는가맹점", acct_code="CONV2",
+            acct_name="(판)차량유지비-관리",
+        )
+    assert res == {"note": "차량유지비-관리", "source": "category"}
+
+
+async def test_suggest_note_category_ignores_split_account(sm):
+    """계정이 서로 다른 성격으로 갈리면(지배율 미달) 관례로 확정하지 않는다."""
+    async with sm() as s:
+        for i in range(6):
+            s.add(CardSeedNote(norm_merchant=f"가맹{i}", merchant=f"가맹{i}",
+                               acct_code="CONV3", note="해외출장 교통비", count=10))
+            s.add(CardSeedNote(norm_merchant=f"숙소{i}", merchant=f"숙소{i}",
+                               acct_code="CONV3", note="해외출장 숙박비", count=9))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="처음보는곳", acct_code="CONV3",
+            acct_name="여비교통비-해외출장",
+        )
+    assert res == {"note": "여비교통비-해외출장", "source": "category"}
+
+
+async def test_suggest_note_convention_strips_cost_division_before_tally(sm):
+    """판/제 접미로 쪼개진 같은 관례는 합산해 한 표현으로 수렴시킨다(-제품/-판매 → base)."""
+    async with sm() as s:
+        for i in range(6):
+            suffix = "-제품" if i % 2 else "-판매"
+            s.add(CardSeedNote(
+                norm_merchant=f"점포{i}", merchant=f"점포{i}", acct_code="CONV4",
+                note=f"직원 야근식대(법인카드){suffix}", count=30,
+            ))
+        await s.commit()
+    async with sm() as s:
+        res = await card_learning.suggest_note(
+            s, user_id=None, merchant="새가맹점", acct_code="CONV4", acct_name="복리후생비-석식"
+        )
+    assert res == {"note": "직원 야근식대(법인카드)", "source": "category"}
+
+
 async def test_suggest_note_category_needs_acct_name_else_heuristic(sm):
     """acct_name 이 없으면 계정명 적요를 만들 수 없어 heuristic(가맹점 키워드)로 폴백."""
     async with sm() as s:

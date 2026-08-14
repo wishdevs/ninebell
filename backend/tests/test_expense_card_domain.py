@@ -37,8 +37,8 @@ def test_budget_for_unknown_returns_none():
 
 
 def test_remark_for_custom_then_fallback():
-    assert remark_for("야근식대") == "직원 야근 식대(법인카드)"
-    assert remark_for("회식") == "직원 회식(법인카드)"
+    assert remark_for("야근식대") == "직원 야근식대(법인카드)"
+    assert remark_for("회식") == "직원 회식비(법인카드)"
     # 커스텀 매핑에 없으면 '{사용항목}(법인카드)' 폴백.
     assert remark_for("중식식대") == "중식식대(법인카드)"
     assert remark_for("사무용품비") == "사무용품비(법인카드)"
@@ -46,7 +46,7 @@ def test_remark_for_custom_then_fallback():
 
 def test_use_item_from_remark_reverse_maps():
     # 커스텀 적요 역매핑.
-    assert use_item_from_remark("직원 야근 식대(법인카드)") == "야근식대"
+    assert use_item_from_remark("직원 야근식대(법인카드)") == "야근식대"
     # 기본 패턴 "{사용항목}(법인카드)" — BUDGET_MAP 에 있는 항목만.
     assert use_item_from_remark("중식식대(법인카드)") == "중식식대"
     # BUDGET_MAP 에 없는 접미사 → None.
@@ -59,4 +59,4 @@ def test_maps_have_expected_domain_keys():
     # 사용자 제공 규칙의 핵심 항목이 보존됐는지(회귀 방지).
     for k in ("야근식대", "회식", "국내출장", "유류", "접대비", "중식식대"):
         assert k in BUDGET_MAP
-    assert REMARK_MAP["주차료"] == "국내출장 주차료(법인카드)"
+    assert REMARK_MAP["주차료"] == "국내출장 주차료"

@@ -657,7 +657,7 @@ async def test_templates_crud_owner_scoped(client, make_user, auth_as):
     auth_as(uid)
     sels = [
         {"tool": "set_expense", "field": "예산단위", "value": "야근식대", "query": "제조"},
-        {"tool": "fill_text", "field": "적요", "value": "직원 야근 식대(법인카드)"},
+        {"tool": "fill_text", "field": "적요", "value": "직원 야근식대(법인카드)"},
     ]
     r = await client.post(
         "/runs/templates",

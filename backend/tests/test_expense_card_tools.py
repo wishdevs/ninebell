@@ -257,7 +257,7 @@ async def test_do_fill_dropdown_fail_keeps_option_hint():
 # ══════════════════════════════════════════════════════════════════════════════
 async def test_do_fill_text_ok_with_readback():
     page = ErpFake()
-    v = await T.do_fill_text(page, "적요", "직원 야근 식대(법인카드)")
+    v = await T.do_fill_text(page, "적요", "직원 야근식대(법인카드)")
     assert v.ok and v.warn is None and "반영 확인" in v.message
 
 

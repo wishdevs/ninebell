@@ -40,6 +40,22 @@ LEARNED_APPLY_MIN_COUNT = 3
 # 최빈이 '해외출장 교통비'라 숙박 결제에도 교통비가 박혔다. 과반(0.5)을 확정의 하한으로 둔다.
 SEED_NOTE_MIN_DOMINANCE = 0.5
 
+# 계정 단위 전사 관례(가맹점 무관)를 category tier 기본 적요로 채택할 기준 — 사용자 지적
+# 2026-08-14: 같은 석식인데 학습 적요는 '직원 야근식대(법인카드)'(전사 3,211건), 기본 적요는
+# 계정명 '복리후생비-석식 (연장근무 식대)' 로 갈렸다. 계정에 **결정적 관례**가 있으면 그것을
+# 기본값으로 쓰고, 갈리면 종전대로 계정명을 쓴다.
+# ⚠ 하한이 SEED_NOTE_MIN_DOMINANCE(0.5)보다 높은 이유(실측 대조):
+#   채택 — 석식 100%/99%, 업무추진비 100%, 차량유류비 98%, 접대비 99%, 해외접대비 96%
+#   배제 — 세차비 55%, 국내출장 주차료 57%, 대리운전비 59%, 해외출장 교통비 67%
+#   배제군은 '그 계정의 어떤 거래에도 일반적'이지 않은 특정 서비스 표현이다(2026-07-24 확정 —
+#   "세차비"·"양면테이프"를 같은 계정의 무관한 거래에 붙이지 않는다). 0.7 이 그 경계다.
+ACCT_NOTE_MIN_DOMINANCE = 0.7
+ACCT_NOTE_MIN_SAMPLES = 20  # 표본이 적으면 '관례'로 보지 않는다(소수 이력의 우연한 100% 방지).
+# 서로 다른 가맹점 수 하한 — **'그 가맹점의 서비스'와 '그 계정의 비용 성격'을 가르는 조건**.
+# 실측(2026-08-14): 채택군은 11~211곳에 걸쳐 쓰이고, 배제해야 할 '세차비'류는 소수 가맹점에
+# 몰린다. 지배율만으로는 단일 가맹점 100% 적요를 못 거르므로 이 조건이 본질이다.
+ACCT_NOTE_MIN_MERCHANTS = 5
+
 
 def norm_merchant(name: str | None) -> str:
     """가맹점명 매칭 키 — 공백·괄호표기·부호를 흡수해 '네이버파이낸셜㈜'↔'네이버파이낸셜(주)' 등을 묶는다."""
@@ -497,6 +513,52 @@ async def _ai_note_store(
 # (is_person_name_note skip 과 동일 패턴 — 미정리 서버에서도 사다리가 죽지 않는다).
 
 
+async def _acct_dominant_note(session: AsyncSession, acct: str) -> str | None:
+    """계정 단위 전사 관례 적요 — **가맹점 무관** 최빈이 결정적일 때만 반환(아니면 None).
+
+    같은 계정인데 학습/시드는 회사 관례('직원 야근식대(법인카드)')를 쓰고 기본값만 계정명
+    ('복리후생비-석식 (연장근무 식대)')이던 불일치를 없앤다(사용자 지적 2026-08-14).
+
+    판/제 접미(-제품·(판매) 등)는 벗겨서 합산한다 — 같은 관례가 비용구분으로 쪼개져 표가
+    갈리지 않게. 사람이름 적요는 제외(추천 금지 규율 동일).
+
+    **관례 인정 조건 3개를 모두** 넘어야 한다. 핵심은 다양성이다:
+      · 가맹점 다양성(ACCT_NOTE_MIN_MERCHANTS) — 여러 가맹점에 걸쳐 쓰이는 적요는 그 계정의
+        **비용 성격**을 말하고, 한두 가맹점에 몰린 적요는 그 **가맹점의 상품/서비스**를 말한다.
+        2026-07-24 확정("세차비"·"양면테이프"를 무관한 거래에 붙이지 않는다)을 지키는 장치가
+        바로 이 조건이다 — 지배율만으로는 단일 가맹점 100% 적요를 걸러내지 못한다.
+      · 지배율(ACCT_NOTE_MIN_DOMINANCE) — 계정이 서로 다른 성격으로 갈리지 않을 것.
+      · 표본(ACCT_NOTE_MIN_SAMPLES) — 소수 이력의 우연한 100% 방지.
+    실측 대조(2026-08-14): 채택 = 석식 119곳/100%, 업무추진비 211곳/100%, 차량유류비 115곳/98%,
+    접대비 164곳/99% · 배제 = 세차비 19곳/55%, 국내출장 주차료 22곳/57%.
+    """
+    rows = (
+        await session.execute(
+            select(CardSeedNote.note, CardSeedNote.count, CardSeedNote.norm_merchant).where(
+                CardSeedNote.acct_code == acct
+            )
+        )
+    ).all()
+    totals: dict[str, int] = {}
+    merchants: dict[str, set[str]] = {}
+    for note, cnt, norm in rows:
+        if not note or is_person_name_note(note):
+            continue
+        base, _ = strip_division(note)
+        base = (base or "").strip()
+        if not base:
+            continue
+        totals[base] = totals.get(base, 0) + int(cnt or 0)
+        merchants.setdefault(base, set()).add(norm or "")
+    total = sum(totals.values())
+    if total < ACCT_NOTE_MIN_SAMPLES:
+        return None
+    top, n = max(totals.items(), key=lambda kv: kv[1])
+    if len(merchants.get(top, ())) < ACCT_NOTE_MIN_MERCHANTS:
+        return None
+    return top if (n / total) >= ACCT_NOTE_MIN_DOMINANCE else None
+
+
 async def suggest_note(
     session: AsyncSession,
     *,
@@ -605,9 +667,18 @@ async def suggest_note(
                         model=gen_model,
                     )
                     return {"note": clean, "source": "ai"}
-        # 4) category — 계정만으로 채우는 적요는 **계정명 그대로**를 일반 적요로 쓴다(사용자 확정
-        #    2026-07-24). 특정 과거 적요(count 최빈이라도 "세차비"·"양면테이프"처럼 특정 서비스·품목)를
-        #    같은 계정의 무관한 거래에 붙이지 않는다 — 계정명은 그 계정의 어떤 거래에도 일반적이다.
+        # 4a) category(전사 관례) — 그 **계정**에 결정적 관례가 있으면 계정명보다 그것을 쓴다
+        #     (사용자 지적 2026-08-14): 학습/시드는 '직원 야근식대(법인카드)'인데 기본값만
+        #     계정명이라 같은 석식이 두 표현으로 갈렸다. 지배율·표본 하한(ACCT_NOTE_MIN_*)을
+        #     둬 '세차비'·'국내출장 주차료'처럼 갈리는 계정은 여기 걸리지 않고 4b 로 간다 —
+        #     2026-07-24 확정(특정 서비스 표현을 무관한 거래에 붙이지 않는다)은 그대로 지킨다.
+        dominant = await _acct_dominant_note(session, acct)
+        if dominant:
+            clean = sanitize_note(apply_cost_suffix(dominant, cost_type))
+            if clean:
+                return {"note": clean, "source": "category"}
+        # 4b) category(계정명) — 관례가 갈리는 계정은 **계정명 그대로**를 일반 적요로 쓴다
+        #    (사용자 확정 2026-07-24). 계정명은 그 계정의 어떤 거래에도 일반적이다.
         #    (판)/(제)/(공통) 접두는 표시용으로 벗긴다. acct_name 이 있을 때만(없으면 heuristic 폴백).
         if acct_name:
             display = _ACCT_PREFIX_RE.sub("", acct_name).strip()
