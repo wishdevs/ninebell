@@ -20,6 +20,9 @@ export interface ManualSectionDef {
   items: ManualDocMeta[];
 }
 
+/** 에이전트 하위 분류(결의서입력·회계전표…)가 붙을 최상위 묶음의 라벨 — manual-client 매칭 키. */
+export const AGENT_NODE_LABEL = '에이전트';
+
 export const GENERAL_MANUAL_SECTIONS: ManualSectionDef[] = [
   {
     label: '일반',
@@ -27,8 +30,13 @@ export const GENERAL_MANUAL_SECTIONS: ManualSectionDef[] = [
       { id: 'getting-started', name: '대시보드 시작하기' },
       // 계정 설정 화면의 ManualLink(docId='account-settings')가 가리키는 문서.
       { id: 'account-settings', name: '계정 설정과 로그아웃' },
-      { id: 'run-and-intervene', name: '에이전트 실행과 개입' },
     ],
+  },
+  {
+    // AGENT_NODE_LABEL 섹션 — 여기 items 가 먼저 렌더되고 그 아래에 AGENT_MANUAL_SECTIONS
+    // 가 하위 분류로 붙는다(3단). 특정 에이전트에 속하지 않는 공통 사용법 문서의 자리다.
+    label: AGENT_NODE_LABEL,
+    items: [{ id: 'run-and-intervene', name: '에이전트 실행과 개입' }],
   },
 ];
 
