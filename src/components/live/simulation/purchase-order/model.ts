@@ -193,10 +193,7 @@ const OUTSOURCED_PREFIX = '외주조립-';
  * ⚠ 여기엔 프로젝트명이 들어가지 않는다 — 입력란은 **모듈명만** 받고, 프로젝트와의 결합은
  *   최종 계획서(finalPurchaseReasonOf → buildPlanPayload)에서 한다(사용자 확정 2026-08-14).
  */
-export function defaultPurchaseReasonOf(
-  bom: PlanBom,
-  moduleCodes: readonly string[],
-): string {
+export function defaultPurchaseReasonOf(bom: PlanBom, moduleCodes: readonly string[]): string {
   return moduleCodes
     .map((c) => bom.moduleMap.get(c)?.name ?? '')
     .filter((n) => n.startsWith(OUTSOURCED_PREFIX))
@@ -278,9 +275,12 @@ export function vendorDueOf(unitDue: string, vendorClass: string): string {
 }
 
 /**
- * 그룹 기본 **비고 메시지** — 가공품 외 그룹은 '가공품 거래처(해룡) 직배송'. 괄호 안은 그
- * 발주단위 가공품 그룹의 유효 거래처명 동적 표기(가공품 그룹이 없으면 괄호 생략). 사유:
- * 가공품 외 거래처가 제작품을 가공품 제작처로 직배송하고, 거기서 조립해 모듈 단위로 받는다.
+ * 그룹 기본 **비고 메시지** — '가공품 거래처(해룡) 직배송'. 괄호 안은 그 발주단위 가공품
+ * 그룹의 유효 거래처명 동적 표기. 사유: 가공품 외 거래처가 제작품을 가공품 제작처로
+ * 직배송하고, 거기서 조립해 모듈 단위로 받는다.
+ *
+ * 빈 값이 되는 경우 둘 — ① 가공품 그룹 자신, ② **발주단위에 가공품이 없을 때**(직배송할
+ * 대상이 없으므로 아무것도 쓰지 않는다).
  *
  * ⚠ 여기엔 구매사유가 들어가지 않는다 — 입력란은 **메시지만** 받고, 구매사유와의 결합은
  *   최종 계획서(finalNoteOf → buildPlanPayload)에서 한다(사용자 확정 2026-08-14).
@@ -291,9 +291,12 @@ export function defaultNoteOf(
   groups: readonly VendorGroup[],
 ): string {
   if (vendorClass === PROCESSED_CLASS) return '';
-  const hasProcessed = groups.some((g) => g.vendorClass === PROCESSED_CLASS);
-  const name = hasProcessed ? effectiveVendorOf(unit, PROCESSED_CLASS)?.name : undefined;
-  return name ? `가공품 거래처(${name}) 직배송` : '가공품 거래처 직배송';
+  // 발주단위에 가공품 그룹이 없으면 직배송할 대상이 없다 — 아무것도 쓰지 않는다
+  // (사용자 확정 2026-08-14: 종전엔 거래처명 없이 '가공품 거래처 직배송'을 남겨,
+  //  가공품이 한 건도 없는 발주에도 무의미한 문구가 붙었다).
+  if (!groups.some((g) => g.vendorClass === PROCESSED_CLASS)) return '';
+  const name = effectiveVendorOf(unit, PROCESSED_CLASS)?.name;
+  return name ? `가공품 거래처(${name}) 직배송` : '';
 }
 
 /**

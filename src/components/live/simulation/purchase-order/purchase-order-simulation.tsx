@@ -101,7 +101,11 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
             compact
           />
         ) : confirmed && payload ? (
-          <ConfirmedView payload={payload} totals={plan.totals} onEdit={() => setConfirmed(false)} />
+          <ConfirmedView
+            payload={payload}
+            totals={plan.totals}
+            onEdit={() => setConfirmed(false)}
+          />
         ) : reviewing && payload ? (
           <PlanReviewView
             payload={payload}
