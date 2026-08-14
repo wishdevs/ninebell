@@ -20,7 +20,9 @@ const DENY_PREFIXES = ['/login', '/signup'];
 export function isSafeReturnPath(value: string | null | undefined): value is string {
   if (!value || !value.startsWith('/')) return false;
   if (value.startsWith('//') || value.startsWith('/\\')) return false;
-  return !DENY_PREFIXES.some((p) => value === p || value.startsWith(`${p}/`) || value.startsWith(`${p}?`));
+  return !DENY_PREFIXES.some(
+    (p) => value === p || value.startsWith(`${p}/`) || value.startsWith(`${p}?`),
+  );
 }
 
 /** 현재 위치(경로+쿼리)를 next 값으로. 브라우저 밖(SSR)이면 null. */

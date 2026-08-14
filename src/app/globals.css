@@ -209,6 +209,16 @@ samp {
     box-shadow var(--duration-normal) var(--ease-out),
     border-color var(--duration-fast) ease;
 }
+/* ⚠ 카드가 래퍼를 넘쳐 옆 카드를 덮던 버그(사용자 리포트 2026-08-14, /agents 768~1180px).
+   .card-lift 는 grid 라 안의 카드가 **암시적 auto 트랙**에 놓인다 — auto 트랙의 최소값은
+   min-content 라, 래퍼가 min-w-0 로 그리드 트랙(227px)까지 줄어도 카드는 자기 min-content
+   (316px)를 고집해 89px 삐져나오고, 뒤에 그려지는 이웃 카드가 그 위를 덮었다.
+   카드 콘텐츠에 truncate 를 걸어도 소용없다 — 넘치는 주체가 콘텐츠가 아니라 카드 박스다.
+   래퍼를 쓰는 6곳(에이전트·그룹·프로젝트·홈 즐겨찾기·관리)이 같은 구조라 여기서 한 번에 막는다. */
+.card-lift > * {
+  min-width: 0;
+}
+
 /* 리프트는 카드 자신이 아니라 '안 움직이는 부모(.card-lift)'에 커서가 있을 때 발동한다.
    카드가 위로 떠도 hover 타깃(부모)은 제자리라 :hover 가 풀리지 않아, 경계에서 카드가
    떴다 내렸다 반복하는 '드드득'(hover jitter)이 사라진다. (부모 hover = Tailwind group-hover 동치) */
