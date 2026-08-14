@@ -6,12 +6,15 @@
     params["purchase_order"] = {project_no, project_name, keyword}
 
   project_no    옴니솔 도움창 PJT_NO(카탈로그 code 'PJT_NO|WBS_NO' 의 앞부분).
+                직접 입력 폼에선 생략 가능 — 검색 결과 1건일 때만 자동 특정(steps.apply_project).
   project_name  표시·검증용 전체 이름(적용 후 필드 반영 로그에 쓴다).
-  keyword       ERP 도움창 검색어. 미지정이면 project_name 의 **콤마 앞 토큰**으로 유도한다
-                (프로브 검증 경로 — 전체 이름으로는 도움창이 0건을 돌려주는 사례가 있다).
+  keyword       ERP 도움창 검색어. 미지정이면 project_name 에서 유도하며, 지정/유도 모두
+                **콤마·'#' 앞 토큰**으로 정화한다 — 진단 프로브 실측(2026-08-14):
+                '#' 포함 검색('MISC-ESR3 #2')과 PJT_NO 숫자 검색은 **도움창 팝업을 죽인다**.
+                'MISC-ESR3' 처럼 넓힌 검색 + PJT_NO 행 선택이 검증된 경로다.
 
-셋 다 없으면(=폼 없이 실행) 종전대로 pick_project 가 HITL 검색 개입을 띄운다 — 사전 선택은
-**개입을 건너뛰는 지름길**일 뿐이고, 적용에 실패하면 같은 개입으로 폴백한다(nodes/pick_project).
+keyword 가 없으면 pick_project 가 하드 실패한다 — 검색 개입 폴백은 제거됐다(2026-08-14
+사용자 지시, 폼에서 이미 고른 것을 다시 고르게 하는 이중 입력 방지).
 """
 
 from __future__ import annotations
@@ -24,8 +27,13 @@ from pydantic import BaseModel, ValidationError, field_validator, model_validato
 MAX_KEYWORD_LEN = 50
 
 
+def sanitize_keyword(raw: str) -> str:
+    """도움창 검색어 정화 — 콤마·'#' 앞 토큰 + 상한. '#' 은 팝업을 죽인다(프로브 실측)."""
+    return raw.split(",")[0].split("#")[0].strip()[:MAX_KEYWORD_LEN]
+
+
 class PurchaseOrderParams(BaseModel):
-    """프로젝트 사전 선택(전부 optional — 없으면 HITL 검색 개입)."""
+    """프로젝트 사전 선택 — keyword 필수(없으면 pick_project 하드 실패), project_no 권장."""
 
     project_no: str | None = None
     project_name: str | None = None
@@ -41,19 +49,15 @@ class PurchaseOrderParams(BaseModel):
 
     @model_validator(mode="after")
     def _derive_keyword(self) -> PurchaseOrderParams:
-        """keyword 미지정 시 project_name 의 콤마 앞 토큰으로 유도하고, 상한으로 자른다."""
-        kw = self.keyword
-        if not kw and self.project_name:
-            kw = self.project_name.split(",")[0].strip() or None
-        if kw:
-            kw = kw[:MAX_KEYWORD_LEN]
-        object.__setattr__(self, "keyword", kw)
+        """keyword 미지정 시 project_name 에서 유도 — 지정/유도 모두 sanitize_keyword 로 정화."""
+        kw = self.keyword or self.project_name or ""
+        object.__setattr__(self, "keyword", sanitize_keyword(kw) or None)
         return self
 
     @property
     def has_preselection(self) -> bool:
-        """사전 선택으로 개입을 건너뛸 수 있는가 — 코드와 검색어가 모두 있어야 한다."""
-        return bool(self.project_no and self.keyword)
+        """적용을 시작할 수 있는가 — 검색어만 있으면 된다(번호 없으면 단일 결과 자동 특정)."""
+        return bool(self.keyword)
 
 
 def parse_purchase_order_params(params: dict | None) -> PurchaseOrderParams:

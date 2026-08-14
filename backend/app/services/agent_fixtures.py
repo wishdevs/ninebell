@@ -792,7 +792,7 @@ _EAP_CANCEL_FIXTURE: dict = {
 PURCHASE_ORDER_FLOW: dict = {
     "nodes": [
         {"id": "access", "kind": "start", "status": "done", "title": "구매요청 화면 접속", "sub": "SCM-구매 · PUOPRQ00200", **_col(0)},
-        {"id": "project", "kind": "step", "status": "active", "title": "프로젝트 선택", "sub": "도움창 검색(사용자 개입)", **_col(1)},
+        {"id": "project", "kind": "step", "status": "active", "title": "프로젝트 적용", "sub": "실행 전 선택분 · 도움창 검색·적용", **_col(1)},
         {"id": "query", "kind": "step", "status": "pending", "title": "BOM 조회(F2)", "sub": "이동요청 해제 · 구매요청만", **_col(2)},
         {"id": "read", "kind": "step", "status": "pending", "title": "BOM 트리 읽기", "sub": "장비·모듈(SET)·부품 조립", **_col(3)},
         {"id": "plan", "kind": "step", "status": "pending", "title": "발주 계획서 작성", "sub": "발주단위·사유·납기·거래처(사용자 개입)", **_col(4)},
@@ -814,8 +814,8 @@ PURCHASE_ORDER_FLOW: dict = {
 # ── 구매발주 — 실동작 승격(purchase-order 워크플로우, Phase A 2026-08-13) ─────────
 # placeholder 를 제자리 승격한다(agent id "purchase-order" 유지 — 프론트/시드 연속성).
 # steps 의 key 는 build_purchase_order_graph 노드 등록 순서와 1:1(진행 하이라이트 정합).
-# HITL 두 스텝(pick_project·plan)에 intervention — pick_project 는 kind 'search'(split),
-# plan 은 신규 kind 'planner'(full). hidden=False 유지(placeholder 와 동일).
+# HITL 은 plan 한 스텝만(kind 'planner', full) — pick_project 의 검색 개입 폴백은
+# 2026-08-14 제거(실행 전 폼이 프로젝트 필수, 적용 실패 = 하드 실패). hidden=False 유지.
 _PURCHASE_ORDER_FIXTURE: dict = {
     "id": "purchase-order",
     "workflow_id": "purchase-order",
@@ -852,10 +852,9 @@ _PURCHASE_ORDER_FIXTURE: dict = {
         {"key": "user_type", "label": "SCM-구매 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 'SCM-구매'로 전환"},
         {"key": "menu_nav", "label": "프로젝트BOM구매요청 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "구매(PU) > 프로젝트BOM구매요청[나인벨](PUOPRQ00200) 진입"},
         {
-            "key": "pick_project", "label": "프로젝트 선택", "skill": "codepicker", "status": "pending",
-            "intervention": True,
+            "key": "pick_project", "label": "프로젝트 적용", "skill": "codepicker", "status": "pending",
             "phase": "프로젝트",
-            "detail": "프로젝트 도움창을 검색해 발주할 프로젝트를 선택(사용자 개입) → 적용·반영 확인·조회(F2)",
+            "detail": "실행 전 입력에서 고른 프로젝트를 도움창 검색·선택으로 적용 → 반영 확인·조회(F2)",
         },
         {"key": "read_bom", "label": "BOM 읽기", "skill": "grid-read", "status": "pending", "phase": "BOM", "detail": "이동요청 해제(구매요청만) → 조회(F2) → 트리그리드 전량 읽기 → 계획서 BOM 조립"},
         {

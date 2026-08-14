@@ -19,7 +19,6 @@ from app.agents.purchase_order import js as js_mod
 from app.agents.purchase_order import planner
 from app.agents.purchase_order import steps as steps_mod
 from app.agents.purchase_order.graph import PurchaseOrderState, build_purchase_order_graph
-from app.agents.purchase_order.nodes import pick_project as pick_mod
 from app.agents.purchase_order.nodes import plan as plan_mod
 from app.agents.purchase_order.nodes import (
     make_pick_project_node,
@@ -268,22 +267,23 @@ def test_validate_plan_rejects_non_dict():
     assert ok is False
 
 
-# ── pick_project 노드(스텝 monkeypatch — 브라우저 없이 검색→선택 왕복) ─────────────
-def _patch_pick(monkeypatch, *, search_rows, apply_ok=True, bom_rows=337):
-    calls: dict = {"search": [], "apply": [], "lookup": 0}
-
-    async def _search(page, kw, **kwargs):
-        calls["search"].append(kw)
-        return {"ok": True, "rows": list(search_rows)}
+# ── pick_project 노드(스텝 monkeypatch — 브라우저 없이 적용 사이클) ───────────────
+def _patch_pick(monkeypatch, *, apply_ok=True, bom_rows=337):
+    calls: dict = {"apply": [], "lookup": 0}
 
     async def _close(page):
         return None
 
-    async def _apply(page, keyword, pjt_no):
+    async def _apply(page, keyword, pjt_no, **kwargs):
         calls["apply"].append((keyword, pjt_no))
         if not apply_ok:
             return {"ok": False, "reason": "적용 실패(테스트)"}
-        return {"ok": True, "name": "CX85-137, 12CH PROCESS", "field_value": "CX85-137"}
+        return {
+            "ok": True,
+            "name": "CX85-137, 12CH PROCESS",
+            "pjt_no": pjt_no or "2297",
+            "field_value": "CX85-137",
+        }
 
     async def _lookup(page):
         calls["lookup"] += 1
@@ -292,7 +292,6 @@ def _patch_pick(monkeypatch, *, search_rows, apply_ok=True, bom_rows=337):
     async def _wait_bom(page, **kw):
         return bom_rows
 
-    monkeypatch.setattr(steps_mod, "open_and_search_once", _search)
     monkeypatch.setattr(steps_mod, "close_popup", _close)
     monkeypatch.setattr(steps_mod, "apply_project", _apply)
     monkeypatch.setattr(steps_mod, "click_lookup", _lookup)
@@ -300,75 +299,7 @@ def _patch_pick(monkeypatch, *, search_rows, apply_ok=True, bom_rows=337):
     return calls
 
 
-_SEARCH_ROW = {
-    "PJT_NO": "2297",
-    "PJT_NM": "CX85-137, 12CH PROCESS",
-    "START_DT": "2026-01-01",
-    "END_DT": "2026-12-31",
-    "RSPNBER_EMP_NM": "석대현",
-    "PJT_ST_NM": "승인",
-}
-
-
-@pytest.mark.asyncio
-async def test_pick_project_query_then_value_roundtrip(monkeypatch):
-    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
-    events = _q()
-    state = {"events": events, "page": _Page(), "owner": None, "run_id": None}
-    task = asyncio.create_task(make_pick_project_node()(state))
-
-    # 초기 프레임 — kind 'search' + options=[] 키 존재(공유 계약).
-    frame = await _next_hitl(events)
-    assert frame["kind"] == "search" and frame["title"] == "프로젝트 선택"
-    assert frame["options"] == []
-
-    # query 제출 → 검색 → 프레임 전체 재방출(options 갱신).
-    resolve_hitl(frame["id"], {"query": "CX85", "value": None, "plan": None})
-    frame2 = await _next_hitl(events)
-    assert frame2["id"] == frame["id"] and frame2["kind"] == "search"
-    assert frame2["options"] == [
-        {"value": "2297", "label": "CX85-137, 12CH PROCESS",
-         "description": "석대현 · 2026-01-01~2026-12-31 · 승인"}
-    ]
-
-    # value 제출 → 재검색·선택·적용(마지막 검색어로) → 조회(F2) → break.
-    resolve_hitl(frame["id"], {"value": "2297", "query": None, "plan": None})
-    out = await asyncio.wait_for(task, timeout=5)
-    assert out["project"] == {"code": "2297", "name": "CX85-137, 12CH PROCESS"}
-    assert calls["apply"] == [("CX85", "2297")]
-    assert calls["lookup"] == 1
-    assert_keys_declared(PurchaseOrderState, out)
-    assert frame["id"] not in _hitl_queues  # 채널 정리(close_hitl_channel).
-
-
-@pytest.mark.asyncio
-async def test_pick_project_rejects_value_outside_last_results(monkeypatch):
-    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
-    events = _q()
-    task = asyncio.create_task(
-        make_pick_project_node()({"events": events, "page": _Page()})
-    )
-    frame = await _next_hitl(events)
-    # 검색 없이 value 제출 — 적용하지 않고 재방출(프리필 불신·검색 결과 밖 값 차단).
-    resolve_hitl(frame["id"], {"value": "9999", "query": None, "plan": None})
-    frame2 = await _next_hitl(events)
-    assert frame2["kind"] == "search" and calls["apply"] == []
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-
-@pytest.mark.asyncio
-async def test_pick_project_timeout_fails_node(monkeypatch):
-    _patch_pick(monkeypatch, search_rows=[])
-    monkeypatch.setattr(pick_mod, "get_settings", lambda: type("S", (), {"hitl_timeout_s": 0})())
-    events = _q()
-    out = await make_pick_project_node()({"events": events, "page": _Page()})
-    assert "시간 초과" in out["error"]
-    assert_keys_declared(PurchaseOrderState, out)
-
-
-# ── 사전 선택(실행 전 폼 params) — 개입 없이 바로 적용, 실패 시 개입 폴백(2026-08-13) ──
+# ── 사전 선택(실행 전 폼 params) — 유일한 경로. 개입 폴백 없음(사용자 지시 2026-08-14) ──
 _PRESELECT = {
     "purchase_order": {
         "project_no": "2297",
@@ -379,9 +310,9 @@ _PRESELECT = {
 
 
 @pytest.mark.asyncio
-async def test_pick_project_preselection_skips_hitl(monkeypatch):
-    # 실행 전 폼이 고른 프로젝트가 있으면 개입(hitl 프레임) 없이 바로 적용·조회하고 끝난다.
-    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
+async def test_pick_project_applies_preselection_without_hitl(monkeypatch):
+    # 실행 전 폼이 고른 프로젝트를 개입(hitl 프레임) 없이 바로 적용·조회하고 끝난다.
+    calls = _patch_pick(monkeypatch)
     events = _q()
     out = await asyncio.wait_for(
         make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
@@ -395,25 +326,24 @@ async def test_pick_project_preselection_skips_hitl(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pick_project_preselection_falls_back_to_hitl_when_apply_fails(monkeypatch):
-    # 카탈로그 스냅샷이 낡아 도움창에서 못 잡는 경우 — 하드 실패가 아니라 검색 개입으로 폴백.
-    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW], apply_ok=False)
+async def test_pick_project_apply_failure_is_hard_error(monkeypatch):
+    # ⚠ 폴백 제거 회귀 방어: 적용 실패는 개입이 아니라 사유를 실은 하드 실패다.
+    calls = _patch_pick(monkeypatch, apply_ok=False)
     events = _q()
-    task = asyncio.create_task(
-        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT})
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
     )
-    frame = await _next_hitl(events)
-    assert frame["kind"] == "search" and frame["options"] == []
-    assert calls["apply"] == [("CX85-137", "2297")]  # 사전 선택은 시도했다.
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    assert "적용 실패(테스트)" in out["error"] and "다시 실행" in out["error"]
+    assert calls["apply"] == [("CX85-137", "2297")]  # 시도는 했다.
+    assert not [f for f in _frames(events) if "hitl" in f]  # 개입 프레임 0.
+    assert_keys_declared(PurchaseOrderState, out)
 
 
 @pytest.mark.asyncio
-async def test_pick_project_preselection_hard_fails_when_bom_not_loaded(monkeypatch):
-    # 적용은 됐는데 BOM 미로드 — 다른 프로젝트를 골라도 안 풀리므로 개입 없이 즉시 중단.
-    _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW], bom_rows=0)
+async def test_pick_project_hard_fails_when_bom_not_loaded(monkeypatch):
+    # 적용은 됐는데 BOM 미로드 — 재실행으로도 안 풀릴 수 있는 화면 문제라 즉시 중단.
+    _patch_pick(monkeypatch, bom_rows=0)
     events = _q()
     out = await asyncio.wait_for(
         make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
@@ -425,16 +355,33 @@ async def test_pick_project_preselection_hard_fails_when_bom_not_loaded(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_pick_project_without_params_opens_hitl(monkeypatch):
-    # params 없음(폼 미사용) — 종전 그대로 검색 개입을 띄운다(사전 선택 도입 회귀 방어).
-    calls = _patch_pick(monkeypatch, search_rows=[_SEARCH_ROW])
+async def test_pick_project_without_params_is_hard_error(monkeypatch):
+    # params 없음(폼 미사용 — API 직접 호출 등) — 개입을 띄우지 않고 즉시 실패한다.
+    calls = _patch_pick(monkeypatch)
     events = _q()
-    task = asyncio.create_task(make_pick_project_node()({"events": events, "page": _Page()}))
-    frame = await _next_hitl(events)
-    assert frame["kind"] == "search" and calls["apply"] == []
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": events, "page": _Page()}), timeout=5
+    )
+    assert "실행 전 입력에서 프로젝트를 선택" in out["error"]
+    assert calls["apply"] == []
+    assert not [f for f in _frames(events) if "hitl" in f]
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+# ── steps.apply_project — 번호 생략 시 단일 결과만 자동 특정(추측 금지) ─────────────
+@pytest.mark.asyncio
+async def test_apply_project_without_pjt_no_requires_single_result(monkeypatch):
+    async def _close(page):
+        return None
+
+    monkeypatch.setattr(steps_mod, "close_popup", _close)
+    for rows, count_txt in (([], "0건"), ([{"PJT_NO": "1"}, {"PJT_NO": "2"}], "2건")):
+        async def _search(page, kw, retries=2, _rows=rows):
+            return {"ok": True, "rows": list(_rows)}
+
+        monkeypatch.setattr(steps_mod, "open_and_search_once", _search)
+        r = await steps_mod.apply_project(_Page(), "MISC-ESR3", "")
+        assert not r.get("ok") and count_txt in r["reason"]
 
 
 # ── 실행 전 폼 params 파싱 ────────────────────────────────────────────────────
@@ -457,7 +404,33 @@ def test_purchase_order_params_derives_keyword_from_name_comma_prefix():
     assert p.keyword == "CX85-137" and p.has_preselection
 
 
-def test_purchase_order_params_absent_means_hitl():
+def test_purchase_order_params_sanitizes_hash_keyword():
+    """⚠ 회귀(라이브 5연속 실패 2026-08-14): '#' 포함 검색은 도움창 팝업을 죽인다(프로브
+    실측 — 'MISC-ESR3 #2' 소멸, 'MISC-ESR3' 4건 생존). 지정/유도 모두 '#' 앞에서 자른다."""
+    from app.agents.purchase_order.params import parse_purchase_order_params
+
+    # 폼이 keyword 를 명시해도 정화한다(13:40 라이브 payload 재현).
+    p = parse_purchase_order_params(
+        {"purchase_order": {"project_no": "2013", "project_name": "MISC-ESR3 #2",
+                            "keyword": "MISC-ESR3 #2"}}
+    )
+    assert p.keyword == "MISC-ESR3" and p.has_preselection
+    # 이름 유도 경로도 동일.
+    p2 = parse_purchase_order_params(
+        {"purchase_order": {"project_no": "2013", "project_name": "MISC-ESR3 #2"}}
+    )
+    assert p2.keyword == "MISC-ESR3"
+
+
+def test_purchase_order_params_keyword_only_is_enough():
+    # 직접 입력 폼의 번호 생략 경로 — 검색어만으로 사전 선택 성립(단일 결과 자동 특정).
+    from app.agents.purchase_order.params import parse_purchase_order_params
+
+    p = parse_purchase_order_params({"purchase_order": {"keyword": "MISC-ESR3"}})
+    assert p.has_preselection and p.project_no is None
+
+
+def test_purchase_order_params_absent_means_no_preselection():
     from app.agents.purchase_order.params import parse_purchase_order_params
 
     for raw in (None, {}, {"purchase_order": {}}, {"purchase_order": {"project_no": "  "}}):
@@ -828,9 +801,9 @@ def test_fixture_promoted_from_placeholder():
     assert "저장" in fx["handoff_note"]  # 쓰기 없음(Phase A) 안내.
     # steps 의 key 순서는 build_purchase_order_graph 노드 등록 순서와 정확히 일치해야 한다.
     assert [s["key"] for s in fx["steps"]] == GRAPH_STEP_KEYS
-    # HITL 두 스텝만 intervention.
+    # HITL 은 plan(계획서) 한 스텝만 — pick_project 검색 개입 폴백 제거(2026-08-14).
     marked = [s["key"] for s in fx["steps"] if s.get("intervention")]
-    assert marked == ["pick_project", "plan"]
+    assert marked == ["plan"]
 
 
 def test_read_fields_cover_all_candidates():

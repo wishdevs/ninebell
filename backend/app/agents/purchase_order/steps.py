@@ -119,15 +119,33 @@ async def close_popup(page: Any) -> None:
         logger.debug("close_popup 실패(무시)", exc_info=True)
 
 
-async def apply_project(page: Any, keyword: str, pjt_no: str) -> dict:
-    """도움창 재검색(팝업당 1회+재오픈 상한) → PJT_NO 행 선택 → '적용' → 닫힘·필드 반영 확인.
+async def apply_project(
+    page: Any, keyword: str, pjt_no: str, *, retries: int = POPUP_RETRIES
+) -> dict:
+    """도움창 재검색(팝업당 1회+재오픈 상한) → 행 선택 → '적용' → 닫힘·필드 반영 확인.
+
+    행 선택: pjt_no 가 있으면 그 행(정확 선택), 없으면 **검색 결과가 정확히 1건일 때만**
+    그 행을 쓴다(직접 입력 폼의 번호 생략 경로 — 0건/복수는 추측하지 않고 실패).
 
     ⚠ 프리필 불신(D11): 메인 필드에 이미 같은 값이 보여도 항상 이 명시 사이클로 재선택한다.
-    반환 {"ok", "name"?, "field_value"?, "reason"?}.
+    반환 {"ok", "name"?, "pjt_no"?, "field_value"?, "reason"?}.
     """
-    search = await open_and_search_once(page, keyword)
+    search = await open_and_search_once(page, keyword, retries=retries)
     if not search.get("ok"):
         return {"ok": False, "reason": search.get("reason") or "도움창 검색 실패"}
+
+    rows = search.get("rows") or []
+    if not pjt_no:
+        if len(rows) != 1:
+            await close_popup(page)
+            return {
+                "ok": False,
+                "reason": (
+                    f"'{keyword}' 검색 결과가 {len(rows)}건입니다 — 프로젝트를 특정할 수 "
+                    "없어 프로젝트 번호가 필요합니다."
+                ),
+            }
+        pjt_no = str(rows[0].get("PJT_NO") or "")
 
     sel = await page.evaluate(js.SELECT_ROW_JS, pjt_no)
     if not sel.get("ok"):
@@ -156,7 +174,7 @@ async def apply_project(page: Any, keyword: str, pjt_no: str) -> dict:
     )
     if field_val is None:
         return {"ok": False, "reason": f"적용 후 프로젝트 필드에 '{probe}' 반영을 확인하지 못했습니다."}
-    return {"ok": True, "name": name, "field_value": field_val}
+    return {"ok": True, "name": name, "pjt_no": pjt_no, "field_value": field_val}
 
 
 async def set_checkbox(page: Any, label: str, want_checked: bool) -> dict:

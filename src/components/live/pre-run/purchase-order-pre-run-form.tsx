@@ -56,9 +56,11 @@ function toProjectOptions(rows: readonly ProjectRow[]): ComboOption[] {
   return [...byPjtNo.values()];
 }
 
-/** ERP 도움창 검색어 = 프로젝트명의 콤마 앞 토큰('CX85-137, 12CH PROCESS' → 'CX85-137'). */
+/** ERP 도움창 검색어 = 프로젝트명의 콤마·'#' 앞 토큰('CX85-137, 12CH PROCESS' → 'CX85-137',
+ * 'MISC-ESR3 #2' → 'MISC-ESR3'). '#' 포함 검색은 도움창 팝업을 죽인다(백엔드 프로브 실측
+ * 2026-08-14) — 넓힌 검색어 + PJT_NO 행 선택이 검증된 경로. 백엔드 sanitize_keyword 미러. */
 function deriveKeyword(projectName: string): string {
-  return (projectName.split(',')[0] ?? '').trim();
+  return (projectName.split(',')[0] ?? '').split('#')[0].trim();
 }
 
 /** ISO 타임스탬프 → 'YYYY-MM-DD'(표시용). 형식이 아니면 null. */

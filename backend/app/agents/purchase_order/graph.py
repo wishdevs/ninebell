@@ -3,8 +3,8 @@
 SCM-구매 첫 에이전트. 결의서(GLDDOC00300) 패밀리가 아니라 구매 3화면 파이프라인의 화면 ①
 (프로젝트BOM구매요청 PUOPRQ00200)만 다룬다 — PROCESS.md D1(실행 중 HITL) 구현.
 
-체인: login → user_type(SCM) → menu_nav(PUOPRQ00200) → pick_project(HITL search)
-      → read_bom → plan(HITL planner) → report → END.
+체인: login → user_type(SCM) → menu_nav(PUOPRQ00200) → pick_project(실행 전 선택 적용 —
+      개입 없음, 실패는 하드) → read_bom → plan(HITL planner) → report → END.
 
 ⚠ Phase A 안전: 저장(F7)·결재 코드가 한 줄도 없다 — 런은 계획 확정 payload 를 결과로
   반환하고 끝난다. 쓰기(이동요청 저장·발주단위 저장·셀프 결재)는 실측 후 Phase B 에서 게이트
