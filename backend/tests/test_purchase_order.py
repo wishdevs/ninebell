@@ -95,8 +95,8 @@ def _sample_rows() -> list[dict]:
 
 
 def _shallow_rows() -> list[dict]:
-    """얕은 BOM 실측(ZJ90-130, 2026-08-13) — 4레벨 부품이 **없고** SET(3레벨)이 곧 구매 대상.
-    화면 실측: 17행 = 프로젝트1 + 장비1 + 외주조립 SET 15(요청잔량 1)."""
+    """발주 완료 BOM 실측(ZJ90-130) — SET(3레벨) 아래 리프가 하나도 없다.
+    화면 실측: 17행 = 프로젝트1 + 장비1 + 외주조립 SET 15(하위 부품 0)."""
     return [
         _grid_row(0),
         _grid_row(1, ITEM_CD="2261", ITEM_NM="프로젝트", WBS_NM="ZJ90-130,  8CH BS PROCESS"),
@@ -115,24 +115,28 @@ def _shallow_rows() -> list[dict]:
     ]
 
 
-def test_assemble_shallow_bom_uses_set_row_as_its_own_part():
-    """⚠ 회귀(2026-08-13 라이브 실패): 4레벨 부품이 없는 프로젝트에서 parts=0 이 되어
-    read_bom 이 '부품(리프) 행을 조립하지 못했습니다'로 하드 실패했다. 자식 없는 SET 은
-    그 행 자체가 부품 1건이다(발주단위=SET, 구매 대상=SET)."""
+def test_assemble_drops_modules_without_parts():
+    """사용자 확정 2026-08-14: 하위 부품이 없는 SET = 발주 완료분이라 계획서에 노출하지 않는다.
+    (2026-08-13 의 '자식 없는 SET 을 자기 자신으로 채우는' 보정은 완료분까지 띄우던 오독.)"""
     bom = planner.assemble_planner_bom(
         _shallow_rows(), {"code": "2261", "name": "ZJ90-130,  8CH BS PROCESS"}
     )
-    modules = bom["machines"][0]["modules"]
-    assert len(modules) == 2
-    for module in modules:
-        assert len(module["parts"]) == 1
-        part = module["parts"][0]
-        assert part["itemCode"] == module["itemCode"]  # SET 자신이 구매 대상
-        assert part["remainQty"] == 1 and part["purchasable"] is True
-
+    assert bom["machines"] == []  # 모듈이 다 빠지면 빈 껍데기 장비도 남기지 않는다.
     summary = planner.summarize_bom(bom, 17)
-    assert summary["parts"] == 2 and summary["purchasableParts"] == 2  # read_bom 하드 실패 해제
+    assert summary["modules"] == 0 and summary["parts"] == 0
     assert bom["project"]["wbs"] == "PO-2026-06-8668"  # 프로젝트 라벨 행 WBS 오염 방지 유지
+
+
+def test_assemble_keeps_only_modules_that_have_parts():
+    """섞인 BOM — 리프가 있는 SET 만 남고, 없는 SET 은 조용히 빠진다."""
+    rows = [
+        _grid_row(2, ITEM_CD="M-1", ITEM_NM="장비", WBS_NM="PO-1"),
+        _grid_row(3, ITEM_CD="SET-DONE", ITEM_NM="발주 완료 SET"),
+        _grid_row(3, ITEM_CD="SET-OPEN", ITEM_NM="남은 SET"),
+        _grid_row(4, ITEM_CD="P-1", ITEM_NM="부품"),
+    ]
+    bom = planner.assemble_planner_bom(rows, {"code": "1", "name": "x"})
+    assert [m["itemCode"] for m in bom["machines"][0]["modules"]] == ["SET-OPEN"]
 
 
 def test_deep_bom_keeps_real_leaves_only():
@@ -517,13 +521,29 @@ async def test_read_bom_unchecks_move_then_reads_and_assembles(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_read_bom_fails_when_no_parts_assembled(monkeypatch):
-    # 리프가 하나도 안 잡히면(레벨 매핑 드리프트) 성공으로 단정하지 않는다.
+async def test_read_bom_fails_when_no_set_rows_assembled(monkeypatch):
+    # SET 행이 하나도 안 잡히면(레벨 매핑 드리프트) 성공으로 단정하지 않는다.
     _patch_read(monkeypatch, rows=[_grid_row(0, ITEM_CD="x"), _grid_row(2, ITEM_CD="y")])
     out = await make_read_bom_node()(
         {"events": _q(), "page": _Page(), "project": {"code": "1"}}
     )
     assert "조립하지 못했습니다" in out["error"]
+    assert not out.get("no_modules")
+
+
+@pytest.mark.asyncio
+async def test_read_bom_ends_cleanly_when_every_set_is_done(monkeypatch):
+    """SET 은 읽혔는데 전부 하위 부품이 없다 = 발주 완료 프로젝트. 실패가 아니라 조기 종료다
+    (빈 계획서 HITL 로 사용자를 기다리게 하지 않는다)."""
+    _patch_read(monkeypatch, rows=_shallow_rows())
+    out = await make_read_bom_node()(
+        {"events": _q(), "page": _Page(), "project": {"code": "2261"}}
+    )
+    assert "error" not in out
+    assert out["no_modules"] is True
+    assert "발주할 모듈이 없습니다" in out["result"]
+    assert out["bom_summary"]["modules"] == 0
+    assert_keys_declared(PurchaseOrderState, out)
 
 
 @pytest.mark.asyncio

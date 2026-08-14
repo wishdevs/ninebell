@@ -57,22 +57,48 @@ def make_read_bom_node():
             }
 
         project = dict(state.get("project") or {})
-        planner_bom = planner.assemble_planner_bom(read.get("rows") or [], project)
+        rows = read.get("rows") or []
+        planner_bom = planner.assemble_planner_bom(rows, project)
         summary = planner.summarize_bom(planner_bom, read.get("count") or 0)
-        if summary["parts"] == 0:
-            await emit_step(events, STEP, "failed")
+        # 그리드 SET 행수 대비 남은 모듈 — 차이 = 하위 부품이 없어 제외된(발주 완료) SET.
+        set_rows = sum(1 for r in rows if r.get("level") == planner.LEVEL_MODULE)
+        excluded = set_rows - summary["modules"]
+
+        if summary["modules"] == 0:
+            if set_rows == 0:
+                await emit_step(events, STEP, "failed")
+                return {
+                    "error": (
+                        f"BOM {summary['gridRows']}행을 읽었지만 SET(모듈) 행을 조립하지 "
+                        "못했습니다 — 레벨 매핑을 확인해 주세요."
+                    )
+                }
+            # SET 은 있는데 전부 하위 부품이 없다 = 발주가 끝난 프로젝트. 실패가 아니라
+            # '할 일 없음'이므로 계획서(HITL)를 띄우지 않고 여기서 끝낸다(사용자 확정 2026-08-14).
+            msg = (
+                f"발주할 모듈이 없습니다 — SET {set_rows}건이 모두 하위 부품 없이 "
+                "조회됐습니다(이미 발주 완료)."
+            )
+            await emit_log(events, msg, "warn")
+            await emit_shot(events.put, page)
+            await emit_step(events, STEP, "done", _ms(t0))
             return {
-                "error": (
-                    f"BOM {summary['gridRows']}행을 읽었지만 부품(리프) 행을 조립하지 못했습니다 — "
-                    "레벨 매핑을 확인해 주세요."
-                )
+                "planner_bom": planner_bom,
+                "bom_summary": summary,
+                "project": planner_bom["project"],
+                "no_modules": True,
+                "result": msg,
             }
 
+        # 제외분은 조용히 버리지 않고 로그에 남긴다 — 그리드 행수와 모듈 수가 안 맞는 이유가 된다.
+        excluded_txt = (
+            f" 하위 부품 없는 SET {excluded}건은 발주 완료로 보고 제외했습니다." if excluded > 0 else ""
+        )
         await emit_log(
             events,
             f"BOM 읽기 완료 — 그리드 {summary['gridRows']}행 → 장비 {summary['machines']} · "
             f"모듈(SET) {summary['modules']} · 부품 {summary['parts']}"
-            f"(구매대상 {summary['purchasableParts']}).",
+            f"(구매대상 {summary['purchasableParts']}).{excluded_txt}",
             "ok",
         )
         await emit_shot(events.put, page)

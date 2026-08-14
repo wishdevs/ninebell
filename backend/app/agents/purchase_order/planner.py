@@ -93,7 +93,7 @@ def _bool_yn(row: dict, key: str, *, default: bool = True) -> bool:
 
 
 def _part_from_row(row: dict) -> dict:
-    """부품(리프) 한 건 — LEVEL_PART 행과 '자식 없는 SET' 행이 함께 쓰는 단일 변환."""
+    """부품(리프) 한 건 — LEVEL_PART 행 변환."""
     return {
         "itemCode": _text(row, "itemCode"),
         "name": _text(row, "name"),
@@ -117,17 +117,15 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
     행(machine 없는 module, module 없는 part)은 버린다 — 조립을 죽이는 것보다 낫고, 요약
     카운트로 드러난다.
 
-    ⚠ **얕은 BOM**(사용자 리포트 2026-08-13, ZJ90-130): 프로젝트에 따라 4레벨 부품이 아예
-      없고 SET(레벨 3)이 곧 구매 대상인 경우가 있다(외주조립 SET — 17행 = 프로젝트1+장비1+SET15,
-      요청잔량 1). 이때 parts 가 전부 비어 `summarize_bom.parts == 0` 이 되어 read_bom 이 하드
-      실패했다. 이제 **자식이 없는 SET 은 그 행 자체를 부품 1건으로** 담는다(발주단위=그 SET,
-      구매 대상=그 SET). 깊은 BOM(CX85-137: SET 아래 부품 337건)은 종전 그대로다.
+    ⚠ **하위 부품이 없는 SET 은 발주 대상이 아니다**(사용자 확정 2026-08-14): 발주가 이미
+      끝난 SET 은 리프(레벨 4)가 딸려 나오지 않고 SET 행만 남는다(ZJ90-130 = 17행 전부 이
+      상태). 그러므로 parts 가 빈 module 은 **버리고**, 그 결과 module 이 하나도 남지 않는
+      machine 도 버린다. 2026-08-13 에 그 SET 들을 '자기 자신을 부품 1건으로' 담았던 보정은
+      같은 화면을 완료분까지 노출하는 오독이라 제거했다.
     """
     machines: list[dict] = []
     cur_machine: dict | None = None
     cur_module: dict | None = None
-    # 자식 없는 SET 을 자기 자신으로 채우기 위해 (모듈, 원본행) 쌍을 들고 간다.
-    module_rows: list[tuple[dict, dict]] = []
     wbs = str(project.get("wbs") or "").strip()
 
     for row in rows:
@@ -160,17 +158,15 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
                 "parts": [],
             }
             cur_machine["modules"].append(cur_module)
-            module_rows.append((cur_module, row))
         elif level == LEVEL_PART:
             if cur_module is None:
                 continue
             cur_module["parts"].append(_part_from_row(row))
         # level 0(루트)·1(프로젝트 라벨)·미상(-1)은 조립 대상 아님.
 
-    # 얕은 BOM 보정 — 자식(레벨 4)이 없는 SET 은 그 행 자체가 구매 대상이다(docstring 참조).
-    for module, row in module_rows:
-        if not module["parts"]:
-            module["parts"].append(_part_from_row(row))
+    # 발주 완료분 제외 — 하위 부품이 없는 SET, 그리고 그 결과 빈 껍데기가 된 장비를 버린다.
+    for machine in machines:
+        machine["modules"] = [m for m in machine["modules"] if m["parts"]]
 
     return {
         "project": {
@@ -178,7 +174,7 @@ def assemble_planner_bom(rows: list[dict], project: dict) -> dict:
             "name": str(project.get("name") or ""),
             "wbs": wbs,
         },
-        "machines": machines,
+        "machines": [mc for mc in machines if mc["modules"]],
     }
 
 

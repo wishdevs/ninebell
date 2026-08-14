@@ -39,6 +39,7 @@ class PurchaseOrderState(BaseAgentState, total=False):
     project: dict  # pick_project — {"code","name"} (read_bom 이 "wbs" 를 채워 갱신)
     planner_bom: dict  # read_bom — plannerBom(공유 계약 shape, plan 프레임에 실림)
     bom_summary: dict  # read_bom — 행수 요약(result.bomSummary)
+    no_modules: bool  # 발주 대상 모듈 0 — read_bom 이 결과 메시지와 함께 조기 종료(→END)
     # plan 노드가 수락한 계획 payload(검증 통과분). ⚠ 키 이름이 노드명 'plan' 과 같으면
     # LangGraph 가 등록을 거부한다("already being used as a state key") — confirmed_plan 사용.
     confirmed_plan: dict
@@ -60,9 +61,15 @@ def build_purchase_order_graph():
         ("user_type", "menu_nav"),
         ("menu_nav", "pick_project"),
         ("pick_project", "read_bom"),
-        ("read_bom", "plan"),
         ("plan", "report"),
         ("report", END),
     ):
         g.add_edge(a, b)
+
+    # 발주 대상 모듈 0건: read_bom 이 '발주할 모듈이 없습니다' 결과를 남기고 즉시 종료 —
+    # 빈 계획서(HITL)를 띄워 사용자를 기다리게 하지 않는다(사용자 확정 2026-08-14).
+    def _after_read_bom(state: PurchaseOrderState) -> str:
+        return END if state.get("no_modules") else "plan"
+
+    g.add_conditional_edges("read_bom", _after_read_bom, {"plan": "plan", END: END})
     return g.compile().with_config({"recursion_limit": RECURSION_LIMIT})
