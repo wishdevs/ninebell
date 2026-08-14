@@ -280,11 +280,13 @@ export function defaultNoteOf(
 }
 
 /**
- * 최종 비고 = **[구매사유] + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
- * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 붙거나 안 붙는다.
+ * 최종 비고 = **구매사유 + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
+ * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 대괄호로 묶여 붙거나 안 붙는다.
+ *   예) 'CX85 1차 발주 [가공품 거래처(해룡) 직배송]' / 메시지 없으면 'CX85 1차 발주'
  *
  * 메시지는 오버라이드(사용자 입력) 우선, 없으면 defaultNoteOf 파생. 둘 중 빈 값은 빠지므로
- * 가공품 그룹(메시지 없음)은 구매사유만, 메시지를 지운 그룹도 구매사유만 남는다.
+ * 가공품 그룹(메시지 없음)은 구매사유만, 메시지를 지운 그룹도 구매사유만 남는다(대괄호도
+ * 함께 사라진다 — 빈 '[]' 를 남기지 않는다).
  * 최종 계획서 표기와 제출 페이로드가 이 함수 하나를 공유한다(표기 = 전달값).
  */
 export function finalNoteOf(
@@ -292,8 +294,10 @@ export function finalNoteOf(
   vendorClass: string,
   groups: readonly VendorGroup[],
 ): string {
-  const message = unit.vendorEdits[vendorClass]?.note ?? defaultNoteOf(unit, vendorClass, groups);
-  return [unit.purchaseReason.trim(), message.trim()].filter(Boolean).join(' ');
+  const message = (
+    unit.vendorEdits[vendorClass]?.note ?? defaultNoteOf(unit, vendorClass, groups)
+  ).trim();
+  return [unit.purchaseReason.trim(), message && `[${message}]`].filter(Boolean).join(' ');
 }
 
 // ── 합계 ─────────────────────────────────────────────────────────────────────
