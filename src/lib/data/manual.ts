@@ -49,9 +49,9 @@ export const GENERAL_MANUAL_SECTIONS: ManualSectionDef[] = [
  * 디버그 전용 노출(tax-invoice 등)은 agents.ts `DEBUG_ONLY_AGENT_IDS` 가 단일
  * 소스이며, manual-client 가 `filterByDebugMode` 로 같은 규칙을 적용한다.
  *
- * ⚠ 이 목록은 **최대 집합**이다 — 로그인 상태에서는 manual-client 가 `GET /agents`
- * 응답 id 와 교집합을 취해 조직구분(AgentOrgAccess) 접근 필터를 종전과 동일하게
- * 적용한다. 비로그인(dev 공개)에서만 이 목록이 그대로 노출된다.
+ * ⚠ 이 목록은 **최대 집합**이다 — manual-client 가 `GET /agents` 응답 id 와
+ * 교집합을 취해 조직구분(AgentOrgAccess) 접근 필터를 동일하게 적용한다
+ * (비인증 공개는 2026-08-14 회수 — /manual 도 로그인 필수).
  */
 export const AGENT_MANUAL_SECTIONS: ManualSectionDef[] = [
   {

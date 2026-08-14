@@ -11,14 +11,9 @@ import { NextResponse, type NextRequest } from 'next/server';
  */
 
 // `/signup`은 세션 이전 단계(로그인 응답으로 받은 signupToken이 인증 수단)라 공개.
+// /manual 은 공개 대상이 아니다 — 개발환경 한정 비인증 공개(2026-08-13)를 2026-08-14
+// 사용자 지정으로 회수, 모든 환경에서 로그인 필수.
 const PUBLIC_PATHS = ['/login', '/signup'];
-
-// 매뉴얼 비인증 공개는 개발환경 전용(2026-08-13 사용자 지정) — 운영 공개 전 스크린샷
-// 내부정보 정리 선행. NODE_ENV 는 빌드 시 인라인되므로 프로덕션 빌드에서는 이 분기가
-// 제거되어 /manual 도 로그인 필수(현행 유지)다.
-if (process.env.NODE_ENV !== 'production') {
-  PUBLIC_PATHS.push('/manual');
-}
 
 export function proxy(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
