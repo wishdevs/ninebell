@@ -261,19 +261,27 @@ export function vendorDueOf(unitDue: string, vendorClass: string): string {
 }
 
 /**
- * 그룹 기본 비고 — 가공품 외 그룹은 '가공품 거래처(해룡) 직배송'. 괄호 안은 그 발주단위
- * 가공품 그룹의 유효 거래처명 동적 표기(가공품 그룹이 없으면 괄호 생략). 사유: 가공품 외
- * 거래처가 제작품을 가공품 제작처로 직배송하고, 거기서 조립해 모듈 단위로 받는다.
+ * 그룹 기본 비고 = **[구매사유] + [비고 메시지]**(사용자 규칙 2026-08-14) — 발주 리스트의
+ * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 붙거나 안 붙는다.
+ *   가공품 그룹  → 구매사유만.
+ *   그 외 그룹  → 구매사유 + '가공품 거래처(해룡) 직배송'. 괄호 안은 그 발주단위 가공품
+ *                그룹의 유효 거래처명 동적 표기(가공품 그룹이 없으면 괄호 생략). 사유:
+ *                가공품 외 거래처가 제작품을 가공품 제작처로 직배송하고, 거기서 조립해
+ *                모듈 단위로 받는다.
+ * 파생값이라 구매사유를 고치면 오버라이드 전까지 함께 따라온다. 사용자가 비고를 직접
+ * 수정하면 그 텍스트가 그대로 최종값이다(지움 포함 — 기존 오버라이드 의미 유지).
  */
 export function defaultNoteOf(
   unit: OrderUnit,
   vendorClass: string,
   groups: readonly VendorGroup[],
 ): string {
-  if (vendorClass === PROCESSED_CLASS) return '';
+  const reason = unit.purchaseReason.trim();
+  if (vendorClass === PROCESSED_CLASS) return reason;
   const hasProcessed = groups.some((g) => g.vendorClass === PROCESSED_CLASS);
   const name = hasProcessed ? effectiveVendorOf(unit, PROCESSED_CLASS)?.name : undefined;
-  return name ? `가공품 거래처(${name}) 직배송` : '가공품 거래처 직배송';
+  const message = name ? `가공품 거래처(${name}) 직배송` : '가공품 거래처 직배송';
+  return [reason, message].filter(Boolean).join(' ');
 }
 
 // ── 합계 ─────────────────────────────────────────────────────────────────────
