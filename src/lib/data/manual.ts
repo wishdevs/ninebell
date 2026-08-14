@@ -67,6 +67,7 @@ export const AGENT_MANUAL_SECTIONS: ManualSectionDef[] = [
     ],
   },
   {
+    // 전 항목 디버그 전용(DEBUG_ONLY_AGENT_IDS) — 일반 모드에선 분류째 숨겨진다(2026-08-14).
     label: '구매팀',
     items: [
       { id: 'item-bulk-register', name: '품목일괄등록' },

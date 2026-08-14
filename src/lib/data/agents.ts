@@ -243,8 +243,17 @@ export const DEBUG_ONLY_WORKFLOW_IDS: ReadonlySet<string> = new Set([]);
  * · `tax-invoice` — 세금계산서. 화면 흐름만 확인하는 **시뮬레이션**이고 실 옴니솔 조회·저장이
  *   아직 없다(workflow_id=null). 완성된 자동화로 오해되지 않게 일반 모드에서 감춘다
  *   (사용자 지정 2026-08-12). 자동화가 붙어 정식 공개할 때 이 한 줄을 지운다.
+ * · 구매팀 그룹 전체(`purchase-order`·`item-bulk-register`·`purchase-order-demo`) — 구축 중
+ *   (구매발주 Phase A: 계획서까지, 실 발주 저장 없음)이라 일반 모드에서 감춘다(사용자 지정
+ *   2026-08-14). 그룹 카드·메뉴얼 '구매팀' 분류는 소속 에이전트가 전부 걸러지면 함께
+ *   사라진다. 정식 공개할 때 이 줄들을 지운다.
  */
-export const DEBUG_ONLY_AGENT_IDS: ReadonlySet<string> = new Set(['tax-invoice']);
+export const DEBUG_ONLY_AGENT_IDS: ReadonlySet<string> = new Set([
+  'tax-invoice',
+  'purchase-order',
+  'item-bulk-register',
+  'purchase-order-demo',
+]);
 
 /** 일반 모드에서 감출 대상인지 — 목록 필터와 상세 URL 게이트가 함께 쓰는 단일 판정. */
 export function isDebugOnlyAgent(agent: { id: string; workflowId?: string }): boolean {
