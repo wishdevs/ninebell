@@ -62,7 +62,7 @@ docker build -f infra/aws/docker/front.Dockerfile \
   -t ${FRONT_REPO}:latest .
 docker push ${FRONT_REPO}:latest
 
-# ⑤ DB 마이그레이션 (1회) — 아래 "마이그레이션" 참조
+# ⑤ DB 마이그레이션 — 별도 실행 불필요(컨테이너 기동 시 자동, 아래 "마이그레이션" 참조)
 
 # ⑥ 새 이미지로 서비스 롤아웃
 aws ecs update-service --cluster ninebell-dashboard-test --service api   --force-new-deployment --region ap-northeast-2
@@ -72,17 +72,34 @@ aws ecs update-service --cluster ninebell-dashboard-test --service front --force
 접속: `terraform output front_url`.
 
 ## 마이그레이션 (alembic)
-서비스가 아니라 **1회성 태스크**로 실행(권장):
+
+**자동이다 — 배포 시 할 일 없음.** `backend/docker-entrypoint.sh` 가 컨테이너 PID 1 로 돌며
+`alembic upgrade head` 를 마친 뒤 CMD(uvicorn)를 exec 한다. 온프렘 이미지와 같은 스크립트를
+공유한다(2026-07-29 `bab95a1` — 그전엔 AWS 만 수동이라 미적용 상태로 부팅해 장애가 났다).
+
+확인은 로그로 한다:
 ```bash
-# api 태스크 정의로 command 오버라이드해 1회 실행
+aws --profile ax-prod logs tail /ecs/ninebell-dashboard-test/api --since 30m --format short \
+  | grep -i "alembic\|Application startup"
+```
+`Running upgrade …` 뒤에 `Application startup complete` 가 보이면 정상이다.
+
+⚠ `alembic stamp` 는 돌리지 말 것 — `DEV_CREATE_ALL=1`(현재 0)로 테이블만 만들어져
+`alembic_version` 이 비었던 **초기 부트스트랩 1회용**이다. 지금 stamp 하면 리비전이 어긋나
+이후 마이그레이션이 조용히 건너뛰어진다.
+
+마이그레이션이 실패하면 `set -e` 로 앱이 뜨지 않고 ECS 가 재시작을 반복한다
+(`aws ecs wait services-stable` 타임아웃으로 드러남). 위 로그에서 실패한 리비전을 먼저 본다.
+
+수동 실행이 필요한 예외 상황(복구·검증)에만:
+```bash
 aws ecs run-task --cluster ninebell-dashboard-test \
   --task-definition ninebell-dashboard-test-api --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[<public-subnet-id>],securityGroups=[<api-sg-id>],assignPublicIp=ENABLED}" \
-  --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
+  --overrides '{"containerOverrides":[{"name":"api","command":["alembic","current"]}]}' \
   --region ap-northeast-2
 ```
-서브넷/보안그룹 ID 는 콘솔 또는 `terraform state show` 로 확인. (부트스트랩 admin/시드가 startup 에서 도는지
-`app/main.py` 확인 — 안 돌면 별도 시드 태스크 필요.)
+(엔트리포인트가 이미 upgrade 를 돌리므로 `command` 로는 `alembic current` 같은 조회만 쓴다.)
 
 ## 확인
 ```bash

@@ -11,15 +11,21 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, latency
 from nbkit.omnisol.errors import MenuError
 from nbkit.omnisol.menu_schemas import MenuSchema
+from nbkit.omnisol.modals import watch_notice_popup
 
 logger = logging.getLogger("nbkit.omnisol.navigator")
 
 MENU_TIMEOUT_MS = 25_000
+# 그리드 출현 되먹임의 평시 기준선(ms) — goto(domcontentloaded) 반환 후 그리드 로드까지.
+# 이보다 빠르면 비율 하한 1.0(빠름 신호)이라 기준선을 약간 후하게 잡아도 평시 factor 는
+# 1.0 에 붙는다(과소 추정만이 평시 factor 를 헛되이 올린다 — 보수적으로 4s).
+GRID_APPEAR_EXPECTED_MS = 4_000
 
 
 async def navigate_menu(
@@ -45,10 +51,21 @@ async def navigate_menu(
     await page.goto(
         f"{base.rstrip('/')}{menu_path}", wait_until="domcontentloaded", timeout=timeout_ms
     )
-    for _ in range(tries):
+    # 적응형 상한 — ERP 지연 시 폴 간격(300ms)은 불변, **회수 상한만** 배율(≤×4)로 확대.
+    t0 = time.monotonic()
+    for _ in range(latency.budget_polls(tries)):
         chk = await page.evaluate(js_lib.MENU_CHECK_JS)
         if int(chk.get("grids", 0)) >= grids_required:
+            # 되먹임 — 그리드 출현 실소요는 매 런 반드시 지나는 좋은 지연 관측점.
+            latency.record(GRID_APPEAR_EXPECTED_MS, (time.monotonic() - t0) * 1_000)
             logger.info("%s 진입 성공(grids=%s)", label, chk.get("grids"))
+            # 공지팝업 재출현 방어(사용자 실측 2026-07-23: 결의서작성 진입 후 또 뜸) — 화면
+            # 전환마다 재출현할 수 있어 관찰창을 둔다. 다만 **차단형으로 기다리지 않는다**:
+            # 실측(2026-07-28) 이 관찰창 2.5s 가 진입 시간에 통째로 얹혔는데, 재출현이 없는
+            # 경우가 대부분이라 매 실행 ~2.8s 를 헛대기했다. 배경으로 돌리면 재출현 시에는
+            # 그대로 닫히고, 안 뜨면 아무 비용이 없다. 실제 클릭 직전 JIT 확인(피커·탭 열기)은
+            # 차단형으로 남아 있어 레이스 방어는 불변.
+            watch_notice_popup(page, appear_cap_ms=2_500)
             return
         if chk.get("notFound"):
             raise MenuError(

@@ -10,7 +10,8 @@ import { MetaChip } from '@/components/ui/meta-chip';
 import { Spinner } from '@/components/ui/spinner';
 import { errorMessage } from '@/lib/api/client';
 import { fetchFavorites, removeFavorite, type Favorite } from '@/lib/api/me-codes';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode, filterVisibleAgents } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentCardHeader } from '@/app/(app)/agents/_components/agent-card';
 import { cn } from '@/lib/utils';
@@ -27,6 +28,7 @@ const MAX_HOME_FAVORITES = 3;
  */
 export function HomeFavoriteAgents() {
   const agents = useApiResource<Agent[]>('/agents');
+  const debugMode = useDebugMode();
   // 즐겨찾기는 해제(삭제) 변이가 필요해 로컬 상태로 관리한다. null = 로딩 중.
   const [favorites, setFavorites] = useState<Favorite[] | null>(null);
 
@@ -60,8 +62,13 @@ export function HomeFavoriteAgents() {
 
   const loading = favorites === null || agents.status === 'loading';
 
-  // 즐겨찾기(sortOrder 순) ↔ 에이전트 정의 조인 — 정의가 사라진 즐겨찾기는 숨긴다.
-  const agentById = new Map((agents.data ?? []).map((a) => [a.id, a] as const));
+  // 즐겨찾기(sortOrder 순) ↔ 에이전트 정의 조인 — 정의가 사라진/숨김 대상 즐겨찾기는 숨긴다.
+  // 디버그 전용 에이전트도 여기서 빠진다(이미 ★ 해둔 사용자에게 홈으로 새어나오지 않게).
+  const agentById = new Map(
+    filterByDebugMode(filterVisibleAgents(agents.data ?? []), debugMode).map(
+      (a) => [a.id, a] as const,
+    ),
+  );
   const matched = (favorites ?? [])
     .filter((f) => agentById.has(f.code))
     .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -127,28 +134,30 @@ export function HomeFavoriteAgents() {
  */
 function FavoriteAgentCard({ agent, onUnfavorite }: { agent: Agent; onUnfavorite: () => void }) {
   return (
-    <div className="card-interactive border-border bg-surface group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
-      <AgentCardHeader
-        agent={agent}
-        action={
-          <button
-            type="button"
-            onClick={onUnfavorite}
-            aria-pressed
-            aria-label="자주쓰는 해제"
-            title="자주쓰는 해제"
-            className={cn(
-              'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-              'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
-            )}
-          >
-            <RiStarFill size={15} aria-hidden />
-          </button>
-        }
-      />
+    <div className="card-lift grid min-w-0">
+      <div className="card-interactive border-border bg-surface group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border p-5 shadow-[var(--shadow-card)] transition-colors">
+        <AgentCardHeader
+          agent={agent}
+          action={
+            <button
+              type="button"
+              onClick={onUnfavorite}
+              aria-pressed
+              aria-label="자주쓰는 해제"
+              title="자주쓰는 해제"
+              className={cn(
+                'relative z-10 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+                'text-warning hover:bg-warning/10 focus-visible:ring-accent/40 outline-none focus-visible:ring-2',
+              )}
+            >
+              <RiStarFill size={15} aria-hidden />
+            </button>
+          }
+        />
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <MetaChip>{agent.targetSystem}</MetaChip>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MetaChip>{agent.targetSystem}</MetaChip>
+        </div>
       </div>
     </div>
   );

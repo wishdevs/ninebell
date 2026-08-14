@@ -6,14 +6,23 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 ARG NEXT_PUBLIC_API_BASE
-ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE \
+# 배포 환경 표식(빌드 타임 인라인) — AWS 테스트 클러스터는 deploy.yml 이 development 주입
+# → devOnly 메뉴·AI 모델 스위처 노출. 미주입(온프렘 등)이면 프로덕션 동작.
+ARG NEXT_PUBLIC_APP_ENV
+ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV \
+    NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE \
     NEXT_TELEMETRY_DISABLED=1
 
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 # pnpm 11 은 빌드 스크립트 있는 의존성(sharp 등)을 기본 차단하고 CI 에서 에러(ERR_PNPM_IGNORED_BUILDS).
-# 설치는 완료되므로(|| true) 뒤이어 필요한 것만 명시적으로 rebuild. rebuild 실패 시 빌드 중단(안전).
-RUN pnpm install --frozen-lockfile || true
+# 설치는 완료되므로 실패코드는 허용하되, 레지스트리 타임아웃 같은 **진짜 실패**까지 삼키면
+# next build 에서 'not found'로 늦게 터진다(2026-07-29 GH Actions 실측: next tarball 타임아웃).
+# → fetch 재시도·타임아웃 완화 + 설치 후 next 실재 검증(없으면 1회 재설치, 그래도 없으면 중단).
+RUN pnpm config set fetch-retries 5 && pnpm config set fetch-timeout 300000 \
+ && (pnpm install --frozen-lockfile || true) \
+ && ([ -e node_modules/.bin/next ] || pnpm install --frozen-lockfile || true) \
+ && [ -e node_modules/.bin/next ]
 RUN pnpm rebuild sharp unrs-resolver
 COPY . .
 # pnpm build 는 실행 전 deps 재검증(verify-deps-before-run)에서 또 ignored-builds 로 막힘 →

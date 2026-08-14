@@ -1,7 +1,7 @@
 """expense_card.chat_form 통합 단위테스트 — wait_hitl 멀티턴 루프 + 도구 디스패치(모킹).
 
 실 브라우저/실 Gemini 없이: page 는 FakePage(identity 라우팅), Gemini 판단은
-`gemini_chat_decide` 를 스크립트 함수로 monkeypatch. app.live.hitl.resolve_hitl 로 사용자
+`chat_decide`(LLM 디스패처)를 스크립트 함수로 monkeypatch. app.live.hitl.resolve_hitl 로 사용자
 메시지/‘선택 완료’를 주입한다. 저장(F7) 액션이 없음을 mouse.click 미발생으로 확인한다.
 """
 
@@ -16,6 +16,7 @@ import pytest
 import app.agents.expense_card.chat_form as CF
 import app.agents.expense_card.tools as T
 from app.live.hitl import resolve_hitl
+from nbkit.omnisol import js_lib
 
 
 class _FakeMouse:
@@ -41,13 +42,22 @@ class FakePage:
         return b"\xff\xd8\xff\xe0jpegbytes"
 
 
+def _modal_open(script: Any, _arg: Any = None) -> Any:
+    """카드상세 모달만 떠 있는 최소 화면 — 팝업 1개(모달 자체가 .k-window), 로딩 없음."""
+    if script is js_lib.POPUP_COUNT_JS:
+        return 1
+    if script is CF.CARD_FORM_SCHEMA_JS:
+        return {"ok": True, "pickers": [], "drops": [], "inputs": [], "root": "modal"}
+    return True
+
+
 def _fake_settings(key: str) -> SimpleNamespace:
     return SimpleNamespace(gemini_api_key=key, gemini_model="m", gemini_base_url="http://b")
 
 
 async def test_chat_form_errors_without_gemini_key(monkeypatch):
     monkeypatch.setattr(CF, "get_settings", lambda: _fake_settings(""))
-    page = FakePage(lambda s, a: True)  # MODAL_IDLE → True
+    page = FakePage(_modal_open)  # 모달 도착(팝업 1개) + MODAL_IDLE
     events: asyncio.Queue = asyncio.Queue()
     out = await CF.make_chat_form_node()({"page": page, "events": events})
     assert "error" in out
@@ -68,10 +78,12 @@ async def test_chat_form_loop_dispatches_fill_then_completes(monkeypatch):
     async def fake_decide(*_a: Any, **_k: Any):
         return next(scripted)
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", fake_decide)
+    monkeypatch.setattr(CF, "chat_decide", fake_decide)
 
     def handler(script, arg):  # noqa: ANN001
-        if script is CF.MODAL_IDLE_JS:
+        if script is js_lib.POPUP_COUNT_JS:
+            return 1  # 카드상세 모달 자체가 .k-window — 도착 확인의 근거
+        if script is T.MODAL_IDLE_JS:
             return True
         if script is CF.CARD_FORM_SCHEMA_JS:
             return {"ok": True, "pickers": [], "drops": [], "inputs": []}
@@ -129,10 +141,12 @@ async def test_chat_form_ignores_empty_then_completes(monkeypatch, bad_message):
     async def fake_decide(*_a: Any, **_k: Any):  # 빈 입력은 Gemini 까지 가지 않아야 함
         raise AssertionError("빈 메시지에 Gemini 를 호출하면 안 됨")
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", fake_decide)
+    monkeypatch.setattr(CF, "chat_decide", fake_decide)
 
     def handler(script, arg):  # noqa: ANN001
-        if script is CF.MODAL_IDLE_JS:
+        if script is js_lib.POPUP_COUNT_JS:
+            return 1  # 카드상세 모달 자체가 .k-window — 도착 확인의 근거
+        if script is T.MODAL_IDLE_JS:
             return True
         if script is CF.CARD_FORM_SCHEMA_JS:
             return {"ok": True, "pickers": [], "drops": [], "inputs": []}
@@ -170,21 +184,21 @@ async def test_chat_form_auto_replay_applies_selections_without_gemini(monkeypat
 
     calls: list[tuple] = []
 
-    async def fake_fill_text(page: Any, field: str, value: str) -> str:
+    async def fake_fill_text(page: Any, field: str, value: str) -> T.Verdict:
         calls.append(("fill_text", field, value))
-        return f"ok: {field}={value}"
+        return T.Verdict(True, f"ok: {field}={value}")
 
-    async def fake_fill_search(page: Any, field: str, query: str, value: str) -> str:
+    async def fake_fill_search(page: Any, field: str, query: str, value: str) -> T.Verdict:
         calls.append(("fill_search", field, value))
-        return f"ok: {field}={value}"
+        return T.Verdict(True, f"ok: {field}={value}")
 
-    async def fake_budget(page: Any, use_item: str, division: str):
+    async def fake_budget(page: Any, use_item: str, division: str) -> T.Verdict:
         calls.append(("set_expense", use_item, division))
-        return ("ok", f"예산단위 '{use_item}' 적용")
+        return T.Verdict(True, f"예산단위 '{use_item}' 적용")
 
-    async def fake_account(page: Any):
+    async def fake_account(page: Any) -> T.Verdict:
         calls.append(("set_account", ""))
-        return ("ok", "계정 자동 선택")
+        return T.Verdict(True, "계정 자동 선택")
 
     monkeypatch.setattr(CF, "do_fill_text", fake_fill_text)
     monkeypatch.setattr(CF, "do_fill_search", fake_fill_search)
@@ -195,9 +209,9 @@ async def test_chat_form_auto_replay_applies_selections_without_gemini(monkeypat
     async def no_gemini(*_a: Any, **_k: Any):
         raise AssertionError("AUTO 재생에서 Gemini 를 호출하면 안 됨")
 
-    monkeypatch.setattr(CF, "gemini_chat_decide", no_gemini)
+    monkeypatch.setattr(CF, "chat_decide", no_gemini)
 
-    page = FakePage(lambda s, a: True)  # MODAL_IDLE 등 True
+    page = FakePage(_modal_open)  # 모달 도착(팝업 1개) + MODAL_IDLE
     events: asyncio.Queue = asyncio.Queue()
     template = [
         {"tool": "set_expense", "field": "예산단위", "value": "야근식대", "query": "제조"},
@@ -229,3 +243,95 @@ async def test_chat_form_auto_replay_applies_selections_without_gemini(monkeypat
     assert any("chat" in f and f["chat"].get("note") == "action" for f in frames)
     # 저장(F7)·좌표 클릭 없음(모킹된 도구는 page.mouse 미사용).
     assert page.mouse.clicks == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 확인 커널 계약 — 모달 도착(하드) / 반영 실패(하드) / 확인 불가(warn 후 진행)
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_chat_form_hard_fails_when_modal_not_arrived(monkeypatch):
+    """모달이 안 떴는데 진행하면 배경 결의서입력 화면의 스키마를 학습하고 그 화면을 조작한다."""
+    monkeypatch.setattr(CF, "get_settings", lambda: _fake_settings("x"))
+
+    async def no_gemini(*_a: Any, **_k: Any):
+        raise AssertionError("모달 도착 전에는 Gemini 를 부르면 안 됨")
+
+    monkeypatch.setattr(CF, "chat_decide", no_gemini)
+
+    def handler(script, arg):  # noqa: ANN001
+        if script is js_lib.POPUP_COUNT_JS:
+            return 0  # 보이는 k-window 가 없다 = 카드상세 모달 미도착
+        if script is CF.CARD_FORM_SCHEMA_JS:
+            raise AssertionError("도착 확인 전에 스키마를 학습하면 안 됨")
+        return True
+
+    page = FakePage(handler)
+    events: asyncio.Queue = asyncio.Queue()
+    out = await CF.make_chat_form_node()({"page": page, "events": events})
+    assert "error" in out and "모달" in out["error"]
+
+    frames: list[dict] = []
+    while not events.empty():
+        frames.append(events.get_nowait())
+    assert any(f.get("step") == "chat_form" and f.get("status") == "failed" for f in frames)
+
+
+async def _run_one_fill(monkeypatch, verdict: T.Verdict) -> tuple[dict, list[dict]]:
+    """fill_text 한 번 → '선택 완료' 시나리오를 돌리고 (결과, 프레임) 을 돌려준다."""
+    monkeypatch.setattr(CF, "get_settings", lambda: _fake_settings("x"))
+    scripted = iter([("fill_text", {"field": "적요", "value": "메모"}), ("turn_done", {"message": "끝"})])
+
+    async def fake_decide(*_a: Any, **_k: Any):
+        return next(scripted)
+
+    async def fake_fill_text(page: Any, field: str, value: str) -> T.Verdict:
+        return verdict
+
+    monkeypatch.setattr(CF, "chat_decide", fake_decide)
+    monkeypatch.setattr(CF, "do_fill_text", fake_fill_text)
+
+    page = FakePage(_modal_open)
+    events: asyncio.Queue = asyncio.Queue()
+    frames: list[dict] = []
+    sent = {"done": False}
+
+    async def drain() -> None:
+        while True:
+            ev = await events.get()
+            frames.append(ev)
+            if "hitl" in ev and not sent["done"]:
+                did = ev["hitl"]["id"]
+                resolve_hitl(did, {"message": "적요 메모"})
+                resolve_hitl(did, {"done": True})
+                sent["done"] = True
+
+    drain_task = asyncio.create_task(drain())
+    try:
+        out = await asyncio.wait_for(
+            CF.make_chat_form_node(timeout_s=5)({"page": page, "events": events}), timeout=5
+        )
+    finally:
+        drain_task.cancel()
+    while not events.empty():
+        frames.append(events.get_nowait())
+    return out, frames
+
+
+async def test_chat_form_does_not_record_selection_when_not_reflected(monkeypatch):
+    """반영 실패(하드)는 selections 에 쌓이지 않는다 — 화면에 없는 값이 템플릿으로 영속되던 자리."""
+    out, _frames = await _run_one_fill(
+        monkeypatch, T.Verdict(False, "fail(미검증): 입력 '적요' 값이 반영되지 않음", status="fail")
+    )
+    assert "result" not in out
+    assert "error" in out and "0필드" in out["error"]
+
+
+async def test_chat_form_marks_selection_unverified_and_logs_warn(monkeypatch):
+    """확인 불가(리더가 못 읽음)는 진행하되 verified=False + warn 로그로 노출한다."""
+    out, frames = await _run_one_fill(
+        monkeypatch,
+        T.Verdict(True, "ok(미검증): 입력 '적요' = '메모' (반영 미확인)", warn="입력 '적요' 확인 불가"),
+    )
+    sel = next(s for s in out["result"]["selections"] if s["field"] == "적요")
+    assert sel.get("verified") is False  # '화면에 붙었는지 모름'을 템플릿에 남긴다
+    warns = [f["log"] for f in frames if "log" in f and f.get("level") == "warn"]
+    assert any("미확인" in m for m in warns)

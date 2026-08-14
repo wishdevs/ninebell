@@ -16,12 +16,19 @@ ninebell-bak `erp/graph.py` 의 `run_graph` 를 워크플로우 무관 러너로
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import os
 import time
+import traceback
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from nbkit.browser.popups import install_notice_autoclose
+
+from app.config import get_settings
+
+from . import run_budget
 from .screencast import screencast_pump
 
 logger = logging.getLogger(__name__)
@@ -73,6 +80,11 @@ BrowserFactory = Callable[[], Awaitable[Any]]
 # 셀렉터가 화면 밖으로 밀릴 수 있어, 탐색 단계에서 검증된 크기(1440×900)로 고정한다.
 LIVE_VIEWPORT: dict[str, int] = {"width": 1440, "height": 900}
 
+# 자식 팝업(전자결재 결제창) 전용 뷰포트 — 결제 전표는 세로로 긴 문서라 부모(900) 높이로는
+# 아래가 잘린다. 세로를 키워 한 프레임에 더 많은 폼이 렌더·캡처되게 한다(FE 는 고정 카드에
+# object-contain 으로 얹어 카드 너비와 무관하게 전체를 보여준다).
+CHILD_VIEWPORT: dict[str, int] = {"width": 1440, "height": 1120}
+
 # ── 세션 워밍(storage_state 캐시) — Phase 2b 속도 최적화 ─────────────────────────
 # 인증 쿠키(세션 스코프)를 userid 별로 **RAM 에만** 보관한다(디스크 저장 금지 — 세션 토큰).
 # 프로브 실측(2026-07-04): 같은 상태로 컨텍스트 3개 동시 사용해도 ERP 킥 없음, 웜 진입 ~4s
@@ -120,6 +132,71 @@ async def _save_state(
             )
     except Exception:  # noqa: BLE001 — 캐시 갱신 실패가 런 결과를 바꿔선 안 된다.
         logger.debug("storage_state 캐시 갱신 실패(무시)", exc_info=True)
+
+
+# ── 런 전역 활동 시간 예산(워치독) ───────────────────────────────────────────────
+# 체크 간격(초) — 테스트가 monkeypatch 로 단축한다(루프마다 모듈 전역을 다시 읽음).
+_BUDGET_CHECK_INTERVAL_S = 5.0
+# 경고 임계 — 예산의 80% 소진 시 1회 warn(러너 로그 + 런 로그).
+_BUDGET_WARN_RATIO = 0.8
+
+
+async def _budget_watchdog(
+    run_id: str,
+    budget_s: float,
+    events: asyncio.Queue,
+    graph_task: asyncio.Task,
+    raw_page: Any,
+) -> None:
+    """활동 시간 예산 워치독 — 주기 체크로 80% 경고 1회, 초과 시 그래프 태스크를 취소한다.
+
+    예산은 HITL 대기 시간을 제외한 활동 시간(run_budget — hitl 이 대기 구간을 pause).
+    초과 시 신규 종료 경로를 만들지 않는다: 그래프 태스크 cancel 후 `_final` error 프레임을
+    큐에 넣으면 run_workflow 본류가 error 를 방출하고 finally 에서 러너·캐스트·브라우저를
+    정리한다(그래프 예외·사용자 취소와 동일한 teardown). 세션 펌프는 error 프레임으로
+    failed + 사유를 확정하고 on_terminal 기존 규약대로 영속한다.
+
+    ⚠ 한계: 이 cancel 은 사용자 취소와 동일하게 저장 확정 구간 한가운데를 자를 수 있다
+    (반저장 위험 — run_budget 모듈 docstring 참고).
+    """
+    warned = False
+    while True:
+        await asyncio.sleep(_BUDGET_CHECK_INTERVAL_S)
+        elapsed = run_budget.active_elapsed(run_id)
+        if not warned and elapsed >= budget_s * _BUDGET_WARN_RATIO:
+            warned = True
+            logger.warning(
+                "run_workflow: 런 시간 예산 80%% 소진 run_id=%s (활동 %.0fs/한도 %.0fs)",
+                run_id,
+                elapsed,
+                budget_s,
+            )
+            await events.put(
+                {
+                    "log": f"런 시간 예산 80% 소진(활동 {elapsed / 60:.1f}분/한도 {budget_s / 60:.0f}분)",
+                    "level": "warn",
+                }
+            )
+        if elapsed > budget_s:
+            reason = (
+                f"런 시간 예산 초과(활동 {elapsed / 60:.1f}분/한도 {budget_s / 60:.0f}분) — 자동 중단"
+            )
+            logger.error("run_workflow: %s run_id=%s", reason, run_id)
+            await events.put({"log": reason, "level": "error"})
+            # best-effort 마지막 화면 1장 — 어느 화면에서 멈췄는지 남긴다(실패해도 종료 계속).
+            try:
+                if raw_page is not None:
+                    shot = await asyncio.wait_for(
+                        raw_page.screenshot(type="jpeg", quality=60), timeout=3
+                    )
+                    await events.put(
+                        {"screenshot": "data:image/jpeg;base64," + base64.b64encode(shot).decode()}
+                    )
+            except Exception:  # noqa: BLE001 — 스크린샷 실패가 중단을 막아선 안 된다.
+                logger.debug("예산 초과 스크린샷 실패(무시)", exc_info=True)
+            graph_task.cancel()
+            await events.put({"_final": {"error": reason}})
+            return
 
 
 async def run_workflow(
@@ -170,6 +247,13 @@ async def run_workflow(
                 page = None
 
         raw_page = page  # storage_state 저장은 원본 page.context 로(프록시 우회).
+        # 공지 팝업 상시 무시 — 도착하는 즉시 닫는다(웜/콜드 양 경로 공통). 공지 마커를 가진
+        # 창만 대상이라 결제창(EAP)은 영향이 없고, 공지는 화면 전환마다 다시 뜨므로 로그인
+        # 구간(PopupWatcher)이 아니라 런 내내 걸어둔다.
+        if raw_page is not None:
+            ctx = getattr(raw_page, "context", None)
+            if ctx is not None:
+                install_notice_autoclose(ctx)
         # 대기 배율 프록시. env(CARD_DELAY_SCALE) 우선, 없으면 per-run delay_scale(card-collect=0.15).
         page = _maybe_scale_page(page, delay_scale)
 
@@ -191,18 +275,90 @@ async def run_workflow(
                 final = await graph.ainvoke(state)
                 await events.put({"_final": final or {}})
             except Exception:
-                logger.exception("workflow run failed")
+                # run_id 를 함께 남겨 서버 로그 ↔ AgentRun 상관 조회가 가능하게 한다.
+                logger.exception("workflow run failed run_id=%s", run_id)
+                # 예외 스택 꼬리를 런 로그(error)로도 방출 — 서버 로그 없이도 실패 원인을
+                # 몇 주 뒤 재구성할 수 있게 한다. 최종 error 프레임 계약은 불변(log 프레임 추가만).
+                tail = "\n".join(traceback.format_exc().splitlines()[-15:])
+                await events.put({"log": f"예외 스택(마지막 15줄):\n{tail}", "level": "error"})
                 await events.put({"_final": {"error": "실행 중 오류(워크플로우/브라우저)."}})
 
         task = asyncio.create_task(runner())
+        # 런 전역 활동 시간 예산 — budget=0(비활성) 또는 run_id 없음(스크립트/익명 — 추적 키
+        # 부재)이면 미기동(현행 동작 유지). HITL 대기 구간은 hitl 의 예산 일시정지 큐가 제외한다.
+        budget_s = get_settings().run_active_budget_s
+        budget_task: asyncio.Task | None = None
+        if budget_s > 0 and run_id:
+            run_budget.start(run_id)
+            budget_task = asyncio.create_task(
+                _budget_watchdog(run_id, float(budget_s), events, task, raw_page)
+            )
         cast: asyncio.Task | None = None
+        # 자식 창(팝업) 스크린캐스트 태스크들 — 진짜 두 번째 Playwright Page(예: SSO 교차출처
+        # 전자결재 창)가 열리면 창별로 하나씩 생기고, 종료 시 부모 cast 와 함께 취소한다.
+        child_casts: list[asyncio.Task] = []
+        # context.on("page") 를 등록한 컨텍스트(teardown 에서 리스너 제거용). None = 미등록.
+        page_listener_ctx: Any | None = None
         if screencast and page is not None:
             cast = asyncio.create_task(screencast_pump(page, events))
+
+            async def _cast_child(pg: Any) -> None:
+                # 자식 팝업(전자결재 결제창 등)은 window.open 고정 크기라 부모 컨텍스트 뷰포트를
+                # 못 물려받는다 → 결제 폼이 창보다 넓으면 캐스트가 뜨기도 전에 오른쪽이 잘린다.
+                # 부모와 같은 크기로 강제 리사이즈해 폼 전체가 렌더·캡처되게 한다(FE 는 실제 비율로 표시).
+                try:
+                    await pg.set_viewport_size(CHILD_VIEWPORT)
+                except Exception:
+                    logger.debug("자식 페이지 뷰포트 강제 실패(무시)", exc_info=True)
+                await screencast_pump(pg, events, window="child")
+
+            def _on_new_page(new_page: Any) -> None:
+                # context 에 새 Page 가 생기면(팝업/window.open) 자식 스크린캐스트를 시작하고,
+                # 그 페이지가 닫히면 펌프를 취소한 뒤 closed 전이 프레임을 방출한다(FE=부모창 복귀).
+                child_cast = asyncio.create_task(_cast_child(new_page))
+                child_casts.append(child_cast)
+
+                def _on_child_close(_evt: Any = None) -> None:
+                    child_cast.cancel()
+                    try:
+                        events.put_nowait({"window": "child", "closed": True})
+                    except Exception:
+                        pass
+
+                try:
+                    new_page.on("close", _on_child_close)
+                except Exception:
+                    logger.debug("자식 페이지 close 핸들러 등록 실패(무시)", exc_info=True)
+
+            # raw_page(프록시 우회)의 실제 context 에 등록 — 초기 페이지는 이미 생성돼 이 핸들러
+            # 이전이라 트리거되지 않고, 이후 열리는 팝업만 잡는다.
+            if raw_page is not None:
+                try:
+                    raw_page.context.on("page", _on_new_page)
+                    page_listener_ctx = raw_page.context
+                except Exception:
+                    logger.debug("context.on('page') 등록 실패(무시)", exc_info=True)
         try:
             while True:
                 ev = await events.get()
                 if "_final" in ev:
                     final = ev["_final"] or {}
+                    # 종료 후에도 라이브 화면을 약 2초 더 흘린다(사용자 요청 2026-07-30) —
+                    # 마지막 프레임이 로딩 중 화면에서 얼어붙으면 '아직 처리 중'처럼 보인다.
+                    # 캐스트 펌프는 아직 살아 있으므로(finally 에서 취소) 그동안 도착하는
+                    # 프레임·이벤트를 그대로 전달한 뒤 최종 result/error 를 내보낸다.
+                    if screencast and cast is not None:
+                        tail_deadline = time.monotonic() + 2.0
+                        while True:
+                            remain = tail_deadline - time.monotonic()
+                            if remain <= 0:
+                                break
+                            try:
+                                tail_ev = await asyncio.wait_for(events.get(), timeout=remain)
+                            except asyncio.TimeoutError:
+                                break
+                            if "_final" not in tail_ev:
+                                yield tail_ev
                     if final.get("error"):
                         yield {"error": final["error"]}
                     elif "result" in final:
@@ -212,8 +368,21 @@ async def run_workflow(
                 yield ev
         finally:
             # 클라 끊김/종료 시 러너·캐스트를 즉시 취소하고 브라우저를 닫아 메모리를 반환한다.
+            # 새 팝업 리스너를 먼저 제거해, teardown 중(browser.close 전) 열리는 팝업이 또 다른
+            # 자식 펌프를 만들지 않게 한다(늦은 펌프 유출 방지).
+            if page_listener_ctx is not None:
+                try:
+                    page_listener_ctx.remove_listener("page", _on_new_page)
+                except Exception:
+                    logger.debug("context.remove_listener('page') 실패(무시)", exc_info=True)
+            # 예산 워치독·추적 정리 — 종료·취소·예외 모든 경로에서 clear 를 보장한다.
+            if budget_task is not None:
+                budget_task.cancel()
+            run_budget.clear(run_id)
             if cast is not None:
                 cast.cancel()
+            for child_cast in child_casts:
+                child_cast.cancel()
             task.cancel()
             try:
                 await task
@@ -228,3 +397,7 @@ async def run_workflow(
                     await browser.close()
                 except Exception:
                     logger.debug("browser.close 예외 무시", exc_info=True)
+            # browser.close 전후로 열렸을 수 있는 자식 펌프까지 확실히 취소 — 초기 스냅샷 이후
+            # 추가된 late 펌프(teardown 중 팝업)를 fresh 스냅샷으로 다시 취소한다.
+            for child_cast in list(child_casts):
+                child_cast.cancel()

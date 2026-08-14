@@ -5,14 +5,21 @@
 를 읽는다). 워크플로우 노드는 `state["events"]`(asyncio.Queue)로 이 헬퍼를 통해 방출한다.
 
 프레임 계약(고정):
-    {"step": str, "status": "running"|"done"|"failed", "ms"?: int}
+    {"step": str, "status": "running"|"done"|"failed", "ms"?: int, "progress"?: {"done": int, "total": int}}
     {"log": str, "level": "info"|"ok"|"error"|"warn"}
-    {"screenshot": "data:image/jpeg;base64,..."}          # 비버퍼(최신 1장)
+    {"screenshot": "data:image/jpeg;base64,...", "window"?: "parent"|"child"}  # 비버퍼(창별 최신 1장)
+    {"window": "child", "closed": true}                   # 자식 창 닫힘 전이(버퍼/커서 대상 — 재생 가능)
     {"hitl": {"id","kind","title","prompt","options"?}}
     {"chat": {"id","role","content","streaming"?,"done"?,"note"?}}
     {"transactions": {"title","columns","rows"}}
     {"result": str}                                        # 종료(성공)
     {"error": str}                                         # 종료(실패)
+
+멀티 창(진짜 두 번째 브라우저 창 — 예: SSO 교차출처 전자결재 팝업):
+    screenshot 프레임의 선택 키 ``window`` 로 어느 창인지 구분한다. 키가 없으면 'parent'(하위 호환 —
+    기존 단일 페이지 프레임은 전부 window 키 없이 parent 로 취급). 자식 스크린캐스트는
+    ``"window": "child"`` 를 실어 오고, 자식 창이 닫히면 ``{"window":"child","closed":true}`` 전이
+    프레임이 (스크린샷과 달리) 버퍼로 재생 가능하게 흘러 늦은 구독자도 닫힘을 알 수 있다.
 """
 
 from __future__ import annotations
@@ -20,10 +27,20 @@ from __future__ import annotations
 import asyncio
 
 
-async def emit_step(events: asyncio.Queue, step: str, status: str, ms: int | None = None) -> None:
+async def emit_step(
+    events: asyncio.Queue,
+    step: str,
+    status: str,
+    ms: int | None = None,
+    *,
+    progress: dict | None = None,
+) -> None:
     ev: dict = {"step": step, "status": status}
     if ms is not None:
         ev["ms"] = ms
+    if progress is not None:
+        # 반복 스텝의 진행 카운트 — 워크플로우 노드에 "done/total" 표시. 예 {"done":2,"total":5}.
+        ev["progress"] = progress
     await events.put(ev)
 
 

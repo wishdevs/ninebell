@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONVariant
@@ -24,7 +24,17 @@ if TYPE_CHECKING:
 class AgentRun(Base):
     __tablename__ = "agent_runs"
     # 로깅 목록은 소유자 스코프 + started_at 최신순 조회가 잦다 → 복합 인덱스로 정렬 스캔 회피.
-    __table_args__ = (Index("ix_agent_runs_user_started", "user_id", "started_at"),)
+    # 전체 뷰(관리자, user_id 필터 없음) 최신순은 started_at 단독 인덱스, 에이전트×상태 필터
+    # 목록/통계는 (agent_id, status, started_at) 복합 인덱스가 받는다(0033 과 동일 정의).
+    # status CHECK 는 실기록 전수(running/succeeded/failed/cancelled + 문서화된 waiting)만 허용.
+    __table_args__ = (
+        Index("ix_agent_runs_user_started", "user_id", "started_at"),
+        Index("ix_agent_runs_started", "started_at"),
+        Index("ix_agent_runs_agent_status_started", "agent_id", "status", "started_at"),
+        CheckConstraint(
+            "status IN ('running','waiting','succeeded','failed','cancelled')", name="status"
+        ),
+    )
 
     # 클라이언트가 만든 런 id(세션 키와 동일). 예: 'run-<hex>'. 64로 경계 여유(이전 40).
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

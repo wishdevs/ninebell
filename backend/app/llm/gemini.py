@@ -58,12 +58,15 @@ class GeminiProvider:
         messages: list[ChatMessage],
         *,
         system=None,
-        temperature=0.7,
+        temperature=None,
         max_output_tokens=8192,
         tools=None,
     ) -> AsyncIterator[ChatChunk]:
         url = f"{self._base}/models/{self._model}:streamGenerateContent"
-        body = self._build_body(messages, system, temperature, max_output_tokens, tools)
+        # None = 프로바이더 기본 — gemini 는 종전 기본 0.7 유지(base 프로토콜 주석 참조).
+        body = self._build_body(
+            messages, system, 0.7 if temperature is None else temperature, max_output_tokens, tools
+        )
         headers = {"x-goog-api-key": self._key, "content-type": "application/json"}
         done_sent = False  # finishReason 으로 이미 done 을 냈으면 마지막 보강 done 을 생략(중복 [DONE] 방지).
         try:
@@ -97,7 +100,7 @@ class GeminiProvider:
                                         "args": fc.get("args") or {},
                                     },
                                 )
-                        if cand.get("finishReason"):
+                        if cand.get("finishReason") and not done_sent:
                             done_sent = True
                             yield ChatChunk(
                                 delta="", done=True, finish_reason=cand["finishReason"]

@@ -20,8 +20,7 @@ import logging
 import re
 from typing import Any
 
-from nbkit.browser.actions import mouse_click
-from nbkit.omnisol import js_lib
+from nbkit.omnisol import js_lib, verify
 from nbkit.omnisol.codepicker import (
     _norm,
     _picker_search,
@@ -32,7 +31,18 @@ from . import js
 
 # 국내/자차에서 확정된 공통 스텝을 재사용(중복 방지) — 금액 예산현황 타이핑·상대계정 부가선택
 # 위젯 등록·딸려온 빈 행 삭제. detail 그리드 조작이 국내와 동일 구조라 그대로 통용된다(2026-07-09).
+# 피커 내부 헬퍼(_open/_select/_fail_close/_close/_search)도 국내의 **하드닝판**을 그대로 쓴다
+# (2026-08-07): 이 파일에 남아 있던 사본은 2026-07-31~08-01 하드닝(검증된 팝업 닫기·오픈/적용
+# reapply·재시도 전 잔존 팝업 정리) **이전** 버전이라, 튕긴 '적용'이 영영 안 붙고 잔존 팝업이
+# 다음 피커 오독·F7 삼킴(팬텀 저장)으로 이어지던 자리다.
 from app.agents.trip_domestic.steps import (  # noqa: E402
+    _close_picker_verified,
+    _fail_close,
+    _open_detail_cell_picker,
+    _poll_rowcount_over,
+    _popup_count,
+    _search_and_pick,
+    _select_and_apply,
     delete_blank_row,
     register_counter_partner,
     type_amount,
@@ -59,6 +69,41 @@ PARTNER_CELL = "PARTNER_NM"
 BUDGET_CELL = "BG_NM"
 PROJECT_CELL = "PJT_NM"
 BFC_PARTNER_CELL = "BFC_PARTNER_NM"
+
+# detail(본문 행) 그리드 인덱스 — 마스터가 0, detail 이 1(프로브 P7 실측).
+DETAIL_GRID_INDEX = 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 확인(verify) 커널 어댑터 — "세팅했다"가 아니라 "값이 반영됐다"를 판정하는 공용 조각
+# ══════════════════════════════════════════════════════════════════════════════
+def _verdict(res: verify.Confirmed, **ok_extra: Any) -> dict:
+    """확인 결과 → 스텝 반환 dict. **불일치는 하드 실패, 확인 불가는 warn 을 얹은 성공**.
+
+    리더가 그리드/행을 못 읽는 것(확인 불가)까지 실패로 올리면 리더 오탐 하나가 멀쩡한 플로우를
+    끊는다 — 대신 warn 을 올려 호출 노드가 "완료"가 아니라 "미확인"으로 노출하게 한다.
+    """
+    if res:
+        return {"ok": True, **ok_extra}
+    if res.unknown:
+        return {"ok": True, "warn": res.reason, **ok_extra}
+    return {"ok": False, "reason": res.reason}
+
+
+def _cell_unreadable(v: Any) -> bool:
+    """GRID_CELL_VALUE_JS 가 ok:false = 그리드/행을 못 읽음(값이 틀린 게 아니라 **확인 불가**)."""
+    return not (isinstance(v, dict) and v.get("ok"))
+
+
+async def _read_detail_cell(page: Any, field: str) -> Any:
+    """detail 마지막 행의 한 셀을 §C 공용 리더로 재독(부작용 없음)."""
+    return await page.evaluate(
+        js_lib.GRID_CELL_VALUE_JS, {"index": DETAIL_GRID_INDEX, "field": field}
+    )
+
+
+def _cell_raw(v: Any, field: str) -> str:
+    return _norm((v.get("raw") or {}).get(field, "")) if isinstance(v, dict) else ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -186,90 +231,9 @@ def partner_options_to_rows(options: list[dict]) -> list[dict]:
     return out
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# detail 코드 셀 피커 공용 내부 헬퍼
-# ══════════════════════════════════════════════════════════════════════════════
-async def _open_detail_cell_picker(page: Any, field_name: str, label: str) -> dict:
-    """detail 마지막 행 field_name 셀 → showEditor → 돋보기 실클릭 → 피커 팝업 오픈.
-
-    캔버스 돋보기 클릭은 빗나갈 수 있어 3회 재시도(open_evdn 노드와 동일 패턴).
-    반환 {ok:True} | {ok:False, reason}.
-    """
-    for attempt in range(1, 4):
-        op = await page.evaluate(js_lib.OPEN_DETAIL_CELL_EDITOR_JS, field_name)
-        if not op.get("ok"):
-            continue
-        rect = None
-        waited = 0
-        while waited < 1_000:  # 돋보기 rect 준비 폴링(상한 1s)
-            await page.wait_for_timeout(100)
-            waited += 100
-            rect = await page.evaluate(js_lib.DETAIL_EDITOR_MAGNIFIER_JS)
-            if rect:
-                break
-        if not rect:
-            continue
-        await mouse_click(page, rect["x"], rect["y"])
-        for _ in range(20):  # 팝업 그리드 준비 폴링(rowcount>=0, 상한 ~6s)
-            await page.wait_for_timeout(300)
-            n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
-            if isinstance(n, int) and n >= 0:
-                return {"ok": True}
-    return {"ok": False, "reason": f"{label} 피커 팝업이 열리지 않았습니다(돋보기 클릭 3회 실패)."}
-
-
-async def _fail_close(page: Any, reason: str) -> dict:
-    """실패 경로 — 열린 피커 팝업을 닫고 오류 반환(안 닫으면 다음 피커가 이 팝업을 오독)."""
-    await page.evaluate(js_lib.PICKER_CLOSE_JS)
-    await page.wait_for_timeout(400)
-    return {"ok": False, "reason": reason}
-
-
-async def _picker_gone(page: Any, *, cap_ms: int = 1_500, interval_ms: int = 150) -> bool:
-    """피커 팝업이 닫혔는지 폴링 — 닫히면 True, cap_ms 내 미닫힘이면 False."""
-    waited = 0
-    while waited < cap_ms:
-        await page.wait_for_timeout(interval_ms)
-        waited += interval_ms
-        n = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
-        if not isinstance(n, int) or n < 0:  # 팝업 사라짐(-1) = 닫힘.
-            return True
-    return False
-
-
-async def _select_and_apply(
-    page: Any, row_index: int, label: str, verify_field: str, expect_value: object
-) -> dict:
-    """피커 행 선택 → '적용' 실클릭 → **대상 셀 반영 폴링 검증** → 팝업 닫힘 검증.
-
-    반환 {ok} | {ok:False, reason}. 적용 판정은 팝업 닫힘이 아니라 detail 셀(verify_field) 반영으로
-    한다(select_evdn_code 의 8s 폴링 미러). '적용' 버튼 미발견·셀 미반영·팝업 미닫힘은 전부 실패로
-    승격한다 — 특히 마지막 피커에서 적용을 놓치면 잔존 팝업이 F7 을 삼켜 팬텀 저장을 유발한다.
-    """
-    sel = await page.evaluate(js_lib.PICKER_SELECT_JS, row_index)
-    if not sel.get("ok"):
-        return await _fail_close(page, f"{label} 행 선택 실패: {sel}")
-    await page.wait_for_timeout(400)
-    apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
-    if not apply_box:
-        return await _fail_close(page, f"{label} '적용' 버튼을 찾지 못했습니다(피커 팝업 구조 변경?).")
-    await mouse_click(page, apply_box["x"], apply_box["y"])
-    # 셀 반영 폴링(300ms×27 ≈ 8s) — 정규화 후 완전일치 또는 상호포함(표시명 절삭 대비)이면 반영.
-    want = _norm(expect_value)
-    actual = ""
-    for _ in range(27):
-        await page.wait_for_timeout(300)
-        rd = await page.evaluate(js.READ_DETAIL_CELL_JS, [verify_field])
-        actual = (rd.get("values") or {}).get(verify_field, "")
-        cell = _norm(actual)
-        if want and (want == cell or (cell and (want in cell or cell in want))):
-            break
-    else:
-        return await _fail_close(page, f"{label} 적용 후 셀 미반영(기대 '{expect_value}'·실제 '{actual}')")
-    # 팝업 닫힘 검증 — 잔존 피커 팝업은 F7 을 삼켜 팬텀 저장을 유발한다.
-    if not await _picker_gone(page):
-        return await _fail_close(page, f"{label} 적용 후 피커 팝업이 닫히지 않았습니다.")
-    return {"ok": True}
+# detail 코드 셀 피커 공용 내부 헬퍼는 국내 하드닝판을 import 로 공유한다(상단 import 주석 참조):
+# _open_detail_cell_picker(재시도 전 잔존 팝업 정리 + 오픈 reapply) · _select_and_apply(적용
+# reapply + 개수 기반 닫힘 확인) · _fail_close/_close_picker_verified(검증된 닫기) · _search_and_pick.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -300,7 +264,10 @@ async def _fill_partner_cell(
     fin = await _select_and_apply(page, row["i"], label, open_field, row.get("PARTNER_NM") or expect_name)
     if not fin.get("ok"):
         return fin
-    return {"ok": True, "code": row.get("PARTNER_CD"), "name": row.get("PARTNER_NM")}
+    out = {"ok": True, "code": row.get("PARTNER_CD"), "name": row.get("PARTNER_NM")}
+    if fin.get("warn"):  # 셀 반영 확인 불가는 노드가 '미확인'으로 노출하도록 그대로 전달.
+        out["warn"] = fin["warn"]
+    return out
 
 
 async def fill_partner(page: Any, code: str, name: str) -> dict:
@@ -326,6 +293,10 @@ async def lookup_partner_code(page: Any, name: str) -> str | None:
     detail PARTNER 셀 피커로 거래처 팝업을 열어 **검색만** 하고 닫는다(선택/적용 안 함 → 행 추가·
     PARTNER 변경 없음). 반환 code | None(무매칭). 코드는 행별 불변이라 fill_rows 가 1회만 조회한다.
     customTextBox 필터 레이스 대비 재검색 3회.
+
+    ⚠ 닫기는 **닫힘까지 확인**한다(국내 쌍둥이 미러, 2026-08-07) — 잔존 팝업이 다음 피커에
+      오독되는 것이 이 함수의 유일한 부작용 위험이라, 고정 400ms 로 '닫았다'를 단정하지 않는다.
+      미닫힘은 경고 로그만 남긴다(조회 전용이라 반환 계약 code|None 은 유지).
     """
     if not (await _open_detail_cell_picker(page, PARTNER_CELL, "상대계정거래처(코드조회)")).get("ok"):
         return None
@@ -338,8 +309,9 @@ async def lookup_partner_code(page: Any, name: str) -> str | None:
         if not err:
             break
         await page.wait_for_timeout(500)
-    await page.evaluate(js_lib.PICKER_CLOSE_JS)
-    await page.wait_for_timeout(400)
+    warn = await _close_picker_verified(page)
+    if warn:
+        logger.warning("상대계정 코드조회 팝업 미닫힘: %s", warn)
     return row.get("PARTNER_CD") if (row and not err) else None
 
 
@@ -371,19 +343,37 @@ async def fill_budget_fixed(page: Any, department: str, cost_type: str) -> dict:
     op = await _open_detail_cell_picker(page, BUDGET_CELL, "예산단위")
     if not op.get("ok"):
         return op
+
+    async def _pick() -> tuple[dict | None, str | None]:
+        read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [BUDGET_FIELDS, 0])
+        return pick_budget_row(read.get("options") or [], department, bgacct_nm)
+
+    # 검색어 입력(Enter) 후 후보 재독. customTextBox 는 클라이언트 필터/정렬이라 Enter 직후
+    # 재조회가 정착하기 전 읽으면 **필터 전 상단행**이 잡혀 무매칭이 난다(거래처 경로에서 실측한
+    # 레이스). 무매칭이면 검색을 재실행(reapply)하며 정착을 기다린다 — 정상이면 첫 read(0ms)로 끝.
     await _picker_search(page, BUDGET_SEARCH_KW)
-    read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [BUDGET_FIELDS, 0])
-    row, err = pick_budget_row(read.get("options") or [], department, bgacct_nm)
-    if err:
-        return await _fail_close(page, err)
+    chk = await verify.confirm(
+        _pick,
+        lambda rv: isinstance(rv, tuple) and rv[0] is not None,
+        timing=verify.ASYNC,
+        what="예산단위 후보 매칭",
+        expected=f"{department} · {bgacct_nm}",
+        reapply=lambda: _picker_search(page, BUDGET_SEARCH_KW),
+    )
+    row, err = chk.actual if isinstance(chk.actual, tuple) else (None, None)
+    if not row:
+        return await _fail_close(page, err or f"예산단위 후보를 읽지 못했습니다: {chk.reason}")
     fin = await _select_and_apply(page, row["i"], "예산단위", "BG_NM", row.get("BG_NM"))
     if not fin.get("ok"):
         return fin
-    return {
+    out = {
         "ok": True,
         "code": row.get("BG_CD"),
         "name": f"{row.get('BG_NM')} · {row.get('BIZPLAN_NM')} · {row.get('BGACCT_NM')}",
     }
+    if fin.get("warn"):
+        out["warn"] = fin["warn"]
+    return out
 
 
 async def fill_project(page: Any, project: dict) -> dict:
@@ -400,15 +390,22 @@ async def fill_project(page: Any, project: dict) -> dict:
     op = await _open_detail_cell_picker(page, PROJECT_CELL, "프로젝트")
     if not op.get("ok"):
         return op
-    await _picker_search(page, name or wbs_no)
-    read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [PROJECT_FIELDS, 0])
-    row, err = pick_project_row(read.get("options") or [], name, wbs_no)
-    if err:
-        return await _fail_close(page, err)
+    # 검색 정착 확인 + 무매칭 재검색(국내 fill_project 하드닝 역이식, 2026-08-07) — customTextBox
+    # 필터 정착 전 1회 읽기는 **필터 전 행 목록**에서 인덱스를 뽑는다. 같은 PJT_NM 의 다른 WBS
+    # 행을 골라도 _select_and_apply 의 PJT_NM 셀 검증은 통과하므로 잘못된 WBS 가 조용히 저장되는,
+    # 결과검증이 오선택을 잡지 못하는 자리다.
+    row, err = await _search_and_pick(
+        page, name or wbs_no, PROJECT_FIELDS, lambda opts: pick_project_row(opts, name, wbs_no)
+    )
+    if err or not row:
+        return await _fail_close(page, err or "프로젝트 후보를 읽지 못했습니다")
     fin = await _select_and_apply(page, row["i"], "프로젝트", "PJT_NM", row.get("PJT_NM"))
     if not fin.get("ok"):
         return fin
-    return {"ok": True, "code": row.get("PJT_NO"), "name": row.get("PJT_NM")}
+    out = {"ok": True, "code": row.get("PJT_NO"), "name": row.get("PJT_NM")}
+    if fin.get("warn"):
+        out["warn"] = fin["warn"]
+    return out
 
 
 # 금액 세팅 대상 컬럼(프로브 trip_amount, 2026-07-07 실측):
@@ -481,11 +478,28 @@ async def set_invoice_date(page: Any, ymd_compact: str) -> dict:
 
 
 async def set_row_note(page: Any, text: str) -> dict:
-    """적요(NOTE_DC) 셀 setValue 직접 세팅 + 반영 검증. 반환 {ok, after}."""
-    r = await page.evaluate(js.SET_DETAIL_CELL_JS, {"field": "NOTE_DC", "value": text})
+    """적요(NOTE_DC) 셀 setValue 직접 세팅 + **셀 재독 확인**. 반환 {ok, after} | {ok, warn} | {ok:False}.
+
+    ⚠ 세팅 JS 의 {ok:true} 는 "setValue 를 호출했고 예외가 없었다"까지다 — 값이 튕기거나 빈
+      문자열이 들어가도 통과해 **적요 없는 결의서가 그대로 저장**된다(다른 값 세팅 스텝은 전부
+      readback 비교가 있는데 여기만 빠져 있던 자리). 다른 셀 스텝과 동일하게 §C 공용 리더로
+      실제 셀 값을 재독해 확정하고, 튕김 성격이라 재시도 때 **재세팅**(reapply)한다.
+    """
+    payload = {"field": "NOTE_DC", "value": text}
+    r = await page.evaluate(js.SET_DETAIL_CELL_JS, payload)
     if not r.get("ok"):
         return {"ok": False, "reason": r.get("reason") or "적요 세팅 실패"}
-    return {"ok": True, "after": r.get("after")}
+    want = _norm(text)
+    chk = await verify.confirm(
+        lambda: _read_detail_cell(page, "NOTE_DC"),
+        lambda v: not _cell_unreadable(v) and _cell_raw(v, "NOTE_DC") == want,
+        timing=verify.INSTANT,
+        what="적요(NOTE_DC)",
+        expected=text,
+        reapply=lambda: page.evaluate(js.SET_DETAIL_CELL_JS, payload),
+        unknown_when=_cell_unreadable,
+    )
+    return _verdict(chk, after=r.get("after"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -513,7 +527,12 @@ async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
     if not box:
         logger.warning("거래처 코드피커(partner_cd) 버튼 없음 — 카드 문맥 확인 필요")
         return []
+    popups_before = await _popup_count(page)
     await page.mouse.click(box["x"], box["y"])
+    # 오픈은 **개수 증가**로 확인한다(스테일 팝업 오독 차단 — 국내 dump_partners 미러, 2026-08-07).
+    # 읽기 전용 카탈로그 동기화라 미확인이어도 덤프는 시도하되, 성공을 단정하지 않도록 경고를 남긴다.
+    if not await verify.confirm_popup_count(page, more_than=popups_before, timing=verify.ASYNC):
+        logger.warning("거래처 팝업 개수 증가 미확인 — 스테일 팝업을 읽을 수 있음(덤프 결과 주의)")
     await _wait_picker_rows_stable(page, cap_ms=3_000)
     await _picker_search(page, "")
     prev = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
@@ -525,18 +544,20 @@ async def dump_partners(page: Any, *, max_rounds: int = 60) -> list[dict]:
             break
         for _ in range(30):
             await page.keyboard.press("ArrowDown", delay=30)
-        await page.wait_for_timeout(3_000)
-        cur = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        # 서버 페이징 도착 폴링(종전 고정 3s) — 행 증가 즉시 진행(국내 dump_partners 미러).
+        cur = await _poll_rowcount_over(page, prev, cap_ms=3_000)
         logger.info("거래처 스크롤 r%d — rows=%s(prev=%s) stable=%d", rnd, cur, prev, stable)
         if not isinstance(cur, int) or cur <= prev:
             stable += 1
             if stable >= 3:
                 break
-            await page.wait_for_timeout(2_000)
+            # 추가 관찰창(종전 고정 2s) — 늦은 도착 감지 시 즉시 다음 라운드로(미러).
+            await _poll_rowcount_over(page, prev, cap_ms=2_000)
         else:
             stable = 0
         prev = max(prev, cur if isinstance(cur, int) else prev)
     read = await page.evaluate(js_lib.PICKER_READ_MULTI_JS, [PARTNER_FIELDS, 0])
-    await page.evaluate(js_lib.PICKER_CLOSE_JS)
-    await page.wait_for_timeout(400)
+    warn = await _close_picker_verified(page)
+    if warn:
+        logger.warning("거래처 덤프 팝업 미닫힘: %s", warn)
     return partner_options_to_rows(read.get("options") or [])

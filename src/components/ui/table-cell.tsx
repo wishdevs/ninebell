@@ -7,7 +7,8 @@ import { cn } from '@/lib/utils';
  */
 export function Th({ children, className, ...rest }: React.ThHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <th className={cn('px-4 py-3 font-medium whitespace-nowrap', className)} {...rest}>
+    // scope="col" 은 a11y 기본값 — rest 가 뒤에 와서 호출부가 넘기면 덮어쓸 수 있다.
+    <th scope="col" className={cn('px-4 py-3 font-medium whitespace-nowrap', className)} {...rest}>
       {children}
     </th>
   );

@@ -23,13 +23,11 @@ from ._shared import (
     _MAX_BUDGET_UNITS,
     _MAX_FAVORITES,
     _MAX_PROJECT_RESULTS,
-    _STATUS_MARK,
     _fmt_won,
-    _md_cell,
     _ms,
     _params_today,
     _row_key,
-    _status_table,
+    _status_line,
     recommend_note,
 )
 from .batch import _apply_batch, _apply_group_fields, _batch_key
@@ -59,9 +57,9 @@ from .query import (
     make_set_period_node,
 )
 from .save import (
-    MAX_SAVE_RETRIES,
     _SAVE_APRVL_RE,
     _SAVE_REQ_ACCT_RE,
+    _handoff_save_failure,
     _parse_save_rejections,
     _save_guidance,
     make_save_final_node,
@@ -72,8 +70,8 @@ __all__ = [
     "_shared", "batch", "catalog", "collect", "pass2", "prefill", "query", "save",
     # _shared
     "FIELD_SPEC", "_MAX_BUDGET_UNITS", "_MAX_FAVORITES", "_MAX_PROJECT_RESULTS",
-    "_STATUS_MARK", "_fmt_won", "_md_cell", "_ms", "_params_today", "_row_key",
-    "_status_table", "recommend_note",
+    "_fmt_won", "_ms", "_params_today", "_row_key",
+    "_status_line", "recommend_note",
     # batch
     "_apply_batch", "_apply_group_fields", "_batch_key",
     # catalog
@@ -90,6 +88,6 @@ __all__ = [
     "make_query_node", "make_select_all_cards_node", "make_set_acct_date_node",
     "make_set_period_node",
     # save
-    "MAX_SAVE_RETRIES", "_SAVE_APRVL_RE", "_SAVE_REQ_ACCT_RE",
+    "_SAVE_APRVL_RE", "_SAVE_REQ_ACCT_RE", "_handoff_save_failure",
     "_parse_save_rejections", "_save_guidance", "make_save_final_node",
 ]

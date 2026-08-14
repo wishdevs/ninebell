@@ -185,6 +185,71 @@ BTN_BOX_JS = """(sel) => {
   const r = b.getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) };
 }"""
 
+# 툴바 버튼(selector) 매치 개수 진단(읽기 전용) — BTN_BOX_JS 는 querySelector **첫 매치**만
+# 쓰므로, 3그리드 화면에서 동일 셀렉터 버튼이 여러 개면 엉뚱한 툴바의 버튼일 수 있다
+# (2026-07-31 미확증 후보). 다음 실패 때 로그만으로 모호성을 판별하기 위한 카운트.
+# 반환 {total, visible}.
+BTN_COUNT_JS = """(sel) => {
+  const all = [...document.querySelectorAll(sel)];
+  return { total: all.length, visible: all.filter(b => b.offsetParent !== null).length };
+}"""
+
+# 삭제 버튼 **클릭 가능성** 진단(읽기 전용, 2026-08-01) — 1차 클릭 100% 무효의 원인 계측이자
+# 클릭 전 게이트 조건. 인자 {sel, x, y}(x,y = 클릭 예정 좌표).
+#   * hit_is_btn=false → 좌표가 버튼이 아닌 요소에 떨어진다 = **클릭이 ERP 에 전달되지 않는다**
+#   * blocked=true(hit.cls='disabled-main-top-area') → ★실측 원인: detail 셀 편집 중 DEWS 가
+#     상단 버튼영역 전체를 오버레이로 덮는다. 3행 3/3 동일(모달 미출현·행수 불변).
+#   * inview=false / hit=null → 좌표가 뷰포트 밖(스크롤 상태) → mouse.click 이 아무 데도 안 닿음
+#   * disabled/aria='true' → 버튼 자체 비활성 타이밍(이번 실측에서는 항상 false)
+# 반환 {total, visible, rect, disabled, aria, cls, inview, hit, hit_is_btn, active, editing,
+#      blocked, grids}.
+DELETE_BTN_DIAG_JS = r"""({ sel, x, y }) => {
+  const info = (el) => el ? { tag: el.tagName,
+    id: String(el.id || '').slice(0, 40), cls: String(el.className || '').slice(0, 60) } : null;
+  const all = [...document.querySelectorAll(sel)];
+  const b = all[0] || null;
+  const out = { total: all.length, visible: all.filter(e => e.offsetParent !== null).length,
+                vw: window.innerWidth, vh: window.innerHeight, scrollY: Math.round(window.scrollY) };
+  if (b) {
+    const r = b.getBoundingClientRect();
+    out.rect = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+    out.disabled = !!b.disabled;
+    out.aria = b.getAttribute('aria-disabled');
+    out.cls = String(b.className || '').slice(0, 60);
+    out.inview = r.y >= 0 && r.x >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
+  }
+  const hit = (x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight)
+    ? document.elementFromPoint(x, y) : null;
+  out.hit = info(hit);
+  out.hit_is_btn = !!(hit && b && (hit === b || b.contains(hit) || hit.contains(b)));
+  const act = document.activeElement;
+  out.active = info(act);
+  out.editing = !!(act && act.tagName === 'INPUT' && /grid/i.test(String(act.id || '')));
+  out.blocked = [...document.querySelectorAll('.disabled-main-top-area')].some(e => e.offsetParent !== null);
+  out.grids = [...document.querySelectorAll('.dews-ui-grid')].map((el, i) => {
+    try {
+      const g = window.jQuery(el).data('dewsControl')._grid;
+      const cur = g.getCurrent() || {};
+      return { i, rows: g.getDataSource().getRowCount(),
+               cur: (typeof cur.itemIndex === 'number' ? cur.itemIndex : -1),
+               focused: el.contains(document.activeElement) };
+    } catch (e) { return { i, e: String(e).slice(0, 40) }; }
+  });
+  return out;
+}"""
+
+# 상단 버튼영역 차단 오버레이(`.disabled-main-top-area`) **원자적** 해제 — 존재할 때만 클릭한다.
+# ⚠ 좌표 재클릭(mouse_click)으로는 이 원자성을 얻을 수 없다 — 관측과 클릭 사이에 오버레이가
+#   걷히면 그 좌표에 있는 **삭제 버튼**을 눌러 버려, 이어지는 본 클릭과 합쳐 2회 삭제(=데이터
+#   행 오삭제)가 된다. 존재 확인과 클릭을 한 evaluate 안에서 하면 걷힌 뒤에는 아무 일도 없다.
+# 반환 {found, clicked}.
+DISMISS_TOP_BLOCK_JS = """() => {
+  const el = [...document.querySelectorAll('.disabled-main-top-area')].find(e => e.offsetParent !== null);
+  if (!el) return { found: false, clicked: false };
+  el.click();
+  return { found: true, clicked: true };
+}"""
+
 
 # 마스터(결의서, grid 0) 상세합계금액(DETAIL_SUM_AMT) 직접 세팅 + 재독 검증. 인자 total(int).
 # ⚠ setValue 는 ERP 합계 재계산 핸들러를 발화하지 않아, 행별 금액 setValue 후에도 마스터 합계가
@@ -224,4 +289,24 @@ READ_AMOUNT_FIELDS_JS = """() => {
     out.detail = d; out.detail_rows = n;
   } catch (e) { out.detail_err = String(e).slice(0, 80); }
   return out;
+}"""
+
+
+# 확인 모달 버튼 **느슨 매칭** 폴백 — MODAL_BTN_BOX_JS('확인'/'예')의 정확일치가 놓치는
+# 라벨 변형("확 인"·"OK"·에러성 모달의 "닫기") 대비(2026-07-30: 예산현황 모달이 8회 시도에도
+# 안 닫혀 출장/가족행사 3에이전트 동시 실패 — 표준 조합 재현 4회 전부 정상이라 변형 모달
+# 가설). 최상단 보이는 k-window 부터 공백 제거 후 확인|예|OK|닫기 를 찾는다.
+# 반환 {x, y, title, label} | null.
+MODAL_BTN_LOOSE_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,'');
+  const wins = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null);
+  for (const w of wins.reverse()) {
+    const b = [...w.querySelectorAll('button')].filter(x=>x.offsetParent!==null)
+      .find(x => /^(확인|예|ok|닫기)$/i.test(c(x.innerText)));
+    if (b) { const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2),
+               title: String(((w.querySelector('.k-window-title')||{}).innerText)||'').trim(),
+               label: c(b.innerText) }; }
+  }
+  return null;
 }"""

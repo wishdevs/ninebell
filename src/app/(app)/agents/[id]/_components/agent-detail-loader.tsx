@@ -5,7 +5,8 @@ import { RiArrowLeftSLine, RiErrorWarningLine, RiSearchLine } from '@remixicon/r
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
-import { type Agent } from '@/lib/data/agents';
+import { type Agent, isDebugOnlyAgent } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { AgentDetailClient } from './agent-detail-client';
 
@@ -18,6 +19,7 @@ import { AgentDetailClient } from './agent-detail-client';
  */
 export function AgentDetailLoader({ id }: { id: string }) {
   const { status, data, error, reload } = useApiResource<Agent>(`/agents/${id}`);
+  const debugMode = useDebugMode();
 
   if (status === 'loading') {
     return (
@@ -28,8 +30,14 @@ export function AgentDetailLoader({ id }: { id: string }) {
     );
   }
 
-  if (status === 'error') {
-    const notFound = error?.status === 404;
+  // 디버그 전용 에이전트를 일반 모드에서 **직접 URL** 로 연 경우 — 목록에서 감춘 것과 같은 답
+  // ('없음')을 준다. 서버는 여전히 내려주므로 이건 표시 게이트일 뿐 권한 경계가 아니다.
+  // ⚠ status==='success' 이후에만 판정한다 — 디버그 플래그는 마운트 후 localStorage 에서
+  //   읽히므로(초기 false), 로딩 중에 판정하면 디버그 사용자에게 '없음'이 한 번 번쩍인다.
+  const debugBlocked = status === 'success' && !!data && !debugMode && isDebugOnlyAgent(data);
+
+  if (status === 'error' || debugBlocked) {
+    const notFound = debugBlocked || error?.status === 404;
     return (
       <div className="flex flex-col gap-4">
         <Link

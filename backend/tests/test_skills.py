@@ -1,7 +1,7 @@
 """스킬 카탈로그(app/services/skills.py) + GET /skills 역인덱스 테스트.
 
 - 픽스처 스텝의 skill 은 전부 카탈로그 KEY 여야 한다(자유 문자열 회귀 방지).
-- card-chat 픽스처 스텝 key 는 실행 그래프(card-collect) 노드명과 1:1 이어야 한다.
+- corporate-card 픽스처 스텝 key 는 실행 그래프(card-collect) 노드명과 1:1 이어야 한다.
 - GET /skills 는 카탈로그 전체 + 스킬별 사용 에이전트 역인덱스를 내려준다.
 - GET /agents/{id} 스텝은 skill 라벨(기존 shape) + skillKey + intervention 을 내려준다.
 """
@@ -61,7 +61,7 @@ def test_every_fixture_step_skill_is_in_catalog():
 
 
 def test_card_collect_fixture_step_keys_match_graph_nodes():
-    fx = next(f for f in AGENT_FIXTURES if f["id"] == "card-chat")
+    fx = next(f for f in AGENT_FIXTURES if f["id"] == "corporate-card")
     assert [s["key"] for s in fx["steps"]] == CARD_COLLECT_EXPECTED_STEPS
 
 
@@ -98,10 +98,10 @@ async def test_list_skills_returns_catalog_with_reverse_index(client, make_user,
         assert item["label"] == SKILLS[item["key"]].label
         assert item["layer"] in ("omnisol", "common", "llm")
         assert item["description"]
-    # 역인덱스: 시드된 card-chat 이 codepicker 스킬 사용자로 잡혀야 한다.
-    assert {"id": "card-chat", "name": "카드"} in by_key["codepicker"]["agents"]
+    # 역인덱스: 시드된 corporate-card 이 codepicker 스킬 사용자로 잡혀야 한다.
+    assert {"id": "corporate-card", "name": "법인카드"} in by_key["codepicker"]["agents"]
     # 코드피커는 여러 스텝에서 쓰이지만 distinct 로 에이전트는 1번만 나온다.
-    assert [a["id"] for a in by_key["codepicker"]["agents"]].count("card-chat") == 1
+    assert [a["id"] for a in by_key["codepicker"]["agents"]].count("corporate-card") == 1
 
 
 async def test_list_skills_requires_auth(client):
@@ -114,7 +114,7 @@ async def test_agent_steps_expose_skill_label_key_and_intervention(client, make_
     uid = await make_user("skills-admin", "super_admin")
     auth_as(uid)
 
-    resp = await client.get("/agents/card-chat")
+    resp = await client.get("/agents/corporate-card")
     assert resp.status_code == 200
     steps = {s["id"]: s for s in resp.json()["steps"]}
     # skill 은 기존대로 한글 라벨, skillKey 는 카탈로그 키.
@@ -142,15 +142,15 @@ async def test_seed_replaces_stale_step_set(sm):
     from app.services.seed import seed_agents
 
     async with sm() as s:
-        # 낡은 스텝 셋 시뮬레이션: card-chat 스텝을 옛 키로 통째로 바꿔치기.
+        # 낡은 스텝 셋 시뮬레이션: corporate-card 스텝을 옛 키로 통째로 바꿔치기.
         rows = (
-            await s.execute(sa_select(AgentStep).where(AgentStep.agent_id == "card-chat"))
+            await s.execute(sa_select(AgentStep).where(AgentStep.agent_id == "corporate-card"))
         ).scalars().all()
         for r in rows:
             await s.delete(r)
-        s.add(AgentStep(agent_id="card-chat", key="access", label="결의서 입력 접속",
+        s.add(AgentStep(agent_id="corporate-card", key="access", label="결의서 입력 접속",
                         skill="로그인·메뉴 이동", status="done", position=0))
-        s.add(AgentStep(agent_id="card-chat", key="kind", label="결의구분 = 카드",
+        s.add(AgentStep(agent_id="corporate-card", key="kind", label="결의구분 = 카드",
                         skill="필드 입력", status="done", position=1))
         await s.commit()
 
@@ -164,7 +164,7 @@ async def test_seed_replaces_stale_step_set(sm):
             for r in (
                 await s.execute(
                     sa_select(AgentStep)
-                    .where(AgentStep.agent_id == "card-chat")
+                    .where(AgentStep.agent_id == "corporate-card")
                     .order_by(AgentStep.position)
                 )
             ).scalars()

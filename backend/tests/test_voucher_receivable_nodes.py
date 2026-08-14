@@ -1,0 +1,1450 @@
+"""voucher-receivable 노드 순수 로직 테스트 — 브라우저 없이(스텝 monkeypatch) 계약·안전 검증.
+
+- state-contract: 각 노드 출력 키가 VoucherReceivableState 에 선언됐는지(LangGraph silent drop 방지).
+- validate_params: 정규화 성공 / 배치 게이트 오류 / 단락.
+- set_query·run_query: 성공/실패 분기, master_rowcount 전달.
+- loop_approvals: 0건 완료 / 단일행 / max_rows 제한 / 배치 / 실패 분기 +
+  ⚠ 절대 안전 가드: 결제창에서 상신·보관을 절대 클릭하지 않는다(정적 소스 스캔 + 행위 검증) +
+  가상 상신 로그가 DOCU_NO 를 남긴다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import time
+
+import pytest
+
+from app.agents.voucher_receivable import js as vjs
+from app.agents.voucher_receivable import steps as vsteps
+from nbkit.omnisol import js_lib
+from app.agents.voucher_receivable.graph import VoucherReceivableState
+from app.agents.voucher_receivable.nodes import approvals, query, validate
+from app.agents.voucher_receivable.nodes.approvals import make_loop_approvals_node
+from app.agents.voucher_receivable.nodes.query import make_run_query_node, make_set_query_node
+from app.agents.voucher_receivable.nodes.validate import make_validate_params_node
+from tests.support.state_contract import assert_keys_declared
+
+pytestmark = pytest.mark.asyncio
+
+
+def _q() -> asyncio.Queue:
+    return asyncio.Queue()
+
+
+def _drain(q: asyncio.Queue) -> list[dict]:
+    out: list[dict] = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out
+
+
+def _logs(frames: list[dict]) -> list[str]:
+    return [f["log"] for f in frames if "log" in f]
+
+
+# ── validate_params ───────────────────────────────────────────────────────────
+async def test_validate_default_all_declares_keys():
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {}})
+    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월) + 디버그 기본 꺼짐(2026-08-10).
+    assert out == {"max_rows": None, "period_from": None, "period_to": None, "debug_mode": False}
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_explicit_max_rows():
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {"max_rows": 4}})
+    assert out["max_rows"] == 4  # 게이트 없음 — 명시값 그대로
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_period_range_passthrough():
+    """실행 전 폼의 기간(월 부분 기간 포함)이 YYYYMMDD 로 정규화돼 state 로 넘어간다."""
+    node = make_validate_params_node()
+    out = await node(
+        {"events": _q(), "params": {"voucher": {"period_from": "2026-07-01", "period_to": "2026-07-05"}}}
+    )
+    assert out["period_from"] == "20260701"
+    assert out["period_to"] == "20260705"
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_half_period_errors():
+    """시작일만 주면 거부 — 반쪽 기간으로 의도와 다른 범위를 결재하는 사고 방지."""
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {"voucher": {"period_from": "2026-07-01"}}})
+    assert "함께 지정" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_reversed_period_errors():
+    node = make_validate_params_node()
+    out = await node(
+        {"events": _q(), "params": {"voucher": {"period_from": "2026-07-31", "period_to": "2026-07-01"}}}
+    )
+    assert "늦을 수 없" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_invalid_max_rows_errors():
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {"max_rows": 0}})
+    assert "올바르지 않" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_short_circuits_on_prior_error():
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "error": "이전 실패", "params": {}})
+    assert out == {}
+
+
+# ── set_query(스텝 monkeypatch) ───────────────────────────────────────────────
+class _FakePage:
+    """set_query/run_query 는 조작을 steps 로 위임(스텁) — page 는 통과값일 뿐."""
+
+    async def evaluate(self, js_src, arg=None):
+        return True
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def _patch_set_query_ok(monkeypatch, calls: list):
+    def _rec(name, ret=None):
+        async def _f(*a, **k):
+            calls.append(name)
+            return {"ok": True, **(ret or {})}
+
+        return _f
+
+    async def _expand(page):
+        calls.append("expand")
+        return True
+
+    monkeypatch.setattr(query.steps, "expand_condition_panel", _expand)
+    monkeypatch.setattr(query.steps, "set_dept_all", _rec("dept", {"n": 46}))
+    monkeypatch.setattr(query.steps, "set_period_this_month", _rec("period"))
+    monkeypatch.setattr(query.steps, "clear_writer", _rec("writer"))
+    monkeypatch.setattr(query.steps, "set_docu_status", _rec("status"))
+    monkeypatch.setattr(query.steps, "set_gwaprvlst", _rec("gwaprvlst"))
+    monkeypatch.setattr(query.steps, "set_docu_types", _rec("docutypes"))
+
+
+async def test_set_query_success_order(monkeypatch):
+    calls: list = []
+    _patch_set_query_ok(monkeypatch, calls)
+    out = await make_set_query_node()({"events": _q(), "page": _FakePage()})
+    assert out == {}
+    assert_keys_declared(VoucherReceivableState, out)
+    # 순서: 패널 확장 → 부서 → 회계일 → 작성자 → 전표상태 → 전자결재상태 → 전표유형.
+    # (공지 팝업 닫기는 공유 로그인 플로우 + _open_picker just-in-time 재확인으로 이관 — set_query 무관.)
+    assert calls == ["expand", "dept", "period", "writer", "status", "gwaprvlst", "docutypes"]
+
+
+async def test_set_query_field_failure_errors(monkeypatch):
+    calls: list = []
+    _patch_set_query_ok(monkeypatch, calls)
+
+    async def _fail(*a, **k):
+        return {"ok": False, "reason": "돋보기 없음"}
+
+    monkeypatch.setattr(query.steps, "set_gwaprvlst", _fail)
+    out = await make_set_query_node()({"events": _q(), "page": _FakePage()})
+    assert "전자결재상태" in out["error"] and "돋보기 없음" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_set_query_short_circuits():
+    out = await make_set_query_node()({"events": _q(), "error": "x", "page": _FakePage()})
+    assert out == {}
+
+
+async def test_set_query_passes_docu_types(monkeypatch):
+    # 전표유형(docu_types)만 에이전트별로 다르다 — set_query 가 인자를 set_docu_types 로 그대로 전달.
+    _patch_set_query_ok(monkeypatch, [])
+    seen: dict = {}
+
+    async def _capture(page, targets):
+        seen["targets"] = targets
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "set_docu_types", _capture)
+    out = await make_set_query_node(("내수구매",))({"events": _q(), "page": _FakePage()})
+    assert out == {} and seen["targets"] == ("내수구매",)
+
+
+# ── run_query ─────────────────────────────────────────────────────────────────
+def _patch_requery_gate_ok(monkeypatch, calls: list | None = None):
+    """조회 직전 재확정 게이트(작성자·회계일 — 2026-08-07) 스텁 — 기본 성공."""
+
+    async def _writer(page):
+        if calls is not None:
+            calls.append("gate_writer")
+        return {"ok": True}
+
+    async def _period(page, start=None, end=None):
+        if calls is not None:
+            calls.append("gate_period")
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer)
+    monkeypatch.setattr(query.steps, "set_period", _period)
+
+
+async def test_run_query_stores_rowcount(monkeypatch):
+    async def _ok(page):
+        return {"ok": True, "rowcount": 31}
+
+    _patch_requery_gate_ok(monkeypatch)
+    monkeypatch.setattr(query.steps, "run_query", _ok)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert out == {"master_rowcount": 31}
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_run_query_zero_is_ok(monkeypatch):
+    async def _zero(page):
+        return {"ok": True, "rowcount": 0}
+
+    _patch_requery_gate_ok(monkeypatch)
+    monkeypatch.setattr(query.steps, "run_query", _zero)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert out == {"master_rowcount": 0}
+
+
+async def test_run_query_grid_unreadable_errors(monkeypatch):
+    async def _fail(page):
+        return {"ok": False, "reason": "rowcount 못 읽음", "rowcount": -1}
+
+    _patch_requery_gate_ok(monkeypatch)
+    monkeypatch.setattr(query.steps, "run_query", _fail)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert "error" in out and "못 읽" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_run_query_reconfirms_writer_and_period_before_click(monkeypatch):
+    """⚠ 재확정 게이트(2026-08-07): 작성자·회계일은 첫 검증 통과 **후** 비동기 되돌림이 가능한
+    값이라(기본값 재주입/위젯 복귀 — 08-03·08-06 라이브 실측 계열), 조회 클릭 직전에 한 번 더
+    확정한다. 게이트가 조회보다 먼저 오는 순서를 고정한다."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _ok(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "run_query", _ok)
+    out = await make_run_query_node()(
+        {"events": _q(), "page": _FakePage(), "period_from": "20260701", "period_to": "20260831"}
+    )
+    assert out == {"master_rowcount": 3}
+    assert calls == ["gate_writer", "gate_period", "query"]
+
+
+async def test_run_query_gate_failure_errors_without_querying(monkeypatch):
+    """재확정 게이트 실패(재클리어 소진 후에도 재주입 잔존 등)는 잘못된 조건 조회를 막고 에러."""
+    calls: list = []
+    _patch_requery_gate_ok(monkeypatch, calls)
+
+    async def _writer_fail(page):
+        return {"ok": False, "reason": "'작성자' 비움 확인 실패"}
+
+    async def _query(page):
+        calls.append("query")
+        return {"ok": True, "rowcount": 3}
+
+    monkeypatch.setattr(query.steps, "clear_writer", _writer_fail)
+    monkeypatch.setattr(query.steps, "run_query", _query)
+    out = await make_run_query_node()({"events": _q(), "page": _FakePage()})
+    assert "error" in out and "작성자 재확정" in out["error"]
+    assert "query" not in calls  # 게이트 실패 시 조회로 진행하지 않는다.
+
+
+# ── loop_approvals ────────────────────────────────────────────────────────────
+class _RecordingChild:
+    """결제창(자식 Page) 스텁 — 호출 메서드를 전부 기록해 '상신/보관 미클릭'을 행위로 검증한다.
+
+    상단 버튼 텍스트에 상신·보관을 포함해 반환하지만, 노드가 그걸 클릭하지 않아야 한다.
+    click/mouse 접근은 접근 자체를 실패로 만들어 원천 차단한다.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.closed = False
+
+    async def wait_for_load_state(self, *a, **k):
+        self.calls.append("wait_for_load_state")
+
+    async def wait_for_timeout(self, ms):
+        self.calls.append("wait_for_timeout")
+
+    async def evaluate(self, js_src, arg=None):
+        self.calls.append("evaluate")
+        return [
+            {"text": "상신", "x": 922, "y": 30, "visible": True},
+            {"text": "보관", "x": 860, "y": 30, "visible": True},
+            {"text": "미리보기", "x": 780, "y": 30, "visible": True},
+        ]
+
+    async def close(self):
+        self.calls.append("close")
+        self.closed = True
+
+    @property
+    def mouse(self):  # noqa: D401 — 접근 시 즉시 실패(상신/보관 클릭 시도 감지).
+        raise AssertionError("결제창 mouse 접근 금지 — 상신/보관 클릭 위험")
+
+    async def click(self, *a, **k):
+        raise AssertionError("결제창 click 금지 — 상신/보관")
+
+
+def _patch_loop(monkeypatch, child, *, check_ok=True, open_child=True):
+    async def _key(page, idx):
+        return f"FI202607010000{idx:04d}"
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, idx):
+        return check_ok
+
+    async def _open(page):
+        return child if open_child else None
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+    # poll_child_ready / close_child 는 실제 구현을 그대로 쓴다(자식 Page 상호작용을 실검증).
+
+
+async def test_loop_zero_rows_completes():
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 0, "max_rows": 1})
+    assert out["processed"] == 0 and out["processed_docu_nos"] == []
+    assert "대상 전표가 없" in out["result"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_loop_single_row_virtual_submit_never_clicks(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    q = _q()
+    node = make_loop_approvals_node()
+    out = await node({"events": q, "page": object(), "master_rowcount": 5, "max_rows": 1})
+
+    # 단일행 게이트: rowcount 5 여도 max_rows=1 이면 1건만.
+    assert out["processed"] == 1
+    assert out["processed_docu_nos"] == ["FI2026070100000000"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+    # ⚠ 절대 안전(행위 검증): 결제창에 한 일은 읽기+닫기뿐 — click/mouse 미접근.
+    assert child.closed is True
+    assert set(child.calls) <= {"wait_for_load_state", "wait_for_timeout", "evaluate", "close"}
+    assert "close" in child.calls
+
+    # 가상 상신 로그가 DOCU_NO 를 남긴다.
+    logs = _logs(_drain(q))
+    # 가상 상신 로그에 진행 표기([i/N])와 DOCU_NO 가 함께 담긴다.
+    assert any("가상 상신" in m and "FI2026070100000000" in m for m in logs)
+    assert any(m.startswith("[1/1]") for m in logs)  # 진행 상황 노출
+
+
+async def test_loop_batch_processes_min_of_max_and_rowcount(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    node = make_loop_approvals_node()
+    # max_rows=3, rowcount=2 → 2건(min).
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 2, "max_rows": 3})
+    assert out["processed"] == 2
+    assert out["processed_docu_nos"] == ["FI2026070100000000", "FI2026070100000001"]
+    assert child.closed is True
+
+
+async def test_loop_default_none_processes_all_rows(monkeypatch):
+    # 전체 진행(사용자 결정 2026-07-21): max_rows 미지정/None → 조회된 전 건 순회.
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 5})  # max_rows 없음 = 전체
+    assert out["processed"] == 5
+    assert out["processed_docu_nos"] == [f"FI202607010000{i:04d}" for i in range(5)]
+
+
+async def test_loop_emits_progress_i_of_n(monkeypatch):
+    # 진행 상황 노출(사용자 요청 2026-07-21): 총 건수 + 몇 건 중 몇 번째 + 누적 실행 건수.
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    node = make_loop_approvals_node()
+    q = _q()
+    out = await node({"events": q, "page": object(), "master_rowcount": 3})  # 전체(None)
+    assert out["processed"] == 3
+    frames = _drain(q)
+    logs = _logs(frames)
+    assert any("대상 3건" in m for m in logs)  # 시작 배너에 총 건수
+    for i in (1, 2, 3):  # 각 건 [i/3] 진행 표기
+        assert any(m.startswith(f"[{i}/3]") for m in logs)
+    assert any("누적 3/3" in m for m in logs)  # 최종 누적 실행 건수
+    assert any("대상 3건 중 3건 가상 상신" in m for m in logs)  # 완료 배너
+    # 워크플로우 노드용 step progress 프레임(done/total) 방출 — 0/3 시작 ~ 3/3 완료.
+    prog = [f["progress"] for f in frames if f.get("step") == "loop_approvals" and "progress" in f]
+    assert {p["total"] for p in prog} == {3}
+    dones = [p["done"] for p in prog]
+    assert 0 in dones and 3 in dones
+
+
+async def test_loop_batch_checks_exactly_one_row_at_each_approval(monkeypatch):
+    """리뷰 HIGH-2 회귀: 배치(2행) 순회에서 결재창을 여는 순간 정확히 한 행만 체크돼 있어야 한다.
+
+    직전 대상 행의 체크가 남으면 결재가 여러 문서를 잡을 위험 — 대상 행 checkRow 전에
+    uncheck_all_rows 로 전체 해제해 매 결재 오픈 시 체크 수가 1 이 되도록 한다.
+    """
+    child = _RecordingChild()
+    checked: set[int] = set()
+    checked_at_approval: list[int] = []
+
+    async def _key(page, idx):
+        return f"FI{idx}"
+
+    async def _uncheck(page):
+        checked.clear()
+        return True
+
+    async def _check(page, idx):
+        checked.add(idx)
+        return True
+
+    async def _open(page):
+        checked_at_approval.append(len(checked))  # 결재창 오픈 순간의 체크 행 수 스냅샷.
+        return child
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 2, "max_rows": 2})
+    assert out["processed"] == 2
+    # 두 번의 결재 오픈 모두에서 정확히 1행만 체크(직전 행 체크가 해제됨).
+    assert checked_at_approval == [1, 1]
+
+
+async def test_loop_check_row_failure_errors(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child, check_ok=False)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 3, "max_rows": 1})
+    assert "checkRow" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+    # 행 선택 실패면 결제창을 열지 않았어야 한다.
+    assert child.closed is False
+
+
+async def test_loop_no_child_page_errors(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child, open_child=False)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert "결재창" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_loop_short_circuits_on_prior_error():
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "error": "이전 실패", "page": object()})
+    assert out == {}
+
+
+# ── 정적 소스 스캔 가드: 상신 실클릭은 게이트 뒤 단일 경로뿐, 보관 클릭 경로는 없다 ──────
+# (정책 전환 2026-08-07: 상신은 allow_submit 게이트 뒤에서 steps.click_child_submit 로만.)
+async def test_source_child_clicks_only_via_gated_submit():
+    # 게이트 기본값: 상신 실클릭은 opt-in(3종 빌더가 개방) — 기본 False.
+    assert inspect.signature(make_loop_approvals_node).parameters["allow_submit"].default is False
+    # loop 노드는 자식 Page 를 직접 클릭하지 않는다(상신도 steps.click_child_submit 경유).
+    approvals_src = inspect.getsource(approvals)
+    assert "child.mouse" not in approvals_src
+    assert "child.click" not in approvals_src
+    assert "mouse_click" not in approvals_src
+    # steps 의 child 클릭은 click_child_submit 한 곳뿐이다.
+    steps_src = inspect.getsource(vsteps)
+    submit_src = inspect.getsource(vsteps.click_child_submit)
+    assert steps_src.count("child.mouse") == 1 and submit_src.count("child.mouse") == 1
+    # 클릭 대상은 '상신' 텍스트뿐 — 보관을 고르는 코드 경로가 없어야 한다.
+    assert '== "상신"' in submit_src
+    assert '== "보관"' not in steps_src
+    # 상단 버튼 탐지 JS 는 여전히 읽기 전용 — 클릭 호출이 없어야 한다.
+    assert ".click(" not in vjs.CHILD_TOP_BUTTONS_JS
+
+
+# ── allow_submit 게이트 개방 경로(행위) ──────────────────────────────────────────
+async def test_loop_allow_submit_clicks_submit_and_logs(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    submits: list = []
+
+    async def _submit(c, **kw):
+        submits.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": 1}
+
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+    q = _q()
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": q, "page": object(), "master_rowcount": 2, "max_rows": 2})
+    assert out["processed"] == 2 and len(submits) == 2  # 건별 — 건마다 상신 1회.
+    assert "전자결재 상신 완료" in out["result"]
+    logs = _logs(_drain(q))
+    assert any("상신 완료" in m for m in logs)
+    assert not any("가상 상신" in m for m in logs)  # 게이트 개방 시 '가상' 문구 금지.
+
+
+async def test_loop_allow_submit_skips_submit_on_refdoc_fatal(monkeypatch):
+    # 카드 실운영 조합(allow_submit=True + on_popup): 참조문서 fatal 이면 **상신이 절대 호출되지
+    # 않고** 런이 중단돼야 한다(리뷰 HIGH 2026-08-07 — 첨부 실패 건이 상신되는 사고 방지).
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _ab(page, idx):
+        return "AB1"
+
+    monkeypatch.setattr(approvals.steps, "read_row_abdocu_no", _ab)
+    submit_calls: list = []
+
+    async def _submit(c, **kw):
+        submit_calls.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+
+    async def _on_popup(c, gw, events):
+        return {"fatal": True, "reason": "참조문서 첨부 실패(테스트)", "outcome": "실패"}
+
+    node = make_loop_approvals_node(on_popup=_on_popup, allow_submit=True)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 1,
+            "max_rows": 1,
+            "payment_map": {"AB1": "GW1"},
+        }
+    )
+    assert "참조문서 첨부 실패" in out["error"] and out["processed"] == 0
+    assert submit_calls == []  # fatal 이면 상신 미호출.
+    assert child.closed is True  # 결제창은 finally 에서 닫힌다.
+
+
+async def test_loop_allow_submit_failure_hard_stops(monkeypatch):
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _submit(c, **kw):
+        return {"ok": False, "reason": "결제창이 닫히지 않았습니다"}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 2, "max_rows": 2})
+    assert "상신 실패" in out["error"] and out["processed"] == 0
+    assert child.closed is True  # 실패해도 finally 경로에서 결제창은 닫는다.
+
+
+async def test_loop_allow_submit_debug_mode_forces_virtual(monkeypatch):
+    # 디버그 모드(로그인 체크박스, 2026-08-10): allow_submit=True 여도 state.debug_mode 가 True 면
+    # 상신을 클릭하지 않고 종전 가상 상신 경로 그대로 — 재조회·재매핑도 없어야 한다(목록 유지).
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    submits: list = []
+
+    async def _submit(c, **kw):
+        submits.append(c)
+        return {"ok": True}
+
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    rq_calls: list = []
+
+    async def _rq(page, **kw):
+        rq_calls.append(1)
+        return {"ok": True, "rowcount": 0}
+
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+    q = _q()
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node(
+        {"events": q, "page": object(), "master_rowcount": 2, "max_rows": 2, "debug_mode": True}
+    )
+    assert out["processed"] == 2
+    assert submits == [] and rq_calls == []  # 상신 미클릭 + 재조회 없음.
+    assert "실제 상신 없음" in out["result"]
+    logs = _logs(_drain(q))
+    assert any("디버그 모드" in m for m in logs)
+    assert any("가상 상신 완료" in m for m in logs)
+
+
+async def test_loop_allow_submit_remaps_indexes_after_rows_disappear(monkeypatch):
+    # 상신된 행은 조회 필터에서 사라진다(2026-08-07 사용자 리포트) — 남은 대상의 인덱스가
+    # 앞으로 당겨져도(재조회+재매핑) 정확한 행을 잡는지 검증. 재매핑이 없으면 2번째 대상이
+    # FI-C 를 집고 3번째는 범위 밖이 된다.
+    child = _RecordingChild()
+    grid = ["FI-A", "FI-B", "FI-C"]  # 현재 그리드 상태(상신 성공분은 즉시 제거).
+    checked: list[int] = []
+
+    async def _key(page, i):
+        return grid[i] if 0 <= i < len(grid) else None
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, i):
+        checked.append(i)
+        return True
+
+    async def _open(page):
+        return child
+
+    async def _submit(c, **kw):
+        grid.pop(checked[-1])  # 상신 성공 → 그 행이 리스트에서 사라진다.
+        return {"ok": True}
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": len(grid)}
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+
+    node = make_loop_approvals_node(allow_submit=True)
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 3})
+    assert "error" not in out and out["processed"] == 3
+    assert out["processed_docu_nos"] == ["FI-A", "FI-B", "FI-C"]
+    assert checked == [0, 0, 0]  # 상신마다 리스트가 줄어 다음 대상은 항상 맨 위 행이다.
+    assert grid == []
+
+
+async def test_loop_allow_submit_key_mismatch_hard_stops(monkeypatch):
+    # 카드(키 선계획) 조합: 재매핑 위치의 행 키가 예상과 다르면(그리드가 기대만큼 줄지 않은
+    # 경우 등) 확정 불일치로 즉시 중단해야 한다 — 엉뚱한 전표 상신 방지.
+    child = _RecordingChild()
+    grid = ["FI-A", "FI-B"]  # ⚠ 상신해도 줄지 않는 그리드(비정상 상황 시뮬레이션).
+
+    async def _key(page, i):
+        return grid[i] if 0 <= i < len(grid) else None
+
+    async def _ab(page, i):
+        return f"AB{i}"
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, i):
+        return True
+
+    async def _open(page):
+        return child
+
+    async def _submit(c, **kw):
+        return {"ok": True}
+
+    async def _rq(page, **kw):
+        return {"ok": True, "rowcount": len(grid)}
+
+    async def _on_popup(c, gw, events):
+        return "첨부"
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "read_row_abdocu_no", _ab)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+    monkeypatch.setattr(approvals.steps, "click_child_submit", _submit)
+    monkeypatch.setattr(approvals.steps, "run_query", _rq)
+
+    node = make_loop_approvals_node(on_popup=_on_popup, allow_submit=True)
+    out = await node(
+        {
+            "events": _q(),
+            "page": object(),
+            "master_rowcount": 2,
+            "payment_map": {"AB0": "GW0", "AB1": "GW1"},
+        }
+    )
+    # 1건째(FI-A) 상신 후 그리드가 줄지 않았다 — 2건째 재매핑 위치(0행)의 키가 FI-A 라서
+    # 예상(FI-B)과 확정 불일치 → 하드 중단, 처리 건수는 1에서 멈춘다.
+    assert "행 재확인 실패" in out["error"]
+    assert out["processed"] == 1 and out["processed_docu_nos"] == ["FI-A"]
+
+
+async def test_run_query_expected_fast_settles_without_exhausting():
+    # 상신 반영 재조회(2026-08-07): 결제창을 닫는 순간 본창이 자동 갱신돼 클릭 전 값이 이미
+    # 기대값과 같다 — 무변화 HEAVY 소진(~7s)을 물지 않아야 한다(사용자 리포트: ~10s 딜레이).
+    # 단 오버레이(F2 리로드)를 관찰하지 못한 경우 **연속 2회 일치**로 확정한다(라이브 회귀:
+    # 리로드 완료 전 확정 → 다음 체크가 씻겨나가 '행 미선택' 결재 시도).
+    class _RQPage:
+        def __init__(self):
+            self.rowcount_reads = 0
+
+        async def evaluate(self, js_src, arg=None):
+            if arg == 0:  # ROWCOUNT_BY_INDEX_JS(마스터 그리드 0)
+                self.rowcount_reads += 1
+                return 5
+            if "loading" in js_src.lower():  # LOADING_OVERLAY_VISIBLE_JS — 오버레이 없음.
+                return False
+            return True  # js_click(BTN_LOOKUP) 등.
+
+    page = _RQPage()
+    t0 = time.monotonic()
+    out = await vsteps.run_query(page, expected=5)
+    assert out == {"ok": True, "rowcount": 5, "basis": "expected"}
+    assert page.rowcount_reads == 3  # 기준 1회 + 연속 일치 2회 — HEAVY 소진(5회) 아님.
+    assert time.monotonic() - t0 < 5.0  # 오버레이 관찰(≤2.5s)+0.6s 폴 — 소진이면 ~9.4s+.
+
+
+# ── click_child_submit 프리미티브(스텁 자식 Page) ────────────────────────────────
+async def test_click_child_submit_clicks_only_submit_then_confirms_and_closes():
+    class _Mouse:
+        def __init__(self, owner):
+            self._o = owner
+
+        async def click(self, x, y):
+            self._o.clicks.append((x, y))
+
+    class _ConfirmBtn:
+        def __init__(self, owner):
+            self._o = owner
+
+        @property
+        def first(self):
+            return self
+
+        async def click(self, timeout=None):
+            self._o.confirm_clicks += 1
+            self._o._closed = True  # 확인 클릭 → 창 닫힘(성공 신호) 시뮬레이션.
+
+    class _Child:
+        def __init__(self):
+            self.clicks: list = []
+            self.confirm_clicks = 0
+            self._closed = False
+            self.mouse = _Mouse(self)
+
+        async def evaluate(self, js_src, arg=None):
+            return [
+                {"text": "상신", "x": 922, "y": 30, "visible": True},
+                {"text": "보관", "x": 860, "y": 30, "visible": True},
+            ]
+
+        def is_closed(self):
+            return self._closed
+
+        def get_by_role(self, role, name=None):
+            assert (role, name) == ("button", "확인")
+            return _ConfirmBtn(self)
+
+    child = _Child()
+    out = await vsteps.click_child_submit(child, cap_ms=3_000, interval_ms=10)
+    assert out["ok"] is True
+    assert child.clicks == [(922, 30)]  # '상신' 좌표만 클릭(보관 미클릭).
+    assert child.confirm_clicks == 1
+
+
+async def test_click_child_submit_fails_without_submit_button():
+    class _Child:
+        async def evaluate(self, js_src, arg=None):
+            return [{"text": "미리보기", "x": 780, "y": 30, "visible": True}]
+
+        @property
+        def mouse(self):
+            raise AssertionError("버튼 미발견 시 클릭 시도 금지")
+
+    out = await vsteps.click_child_submit(_Child(), cap_ms=500, interval_ms=10)
+    assert out["ok"] is False and "찾지 못했" in out["reason"]
+
+
+# ── open_approval: 결재 클릭 '전에' expect_page 를 등록해야 한다(별도 Page 감지 계약) ──
+class _FakePageInfo:
+    def __init__(self, child):
+        self._child = child
+
+    @property
+    def value(self):
+        async def _v():
+            return self._child
+
+        return _v()
+
+
+class _FakeExpectPage:
+    def __init__(self, child, clicked):
+        self._child = child
+        self._clicked = clicked
+
+    async def __aenter__(self):
+        # 리스너는 결재 클릭 전에 등록돼야 한다(SSO 팝업 유실 방지).
+        assert self._clicked[0] is False, "expect_page 진입은 결재 클릭 전이어야 한다"
+        return _FakePageInfo(self._child)
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakeApprovalPage:
+    def __init__(self, child):
+        self._child = child
+        self.clicked = [False]
+        page = self
+
+        class _Ctx:
+            def expect_page(self):
+                return _FakeExpectPage(page._child, page.clicked)
+
+        class _Mouse:
+            async def click(self, x, y):
+                page.clicked[0] = True
+
+        self.context = _Ctx()
+        self.mouse = _Mouse()
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.LOADING_OVERLAY_VISIBLE_JS:
+            return False  # 오버레이 없음 — 즉시 클릭 진행.
+        return {"x": 1317, "y": 72}  # APPROVAL_BTN_RECT_JS
+
+
+async def test_open_approval_registers_listener_before_click():
+    child = _RecordingChild()
+    page = _FakeApprovalPage(child)
+    got = await vsteps.open_approval(page)
+    assert got is child
+    assert page.clicked[0] is True  # 클릭은 실제로 일어났다(리스너 등록 후).
+
+
+# ── open_approval 반복 호출 견고화(2026-07-21 배치 라이브 실측: 2건째 미출현) ──────────
+class _RetryExpectPage:
+    """expect_page() 컨텍스트 — should_fail=True 면 __aexit__ 에서 예외를 던져 '새 Page
+    미출현(타임아웃)'을 흉내낸다. Playwright 실제 계약과 동일하게 대기/확정은 __aexit__ 이후."""
+
+    def __init__(self, should_fail: bool, child) -> None:
+        self._should_fail = should_fail
+        self._child = child
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._should_fail:
+            raise TimeoutError("no new page (fake)")
+        return False
+
+    @property
+    def value(self):
+        async def _v():
+            return self._child
+
+        return _v()
+
+
+class _RetryApprovalPage:
+    """open_approval 재시도 검증용 — 처음 fail_times 회는 expect_page 가 실패하고, 이후엔
+    성공한다. rect 평가·정착 대기 호출 횟수를 기록해 '매 시도 새로 평가'를 검증한다."""
+
+    def __init__(self, fail_times: int, child) -> None:
+        self._fail_times = fail_times
+        self._child = child
+        self._attempts = 0
+        self.rect_evaluations = 0
+        self.waits: list[int] = []
+        page = self
+
+        class _Ctx:
+            def expect_page(ctx_self):
+                page._attempts += 1
+                return _RetryExpectPage(page._attempts <= page._fail_times, page._child)
+
+        class _Mouse:
+            async def click(self, x, y):
+                return None
+
+        self.context = _Ctx()
+        self.mouse = _Mouse()
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.LOADING_OVERLAY_VISIBLE_JS:
+            return False  # 오버레이 없음 — rect 카운트에 포함하지 않는다.
+        self.rect_evaluations += 1
+        return {"x": 1317, "y": 72}
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+async def test_open_approval_retries_after_first_expect_page_timeout():
+    """2026-07-21 실측: 1건째 성공 후 2건째에서 새 Page 미출현 관찰 — bounded 재시도로 방어.
+    실패 후 재시도 시 버튼 rect 를 캐시하지 않고 다시 읽는다."""
+    child = _RecordingChild()
+    page = _RetryApprovalPage(fail_times=1, child=child)
+    got = await vsteps.open_approval(page)
+    assert got is child
+    assert page.rect_evaluations == 2  # 실패 후 rect 를 다시(새로) 읽었다(캐시 아님).
+    assert page.waits == [500]  # 실패~재시도 사이 정착 대기 1회.
+
+
+async def test_open_approval_gives_up_after_max_attempts():
+    """모든 시도가 실패하면 무한 재시도 없이 상한(attempts)에서 None 을 돌려준다."""
+    child = _RecordingChild()
+    page = _RetryApprovalPage(fail_times=99, child=child)  # 항상 실패.
+    got = await vsteps.open_approval(page, attempts=2)
+    assert got is None
+    assert page.rect_evaluations == 2
+
+
+# ── wait_loading_overlay_gone: 근본원인 확정 회귀(2026-07-21 읽기전용 진단) ─────────────
+# check_row(setCurrent)가 트리거하는 `.dews-loading-bg` 오버레이가 결재 버튼 클릭을 가로채
+# 2건째 결제창이 안 뜨던 문제의 확정 원인 — 클릭 전 오버레이가 사라질 때까지 폴링해야 한다.
+class _OverlayFakePage:
+    def __init__(self, visible_for_polls: int) -> None:
+        self.polls = 0
+        self.waits: list[int] = []
+        self._visible_for = visible_for_polls
+
+    async def evaluate(self, js_src, arg=None):
+        assert js_src == vjs.LOADING_OVERLAY_VISIBLE_JS
+        self.polls += 1
+        return self.polls <= self._visible_for
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+async def test_wait_loading_overlay_gone_polls_until_hidden():
+    page = _OverlayFakePage(visible_for_polls=3)
+    ok = await vsteps.wait_loading_overlay_gone(page, interval_ms=10)
+    assert ok is True
+    assert page.polls == 4  # 3회 visible + 1회 확인(hidden).
+
+
+async def test_wait_loading_overlay_gone_returns_false_after_cap():
+    page = _OverlayFakePage(visible_for_polls=9999)  # 계속 안 사라짐.
+    ok = await vsteps.wait_loading_overlay_gone(page, cap_ms=30, interval_ms=10)
+    assert ok is False
+
+
+async def test_wait_loading_overlay_gone_absorbs_incompatible_stub():
+    """스텁이 evaluate/wait_for_timeout 을 못 갖춰도 예외 없이 True(best-effort)."""
+    ok = await vsteps.wait_loading_overlay_gone(object())
+    assert ok is True
+
+
+async def test_open_approval_waits_for_overlay_before_each_click():
+    """open_approval 이 매 시도마다 클릭 전 오버레이 소거를 기다린다(회귀 방지)."""
+    child = _RecordingChild()
+
+    class _OverlayThenApprovalPage(_RetryApprovalPage):
+        def __init__(self, child) -> None:
+            super().__init__(fail_times=0, child=child)
+            self.overlay_polls = 0
+
+        async def evaluate(self, js_src, arg=None):
+            if js_src == vjs.LOADING_OVERLAY_VISIBLE_JS:
+                self.overlay_polls += 1
+                return self.overlay_polls <= 2  # 2회는 보이다가 사라짐.
+            return await super().evaluate(js_src, arg)
+
+    page = _OverlayThenApprovalPage(child)
+    got = await vsteps.open_approval(page)
+    assert got is child
+    assert page.overlay_polls >= 3  # 사라짐 확인까지 폴링했다.
+
+
+# ── settle_parent_after_child_close: 자식 닫힘 확인 → 포그라운드 복귀 → 버튼 재가시 폴링 ──
+class _SettleFakeChild:
+    def __init__(self, closed_after_checks: int) -> None:
+        self._checks = 0
+        self._closed_after = closed_after_checks
+
+    def is_closed(self) -> bool:
+        self._checks += 1
+        return self._checks >= self._closed_after
+
+
+class _SettleFakePage:
+    def __init__(self, approval_visible_after_polls: int) -> None:
+        self.waits: list[int] = []
+        self.brought_to_front = False
+        self._polls = 0
+        self._visible_after = approval_visible_after_polls
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+    async def bring_to_front(self):
+        self.brought_to_front = True
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.LOADING_OVERLAY_VISIBLE_JS:
+            return False  # 로딩 없음 — 근본원인 수정(close 직후 로딩 대기)을 즉시 통과.
+        assert js_src == vjs.APPROVAL_BTN_RECT_JS
+        self._polls += 1
+        if self._polls >= self._visible_after:
+            return {"x": 1, "y": 1}
+        return None
+
+
+async def test_settle_parent_after_child_close_waits_close_then_front_then_button():
+    child = _SettleFakeChild(closed_after_checks=3)
+    page = _SettleFakePage(approval_visible_after_polls=2)
+    await vsteps.settle_parent_after_child_close(page, child)
+    assert page.brought_to_front is True
+    assert page._polls >= 2  # 결재 버튼이 다시 보일 때까지 폴링했다.
+
+
+async def test_settle_parent_after_child_close_absorbs_incompatible_stub():
+    """페이지/자식 스텁이 is_closed/bring_to_front/evaluate 를 갖추지 못해도(단위테스트 등)
+    예외 없이 조용히 반환한다(best-effort — open_approval 의 재시도가 최종 방어선)."""
+    await vsteps.settle_parent_after_child_close(object(), object())  # 예외 없이 반환해야 함.
+
+
+class _SettleLoadingFakePage:
+    """settle_parent_after_child_close 가 close 직후 본창 로딩을 실제로 기다리는지 검증한다
+    (도메인전문가 확정 근본원인 회귀 테스트) — 호출 순서와 오버레이 폴링 횟수를 기록."""
+
+    def __init__(self, overlay_visible_for_polls: int) -> None:
+        self.calls: list[str] = []
+        self.overlay_polls = 0
+        self._overlay_visible_for = overlay_visible_for_polls
+
+    async def wait_for_timeout(self, ms):
+        self.calls.append(f"wait:{ms}")
+
+    async def bring_to_front(self):
+        self.calls.append("bring_to_front")
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.LOADING_OVERLAY_VISIBLE_JS:
+            self.overlay_polls += 1
+            self.calls.append("overlay_check")
+            return self.overlay_polls <= self._overlay_visible_for
+        self.calls.append("rect_check")
+        return {"x": 1, "y": 1}  # 결재 버튼 즉시 유효.
+
+
+async def test_settle_parent_after_child_close_waits_for_loading_before_front_and_button():
+    """근본원인 회귀(도메인전문가 확정, 2026-07-21): "결제 팝업을 닫으면 본창에서 별도 처리가
+    진행되고 로딩이 걸린다. 그 로딩이 끝나기 전에 다음 행을 체크하고 결제를 다시 호출해서
+    안 되는 것" — close 직후 로딩 인디케이터가 사라질 때까지 **실제로 폴링**하고, 그 폴링이
+    bring_to_front/버튼폴링보다 **먼저** 온다(순서 검증)."""
+    child = _SettleFakeChild(closed_after_checks=1)  # 즉시 닫힘 확인.
+    page = _SettleLoadingFakePage(overlay_visible_for_polls=3)
+    await vsteps.settle_parent_after_child_close(page, child)
+    assert page.overlay_polls >= 4  # 3회 visible + 1회 확인(hidden) 이상 폴링했다.
+    first_bring = page.calls.index("bring_to_front")
+    last_overlay = max(i for i, c in enumerate(page.calls) if c == "overlay_check")
+    assert last_overlay < first_bring  # 로딩 대기가 포그라운드 복귀보다 먼저 끝난다.
+
+
+# ── ensure_field_visible: 결과검증형 확장(도메인전문가 실측, 2026-07-21) ─────────────
+class _VisFakeMouse:
+    def __init__(self, page: "_VisFakePage") -> None:
+        self._page = page
+
+    async def click(self, x, y):
+        self._page.clicks.append((x, y))
+
+
+class _VisFakePage:
+    """ensure_field_visible 테스트용 — FIELD_LABEL_VISIBLE_JS/EXPAND_TOGGLE_RECTS_JS 를
+    시나리오별로 스텁하고 클릭 좌표를 기록한다(어느 토글까지 시도했는지 검증).
+
+    (2026-07-31 전환) 라벨 가시화 대기가 고정 1s → 실시간(monotonic) 조건 폴링이 돼,
+    wait_for_timeout 이 가짜 시계를 전진시키고 steps.time.monotonic 를 그 시계로 patch 해야
+    '안 드러나는 토글'의 상한 소진이 실시간 낭비 없이 진행된다(_LogPage.install_clock 선례).
+    """
+
+    def __init__(self, *, visible_after_clicks: int, toggle_rects: list[dict]) -> None:
+        self.visible_after_clicks = visible_after_clicks
+        self.toggle_rects = toggle_rects
+        self.clicks: list[tuple[int, int]] = []
+        self.mouse = _VisFakeMouse(self)
+        self.clock_ms = 0.0
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.FIELD_LABEL_VISIBLE_JS:
+            return len(self.clicks) >= self.visible_after_clicks
+        if js_src == vjs.EXPAND_TOGGLE_RECTS_JS:
+            return self.toggle_rects
+        raise AssertionError(f"unexpected evaluate call: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        self.clock_ms += ms  # 가짜 실시간 진행 — monotonic 상한 소진용.
+
+    def install_clock(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "app.agents.voucher_receivable.steps.time.monotonic", lambda: self.clock_ms / 1_000
+        )
+
+
+async def test_ensure_field_visible_already_visible_clicks_nothing(monkeypatch):
+    """이미 보이면 어떤 토글도 누르지 않는다(역방향 접힘 방지 — 이미 펼쳐진 토글을 다시
+    누르면 접힐 수 있다)."""
+    page = _VisFakePage(visible_after_clicks=0, toggle_rects=[{"x": 1, "y": 1}])
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형")
+    assert ok is True
+    assert page.clicks == []
+
+
+async def test_ensure_field_visible_tries_toggles_left_to_right_until_visible(monkeypatch):
+    """숨김 상태면 좌→우 순으로 토글을 하나씩 결과검증형으로 눌러본다(여러 토글 시나리오,
+    도메인전문가 실측: 확장 토글이 여러 개일 수 있고 어느 것이 목표 필드를 드러내는지 미리
+    알 수 없다). 목표가 보이면 그 이상은 누르지 않는다."""
+    rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}, {"x": 300, "y": 10}]
+    page = _VisFakePage(visible_after_clicks=2, toggle_rects=rects)
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형")
+    assert ok is True
+    assert page.clicks == [(100, 10), (200, 10)]  # 세 번째 토글은 누르지 않았다.
+
+
+async def test_ensure_field_visible_returns_immediately_when_toggle_reveals(monkeypatch):
+    """(전환 검증) 토글이 라벨을 즉시 드러내면 종전 고정 1s 를 기다리지 않고 바로 True —
+    폴링 첫 확인에서 성공하므로 가짜 시계가 전혀 진행되지 않아야 한다."""
+    page = _VisFakePage(visible_after_clicks=1, toggle_rects=[{"x": 100, "y": 10}])
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형")
+    assert ok is True
+    assert page.clicks == [(100, 10)]
+    assert page.clock_ms == 0  # 고정 1s 대기가 사라졌다(조건 충족 즉시 진행).
+
+
+async def test_ensure_field_visible_gives_up_after_max_toggles(monkeypatch):
+    """어떤 토글로도 목표 필드가 보이지 않으면 False(무한 클릭 금지, max_toggles 상한)."""
+    rects = [{"x": 100, "y": 10}, {"x": 200, "y": 10}]
+    page = _VisFakePage(visible_after_clicks=99, toggle_rects=rects)
+    page.install_clock(monkeypatch)
+    ok = await vsteps.ensure_field_visible(page, "전표유형", max_toggles=2)
+    assert ok is False
+    assert page.clicks == [(100, 10), (200, 10)]
+
+
+# ── set_docu_types: SYSDEF_NM 필드 회귀(2026-07-21 실측 — DOCU_NM 아님) ────────────
+class _DocuTypesFakePage:
+    """set_docu_types 가 팝업 체크 JS 를 어떤 fieldName 으로 호출하는지 기록한다."""
+
+    def __init__(self) -> None:
+        self.mouse = _VisFakeMouse(self)  # type: ignore[arg-type]
+        self.clicks: list[tuple[int, int]] = []
+        self.check_rows_arg: list | None = None
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.FIELD_LABEL_VISIBLE_JS:
+            return True  # 이미 보임 — 토글 불필요.
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            return None  # 공지 모달 없음.
+        if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+            return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            return True  # 그리드 즉시 준비됨 — 폴링 1회만.
+        if js_src == vjs.POPUP_CHECK_ROWS_JS:
+            self.check_rows_arg = arg
+            targets, _field = arg
+            idxs = [{"t": t, "idx": i, "code": str(20 + i)} for i, t in enumerate(targets)]
+            return {"ok": True, "idxs": idxs, "n": 62}
+        if js_src == vjs.POPUP_APPLY_BTN_JS:
+            return {"x": 20, "y": 20}
+        raise AssertionError(f"unexpected evaluate call: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+async def test_set_docu_types_queries_sysdef_nm_field():
+    """회귀(2026-07-21 읽기전용 진단 실측): 전표유형 팝업의 실제 필드는 전자결재상태 팝업과
+    동일한 범용 코드테이블 스키마 SYSDEF_NM 이다 — 'DOCU_NM' 아님(이전 프로브 기록 오류)."""
+    page = _DocuTypesFakePage()
+    res = await vsteps.set_docu_types(page)
+    assert res["ok"] is True
+    assert page.check_rows_arg is not None
+    assert page.check_rows_arg[1] == "SYSDEF_NM"
+
+
+# ── _open_picker 그리드 준비 폴링 회귀(2026-07-21 voucher-payable 라이브 크래시 재현) ──────
+class _GridReadyFakePage:
+    """_open_picker 가 POPUP_GRID_READY_JS 로 실제 폴링하는지, 그리고 그리드가 끝까지
+    준비되지 않아도(폴링 상한 소진) 크래시 대신 우아한 실패로 이어지는지 검증한다."""
+
+    def __init__(self, ready_after_polls: int) -> None:
+        self.mouse = _VisFakeMouse(self)  # type: ignore[arg-type]
+        self.clicks: list[tuple[int, int]] = []
+        self.waits: list[int] = []
+        self.grid_ready_polls = 0
+        self._ready_after = ready_after_polls
+        self.check_all_called = False
+
+    @property
+    def _is_ready(self) -> bool:
+        return self.grid_ready_polls >= self._ready_after
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            return None  # 공지 모달 없음.
+        if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+            return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_COUNT_JS:
+            # 팝업 생명주기 모델: 돋보기(10,10) 클릭=열림, 적용(20,20) 클릭=닫힘.
+            opened = (10, 10) in self.clicks
+            closed = (20, 20) in self.clicks
+            return 1 if (opened and not closed) else 0
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            self.grid_ready_polls += 1
+            return self._is_ready
+        if js_src == vjs.POPUP_CHECK_ALL_JS:
+            self.check_all_called = True
+            # 실제 JS 와 동일하게 동작(2026-07-21 하드닝): 그리드 미부착 시 크래시 대신
+            # {ok:false} 를 돌려준다.
+            if not self._is_ready:
+                return {"ok": False, "reason": "grid-not-ready"}
+            return {"ok": True, "n": 46}
+        if js_src == vjs.POPUP_APPLY_BTN_JS:
+            return {"x": 20, "y": 20}
+        if js_src == vjs.FIELD_DISPLAY_JS:
+            return "인사/기획팀 외 45건"
+        raise AssertionError(f"unexpected evaluate: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+class _OrderedMouse:
+    def __init__(self, page: "_NoticeThenPickerFakePage") -> None:
+        self._page = page
+
+    async def click(self, x, y):
+        self._page.clicks.append((x, y))
+
+
+class _NoticeThenPickerFakePage:
+    """공지 팝업이 _open_picker 첫 확인 시 떠 있다가 닫히는 레이스(비동기 지연 로드)를
+    흉내낸다 — _open_picker 가 피커 클릭 **직전** 공유 dismiss_notice_popup 으로 먼저 닫아야
+    잡힌다. 클릭 순서를 그대로 기록해 '공지 닫기 → 대상 클릭' 순서를 검증한다."""
+
+    def __init__(self) -> None:
+        self.clicks: list[tuple[int, int]] = []
+        self.mouse = _OrderedMouse(self)  # type: ignore[arg-type]
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == js_lib.NOTICE_POPUP_BOXES_JS:
+            # 실물 시맨틱: '닫기'(500,500) 실클릭 후에만 소멸, 체크(400,500) 클릭은 checked 반영
+            # — dismiss_notice_popup 의 '검증된 닫기'(클릭 후 재평가) 계약과 정합(2026-07-23).
+            if (500, 500) in self.clicks:
+                return None
+            return {
+                "checkbox": {"x": 400, "y": 500},
+                "close": {"x": 500, "y": 500},
+                "checked": (400, 500) in self.clicks,
+            }
+        if js_src == vjs.FIELD_SEARCH_BTN_RECT_JS:
+            return {"x": 10, "y": 10}
+        if js_src == vjs.POPUP_GRID_READY_JS:
+            return True
+        raise AssertionError(f"unexpected evaluate: {js_src[:60]!r}")
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+async def test_open_picker_dismisses_late_appearing_notice_popup_just_in_time():
+    """근본원인 회귀(2026-07-21 voucher-payable 라이브 재현): 공지 팝업이 비동기 지연 로드돼
+    로그인 시 1회 닫아도 이후 뜨는 레이스가 있다 — _open_picker 가 피커 클릭 **직전** 공유
+    dismiss_notice_popup 으로 '하루동안 보지 않기' 체크→닫기 후에야 대상을 클릭한다(순서 검증)."""
+    page = _NoticeThenPickerFakePage()
+    ok = await vsteps._open_picker(page, "작성부서")
+    assert ok is True
+    # 공지 체크박스(400,500)→닫기(500,500)를 먼저, 그 다음에야 실제 피커(10,10)를 클릭.
+    assert page.clicks == [(400, 500), (500, 500), (10, 10)]
+
+
+async def test_open_picker_polls_grid_ready_before_check_all():
+    """근본원인 회귀(2026-07-21 voucher-payable 라이브 재현: 서버 응답이 느린 세션에서 팝업
+    클릭 직후 고정 대기만으로 checkAll 을 부르면 그리드 미부착 크래시). 그리드가 몇 번의
+    폴링 뒤에야 붙어도 _open_picker 가 대기한 '뒤에' 호출자가 checkAll 을 부른다."""
+    page = _GridReadyFakePage(ready_after_polls=3)
+    res = await vsteps.set_dept_all(page)
+    assert res["ok"] is True
+    assert page.grid_ready_polls >= 3
+    assert page.check_all_called is True
+
+
+async def test_set_dept_all_gracefully_fails_when_grid_never_ready():
+    """그리드가 폴링 상한까지 끝내 준비되지 않아도(극단적으로 느린 세션) 크래시가 아니라
+    우아한 실패({ok:false, reason:'...'})를 돌려준다 — 이전엔 raw JS TypeError 로 그래프
+    전체가 죽었다(runner 최상위 except 로 떨어짐, 필드별 에러 메시지 없음)."""
+    page = _GridReadyFakePage(ready_after_polls=99999)  # 절대 준비 안 됨.
+    res = await vsteps.set_dept_all(page)
+    assert res["ok"] is False
+    assert "실패" in res["reason"]
+    assert page.check_all_called is True  # 최종 방어선(JS 자체의 grid-not-ready)까지 도달했다.
+
+
+# ── D7(배치 순회 정합성) — 행/팝업 어긋남 안전 크리티컬 검증(2026-07-21 배치 라이브 스모크) ──
+class _D7Page:
+    """checked_row_indexes 용 — CHECKED_ROW_INDEXES_JS 호출에 지정된 결과를 돌려준다."""
+
+    def __init__(self, checked_rows: list[int]) -> None:
+        self._checked_rows = checked_rows
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == vjs.CHECKED_ROW_INDEXES_JS:
+            return {"ok": True, "rows": self._checked_rows}
+        raise AssertionError(f"unexpected page.evaluate: {js_src[:60]!r}")
+
+
+class _D7Child(_RecordingChild):
+    """read_child_docu_no 용 — CHILD_DOCU_NO_JS 호출에 지정된 매치를 돌려준다(그 외엔 기존
+    캔드 상단버튼 목록을 유지해 poll_child_ready 를 그대로 통과시킨다)."""
+
+    def __init__(self, docu_matches: list[str]) -> None:
+        super().__init__()
+        self._docu_matches = docu_matches
+
+    async def evaluate(self, js_src, arg=None):
+        self.calls.append("evaluate")
+        if js_src == vjs.CHILD_DOCU_NO_JS:
+            return self._docu_matches
+        return [
+            {"text": "상신", "x": 922, "y": 30, "visible": True},
+            {"text": "보관", "x": 860, "y": 30, "visible": True},
+            {"text": "미리보기", "x": 780, "y": 30, "visible": True},
+        ]
+
+
+async def test_loop_confirmed_docu_no_mismatch_aborts(monkeypatch):
+    """D7 안전 크리티컬: 결제창 전표번호가 예상 DOCU_NO 와 확정적으로(매치 정확히 1개) 다르면
+    배치를 즉시 중단한다(코디네이터 지시 — 어긋남 감지 시 계속 진행 금지). 결제창은 닫는다."""
+    child = _D7Child(["FI9999999999999999"])  # 예상(idx0=FI2026070100000000)과 다른 값.
+    _patch_loop(monkeypatch, child)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 3, "max_rows": 3})
+    assert "불일치" in out["error"]
+    assert child.closed is True  # 중단해도 결제창은 반드시 닫는다.
+    assert out["processed"] == 0  # 불일치 행은 처리건수에 포함하지 않는다.
+    assert out["processed_docu_nos"] == []
+
+
+async def test_loop_ambiguous_docu_no_match_still_processes(monkeypatch):
+    """후보가 0개/2개+ 면 확정 불일치가 아니므로(패턴 모호) 경고만 남기고 정상 처리한다
+    (셀렉터 불확실성으로 인한 오탐이 배치를 중단시키지 않도록)."""
+    child = _D7Child(["FI2026070100000000", "FI2026070100000099"])  # 2개 매치 = 모호.
+    _patch_loop(monkeypatch, child)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert out["processed"] == 1
+    assert out["processed_docu_nos"] == ["FI2026070100000000"]
+    assert child.closed is True
+
+
+async def test_loop_checked_rowcount_violation_aborts_before_opening_approval(monkeypatch):
+    """D7: 결제 열기 직전 체크된 행이 1이 아니면(직전 행 체크 잔존 등) 결제창을 아예 열지
+    않고 즉시 중단한다."""
+
+    async def _key(page, idx):
+        return "FI2026070100000000"
+
+    async def _uncheck(page):
+        return True
+
+    async def _check(page, idx):
+        return True
+
+    opened: list[bool] = []
+
+    async def _open(page):
+        opened.append(True)
+        return _RecordingChild()
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    monkeypatch.setattr(approvals.steps, "uncheck_all_rows", _uncheck)
+    monkeypatch.setattr(approvals.steps, "check_row", _check)
+    monkeypatch.setattr(approvals.steps, "open_approval", _open)
+
+    page = _D7Page(checked_rows=[0, 1])  # 2행 체크됨 — 위반.
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": page, "master_rowcount": 1, "max_rows": 1})
+    assert "체크된 행 수" in out["error"]
+    assert opened == []  # 결제창을 아예 열지 않았다.
+
+
+async def test_loop_checked_rowcount_ok_when_exactly_one(monkeypatch):
+    """체크된 행이 정확히 1개면 정상 진행(회귀 방지 — 정상 케이스가 오탐으로 막히지 않게)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _checked_ok(page):
+        return {"ok": True, "rows": [0]}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _checked_ok)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert out["processed"] == 1
+    assert child.closed is True
+
+
+async def test_loop_lazy_key_reads_only_processed_rows(monkeypatch):
+    """매출/매입(on_popup=None): 사전 전량 스캔 없이 처리 행만 lazy 로 key 를 읽는다
+    (2026-07-30 — 대량 조회에서 전 행 getJsonRows 순회가 체크 리셋을 유발한다는 가설 완화)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    reads: list[int] = []
+
+    async def _key(page, idx):
+        reads.append(idx)
+        return f"FI{idx}"
+
+    monkeypatch.setattr(approvals.steps, "read_row_key", _key)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 5, "max_rows": 1})
+    assert out["processed"] == 1
+    assert reads == [0]  # 이전엔 range(5) 전량 사전 read.
+
+
+async def test_loop_d7_mismatch_recovers_after_recheck(monkeypatch):
+    """D7 체크행수 불일치([]) 1회차 → 재체크로 [idx] 복구되면 배치가 계속된다."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+    seq: list[str] = []
+
+    async def _chk(page):
+        seq.append("chk")
+        # 첫 읽기는 빈 배열(지연 재렌더로 리셋된 상황), 재체크 후 읽기는 정상.
+        return {"ok": True, "rows": []} if len(seq) == 1 else {"ok": True, "rows": [0]}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    q = _q()
+    node = make_loop_approvals_node()
+    out = await node({"events": q, "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert out["processed"] == 1 and "error" not in out
+    logs = _logs(_drain(q))
+    assert any("재체크 후 재확인" in m for m in logs)
+
+
+async def test_loop_d7_mismatch_persists_hard_fails(monkeypatch):
+    """재체크 후에도 체크행수가 1이 아니면 기존대로 하드 실패(안전장치 유지)."""
+    child = _RecordingChild()
+    _patch_loop(monkeypatch, child)
+
+    async def _chk(page):
+        return {"ok": True, "rows": []}
+
+    monkeypatch.setattr(approvals.steps, "checked_row_indexes", _chk)
+    node = make_loop_approvals_node()
+    out = await node({"events": _q(), "page": object(), "master_rowcount": 1, "max_rows": 1})
+    assert "재체크 후에도" in out["error"] and out["processed"] == 0

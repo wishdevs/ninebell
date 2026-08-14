@@ -1,25 +1,32 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   RiAlertLine,
   RiArrowDownSLine,
-  RiErrorWarningLine,
+  RiCheckLine,
+  RiFileCopyLine,
   RiHistoryLine,
-  RiLockLine,
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Spinner } from '@/components/ui/spinner';
-import { EmptyState } from '@/components/ui/empty-state';
+import { FilterPill } from '@/components/ui/filter-pill';
+import { ListStatePanel, LockedEmptyState } from '@/components/ui/list-state';
+import { ListToolbar } from '@/components/ui/list-toolbar';
 import { Pagination } from '@/components/ui/pagination';
 import { RunStatusBadge } from '@/components/ui/run-status-badge';
+import { SelectItem } from '@/components/ui/select-dropdown';
+import { TableCard, tableRowClass } from '@/components/ui/table-card';
 import { cn } from '@/lib/utils';
-import { ApiError, toApiError } from '@/lib/api/client';
+import { api, ApiError } from '@/lib/api/client';
 import { Td, Th } from '@/components/ui/table-cell';
+import { useListParams } from '@/hooks/use-list-params';
+import { usePagedQuery, type Page } from '@/hooks/use-paged-query';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { useCan } from '@/components/permissions/perm-gate';
 import { formatDateTime } from '@/lib/data/format';
+import type { Agent } from '@/lib/data/agents';
 import {
   extractSelections,
   fetchRunDetail,
@@ -28,21 +35,34 @@ import {
   type ChatSelection,
   type RunDetail,
   type RunLogEntry,
+  type RunStatus,
   type RunSummary,
 } from '@/lib/live/runs-api';
 
 const PAGE_SIZE = 50;
 
-type Phase = 'loading' | 'ready' | 'error';
+/**
+ * 워크플로우 id → 표기 메타. GET /agents 가 단일 라벨 소스다(하드코딩 맵 제거) —
+ * 로드 실패/미등록 워크플로우(demo-echo 등)는 매핑이 없어 원문 id 폴백으로 강등된다.
+ */
+interface AgentMeta {
+  /** 한글 에이전트 명(agents.name). */
+  name: string;
+  /** 소속 그룹명 — null 이면 단독 에이전트. */
+  groupName: string | null;
+}
 
-/** 워크플로우 id → 사람이 읽는 라벨(없으면 raw id). */
-const WORKFLOW_LABEL: Record<string, string> = {
-  'demo-echo': '데모 에코',
-  'expense-card-chat': '법인카드 경비 (대화형)',
-};
+/** 상태 필터 옵션 — DB에 실제로 저장되는 런 상태만(RunStatusBadge 라벨과 동일 문구). */
+const STATUS_FILTER_OPTIONS: { value: RunStatus; label: string }[] = [
+  { value: 'running', label: '실행 중' },
+  { value: 'succeeded', label: '완료' },
+  { value: 'failed', label: '실패' },
+  { value: 'cancelled', label: '종료됨' },
+];
 
-function agentLabel(agentId: string): string {
-  return WORKFLOW_LABEL[agentId] ?? agentId;
+interface AgentOption {
+  value: string;
+  label: string;
 }
 
 /**
@@ -52,30 +72,73 @@ function agentLabel(agentId: string): string {
  */
 export function LogsClient() {
   const canRead = useCan(PERMISSIONS.LOGS_READ);
-  const [rows, setRows] = useState<RunSummary[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [phase, setPhase] = useState<Phase>('loading');
-  const [error, setError] = useState<ApiError | null>(null);
+  // 이 화면은 텍스트 검색이 없다 — searchInput 은 쓰지 않는다.
+  const { filters, setFilter, page, setPage, isFiltered, reset } = useListParams({
+    filters: { status: 'all', agent: 'all' },
+  });
+  const [agentIndex, setAgentIndex] = useState<Record<string, AgentMeta>>({});
 
-  const loadPage = useCallback(async (target: number) => {
-    setPhase('loading');
-    setError(null);
-    try {
-      const res = await fetchRuns({ limit: PAGE_SIZE, offset: (target - 1) * PAGE_SIZE });
-      setRows(res.runs);
-      setTotal(res.total);
-      setPage(target);
-      setPhase('ready');
-    } catch (err: unknown) {
-      setError(toApiError(err));
-      setPhase('error');
-    }
-  }, []);
-
+  // 행 라벨·필터 옵션 공용 워크플로우 매핑 — 실패해도 상태 필터만 남기고 무해히 강등한다.
   useEffect(() => {
-    if (canRead) loadPage(1);
-  }, [canRead, loadPage]);
+    if (!canRead) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const agents = await api.get<Agent[]>('/agents');
+        if (cancelled) return;
+        const index: Record<string, AgentMeta> = {};
+        for (const a of agents) {
+          if (!a.workflowId || index[a.workflowId]) continue;
+          index[a.workflowId] = { name: a.name, groupName: a.group?.name ?? null };
+        }
+        setAgentIndex(index);
+      } catch {
+        setAgentIndex({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canRead]);
+
+  // 필터 칩용 옵션 — "그룹명 > 한글명"(단독은 이름만), 그룹 순 → 이름 순 정렬.
+  const agentOptions = useMemo<AgentOption[]>(
+    () =>
+      Object.entries(agentIndex)
+        .sort(([, a], [, b]) => {
+          if (!!a.groupName !== !!b.groupName) return a.groupName ? -1 : 1; // 그룹 있는 항목 먼저
+          const byGroup = (a.groupName ?? '').localeCompare(b.groupName ?? '', 'ko');
+          if (byGroup !== 0) return byGroup;
+          return a.name.localeCompare(b.name, 'ko');
+        })
+        .map(([workflowId, meta]) => ({
+          value: workflowId,
+          label: meta.groupName ? `${meta.groupName} > ${meta.name}` : meta.name,
+        })),
+    [agentIndex],
+  );
+
+  // 필터를 클로저에 넣은 fetcher — 정체성이 바뀌면 usePagedQuery 가 재조회한다.
+  // fetchRuns 의 {runs,total} 을 정규형 Page{rows,total} 로 어댑트.
+  const fetchPage = useCallback(
+    async ({ limit, offset }: { limit: number; offset: number }): Promise<Page<RunSummary>> => {
+      const res = await fetchRuns({
+        limit,
+        offset,
+        agentId: filters.agent === 'all' ? undefined : filters.agent,
+        status: filters.status === 'all' ? undefined : filters.status,
+      });
+      return { rows: res.runs, total: res.total };
+    },
+    [filters.agent, filters.status],
+  );
+
+  // 권한 없으면 fetcher null — 요청 자체를 하지 않는다(권한 게이트).
+  const { rows, total, phase, error, reload } = usePagedQuery(canRead ? fetchPage : null, {
+    page,
+    pageSize: PAGE_SIZE,
+    setPage, // 스테일 URL page 오버플로 시 마지막 페이지로 클램프
+  });
 
   return (
     <div className="animate-page-enter flex flex-col gap-8">
@@ -86,60 +149,82 @@ export function LogsClient() {
       />
 
       {!canRead ? (
-        <EmptyState
-          icon={<RiLockLine size={18} aria-hidden />}
-          title="접근 권한이 없습니다"
-          description="실행 로깅은 관리자 이상만 열람할 수 있습니다."
-        />
-      ) : phase === 'loading' ? (
-        <div className="text-muted-foreground flex items-center justify-center gap-2 py-16 text-sm">
-          <Spinner size={18} label="로그 불러오는 중" />
-          실행 내역을 불러오는 중…
-        </div>
-      ) : phase === 'error' && rows.length === 0 ? (
-        <EmptyState
-          icon={<RiErrorWarningLine size={18} aria-hidden />}
-          title="실행 내역을 불러오지 못했습니다"
-          description={error?.status === 0 ? '서버에 연결할 수 없습니다.' : (error?.message ?? '')}
-          action={
-            <Button variant="secondary" size="sm" onClick={() => loadPage(1)}>
-              다시 시도
-            </Button>
-          }
-        />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          icon={<RiHistoryLine size={18} aria-hidden />}
-          title="실행 내역이 없습니다"
-          description="아직 기록된 에이전트 실행이 없습니다."
-        />
+        <LockedEmptyState description="실행 로깅은 관리자 이상만 열람할 수 있습니다." />
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="border-border bg-surface overflow-x-auto rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-            <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="border-border text-foreground-tertiary border-b text-[length:var(--text-caption)] font-medium tracking-[0.04em]">
-                <tr>
-                  <Th className="w-6">
-                    <span className="sr-only">펼치기</span>
-                  </Th>
-                  <Th>에이전트</Th>
-                  <Th>실행자</Th>
-                  <Th>실행시각</Th>
-                  <Th>상태</Th>
-                  <Th>실패 단계</Th>
-                  <Th>결과 요약</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((run) => (
-                  <RunRow key={run.id} run={run} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <>
+          <ListToolbar isFiltered={isFiltered} onReset={reset}>
+            <FilterPill
+              label="상태"
+              ariaLabel="상태 필터"
+              value={filters.status}
+              active={filters.status !== 'all'}
+              onValueChange={(v) => setFilter('status', v)}
+            >
+              <SelectItem value="all">전체</SelectItem>
+              {STATUS_FILTER_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </FilterPill>
 
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={loadPage} />
-        </div>
+            <FilterPill
+              label="에이전트"
+              ariaLabel="에이전트 필터"
+              value={filters.agent}
+              active={filters.agent !== 'all'}
+              onValueChange={(v) => setFilter('agent', v)}
+            >
+              <SelectItem value="all">전체</SelectItem>
+              {agentOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </FilterPill>
+          </ListToolbar>
+
+          <ListStatePanel
+            phase={phase}
+            error={error}
+            loadingLabel="실행 내역을 불러오는 중…"
+            errorTitle="실행 내역을 불러오지 못했습니다"
+            onRetry={reload}
+            isEmpty={rows.length === 0}
+            empty={{
+              icon: <RiHistoryLine size={18} aria-hidden />,
+              title: '실행 내역이 없습니다',
+              description: isFiltered
+                ? '검색·필터 조건에 맞는 실행 내역이 없습니다.'
+                : '아직 기록된 에이전트 실행이 없습니다.',
+            }}
+          >
+            <div className="flex flex-col gap-3">
+              <TableCard
+                minWidth={900}
+                head={
+                  <tr>
+                    <Th className="w-6">
+                      <span className="sr-only">펼치기</span>
+                    </Th>
+                    <Th>에이전트</Th>
+                    <Th>실행자</Th>
+                    <Th>실행시각</Th>
+                    <Th>상태</Th>
+                    <Th>실패 단계</Th>
+                    <Th>결과 요약</Th>
+                  </tr>
+                }
+              >
+                {rows.map((run) => (
+                  <RunRow key={run.id} run={run} meta={agentIndex[run.agentId]} />
+                ))}
+              </TableCard>
+
+              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+            </div>
+          </ListStatePanel>
+        </>
       )}
     </div>
   );
@@ -147,7 +232,7 @@ export function LogsClient() {
 
 // ── 행(+ 지연 로드 상세) ─────────────────────────────────────────────
 
-function RunRow({ run }: { run: RunSummary }) {
+function RunRow({ run, meta }: { run: RunSummary; meta?: AgentMeta }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -176,7 +261,7 @@ function RunRow({ run }: { run: RunSummary }) {
       <tr
         onClick={() => void toggle()}
         aria-expanded={open}
-        className="border-border-subtle row-hover cursor-pointer border-b last:border-0"
+        className={cn(tableRowClass, 'cursor-pointer')}
       >
         <Td className="text-foreground-tertiary">
           <RiArrowDownSLine
@@ -186,8 +271,18 @@ function RunRow({ run }: { run: RunSummary }) {
           />
         </Td>
         <Td>
-          <span className="text-foreground font-medium">{agentLabel(run.agentId)}</span>
-          <span className="text-muted-foreground block font-mono text-[11px]">{run.agentId}</span>
+          {meta ? (
+            <>
+              <span className="text-foreground font-medium">{meta.name}</span>
+              <span className="text-foreground-secondary block text-[11px]">
+                {meta.groupName ? `${meta.groupName} ` : null}
+                <span className="text-muted-foreground font-mono">{run.agentId}</span>
+              </span>
+            </>
+          ) : (
+            // 매핑 없는 워크플로우(expense-card-chat·demo-echo 등)는 원문 id 한 줄만.
+            <span className="text-foreground font-medium">{run.agentId}</span>
+          )}
         </Td>
         <Td className="text-muted-foreground text-xs">{executor}</Td>
         <Td className="text-muted-foreground text-xs tabular-nums">
@@ -263,7 +358,10 @@ function RunDetailBody({ detail }: { detail: RunDetail }) {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <p className="text-foreground-secondary text-[11px] font-semibold">단계별 로그</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-foreground-secondary text-[11px] font-semibold">단계별 로그</p>
+          <CopyLogsButton detail={detail} />
+        </div>
         <RunLogLines logs={detail.logs} />
       </div>
     </div>
@@ -350,6 +448,95 @@ function renderValue(value: unknown): string {
 
 // ── 단계별 로그 ──────────────────────────────────────────────────────
 
+/** 복사 성공/실패 피드백 유지 시간(ms). */
+const COPY_FEEDBACK_MS = 1500;
+
+/** 로그 줄 시각 "HH:MM:SS" — Asia/Seoul 고정(코드베이스 시간 표기 규칙과 동일). */
+const LOG_TIME_FMT = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+/** 로그 ts(epoch ms) → "HH:MM:SS". 과거 런엔 ts 가 없으므로 없으면 null(방어 렌더). */
+function formatLogTime(ts: number | undefined): string | null {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
+  return LOG_TIME_FMT.format(new Date(ts));
+}
+
+/**
+ * 런 로그 전체를 사람이 읽는 플레인텍스트로 — 상단에 run id·워크플로우·상태·시작/종료,
+ * 이어서 줄마다 [시각] [단계] 레벨 메시지(없는 필드는 생략).
+ */
+function buildLogText(detail: RunDetail): string {
+  const head = [
+    `run id: ${detail.id}`,
+    `워크플로우: ${detail.agentId}`,
+    `상태: ${detail.status}`,
+    `시작: ${detail.startedAt ? formatDateTime(detail.startedAt) : '—'}`,
+    `종료: ${detail.finishedAt ? formatDateTime(detail.finishedAt) : '—'}`,
+  ];
+  const lines = detail.logs.map((log) => {
+    const time = formatLogTime(log.ts);
+    return [
+      time ? `[${time}]` : null,
+      log.step ? `[${log.step}]` : null,
+      LOG_LABEL[log.level] ?? log.level.toUpperCase(),
+      log.message,
+    ]
+      .filter(Boolean)
+      .join(' ');
+  });
+  return [...head, '─'.repeat(24), ...lines].join('\n');
+}
+
+type CopyState = 'idle' | 'copied' | 'failed';
+
+/** 단계별 로그 복사 버튼 — 성공 시 1.5s '복사됨'(아이콘 전환), 실패도 조용히 삼키지 않는다. */
+function CopyLogsButton({ detail }: { detail: RunDetail }) {
+  const [state, setState] = useState<CopyState>('idle');
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  async function copy(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(buildLogText(detail));
+      setState('copied');
+    } catch {
+      // 클립보드 미지원/권한 거부 — 짧은 안내 후 원복.
+      setState('failed');
+    }
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setState('idle'), COPY_FEEDBACK_MS);
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-live="polite"
+      className={cn('h-6 gap-1 px-1.5 text-[11px]', state === 'failed' && 'text-danger')}
+      onClick={() => void copy()}
+    >
+      {state === 'copied' ? (
+        <RiCheckLine size={13} aria-hidden className="text-success" />
+      ) : (
+        <RiFileCopyLine size={13} aria-hidden />
+      )}
+      {state === 'copied' ? '복사됨' : state === 'failed' ? '복사 실패' : '복사'}
+    </Button>
+  );
+}
+
 const LOG_TONE: Record<string, string> = {
   info: 'text-muted-foreground bg-muted',
   ok: 'text-success bg-success/10',
@@ -370,21 +557,30 @@ function RunLogLines({ logs }: { logs: readonly RunLogEntry[] }) {
   }
   return (
     <ul className="border-border bg-surface flex max-h-72 flex-col gap-0.5 overflow-y-auto rounded-[var(--radius-md)] border p-2">
-      {logs.map((log, i) => (
-        <li key={i} className="flex items-start gap-2 px-1 py-0.5">
-          <span
-            className={cn(
-              'mt-0.5 shrink-0 rounded px-1 py-0.5 font-mono text-[9px] font-bold',
-              LOG_TONE[log.level] ?? LOG_TONE.info,
-            )}
-          >
-            {LOG_LABEL[log.level] ?? log.level.toUpperCase()}
-          </span>
-          <p className="text-foreground-secondary min-w-0 flex-1 text-[11px] leading-snug break-words">
-            {log.message}
-          </p>
-        </li>
-      ))}
+      {logs.map((log, i) => {
+        const time = formatLogTime(log.ts);
+        return (
+          <li key={i} className="flex items-start gap-2 px-1 py-0.5">
+            {/* ts 는 BE additive 필드 — 과거 런엔 없으므로 있을 때만 표시(방어 렌더). */}
+            {time ? (
+              <span className="text-foreground-tertiary mt-0.5 shrink-0 font-mono text-[10px] tabular-nums">
+                {time}
+              </span>
+            ) : null}
+            <span
+              className={cn(
+                'mt-0.5 shrink-0 rounded px-1 py-0.5 font-mono text-[9px] font-bold',
+                LOG_TONE[log.level] ?? LOG_TONE.info,
+              )}
+            >
+              {LOG_LABEL[log.level] ?? log.level.toUpperCase()}
+            </span>
+            <p className="text-foreground-secondary min-w-0 flex-1 text-[11px] leading-snug break-words">
+              {log.message}
+            </p>
+          </li>
+        );
+      })}
     </ul>
   );
 }

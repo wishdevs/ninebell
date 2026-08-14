@@ -1,6 +1,7 @@
 """회원가입 흐름 검증(CONTRACT_V2 A) — POST /auth/signup.
 
 - 유효 토큰 + agreedTerms → 유저 생성 + 세션 발급 + 약관 동의 시각/이메일 저장.
+- 이름/부서는 ERP 프로필값(pending)이 권위값 — 클라이언트가 보낸 값은 무시.
 - SUPER_ADMIN_OMNISOL_IDS 에 속한 userid → super_admin 롤.
 - agreedTerms 미동의 → 400. 유효하지 않은/만료 토큰 → 400.
 """
@@ -15,7 +16,7 @@ import app.erp.login as erp_login
 from app.config import get_settings
 from app.erp.credcache import CredCache
 from app.main import app as fastapi_app
-from app.models import User
+from app.models import OrgUnit, User
 from app.services.signup_cache import SignupCache
 
 
@@ -44,8 +45,6 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": True,
         },
@@ -57,6 +56,8 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
     async with sm() as s:
         u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
         assert u.role.code == "user"
+        assert u.display_name == "홍길동"  # pending(ERP 프로필)값 — 클라 미전송
+        assert u.department == "개발팀"
         assert u.email == "hong@example.com"
         assert u.agreed_terms_at is not None
         assert u.last_login_at is not None
@@ -64,6 +65,59 @@ async def test_signup_creates_user_and_issues_session(client, sm, monkeypatch):
 
     # 토큰은 소비되어 재사용 불가.
     assert fastapi_app.state.signup_cache.get(token) is None
+
+
+async def test_signup_name_and_department_from_erp_ignore_body(client, sm, monkeypatch):
+    """이름·부서는 ERP 인증값(pending)을 권위값으로 — 클라가 다른 값을 보내도 무시."""
+    _wire_state(monkeypatch)
+    # ERP 프로필: 이름=홍길동, 부서=개발팀
+    token = fastapi_app.state.signup_cache.put("newbie", "pw", "홍길동", "개발팀")
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "위조이름",  # 클라 조작 — 무시돼야 한다.
+            "department": "위조팀",  # 클라 조작(조직구분 자동배정 키) — 무시돼야 한다.
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
+        assert u.display_name == "홍길동"  # 클라 '위조이름'이 아니라 ERP 프로필값
+        assert u.department == "개발팀"  # 클라 '위조팀'이 아니라 ERP 프로필값
+
+
+async def test_signup_assigns_org_unit_from_department(client, sm, monkeypatch):
+    """가입 시 부서(=조직구분)를 org_units 에 매칭해 org_unit_id 자동 배정 — '미지정' 방지."""
+    _wire_state(monkeypatch)
+    # 조직구분: 본부X ▸ 개발팀. 가입 부서 '개발팀'이 이 팀에 매칭돼야 한다.
+    async with sm() as s:
+        s.add_all(
+            [
+                OrgUnit(id="hq_x", label="본부X", parent_id=None, sort_order=0),
+                OrgUnit(id="hq_x__t0", label="개발팀", parent_id="hq_x", cost_type="판관비", sort_order=0),
+            ]
+        )
+        await s.commit()
+    token = fastapi_app.state.signup_cache.put("newbie", "pw", "홍길동", "개발팀")
+
+    resp = await client.post(
+        "/auth/signup",
+        json={
+            "signupToken": token,
+            "displayName": "홍길동",
+            "department": "개발팀",
+            "agreedTerms": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    async with sm() as s:
+        u = (await s.execute(select(User).where(User.omnisol_userid == "newbie"))).scalar_one()
+        assert u.org_unit_id == "hq_x__t0"  # 부서 → 팀 매칭
 
 
 async def test_signup_succeeds_without_email(client, sm, monkeypatch):
@@ -75,8 +129,6 @@ async def test_signup_succeeds_without_email(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "agreedTerms": True,
         },
     )
@@ -98,8 +150,6 @@ async def test_signup_normalizes_empty_email_to_none(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "",
             "agreedTerms": True,
         },
@@ -121,8 +171,6 @@ async def test_signup_assigns_super_admin_from_env(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "보스",
-            "department": "경영지원",
             "email": "boss@example.com",
             "agreedTerms": True,
         },
@@ -144,8 +192,6 @@ async def test_signup_rejects_when_terms_not_agreed(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": False,
         },
@@ -166,8 +212,6 @@ async def test_signup_rejects_invalid_token(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": "does-not-exist",
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "hong@example.com",
             "agreedTerms": True,
         },
@@ -187,8 +231,6 @@ async def test_login_then_signup_end_to_end(client, sm, monkeypatch):
         "/auth/signup",
         json={
             "signupToken": token,
-            "displayName": "홍길동",
-            "department": "개발팀",
             "email": "e2e@example.com",
             "agreedTerms": True,
         },
@@ -199,5 +241,7 @@ async def test_login_then_signup_end_to_end(client, sm, monkeypatch):
 
     async with sm() as s:
         u = (await s.execute(select(User).where(User.omnisol_userid == "e2euser"))).scalar_one()
+        assert u.display_name == "홍길동"
+        assert u.department == "개발팀"
         assert u.email == "e2e@example.com"
         assert u.role.code == "user"

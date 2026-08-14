@@ -16,6 +16,15 @@ class AuthError(OmnisolError):
     """로그인 실패(자격증명 불일치·폼 미소멸 등)."""
 
 
+class LoginPageError(AuthError):
+    """로그인 페이지 미로드 — 옴니솔 점검·SPA 지연 등 **인프라성** 실패.
+
+    자격증명 실패와 구분하기 위한 서브클래스. AuthError 를 상속하므로 기존 nbkit
+    소비자(에이전트 로그인 노드 등)의 ``except AuthError`` 에는 종전대로 잡히고,
+    backend 로그인 래퍼(app/erp/login.py)만 이를 따로 잡아 401(시도제한 카운트)이
+    아닌 502 인프라 오류 경로로 승격한다."""
+
+
 class UserTypeError(OmnisolError):
     """사용자 유형(인사/회계) 전환 실패 — 실클릭 반영 안 됨 등."""
 

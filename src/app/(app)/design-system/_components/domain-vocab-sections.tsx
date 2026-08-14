@@ -285,6 +285,16 @@ const PREFILL_DOC: Record<PrefillSource, { label: string; cls: string; meaning: 
     cls: 'bg-info/15 text-info',
     meaning: '전사 기초자료(과거 법인카드 실적)의 가맹점 관례 — info = 조직 차원 근거',
   },
+  lookup: {
+    label: '추천',
+    cls: 'bg-warning/15 text-warning',
+    meaning: '예산계정 변경에 맞춰 실시간 재추천된 적요 — warning = 자동 채움, 확인 후 필요시 수정',
+  },
+  mirror: {
+    label: '취소',
+    cls: 'bg-danger/15 text-danger',
+    meaning: '승인취소 — 원거래와 같은 분류를 자동 복사(상계) — danger = 음수 거래 주의',
+  },
   default: {
     label: '기본',
     cls: 'bg-muted text-foreground-tertiary',
@@ -292,7 +302,14 @@ const PREFILL_DOC: Record<PrefillSource, { label: string; cls: string; meaning: 
   },
 };
 
-const PREFILL_ORDER: ReadonlyArray<PrefillSource> = ['learned', 'seed', 'ai', 'default'];
+const PREFILL_ORDER: ReadonlyArray<PrefillSource> = [
+  'learned',
+  'seed',
+  'ai',
+  'mirror',
+  'lookup',
+  'default',
+];
 
 /* ── 5) 스킬 칩 — 계층 배지(skills 페이지 LayerBadge 와 동일 클래스) ── */
 

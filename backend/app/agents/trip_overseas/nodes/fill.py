@@ -42,7 +42,12 @@ def make_set_acct_date_node():
         if not r.get("ok"):
             await emit_step(events, "set_acct_date", "failed")
             return {"error": f"회계일 설정 실패({dashed}): {r.get('reason')}"}
-        await emit_log(events, f"회계일 = {dashed} (마지막 계산서일).", "info")
+        # 확인 불가(그리드 셀 readback 실패)는 하드 실패로 막지 않되 **조용히 넘기지도 않는다** —
+        # 회계일은 저장될 데이터 자체라, 반영을 못 본 채 진행했다는 사실이 로그에 남아야 한다.
+        if r.get("warn"):
+            await emit_log(events, f"회계일 {r['warn']}", "warn")
+        verified = "" if r.get("verified", True) else " (반영 미확인)"
+        await emit_log(events, f"회계일 = {dashed} (마지막 계산서일).{verified}", "info")
         await emit_step(events, "set_acct_date", "done", _ms(t0))
         return {}
 
@@ -78,9 +83,23 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": i + 1, "field": field, "reason": reason}]}
 
+        unverified: list[str] = []
+
+        async def note_warn(i: int, field: str, r: dict) -> None:
+            """스텝이 '확인 불가'(리더가 셀/필드를 못 읽음)로 돌려준 값을 경고로 노출한다.
+
+            값이 틀린 것(하드 실패)과 달리 플로우는 진행하되, **반영을 단정하지 않는다** —
+            리더 오탐이 멀쩡한 런을 끊지 않으면서도 조용한 미반영이 로그 없이 묻히지 않게 하는
+            안전판(D7 체크행수 판정과 동일 규율).
+            """
+            if r.get("warn"):
+                unverified.append(f"{i + 1}행 {field}")
+                await emit_log(events, f"{i + 1}행 '{field}' {r['warn']}", "warn")
+
         total = len(plan_rows)
         filled = 0
         for i, row in enumerate(plan_rows):
+            row_warns = len(unverified)
             amount = int(row.get("amount") or 0)
             await emit_log(events, f"{i + 1}/{total}행 입력 시작 — 공급가액 {amount:,}원.", "info")
 
@@ -104,14 +123,17 @@ def make_fill_rows_node():
             pr = await steps.fill_partner_by_search(page, self_name)
             if not pr.get("ok"):
                 return await fail(i, "거래처", pr.get("reason"))
+            await note_warn(i, "거래처", pr)
             # 4) 예산단위(부서 × 비용구분 여비교통비-해외출장 고정 조합).
             bu = await steps.fill_budget_fixed(page, department, cost_type)
             if not bu.get("ok"):
                 return await fail(i, "예산단위", bu.get("reason"))
+            await note_warn(i, "예산단위", bu)
             # 5) 프로젝트.
             pj = await steps.fill_project(page, row.get("project") or {})
             if not pj.get("ok"):
                 return await fail(i, "프로젝트", pj.get("reason"))
+            await note_warn(i, "프로젝트", pj)
             # 6) 공급가액(거래금액=SPPRC_AMT2) = **셀 에디터 실 타이핑 + 예산현황 확인**(국내와 동일).
             #    setValue 는 예산현황 확인 트리거를 건너뛰어 저장 DB오류 → 타이핑+Tab→예산현황 확인.
             sa = await steps.type_amount(page, amount)
@@ -121,6 +143,7 @@ def make_fill_rows_node():
             nt = await steps.set_row_note(page, row.get("note") or "")
             if not nt.get("ok"):
                 return await fail(i, "적요", nt.get("reason"))
+            await note_warn(i, "적요", nt)
             # 8) 상대계정거래처(작성자 본인) = **부가선택 위젯 🔍 → 검색 → 행 더블클릭**(국내와 동일).
             #    등록 시 딸려오는 빈 행은 9) 에서 삭제.
             cp = await steps.register_counter_partner(page, self_name)
@@ -134,7 +157,13 @@ def make_fill_rows_node():
                 return await fail(i, "빈행삭제", db.get("reason"))
 
             filled += 1
-            await emit_log(events, f"{i + 1}/{total}행 반영 완료.", "ok")
+            # ⚠ 확인 불가가 하나라도 있으면 '완료'라고 쓰지 않는다 — 반영을 단정하는 로그가
+            #   미확인 값을 덮어버리면 나중에 저장 결과를 역추적할 근거가 사라진다.
+            new_warns = len(unverified) - row_warns
+            if new_warns:
+                await emit_log(events, f"{i + 1}/{total}행 입력 — 값 {new_warns}건 반영 미확인.", "warn")
+            else:
+                await emit_log(events, f"{i + 1}/{total}행 반영 완료.", "ok")
             await emit_shot(events.put, page)
 
         # 전 행 합계를 마스터에 명시 세팅 — setValue 는 ERP 합계 재계산 핸들러 미발화라 마스터
@@ -147,8 +176,16 @@ def make_fill_rows_node():
             await emit_log(events, msg, "error")
             return {"error": msg, "fill_failures": [{"row": 0, "field": "마스터합계", "reason": mt.get("reason")}]}
 
-        await emit_log(events, f"전체 {filled}/{total}행 반영 + 마스터 합계 {grand_total:,}원.", "ok")
+        if unverified:
+            await emit_log(
+                events,
+                f"전체 {filled}/{total}행 입력 + 마스터 합계 {grand_total:,}원 "
+                f"— 반영 미확인 {len(unverified)}건({', '.join(unverified[:5])}).",
+                "warn",
+            )
+        else:
+            await emit_log(events, f"전체 {filled}/{total}행 반영 + 마스터 합계 {grand_total:,}원.", "ok")
         await emit_step(events, "fill_rows", "done", _ms(t0))
-        return {"filled": filled, "fill_failures": []}
+        return {"filled": filled, "fill_failures": [], "unverified": unverified}
 
     return fill_rows

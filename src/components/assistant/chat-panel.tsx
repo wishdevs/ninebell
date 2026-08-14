@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RiSparkling2Line } from '@remixicon/react';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
 import { fetchRuns, type RunSummary } from '@/lib/live/runs-api';
-import type { Agent } from '@/lib/data/agents';
+import { type Agent, filterByDebugMode, filterVisibleAgents } from '@/lib/data/agents';
+import { useDebugMode } from '@/lib/debug-mode';
 import type { AssistantSnapshot } from '@/lib/assistant/types';
 import { useChatStream } from '@/lib/assistant/use-chat-stream';
 import { cn } from '@/lib/utils';
@@ -24,6 +25,7 @@ const SUGGESTIONS = [
  */
 export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' }) {
   const { data: agents } = useApiResource<Agent[]>('/agents');
+  const debugMode = useDebugMode();
   const [runs, setRuns] = useState<RunSummary[]>([]);
 
   useEffect(() => {
@@ -43,7 +45,13 @@ export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' })
   // 카드가 id → 표시정보를 해석하는 데 쓰는 스냅샷(부분집합).
   const snapshot: AssistantSnapshot = useMemo(
     () => ({
-      agents: (agents ?? []).map((a) => ({ id: a.id, name: a.name, runnable: !!a.workflowId })),
+      // 디버그 전용 에이전트는 스냅샷에서 뺀다 — 넣으면 어시스턴트가 일반 사용자에게
+      // 감춰야 할 에이전트를 추천·언급하게 된다(목록 필터와 동일 규칙).
+      agents: filterByDebugMode(filterVisibleAgents(agents ?? []), debugMode).map((a) => ({
+        id: a.id,
+        name: a.name,
+        runnable: !!a.workflowId,
+      })),
       runs: runs.map((r) => ({
         id: r.id,
         agentId: r.agentId,
@@ -51,13 +59,13 @@ export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' })
         resultSummary: r.resultSummary,
       })),
     }),
-    [agents, runs],
+    [agents, runs, debugMode],
   );
 
   // 백엔드 프롬프트가 기대하는 컨텍스트(더 풍부한 필드).
   const getContext = useCallback(
     () => ({
-      agents: (agents ?? []).map((a) => ({
+      agents: filterByDebugMode(agents ?? [], debugMode).map((a) => ({
         id: a.id,
         name: a.name,
         description: a.description,
@@ -72,7 +80,7 @@ export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' })
         failedStep: r.failedStep ?? null,
       })),
     }),
-    [agents, runs],
+    [agents, runs, debugMode],
   );
 
   const { messages, isStreaming, send, retry } = useChatStream({ getContext });
@@ -97,7 +105,8 @@ export function ChatPanel({ layout = 'docked' }: { layout?: 'docked' | 'full' })
                   key={p}
                   type="button"
                   onClick={() => send(p)}
-                  className="border-border bg-surface text-muted-foreground hover:text-foreground hover:bg-muted rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11px] transition-colors"
+                  disabled={isStreaming}
+                  className="border-border bg-surface text-muted-foreground hover:text-foreground hover:bg-muted rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-40"
                 >
                   {p}
                 </button>

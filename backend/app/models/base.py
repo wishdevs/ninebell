@@ -8,9 +8,10 @@ ax `db/base.py` 의 네이밍 컨벤션 이식. PostgreSQL 과 SQLite(테스트)
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, MetaData, func
+from sqlalchemy import JSON, DateTime, MetaData, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -42,4 +43,13 @@ class TimestampMixin:
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class UuidPkMixin:
+    """신규 도메인 테이블 기본 PK — 앱 생성 uuid4 surrogate 키(user.py 패턴의 공식화)."""
+
+    # sort_order=-1: 믹스인 컬럼이 클래스 본문 컬럼 뒤로 밀리지 않고 기존 테이블처럼 첫 컬럼 유지.
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, sort_order=-1
     )

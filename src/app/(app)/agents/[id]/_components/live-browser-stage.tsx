@@ -1,11 +1,18 @@
 'use client';
 
-import { RiLockLine, RiPlayCircleLine, RiPlayLine, RiRestartLine } from '@remixicon/react';
+import {
+  RiExternalLinkLine,
+  RiLockLine,
+  RiPlayCircleLine,
+  RiPlayLine,
+  RiRestartLine,
+} from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
+import { ThinkingOrb } from '@/components/ui/thinking-orb';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
 import { formatEta } from '@/lib/data/format';
-import type { LiveRunStatus } from '@/lib/live/types';
+import type { LiveRunStatus, LiveWindow } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -22,7 +29,12 @@ export interface StageEtaHint {
 interface LiveBrowserStageProps {
   targetUrl: string;
   status: LiveRunStatus;
-  screenshot: string | null;
+  /** 창별 최신 스크린캐스트 dataURL. child 가 있으면 부모/자식 탭 토글을 노출한다. */
+  screenshots: { parent: string | null; child: string | null };
+  /** 라이브 뷰에 현재 표시할 창 — 자식 창(팝업)이 열리면 자동 활성화된다. */
+  activeWindow: LiveWindow;
+  /** 부모창/자식창 탭 클릭 — 활성 창 수동 전환. */
+  onSelectWindow?: (window: LiveWindow) => void;
   connected: boolean;
   /** 실행 워크플로우가 매핑돼 있는지 — false 면 스테이지 CTA 를 비활성화한다. */
   canRun?: boolean;
@@ -30,6 +42,8 @@ interface LiveBrowserStageProps {
   onStart?: () => void;
   /** 실행 전 CTA 아래 소요 예고("약 2분 소요 · 첫 입력 요청까지 ~30초"). null=미표시. */
   etaHint?: StageEtaHint | null;
+  /** AI 추천 계산 구간이면 그 단계 라벨 — 화면 위에 'AI가 계산하는 중…' 오버레이. null=미표시. */
+  aiWorking?: string | null;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -47,16 +61,28 @@ const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
 export function LiveBrowserStage({
   targetUrl,
   status,
-  screenshot,
+  screenshots,
+  activeWindow,
+  onSelectWindow,
   connected,
   canRun = false,
   onStart,
   etaHint = null,
+  aiWorking = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
+  // 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열려 자식 화면이 있으면 탭 토글을 노출한다.
+  const hasChild = screenshots.child != null;
+  // 자식창은 부모를 덮는 게 아니라 부모 위로 뜨는 PIP 카드로 표현한다(실제 팝업 멘탈모델).
+  // 부모는 항상 베이스에 유지, 자식 탭이 활성일 때만 그 위에 결제창 카드를 얹는다.
+  const showChildPip = hasChild && activeWindow === 'child';
   return (
     // 카드 폭 = min(셀폭, (셀높이 − 크롬)×16/9). 하단 바 제거로 비-화면 높이가 크롬(≈48px)만 남는다.
-    <div className="[container-type:size] flex min-h-0 items-start justify-center lg:h-full">
+    // ⚠ container-type:size 는 **lg 이상에서만** 건다(모바일 겹침 회귀 2026-08-14):
+    //   size 컨테인먼트는 블록 축까지 가둬 높이를 '내용 없음'으로 계산한다. lg:h-full 이 없는
+    //   모바일에선 이 래퍼가 높이 0 으로 접혀, 안의 스테이지 카드가 다음 그리드 행(실행 전 입력
+    //   폼)과 겹쳐 그려졌다. cqw/cqh 를 쓰는 곳도 lg: 뿐이라 모바일엔 컨테인먼트가 필요 없다.
+    <div className="flex min-h-0 items-start justify-center lg:[container-type:size] lg:h-full">
       <section className="border-border bg-surface flex min-h-0 w-full max-w-full flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:w-[min(100cqw,calc((100cqh-48px)*16/10))]">
         {/* 브라우저 크롬 */}
         <div className="border-border bg-surface-raised flex items-center gap-3 border-b px-3 py-2.5">
@@ -69,6 +95,7 @@ export function LiveBrowserStage({
             <RiLockLine size={11} aria-hidden className="text-foreground-tertiary shrink-0" />
             <span className="truncate font-mono">{targetUrl}</span>
           </div>
+          {hasChild ? <WindowTabs active={activeWindow} onSelect={onSelectWindow} /> : null}
           <StatusBadge status={status} connected={connected} />
         </div>
 
@@ -76,7 +103,21 @@ export function LiveBrowserStage({
         {/* 스크린캐스트 종횡비(≈16:10, CDP 1280×800)에 맞춘 컨테이너 — LiveScreen 은 object-contain
             이라 잘림 없이 전체 프레임을 보여준다(종횡비를 맞춰 레터박스도 최소화). */}
         <div className="bg-muted/30 relative aspect-[16/10] w-full">
-          <LiveScreen src={screenshot} live={live} />
+          {/* 베이스 = 항상 부모창(자식창이 떠도 뒤에 유지된다). */}
+          <LiveScreen src={screenshots.parent} live={live} />
+          {/* 자식창(전자결재 결제창) — 부모를 살짝 어둡게 깔고 그 위로 별도 카드로 띄운다. */}
+          {showChildPip ? <ChildPipCard src={screenshots.child as string} /> : null}
+          {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
+              화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
+          {aiWorking ? (
+            <div className="bg-surface/70 absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center backdrop-blur-[2px]">
+              <ThinkingOrb state="composing" size={64} speed={1.5} aria-label="AI가 계산하는 중" />
+              <p className="ai-working-text text-sm font-semibold">
+                {aiWorking} — AI가 계산하는 중…
+              </p>
+              <p className="text-foreground-tertiary text-xs">건수에 따라 수십 초 걸릴 수 있어요</p>
+            </div>
+          ) : null}
           {/* 실행 CTA — 우상단 버튼이 안 보인다는 피드백에 따라, 세션이 없거나(idle)
               종료됐을 때 화면 중앙에 대형 실행 진입점을 겹쳐 보여준다(실행 중엔 숨김). */}
           {onStart && !live ? (
@@ -84,6 +125,39 @@ export function LiveBrowserStage({
           ) : null}
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * 자식창 PIP 카드 — 전자결재 결제창(window.open 팝업)을 부모 화면 위에 뜨는 별도 창처럼 표현한다.
+ *
+ * 카드는 스테이지를 거의 꽉 채우는 고정 크기라 프레임 비율과 무관하게 좌우 여백(디밍된 부모)이
+ * 최소화된다. 결제 폼은 카드 안에서 상단 고정 object-contain 으로 얹어, 세로가 길어도 잘리지 않고
+ * 전체가 보인다. 부모는 뒤에서 dim 처리돼 "두 번째 창이 열렸다"는 맥락이 유지된다.
+ */
+function ChildPipCard({ src }: { src: string }) {
+  return (
+    <div className="bg-background/50 absolute inset-0 z-20 flex items-center justify-center p-2 backdrop-blur-[1.5px]">
+      {/* 카드는 스테이지를 거의 꽉 채우는 고정 크기 — 프레임 비율과 무관하게 항상 넓게 유지해
+          좌우 여백(디밍된 부모)을 최소화한다. 결제 폼은 카드 안에서 상단 고정 object-contain 으로
+          전체를 보여준다(세로가 길면 하단 여백만 생기고 잘리지 않는다). */}
+      <div className="animate-pip-in border-border bg-surface flex h-[97%] w-[98%] flex-col overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-overlay)]">
+        {/* 결제창 타이틀바 — 실제 창 크롬 느낌 */}
+        <div className="border-border bg-surface-raised text-foreground-secondary flex shrink-0 items-center gap-1.5 border-b px-3 py-1.5 text-[11px] font-medium">
+          <RiExternalLinkLine size={12} aria-hidden className="text-accent shrink-0" />
+          전자결재 결제창
+          <span className="text-foreground-tertiary ml-auto text-[10px] font-normal">자식 창</span>
+        </div>
+        <div className="relative min-h-0 flex-1">
+          {/* eslint-disable-next-line @next/next/no-img-element -- dataURL 스트림이라 next/image 부적합 */}
+          <img
+            src={src}
+            alt="전자결재 결제창"
+            className="bg-surface-raised absolute inset-0 h-full w-full object-contain object-top"
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -187,4 +261,58 @@ function StatusBadge({ status, connected }: { status: LiveRunStatus; connected: 
       ? 'static'
       : 'pulse';
   return <RunStatusBadge status={effective} dot={dot} />;
+}
+
+/**
+ * 부모창/자식창 세그먼트 토글 — 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열렸을 때만
+ * 크롬 바 우측(상태 배지 옆)에 노출한다. 활성 창은 accent 로 채워 명확히, 비활성은 muted hover.
+ */
+function WindowTabs({
+  active,
+  onSelect,
+}: {
+  active: LiveWindow;
+  onSelect?: (window: LiveWindow) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="브라우저 창 선택"
+      className="border-border bg-surface flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] border p-0.5"
+    >
+      <WindowTab
+        label="부모창"
+        selected={active === 'parent'}
+        onClick={() => onSelect?.('parent')}
+      />
+      <WindowTab label="자식창" selected={active === 'child'} onClick={() => onSelect?.('child')} />
+    </div>
+  );
+}
+
+function WindowTab({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={cn(
+        'focus-visible:ring-accent rounded-[3px] px-2 py-0.5 text-[11px] font-medium transition-colors outline-none focus-visible:ring-2',
+        selected
+          ? 'bg-accent text-accent-foreground shadow-sm'
+          : 'text-foreground-tertiary hover:bg-muted hover:text-foreground-secondary',
+      )}
+    >
+      {label}
+    </button>
+  );
 }

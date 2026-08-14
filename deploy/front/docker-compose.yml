@@ -1,0 +1,28 @@
+# 프론트 서버(172.20.50.52) — Caddy(리버스 프록시, 유일한 public 진입점) + Next.js.
+#   .env → FRONTEND_IMAGE(CI 갱신) + SITE_ADDRESS/API_UPSTREAM(서버 설정, .env.example 참고).
+services:
+  frontend:
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE 미설정 — CI 가 .env 에 registry/frontend:TAG 를 씀}
+    restart: unless-stopped
+    expose:
+      - "3000" # 내부만 — Caddy 가 프록시(직접 공개 X)
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80} # ':80' 또는 도메인(자동 HTTPS)
+      API_UPSTREAM: ${API_UPSTREAM:-172.20.50.50:8010}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:

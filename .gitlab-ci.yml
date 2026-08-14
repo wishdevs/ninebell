@@ -1,0 +1,112 @@
+# 배포 파이프라인 — build(러너에서 1회) → registry push → deploy(서버는 pull만).
+# 서버에선 빌드하지 않는다. 상세 셋업: deploy/README.md
+stages: [build, deploy]
+
+variables:
+  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
+  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
+  TAG: "$CI_COMMIT_SHORT_SHA"
+
+# ══════════ BUILD (Kaniko — 데몬리스 이미지 빌드, dind 불필요) ══════════
+# dind 가 이 러너에서 불안정하다(진단 잡은 6초만에 데몬 성공했으나, 바로 다음 빌드 런은 dind 가
+# 아예 안 떠 60s+ 'no route to host' 로 실패). 러너 호스트 자원/상태 문제라 CI 로는 못 고친다 →
+# 데몬 없는 Kaniko 로 빌드해 dind·privileged·TLS·기동레이스 전체를 제거한다. 내부 레지스트리
+# (192.168.50.61:5050)는 HTTP(no TLS) → --insecure 로 그 레지스트리만 평문 허용(베이스 이미지
+# pull 은 Docker Hub HTTPS 유지). debug 이미지는 셸이 있어 before_script(인증 셋업)를 돌릴 수 있다.
+.build:
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  before_script:
+    # HTTP 레지스트리라 docker login(HTTPS 강제) 대신 Kaniko config.json 에 base64 인증 직접.
+    - mkdir -p /kaniko/.docker
+    - |
+      AUTH=$(printf '%s' "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+build:backend:
+  extends: .build
+  stage: build
+  script:
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR/backend"
+      --dockerfile "$CI_PROJECT_DIR/backend/Dockerfile"
+      --destination "$BACKEND_IMAGE:$TAG"
+      --destination "$BACKEND_IMAGE:latest"
+      --insecure --skip-tls-verify
+
+build:frontend:
+  extends: .build
+  stage: build
+  script:
+    # ⚠ NEXT_PUBLIC_API_BASE 는 빌드타임에 번들에 구움 → 프록시 same-origin '/api'.
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$FRONTEND_IMAGE:$TAG"
+      --destination "$FRONTEND_IMAGE:latest"
+      --build-arg NEXT_PUBLIC_API_BASE=/api
+      --insecure --skip-tls-verify
+
+# ══════════ DEPLOY (서버 SSH → 프리빌드 이미지 pull + up) ══════════
+# 서버가 private 레지스트리에서 pull 하려면 read_registry Deploy Token 필요
+# (GitLab → Settings → Repository → Deploy tokens, scope=read_registry).
+# → CI/CD 변수: REGISTRY_DEPLOY_USER / REGISTRY_DEPLOY_TOKEN.
+# SSH: DEPLOY_SSH_KEY(개인키 — ⚠ File 타입 변수 권장·Masked 끄기) / DEPLOY_USER / API_HOST / DB_HOST / FRONT_HOST.
+.deploy:
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache openssh-client rsync
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    # DEPLOY_SSH_KEY 가 File 타입이면 $DEPLOY_SSH_KEY 는 파일 경로 → 그대로 복사(개행 손상 없음, 권장).
+    # 일반 변수면 값 자체를 파일로 기록(마스킹/CRLF 로 깨지기 쉬움 → 'error in libcrypto'). File 타입을 쓸 것.
+    - |
+      if [ -f "$DEPLOY_SSH_KEY" ]; then echo "[key] DEPLOY_SSH_KEY=File 타입(경로) → cp"; cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519;
+      else echo "[key] DEPLOY_SSH_KEY=일반 Variable(값) → printf"; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; fi
+      # 키 정규화 — CR 제거 + 마지막 개행 보장. 둘 다 OpenSSH 'error in libcrypto'(키 파싱 실패)의
+      # 대표 원인이다(File 변수가 마지막 개행을 흔히 떨어뜨림). busybox tr/tail 로 안전하게 처리.
+      tr -d '\r' < ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.n && mv ~/.ssh/id_ed25519.n ~/.ssh/id_ed25519
+      [ -n "$(tail -c1 ~/.ssh/id_ed25519)" ] && printf '\n' >> ~/.ssh/id_ed25519
+      chmod 600 ~/.ssh/id_ed25519
+    # 진단(키 미유출 — 첫줄/줄수/지문만): 지문이 SHA256:TEegNaMKtpQ... 면 정상. 파싱실패면 값 손상.
+    - 'echo "[key] 첫줄: $(head -1 ~/.ssh/id_ed25519)"; echo "[key] 줄수: $(wc -l < ~/.ssh/id_ed25519)"'
+    - ssh-keygen -l -f ~/.ssh/id_ed25519 || echo "[key] !! 키 파싱 실패 — 변수 값이 손상됨(File 타입 아님/개행 깨짐)"
+    - ssh-keyscan -H "$API_HOST" "$FRONT_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"' # main push → build 통과 후 자동 배포(수동 게이트 제거).
+
+# api: entrypoint 가 `alembic upgrade head` 후 uvicorn → 배포 시 마이그레이션 자동.
+deploy:api:
+  extends: .deploy
+  stage: deploy
+  script:
+    - rsync -az deploy/api/docker-compose.yml "$DEPLOY_USER@$API_HOST:/opt/ninebell/api/docker-compose.yml"
+    - |
+      ssh "$DEPLOY_USER@$API_HOST" "
+        set -e
+        cd /opt/ninebell/api
+        docker login -u '$REGISTRY_DEPLOY_USER' -p '$REGISTRY_DEPLOY_TOKEN' '$CI_REGISTRY'
+        BACKEND_IMAGE='$BACKEND_IMAGE:$TAG' docker compose pull
+        BACKEND_IMAGE='$BACKEND_IMAGE:$TAG' docker compose up -d
+        docker image prune -f
+      "
+
+deploy:frontend:
+  extends: .deploy
+  stage: deploy
+  script:
+    - rsync -az deploy/front/docker-compose.yml deploy/front/Caddyfile "$DEPLOY_USER@$FRONT_HOST:/opt/ninebell/front/"
+    - |
+      ssh "$DEPLOY_USER@$FRONT_HOST" "
+        set -e
+        cd /opt/ninebell/front
+        docker login -u '$REGISTRY_DEPLOY_USER' -p '$REGISTRY_DEPLOY_TOKEN' '$CI_REGISTRY'
+        FRONTEND_IMAGE='$FRONTEND_IMAGE:$TAG' docker compose pull
+        FRONTEND_IMAGE='$FRONTEND_IMAGE:$TAG' docker compose up -d
+        docker image prune -f
+      "
+# db(172.20.50.51)는 스테이트풀이라 CI 배포 대상 아님 — 최초 1회 수동 셋업(deploy/README.md).

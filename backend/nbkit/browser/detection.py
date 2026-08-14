@@ -56,10 +56,11 @@ async def is_authenticated(
 
 
 # 화면을 막는 가시 다이얼로그(권한 없음·에러·Kendo 윈도우) 후보 셀렉터.
-_DIALOG_SELECTORS = ".k-window, [role=dialog], .modal"
+# ⚠ 단일 소스 — js_lib.MENU_CHECK_JS 도 이 목록을 임베드한다(별도 하드코딩 금지).
+DIALOG_SELECTORS = ".k-window, [role=dialog], .modal"
 
 
-async def detect_dialog(page: Any, *, selectors: str = _DIALOG_SELECTORS) -> dict:
+async def detect_dialog(page: Any, *, selectors: str = DIALOG_SELECTORS) -> dict:
     """가시(offsetParent!==null) 다이얼로그의 텍스트를 best-effort 로 읽어 반환.
 
     반환: ``{"visible": bool, "text": str}``. 권한/에러 팝업을 상위에서 도메인 오류로

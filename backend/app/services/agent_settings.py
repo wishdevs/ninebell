@@ -92,7 +92,7 @@ def fuel_classes_for(stored: dict | None) -> list[dict]:
 
 # 에이전트 id → 설정 항목 정의 목록. 스키마가 없는 에이전트는 설정 기능 자체가 없다.
 AGENT_SETTINGS_SCHEMA: dict[str, list[SettingDef]] = {
-    "card-chat": [
+    "corporate-card": [
         SettingDef(
             key="acct_cutoff_day",
             label="회계시점 결정일",

@@ -26,7 +26,11 @@ export const LiveScreen = memo(function LiveScreen({
   if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- dataURL 스트림이라 next/image 부적합
-      <img src={src} alt={alt} className="absolute inset-0 h-full w-full bg-black object-contain" />
+      <img
+        src={src}
+        alt={alt}
+        className="bg-surface-raised absolute inset-0 h-full w-full object-contain"
+      />
     );
   }
   return (

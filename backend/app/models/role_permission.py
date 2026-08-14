@@ -11,20 +11,19 @@ from typing import TYPE_CHECKING
 from sqlalchemy import ForeignKey, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, UuidPkMixin
 
 if TYPE_CHECKING:
     from app.models.permission import Permission
     from app.models.role import Role
 
 
-class RolePermission(Base):
+class RolePermission(UuidPkMixin, Base):
     __tablename__ = "role_permissions"
     __table_args__ = (
         UniqueConstraint("role_id", "permission_id", name="uq_role_permissions_role_id"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     role_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("roles.id", ondelete="CASCADE"),

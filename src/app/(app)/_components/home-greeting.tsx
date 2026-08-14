@@ -3,6 +3,7 @@
 import { PageHeader } from '@/components/ui/page-header';
 import { usePermissions } from '@/hooks/use-permissions';
 import { PERMISSIONS } from '@/lib/auth/permissions';
+import { useDebugMode } from '@/lib/debug-mode';
 import { useCurrentUser } from '@/app/(app)/providers/user-provider';
 import { HomeFavoriteAgents } from './home-favorite-agents';
 import { PushAlarmTest } from './push-alarm-test';
@@ -18,6 +19,7 @@ import { PushAlarmTest } from './push-alarm-test';
 export function HomeGreeting() {
   const user = useCurrentUser();
   const { has } = usePermissions();
+  const debugMode = useDebugMode();
 
   return (
     <div className="animate-page-enter flex max-w-[var(--content-max)] flex-col gap-6">
@@ -29,7 +31,8 @@ export function HomeGreeting() {
 
       {has(PERMISSIONS.AGENTS_READ) ? <HomeFavoriteAgents /> : null}
 
-      <PushAlarmTest />
+      {/* 푸시 알람 테스트 — 디버그 모드(로그인 체크박스)에서만 노출(사용자 결정 2026-08-07). */}
+      {debugMode ? <PushAlarmTest /> : null}
     </div>
   );
 }

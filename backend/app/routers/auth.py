@@ -32,12 +32,13 @@ from app.core.security import (
     InvalidTokenError,
     create_session_token,
     decode_session_token,
-    verify_password,
+    verify_password_async,
 )
 from app.erp.login import ErpAuthError
 from app.models import User
 from app.schemas.auth import AuthMe, AuthMeUpdate, LoginBody, SignupBody
 from app.services.access_log import record_access
+from app.services.org_apply import match_org_unit_for_department
 
 logger = logging.getLogger("app.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -78,6 +79,8 @@ def _apply_profile(user: User, profile: dict) -> None:
     """기존 사용자 프로필 best-effort 갱신(빈 값은 덮어쓰지 않음)."""
     if profile.get("display_name"):
         user.display_name = profile["display_name"]
+    if profile.get("job_title"):
+        user.job_title = profile["job_title"]
     if profile.get("department"):
         user.department = profile["department"]
     if profile.get("email"):
@@ -123,9 +126,9 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         await db.execute(select(User).where(User.omnisol_userid == body.userid))
     ).scalar_one_or_none()
 
-    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출).
+    # 1) 로컬 계정: bcrypt 로컬 검증(옴니솔 미호출). CPU 바운드라 워커 스레드에서(async 래퍼).
     if user is not None and user.password_hash is not None:
-        if not verify_password(body.password, user.password_hash):
+        if not await verify_password_async(body.password, user.password_hash):
             _record_failure()
             await record_access(
                 db,
@@ -185,6 +188,18 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
     if user is not None:
         _record_success()
         _apply_profile(user, profile)
+        # 부서(=조직구분) 변경 자동반영 — 갱신된 부서를 org_units 에 매칭해 소속(org_unit_id) 갱신.
+        # 매칭될 때만 갱신(수동 배정·미매칭 부서는 보존). '미지정' 방지의 로그인 경로.
+        matched_ou = await match_org_unit_for_department(db, user.department)
+        if matched_ou is not None and user.org_unit_id != matched_ou.id:
+            user.org_unit_id = matched_ou.id
+        # SUPER_ADMIN_OMNISOL_IDS allowlist 재평가 — 가입 시에만 부여하던 한계 보완.
+        # allowlist 에 있으면 로그인 때도 super_admin 으로 승격(no-op if 이미), 밖이면 강등 안 함.
+        if body.userid in settings.super_admin_id_set():
+            sa_role = await get_role_by_code(db, ROLE_SUPER_ADMIN)
+            if sa_role is not None and user.role_id != sa_role.id:
+                user.role_id = sa_role.id
+                logger.info("super_admin 승격(allowlist): %s", body.userid)
         user.last_login_at = datetime.now(UTC)
         await record_access(
             db, omnisol_userid=body.userid, status="success", user_id=user.id, ip=ip, user_agent=ua
@@ -203,6 +218,7 @@ async def login(body: LoginBody, request: Request, response: Response, db: DbSes
         body.password,
         profile.get("display_name") or "",
         profile.get("department") or "",
+        job_title=profile.get("job_title") or "",
     )
     await record_access(
         db, omnisol_userid=body.userid, status="success", user_id=None, ip=ip, user_agent=ua
@@ -250,11 +266,19 @@ async def signup(body: SignupBody, request: Request, response: Response, db: DbS
 
     code = ROLE_SUPER_ADMIN if userid in settings.super_admin_id_set() else ROLE_USER
     role = await get_role_by_code(db, code)
+    department = pending.get("department") or None
+    # 부서(=조직구분)를 org_units 에 매칭해 소속(org_unit_id)을 자동 배정 — '미지정' 방지.
+    # 미매칭이면 None(조직구분에 해당 조직이 없음 → 조직도 불러오기/수동 배정 필요).
+    org_unit = await match_org_unit_for_department(db, department)
     now = datetime.now(UTC)
     user = User(
         omnisol_userid=userid,
-        display_name=body.display_name or None,
-        department=body.department or None,
+        # 이름·부서는 ERP 인증 프로필값(pending)을 권위값으로 사용 — 클라 입력 무시.
+        # (부서는 조직구분 자동배정 키라 특히 조작 불가여야 함)
+        display_name=pending.get("display_name") or None,
+        job_title=pending.get("job_title") or None,
+        department=department,
+        org_unit_id=org_unit.id if org_unit is not None else None,
         email=body.email or None,  # 빈문자열/누락은 None 으로 정규화(email 선택 입력)
         status="active",
         role_id=role.id if role is not None else None,
@@ -311,9 +335,7 @@ async def me(user: CurrentUser) -> AuthMe:
 
 @router.patch("/me", response_model=AuthMe)
 async def update_me(body: AuthMeUpdate, user: CurrentUser, db: DbSession) -> AuthMe:
-    """본인 프로필(이름/부서/이메일) 수정 — 로그인 식별자(omnisol_userid)·롤·상태는 불변."""
-    user.display_name = body.display_name.strip()
-    user.department = (body.department or "").strip() or None
+    """본인 이메일 수정 — 이름/부서(ERP 동기화값)·로그인 식별자(omnisol_userid)·롤·상태는 불변."""
     user.email = (body.email or "").strip() or None
     await db.commit()
     await db.refresh(user)

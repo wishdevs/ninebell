@@ -12,10 +12,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 import app.db as appdb
-from app.core.deps import get_current_user, get_db, get_role_by_code
+from app.core.deps import DbSession, get_current_user, get_db, get_role_by_code
 from app.main import app as fastapi_app
 from app.models import Base, User
 from app.services.seed import seed_all
+from nbkit.omnisol import latency, verify
 
 
 @pytest_asyncio.fixture
@@ -119,15 +120,41 @@ def set_user_org(sm):
 
 @pytest.fixture
 def auth_as(sm):
-    """get_current_user 를 주어진 user_id 로 오버라이드한다."""
+    """get_current_user 를 주어진 user_id 로 오버라이드한다.
+
+    요청의 DbSession(get_db 오버라이드)을 그대로 재사용해야 한다 — 실제 운영 코드의
+    get_current_user(request, db: DbSession)와 동일하게 세션을 공유해야, 엔드포인트가
+    반환된 User 를 그 db 로 커밋/리프레시하는 케이스(예: PATCH /auth/me)가 성립한다.
+    """
 
     def _set(user_id):
-        async def _dep():
-            async with sm() as s:
-                return (
-                    await s.execute(select(User).where(User.id == user_id))
-                ).scalar_one()
+        async def _dep(db: DbSession):
+            return (
+                await db.execute(select(User).where(User.id == user_id))
+            ).scalar_one()
 
         fastapi_app.dependency_overrides[get_current_user] = _dep
 
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _no_realtime_verify_backoff(monkeypatch):
+    """확인 커널(nbkit.omnisol.verify)의 재시도 대기를 단위 테스트에서 무효화한다.
+
+    커널의 기본 대기는 **실시간**(delay_scale 무관)이라, 실패 경로를 태우는 테스트가
+    회차당 수 초씩 잡아먹는다. 대기 규율 자체는 sleep= 을 직접 주입하는 커널 전용
+    테스트(test_verify_kernel.py)에서 검증하므로, 여기서는 no-op 으로 갈아끼운다.
+
+    지연 배율(nbkit.omnisol.latency)도 함께 격리한다 — ① 프로세스 전역 EMA 를 매 테스트
+    리셋하고 ② record 를 no-op 으로 갈아끼워, 재시도 성공 되먹임이 EMA 를 올려 다른
+    테스트의 대기·폴 상한(factor)이 1.0 을 벗어나는 누수를 막는다. 배율 자체를 검증하는
+    테스트(test_adaptive_latency.py)는 latency.factor/record 를 스스로 패치한다.
+    """
+
+    async def _instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(verify, "DEFAULT_SLEEP", _instant)
+    latency.reset()
+    monkeypatch.setattr(latency, "record", lambda *_a, **_k: None)

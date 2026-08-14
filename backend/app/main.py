@@ -11,33 +11,95 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from playwright.async_api import async_playwright
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import app.agents  # noqa: F401 — import 시 실 워크플로우(expense-card-chat)를 registry 에 등록
 from app.config import get_settings
 from app.core.assistant_ratelimit import AssistantRateLimiter
+from app.core.http_client import new_async_client
+from app.core.logging_setup import configure_logging
 from app.core.ratelimit import LoginRateLimiter
+from app.core.request_log import HttpRequestLogMiddleware
 from app.db import dispose_engine, get_engine, get_sessionmaker, init_engine
 from app.erp.credcache import CredCache
 from app.live.session import close_all_sessions, reap_sessions
 from app.models import Base
-from app.routers import agents, assistant, auth, logs, me_codes, org_units, runs, skills, users
+from app.routers import (
+    agents,
+    assistant,
+    auth,
+    changelog,
+    dev_llm,
+    logs,
+    me_codes,
+    org_units,
+    runs,
+    skills,
+    users,
+)
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
 logger = logging.getLogger("app.main")
 
 
+def _detect_worker_count(argv: list[str] | None = None, env: dict | None = None) -> int | None:
+    """uvicorn 워커 수 탐지 — --workers/-w CLI 인자와 WEB_CONCURRENCY env. 미지정이면 None."""
+    args = sys.argv if argv is None else argv
+    environ = os.environ if env is None else env
+    for i, a in enumerate(args):
+        if a in ("--workers", "-w") and i + 1 < len(args):
+            candidate = args[i + 1]
+        elif a.startswith("--workers="):
+            candidate = a.split("=", 1)[1]
+        else:
+            continue
+        try:
+            return int(candidate)
+        except ValueError:
+            continue
+    raw = environ.get("WEB_CONCURRENCY", "")
+    if raw.strip():
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _ensure_single_worker() -> None:
+    """다중 워커 기동 거부 — 인메모리 상태(CredCache·HITL 큐·세션 레지스트리·시도제한 등)가
+    단일 워커 전제라, 워커가 갈라지면 로그인 세션·SSE 재연결·세마포어가 워커별로 찢어져
+    조용히 오동작한다. docker-entrypoint.sh 주석만으로는 강제되지 않아 부팅 시점에 막는다."""
+    n = _detect_worker_count()
+    if n is not None and n > 1:
+        raise RuntimeError(
+            f"workers={n} 로 기동할 수 없습니다 — 이 앱은 인메모리 상태(CredCache/HITL/"
+            "라이브 세션/로그인 시도제한) 때문에 단일 워커 전용입니다. --workers 1 로 "
+            "실행하거나 WEB_CONCURRENCY 를 제거하세요."
+        )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
+    # ⚠ 앱 로거 부트스트랩 — uvicorn 은 root 에 핸들러를 달지 않아 이걸 빼면 app.* 의 INFO 가
+    #   전부 유실된다(HTTP 요청 로그 포함). 라우터 등록보다 먼저 세운다.
+    configure_logging(settings.log_level, settings.log_file)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # --- 다중 워커 기동 가드(인메모리 상태 단일 워커 전제) ---
+        _ensure_single_worker()
+
         # --- DB ---
         init_engine(settings.database_url)
         if settings.dev_create_all:
@@ -51,7 +113,7 @@ def create_app() -> FastAPI:
 
         # --- 공용 httpx 클라이언트(AI 어시스턴트 Gemini 스트리밍) ---
         # read=None: SSE 스트림이 장시간 idle 이어도 읽기 타임아웃으로 끊기지 않게 한다.
-        app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
+        app.state.http = new_async_client(timeout=httpx.Timeout(30.0, read=None))
 
         # --- 더존 헤드리스 브라우저 + 동시 로그인 상한 ---
         # 컨테이너/Fargate 는 CHROMIUM_ARGS="--disable-dev-shm-usage --no-sandbox" 로 크래시 방지(env).
@@ -119,6 +181,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # CORS **뒤에** 등록해 가장 바깥에 놓는다(Starlette 은 나중에 등록한 것이 바깥) — CORS 가
+    # 선처리하는 preflight(OPTIONS)와 CORS 단계의 예외까지 빠짐없이 남기기 위함이다.
+    app.add_middleware(HttpRequestLogMiddleware)
+
+    # 에러 응답 dual-key: HTTPException(detail) 47곳 vs JSONResponse(error) 16곳 혼재를
+    # 라우터 무수정으로 통일한다 — 핸들러가 detail·error 를 병기(리스트 dual-key 이행 선례와
+    # 동일 방식). FE 전환 완료 후 별도 커밋에서 한 키로 수렴 예정. headers(Retry-After 등) 보존.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception_dual_key(request: Request, exc: StarletteHTTPException):
+        return JSONResponse(
+            {"detail": exc.detail, "error": exc.detail},
+            status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
+        )
 
     app.include_router(auth.router)
     app.include_router(users.router)
@@ -129,6 +205,9 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(me_codes.router)
     app.include_router(skills.router)
+    app.include_router(changelog.router)
+    # 로컬 dev 전용 게이트 라우터 — LLM_PROVIDER_TOGGLE off(기본)면 전 엔드포인트 404.
+    app.include_router(dev_llm.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict:

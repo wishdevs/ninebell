@@ -26,7 +26,7 @@ class _Entry:
 
 
 class SignupCache:
-    """signup_token → {userid, password, display_name, department}.
+    """signup_token → {userid, password, display_name, job_title, department}.
 
     만료는 접근 시(get) + 저장 시(put) + 주기 reaper 로 청소한다.
     """
@@ -35,7 +35,9 @@ class SignupCache:
         self._store: dict[str, _Entry] = {}
         self._ttl = ttl_seconds
 
-    def put(self, userid: str, password: str, display_name: str, department: str) -> str:
+    def put(
+        self, userid: str, password: str, display_name: str, department: str, job_title: str = ""
+    ) -> str:
         """pending 을 저장하고 새 signup_token 을 반환."""
         self._sweep()
         token = uuid.uuid4().hex
@@ -44,6 +46,7 @@ class SignupCache:
                 "userid": userid,
                 "password": password,
                 "display_name": display_name,
+                "job_title": job_title,
                 "department": department,
             },
             time.monotonic() + self._ttl,

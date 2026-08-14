@@ -9,7 +9,7 @@
  *
  * 백엔드 계약(p5-backend, camelCase):
  *   POST   /runs/cancel            {runId}                      → 세션 즉시 close(멱등)
- *   GET    /runs?agentId=&limit=&offset=                        → RunSummary[]
+ *   GET    /runs?agentId=&status=&limit=&offset=                 → RunSummary[]
  *   GET    /runs/{id}                                           → RunDetail
  *   POST   /runs/templates         {agentId, name, selections}  → RunTemplate
  *   GET    /runs/templates?agentId                              → RunTemplate[]
@@ -45,6 +45,12 @@ export interface RunSummary {
 export interface RunLogEntry {
   message: string;
   level: LiveLogLevel;
+  /** 저장 시각(epoch ms) — 백엔드가 additive 로 부여. 과거 런엔 없으므로 방어 렌더 필수. */
+  ts?: number;
+  /** step 프레임의 구조 필드(단계명). 일반 log 프레임엔 없다. */
+  step?: string;
+  /** step 프레임의 구조 필드(running|done|failed). 일반 log 프레임엔 없다. */
+  status?: string;
 }
 
 /**
@@ -140,6 +146,8 @@ export function cancelRun(runId: string): void {
 export interface RunsQuery {
   /** 지정하면 해당 워크플로우로 스코프(에이전트 상세). 생략하면 전체(로깅 페이지). */
   agentId?: string;
+  /** 지정하면 해당 실행 상태로 스코프(로깅 페이지 상태 필터). */
+  status?: string;
   limit?: number;
   offset?: number;
 }
@@ -154,18 +162,21 @@ export interface RunsPage {
  * `GET /runs` — 실행 목록(최신순) + 전체 건수. `agentId` 를 주면 그 워크플로우로 스코프한다.
  * 소유자 스코프는 백엔드가 처리(관리자=전체, 그 외=본인 것).
  *
- * 백엔드는 `{"runs": RunSummary[], "total": number}` envelope 로 반환한다.
+ * 백엔드는 `{"runs": RunSummary[], "total": number}` envelope 로 반환한다. 목록 응답 키
+ * 이원화에 견디도록 `items ?? runs` 관용 리더로 읽는다(반환 형태 {runs,total} 은 유지 —
+ * 소비처 파급 없음).
  */
 export async function fetchRuns(query: RunsQuery = {}): Promise<RunsPage> {
   const qs = new URLSearchParams();
   if (query.agentId) qs.set('agentId', query.agentId);
+  if (query.status) qs.set('status', query.status);
   if (query.limit != null) qs.set('limit', String(query.limit));
   if (query.offset != null) qs.set('offset', String(query.offset));
   const suffix = qs.toString();
-  const res = await api.get<{ runs: RunSummary[]; total: number }>(
+  const res = await api.get<{ items?: RunSummary[]; runs?: RunSummary[]; total?: number }>(
     suffix ? `/runs?${suffix}` : '/runs',
   );
-  return { runs: res.runs ?? [], total: res.total ?? 0 };
+  return { runs: res.items ?? res.runs ?? [], total: res.total ?? 0 };
 }
 
 /** 백엔드 저장 로그 한 줄을 {@link RunLogEntry} 로 정규화(문자열/객체 모두 수용). */
@@ -180,7 +191,12 @@ function normalizeLog(raw: unknown): RunLogEntry {
           ? o.log
           : JSON.stringify(o);
     const level = typeof o.level === 'string' ? (o.level as LiveLogLevel) : 'info';
-    return { message, level };
+    const entry: RunLogEntry = { message, level };
+    // 구조 필드는 있으면 보존(additive) — ts(epoch ms)·step·status. 과거 런엔 없다.
+    if (typeof o.ts === 'number' && Number.isFinite(o.ts)) entry.ts = o.ts;
+    if (typeof o.step === 'string') entry.step = o.step;
+    if (typeof o.status === 'string') entry.status = o.status;
+    return entry;
   }
   return { message: String(raw), level: 'info' };
 }

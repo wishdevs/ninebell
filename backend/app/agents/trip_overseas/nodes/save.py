@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import time
 
+from app.agents.common.commit_shield import shielded_commit
 from app.live.events import emit_chat, emit_log, emit_step
 from nbkit.browser.actions import js_click
-from nbkit.omnisol import js_lib, selectors
+from nbkit.omnisol import js_lib, selectors, verify
 from nbkit.patterns import emit_shot
 
 from ...card_collect import steps as card_steps
@@ -54,10 +55,37 @@ def make_save_doc_node():
         await emit_log(events, f"{filled}개 행 반영 완료 — 저장(F7)을 진행합니다.", "info")
         # F7 전 포커스를 본문으로 강제(잔존 에디터 포커스가 F7 을 삼키는 것 방지, 리뷰 반영).
         await page.evaluate(_BLUR_ACTIVE_JS)
+        # ⚠ F7 **사전 조건 검증**(국내 save 미러, 2026-08-07): 열린 팝업/모달이 0 이어야 한다.
+        #   잔존 k-window(피커·예산현황 확인·삭제 확인)가 F7 을 삼키면 저장이 안 됐는데 오류도
+        #   안 나는 **팬텀 저장**이 된다 — blur 코드가 전제하던 위험인데 정작 검증하는 코드가
+        #   없었다. 남아 있으면 저장을 시도하지 않고 끊는다(팬텀 저장보다 명시적 실패가 안전).
+        popups = await verify.confirm(
+            lambda: page.evaluate(js_lib.POPUP_COUNT_JS),
+            lambda n: isinstance(n, int) and n == 0,
+            timing=verify.ASYNC,
+            what="F7 직전 열린 팝업 수",
+            expected=0,
+            unknown_when=lambda n: not isinstance(n, int),
+        )
+        if popups.mismatch:
+            await emit_step(events, "save_doc", "failed")
+            msg = (
+                f"저장(F7) 중단 — 열린 팝업이 {popups.actual}개 남아 있습니다. "
+                "잔존 팝업은 F7 을 삼켜 팬텀 저장을 유발합니다."
+            )
+            await emit_log(events, msg, "error")
+            return {"error": msg, "retry_save": False}
+        if popups.unknown:
+            await emit_log(events, f"F7 직전 팝업 수 확인 불가 — 진행: {popups.reason}", "warn")
         # ⚠ TODO(Phase 6): 저장 성공의 **양성 신호**(결의번호 채번·성공 토스트)는 실 F7 저장으로만
         #   실측 가능하다. 현재 save_document 는 실패 신호(검증 토스트·오류 모달) 부재로 ok 를 판정한다
         #   (card 와 동일). 실측 후 양성 신호 검증을 추가한다 — PROCESS.md '남은 작업' 플래그 참조.
-        r = await card_steps.save_document(page, confirm=True)
+        # F7 클릭~판정(확인 모달 포함)은 '확정' 구간(ACTIONS.md [저장]) — 외부 취소(사용자
+        # 취소·리퍼·셧다운·워치독)가 한가운데 끊으면 반저장이 남는다. shielded_commit 이
+        # 내부 완료까지 취소를 억류한 뒤 정상 취소 흐름으로 복귀시킨다.
+        r = await shielded_commit(
+            lambda: card_steps.save_document(page, confirm=True), events=events, label="저장(F7)"
+        )
         if not r.get("ok"):
             await emit_step(events, "save_doc", "failed")
             reason = r.get("reason") or str(r)
@@ -110,24 +138,47 @@ def make_save_doc_node():
         # (rowcount 를 못 읽으면(-1/비정수) 판정 보류 — 기존 ok 유지, 오탐 방지).
         try:
             await js_click(page, selectors.BTN_LOOKUP)  # 조회(F2)
-            persisted = -1
-            for _ in range(15):  # 서버 재조회 안정 폴링(상한 ~12s)
-                await page.wait_for_timeout(800)
-                persisted = await page.evaluate(js_lib.ROWCOUNT_JS)
-                if isinstance(persisted, int) and persisted >= 1:
-                    break
-            if isinstance(persisted, int) and persisted == 0:
+            # ⚠ 기존 폴링은 page.wait_for_timeout(800)×15 였는데, 이 워크플로우는 delay_scale=0.4 로
+            #   등록돼 있어 실시간 관찰창이 ~12s → ~4.8s 로 줄었다 — 서버 재조회가 느리면 **정상
+            #   저장을 '팬텀 저장'으로 오판해 하드 실패**시킨다. 확인 커널은 실시간 대기(asyncio)라
+            #   축소되지 않고, 정상 경로는 첫 확인이 0ms 라 추가 지연이 없다.
+            #   rowcount 를 못 읽으면(-1/비정수) 값이 틀린 게 아니라 **확인 불가** → 기존대로 판정
+            #   보류(저장 ok 유지). 확정 0건일 때만 팬텀 저장으로 승격한다.
+            chk = await verify.confirm_grid_rows(
+                page,
+                index=0,
+                min_rows=1,
+                timing=verify.HEAVY,
+                unknown_when=lambda v: not isinstance(v, int) or v < 0,
+            )
+            if chk:
+                await emit_log(
+                    events, f"저장 양성 신호 확인 — 재조회 문서 지속(마스터 {chk.actual}건).", "ok"
+                )
+            elif chk.unknown:
+                await emit_log(events, f"저장 재조회 검증 보류 — {chk.reason}", "warn")
+            else:
                 await emit_step(events, "save_doc", "failed")
                 return {
                     "error": "저장 검증 실패 — F7 후 재조회에 문서가 없습니다(팬텀 저장 의심).",
                     "retry_save": False,
                 }
-            await emit_log(events, f"저장 양성 신호 확인 — 재조회 문서 지속(마스터 {persisted}건).", "ok")
         except Exception as exc:  # noqa: BLE001 — 재조회 검증 실패는 저장 판정을 뒤집지 않는다(보류).
             await emit_log(events, f"저장 재조회 검증 보류(무시): {exc}", "warn")
         await emit_log(events, "결의서 저장 시퀀스 완료(F7).", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, "save_doc", "done", _ms(t0))
+        # 채움 단계에서 '확인 불가'로 남은 값이 있으면 결과 문구도 완료라고 단정하지 않는다
+        # (반영 여부를 사람이 확인할 근거를 결과에 남긴다).
+        unverified = state.get("unverified") or []
+        if unverified:
+            return {
+                "result": (
+                    f"처리 완료 — {filled}개 행 입력·저장. "
+                    f"단, 값 {len(unverified)}건은 반영을 확인하지 못했습니다({', '.join(unverified[:5])}) — 확인 필요."
+                ),
+                "retry_save": False,
+            }
         return {"result": f"처리 완료 — {filled}개 행 입력·저장.", "retry_save": False}
 
     return save_doc

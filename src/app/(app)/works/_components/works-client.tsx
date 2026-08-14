@@ -5,8 +5,8 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { SearchInput } from '@/components/ui/search-input';
 import {
   WORK_STATUS_LABEL,
   WORKS,
@@ -109,20 +109,13 @@ export function WorksClient() {
           })}
         </div>
 
-        <div className="relative sm:w-64">
-          <RiSearchLine
-            size={16}
-            aria-hidden
-            className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
-          />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="제목·담당자·프로젝트 검색"
-            aria-label="업무 검색"
-            className="pl-9"
-          />
-        </div>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="제목·담당자·프로젝트 검색"
+          ariaLabel="업무 검색"
+          className="sm:w-64"
+        />
       </div>
 
       {/* 본문 — 선택 시 2열(리스트 + 상세), 미선택 시 전체폭 리스트 */}

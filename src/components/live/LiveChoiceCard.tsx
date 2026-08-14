@@ -80,9 +80,9 @@ export function LiveChoiceCard({ hitl, onSubmit }: LiveChoiceCardProps) {
               onClick={() => (isMulti ? toggle(opt.value) : void submit({ value: opt.value }))}
               className={cn(
                 'flex items-center gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors disabled:opacity-60',
-                active
-                  ? 'border-accent bg-accent/5 ring-accent/30 ring-2'
-                  : 'border-border hover:bg-muted/60',
+                // ⚠ 활성 표시는 테두리+배경만. 바깥으로 그려지는 ring(box-shadow)은 이 목록의
+                // 스크롤 컨테이너(overflow-y-auto) 경계에서 좌우가 잘린다 — UI 지침 2026-08-04.
+                active ? 'border-accent bg-accent/10' : 'border-border hover:bg-muted/60',
               )}
             >
               <span

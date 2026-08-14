@@ -55,7 +55,7 @@ async def test_seed_agent_groups_syncs_fields(sm):
 async def test_seed_agents_backfills_group_id(sm):
     # 0016 이전에 시드된 기존 에이전트(group_id NULL)도 재시드로 그룹 소속이 보강된다.
     async with sm() as s:
-        agent = await s.get(Agent, "card-chat")
+        agent = await s.get(Agent, "corporate-card")
         agent.group_id = None
         await s.commit()
 
@@ -64,7 +64,7 @@ async def test_seed_agents_backfills_group_id(sm):
         await s.commit()
 
     async with sm() as s:
-        agent = await s.get(Agent, "card-chat")
+        agent = await s.get(Agent, "corporate-card")
     assert agent.group_id == "resolution"
 
 
@@ -73,7 +73,7 @@ async def test_agent_serializes_group(client, make_user, auth_as):
     uid = await make_user("group-admin", "super_admin")
     auth_as(uid)
 
-    resp = await client.get("/agents/card-chat")
+    resp = await client.get("/agents/corporate-card")
     assert resp.status_code == 200
     assert resp.json()["group"] == {
         "id": "resolution",
@@ -91,5 +91,5 @@ async def test_standalone_agent_group_is_null(client, make_user, auth_as, make_a
     assert resp.status_code == 200
     by_id = {a["id"]: a for a in resp.json()}
     assert by_id["standalone-x"]["group"] is None
-    assert by_id["card-chat"]["group"]["id"] == "resolution"
-    assert by_id["card-chat"]["group"]["name"] == "결의서입력"
+    assert by_id["corporate-card"]["group"]["id"] == "resolution"
+    assert by_id["corporate-card"]["group"]["name"] == "결의서입력"

@@ -7,6 +7,7 @@ import { EmptyNote } from '@/components/ui/empty-note';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
 import { LiveGridCard } from '@/components/live/LiveGridCard';
+import { LivePlannerCard } from '@/components/live/LivePlannerCard';
 import type {
   LiveLogLevel,
   LiveLogLine,
@@ -44,6 +45,9 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
+  // 계획서 개입(kind=planner)은 내부스크롤 금지(2026-08-13 규칙) — 패널 높이 고정
+  // (lg:h-full)을 풀어 데모 계획서처럼 콘텐츠 높이로 자라고 페이지 스크롤로 흐르게 한다.
+  const plannerActive = run.hitl?.kind === 'planner';
 
   const [tab, setTab] = useState<TabKey>('workflow');
 
@@ -62,7 +66,12 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
   }, [terminal, hasResult]);
 
   return (
-    <section className="border-border bg-surface flex min-h-[440px] flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:h-full lg:min-h-0 lg:min-w-0">
+    <section
+      className={cn(
+        'border-border bg-surface flex min-h-[440px] flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:min-w-0',
+        plannerActive ? 'lg:self-start' : 'lg:h-full lg:min-h-0',
+      )}
+    >
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as TabKey)}
@@ -104,6 +113,11 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
                 hitl={run.hitl}
                 onQuery={(query) => run.sendQuery(run.hitl!.id, query)}
                 onSubmit={(rows) => run.sendRows(run.hitl!.id, rows)}
+              />
+            ) : run.hitl.kind === 'planner' ? (
+              <LivePlannerCard
+                hitl={run.hitl}
+                onSubmit={(plan) => run.sendPlan(run.hitl!.id, plan)}
               />
             ) : (
               <LiveChoiceCard

@@ -25,6 +25,9 @@ class UserOut(CamelModel):
     last_active_at: datetime | None
     joined_at: datetime | None
     org_unit_id: str | None = None  # 소속 조직구분(실행 조직접근 게이트 기준)
+    omnisol_userid: str | None = None  # 상세 드로워 표시용 로그인 식별자
+    department: str | None = None
+    updated_at: datetime | None = None
 
 
 class RoleUpdate(BaseModel):

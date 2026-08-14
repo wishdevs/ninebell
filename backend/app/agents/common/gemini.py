@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from app.agents.common.prompt_capture import capture_request, capture_response
+
 logger = logging.getLogger("app.agents.common.gemini")
 
 # 재시도 대상 상태코드(일시 오류). 404 는 '빈 바디'일 때만 일시로 보고 재시도한다
@@ -45,10 +47,15 @@ async def gemini_chat_decide(
     context: dict,
     shot_b64: str | None,
     tools: list[dict],
+    thinking_budget: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> tuple[str | None, dict]:
     """대화형 에이전트 한 턴 — 대화 기록+컨텍스트 데이터(+화면)로 `tools` 중 도구 1개를 결정.
 
     반환: (tool_name, args). 도구 호출이 없으면 (None, {}). 일시 오류는 재시도, 소진 시 raise.
+    thinking_budget: 사고 토큰 예산(-1=동적, 0=끔, None=모델 기본) — gemini_generate_text 와
+    동일 규약(thinkingConfig).
+    max_output_tokens: 출력 토큰 예산(None=모델 기본) — 대량 배치 판단에서만 명시.
     """
     user_text = (
         f"## 대화/행동 기록\n{history or '(없음)'}\n\n"
@@ -58,15 +65,21 @@ async def gemini_chat_decide(
     parts: list[dict] = [{"text": user_text}]
     if shot_b64:
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": shot_b64}})
+    gen_config: dict = {"temperature": 0.1}
+    if thinking_budget is not None:
+        gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    if max_output_tokens is not None:
+        gen_config["maxOutputTokens"] = max_output_tokens
     body = {
         "contents": [{"role": "user", "parts": parts}],
         "system_instruction": {"parts": [{"text": system}]},
         "tools": [{"functionDeclarations": tools}],
         "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
-        "generationConfig": {"temperature": 0.1},
+        "generationConfig": gen_config,
     }
     url = f"{base}/models/{model}:generateContent"
     headers = {"x-goog-api-key": key, "content-type": "application/json"}
+    cap_seq = capture_request("gemini", url, body)  # 전체 프롬프트 캡처(env 게이트, best-effort)
 
     last_exc: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -92,7 +105,9 @@ async def gemini_chat_decide(
                 continue
             raise
         # 성공 — functionCall 파싱.
-        cand = (r.json().get("candidates") or [{}])[0]
+        data = r.json()
+        capture_response("gemini", url, cap_seq, data)  # LLM 응답 캡처(요청과 seq 로 짝).
+        cand = (data.get("candidates") or [{}])[0]
         for p in (cand.get("content") or {}).get("parts") or []:
             fc = p.get("functionCall")
             if fc:
@@ -102,3 +117,75 @@ async def gemini_chat_decide(
     if last_exc is not None:  # 이론상 도달하지 않음(루프에서 raise) — 방어적.
         raise last_exc
     return None, {}
+
+
+async def gemini_generate_text(
+    http: Any,
+    key: str,
+    model: str,
+    base: str,
+    *,
+    system: str,
+    user: str,
+    temperature: float = 0.2,
+    max_output_tokens: int = 256,
+    thinking_budget: int | None = None,
+) -> str | None:
+    """단발 텍스트 생성 — 도구 없이 순수 텍스트 응답 1개를 받는다(계정 맞춤 적요 등).
+
+    `gemini_chat_decide` 와 동일한 재시도/backoff 를 공유하되 functionCall 대신 텍스트를 모은다.
+    반환: 응답 텍스트(gemini-2.5-flash 의 thought 파트 제외, 앞뒤 공백 정리). 후보/텍스트가
+    없으면 None. 일시 오류는 재시도, 소진 시 마지막 예외를 raise(호출자가 잡아 폴백).
+
+    thinking_budget: gemini-2.5-flash 의 사고 토큰 예산. 0 으로 주면 사고를 끈다 — 짧은 결정적
+    생성(적요 등)에선 사고가 max_output_tokens 를 잠식해 텍스트가 잘리거나 비므로 0 을 권장.
+    """
+    gen_config: dict = {"temperature": temperature, "maxOutputTokens": max_output_tokens}
+    if thinking_budget is not None:
+        gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "system_instruction": {"parts": [{"text": system}]},
+        "generationConfig": gen_config,
+    }
+    url = f"{base}/models/{model}:generateContent"
+    headers = {"x-goog-api-key": key, "content-type": "application/json"}
+    cap_seq = capture_request("gemini", url, body)  # 전체 프롬프트 캡처(env 게이트, best-effort)
+
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            r = await http.post(url, headers=headers, json=body)
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            body_txt = (exc.response.text or "").strip()
+            retryable = status in _RETRY_STATUSES and not (status == 404 and body_txt)
+            last_exc = exc
+            if retryable and attempt < _MAX_ATTEMPTS:
+                logger.warning("gemini text %s — 재시도(%s/%s)", status, attempt, _MAX_ATTEMPTS)
+                await asyncio.sleep(_backoff_s(attempt))
+                continue
+            raise
+        except httpx.RequestError as exc:
+            last_exc = exc
+            if attempt < _MAX_ATTEMPTS:
+                logger.warning(
+                    "gemini text 네트워크 오류 — 재시도(%s/%s): %s", attempt, _MAX_ATTEMPTS, exc
+                )
+                await asyncio.sleep(_backoff_s(attempt))
+                continue
+            raise
+        data = r.json()
+        capture_response("gemini", url, cap_seq, data)  # LLM 응답 캡처(요청과 seq 로 짝).
+        cand = (data.get("candidates") or [{}])[0]
+        text = "".join(
+            p.get("text") or ""
+            for p in (cand.get("content") or {}).get("parts") or []
+            if not p.get("thought")  # 사고 과정 파트는 응답이 아님 — 제외.
+        ).strip()
+        return text or None
+
+    if last_exc is not None:  # 이론상 도달하지 않음(루프에서 raise) — 방어적.
+        raise last_exc
+    return None

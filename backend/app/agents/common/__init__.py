@@ -3,7 +3,18 @@
 - :mod:`nodes`: 결의서입력 화면 진입 앞단(login→user_type→menu_nav→set_gubun→add_row→
   open_evdn→select_evdn). expense_card·card_collect 가 함께 쓴다.
 - :mod:`gemini`: 범용 Gemini function-calling 디스패처(`gemini_chat_decide`).
+- :mod:`etribe`: 사내 Etribe-LLM(OpenAI 호환) 클라이언트 — gemini 와 동일 반환 계약.
+- :mod:`llm`: settings.llm_provider 로 gemini/etribe 를 고르는 프로바이더 디스패처
+  (`chat_decide`/`generate_text` — 에이전트 호출부는 이쪽만 사용).
+- :mod:`voucher_period`: 전표 3종(외상매출·외상매입·미지급금 법인카드) 공용 회계일 기간
+  파라미터(period_from~period_to) 정규화·검증.
 
 이전엔 expense_card 소유라 card_collect 가 형제 패키지 내부를 import 하는 역방향 결합이었다.
 공용 계층으로 승격해 결합 방향을 바로잡았다(순수 이동, 동작 불변).
 """
+
+# 실패 사유(str(exc)) 로그·사유 문자열 공통 절단 상한 — 60~140자 절단으로
+# 'Cannot read properties of und' 처럼 원인 재구성이 불가했던 결함 해소(디버깅 감사).
+# 저장 포맷은 문자열 그대로라 소비자(FE/steps 파서) 무영향. run.result 는 세션이 [:500]
+# 상한을 따로 걸므로 이 값과 일치시킨다.
+ERR_REASON_MAX = 500

@@ -8,13 +8,15 @@ import time
 import uuid
 
 from app.config import get_settings
+from app.db import get_sessionmaker
 from app.live.events import emit_chat, emit_hitl, emit_log, emit_step
 from app.live.hitl import close_hitl_channel, open_hitl_channel
 from app.services import card_learning
 from app.services.code_sync import dept_matches_budget_name
 
-from .. import steps
+from .. import steps, vat as vat_rules
 from . import _shared, batch, catalog, prefill
+from .save import _save_guidance  # 재개입 그리드 상단 직전 저장 실패 사유+조치.
 
 logger = logging.getLogger("app.agents.card_collect.nodes.collect")
 
@@ -96,7 +98,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
         n = len(rows_list)
 
         # 행별 추천 적요(prefill) + 처리 현황(status)·적요(notes) 트래킹. status/notes 는
-        # r.get("i", idx)(=행 인덱스, 제출행 no-1 과 동일)를 키로 쓴다(_status_table 과 같은 규칙).
+        # r.get("i", idx)(=원본 그리드 인덱스)를 키로 쓴다(batch 의 status 갱신과 같은 규칙).
         recs = {r.get("i", idx): _shared.recommend_note(r.get("TRAN_NM") or "", r.get("TRAN_AMT") or "")
                 for idx, r in enumerate(rows_list)}
         status: dict[int, str] = {r.get("i", idx): "pending" for idx, r in enumerate(rows_list)}
@@ -198,7 +200,49 @@ def make_collect_rows_node(timeout_s: int | None = None):
         preselect = await prefill._prefill_selections(
             events, settings, rows_list, recs, budget_favs, mine_units, project_favs,
             cost_prefix=cost_prefix, cost_project=cost_project, learned=learned, seed=seed,
+            # 접속자 직급(runs 가 params 로 주입) — 팀원이면 접대비·회식비 계정을 추천에서 제외.
+            user_job_title=(state.get("params") or {}).get("user_job_title"),
         )
+        # 계정 인지 적요 재추천: 프리셀렉트된 예산계정(bgacctCd)으로 suggest_note 사다리를 태워
+        # 초기 적요도 계정 인지되게 만든다(엔드포인트 /me/note-suggest 와 같은 리졸버 — 배치
+        # 최초 추천·실시간 재추천 일관). 계정 없는 행은 위 가맹점-키 경로를 그대로 유지(회귀 방어).
+        # noteSource 배지는 리졸버 source(learned/seed/category/heuristic)를 그대로 반영한다.
+        acct_by_key: dict[int, tuple[str, str, str]] = {}
+        for idx, r in enumerate(rows_list):
+            bu = (preselect.get(idx + 1) or {}).get("budgetUnit") or {}
+            acct_code = (bu.get("bgacctCd") or "").strip()
+            if acct_code:
+                acct_by_key[r.get("i", idx)] = (
+                    r.get("TRAN_NM") or "",
+                    acct_code,
+                    (bu.get("bgacctNm") or "").strip(),
+                )
+        if acct_by_key:  # 계정이 하나라도 있을 때만 세션을 연다(계정 없는 런은 DB 접근 없음).
+            try:
+                async with get_sessionmaker()() as s:
+                    for idx, r in enumerate(rows_list):
+                        key = r.get("i", idx)
+                        if key not in acct_by_key:
+                            continue
+                        merchant, acct_code, acct_nm = acct_by_key[key]
+                        # ai_on_ambiguous_seed — 그 가맹점×계정의 seed 적요가 여러 갈래일 때만
+                        # (dominance 미달) AI 로 계정 맞춤 적요를 만든다. 미학습 조합은 배치에서
+                        # 생성하지 않고 결정적 tier 를 그대로 탄다(카드 런당 LLM 호출 억제).
+                        res = await card_learning.suggest_note(
+                            s,
+                            user_id=state.get("owner"),
+                            merchant=merchant,
+                            acct_code=acct_code,
+                            acct_name=acct_nm,
+                            ai_on_ambiguous_seed=True,
+                        )
+                        note = (res.get("note") or "").strip()
+                        if note:
+                            recs[key] = note
+                            notes[key] = note
+                            note_sources[key] = res.get("source")
+            except Exception:  # noqa: BLE001 — 적요 재추천 실패가 런을 죽여선 안 된다(부가기능).
+                logger.exception("card-collect account-aware note suggest failed")
         # AI 추천 준비 끝 → 그리드(사람 개입) 구간 시작. 분리 측정해야 ETA 가 정직해진다
         # (prefill=자동·예측 대상, collect_rows=사람 시간·예측 제외).
         await emit_step(events, "prefill", "done", _shared._ms(t0))
@@ -217,6 +261,14 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 "time": r.get("TRAN_TM") or "",
                 "approved": r.get("APRVL_YN") or "",
                 "vatType": r.get("VAT_TP") or "",
+                # 부가세구분(과세/불공) 자동 분류 — 예산계정 불공목록·AI 가맹점 판정·VAT_TP 순.
+                # 사용자가 그리드에서 덮어쓸 수 있고, 저장 파티션은 그 최종값을 쓴다.
+                "vat": vat_rules.classify_vat(
+                    r.get("VAT_TP"),
+                    (preselect[idx + 1].get("budgetUnit") or {}).get("bgacctNm"),
+                    preselect[idx + 1].get("vatDeduction"),
+                    r.get("TRAN_NM"),  # 가맹점명 — 통행료·우체국 결정적 불공.
+                ),
                 "note": recs[r.get("i", idx)],
                 "noteSource": note_sources[r.get("i", idx)],
                 **preselect[idx + 1],
@@ -259,6 +311,16 @@ def make_collect_rows_node(timeout_s: int | None = None):
             else:
                 gr["error"] = "저장 거부 — 예산단위를 다시 선택하세요."
 
+        # 재개입(직전 저장 실패) 사유 배너 — 계정 불일치는 위 행별 오류로도 뜨지만, 필수값 미입력·
+        # 일반 ERP 오류 등은 행별로 안 잡히므로 **왜 1회차가 실패했고 무엇을 고칠지**를 그리드 상단
+        # notice 로 항상 알려준다(사용자 피드백: 재개입만 하고 이유를 안 알려줌). 첫 진입엔 None.
+        save_error = state.get("save_error_msg")
+        retry_no = state.get("save_retries") or 0
+        retry_notice = _save_guidance(issues, save_error) if save_error else None
+        if retry_notice and retry_no:
+            # 재시도는 사용자 결정(채팅 핸드오프)이라 상한이 없다 — 회차만 표시.
+            retry_notice = f"[저장 재시도 {retry_no}회차] {retry_notice}"
+
         # 지속 HITL 채널: decision_id 1개로 노드 수명 내내 큐를 유지한다(query 재검색·재제출을
         # 같은 채널로 받는다). 소유권·런바인딩은 오픈 시점에 등록해 /runs/hitl 레이스 창을 없앤다.
         decision_id = uuid.uuid4().hex
@@ -270,7 +332,9 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 events,
                 decision_id=decision_id,
                 kind="grid",
-                title="승인내역 정리",
+                # 프론트 GridHeader 가 '· 승인내역 정리'를 덧붙이므로 여기엔 **에이전트 이름만**
+                # 넣는다 — '승인내역 정리'를 넣으면 '승인내역 정리 · 승인내역 정리'가 된다.
+                title="법인카드",
                 prompt=(
                     "행별로 예산단위·프로젝트·적요를 입력한 뒤 '입력 완료'를 누르세요. "
                     "과세 행은 법인카드(01), 나머지는 법인카드(불공)(02)으로 자동 전환해 "
@@ -279,6 +343,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 rows=grid_rows,
                 budgetUnits=budget_units,
                 projects={"favorites": project_favs, "searchResults": search_results, "query": query},
+                notice=retry_notice,
             )
 
         last_results: list | None = None  # 마지막 프로젝트 검색 결과(무효 제출 시 프레임 유지용).
@@ -342,7 +407,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
             skipped = 0
             for r in submitted:
                 if r.get("skip"):
-                    status[r["no"] - 1] = "skipped"
+                    # status 키는 그리드 인덱스(i) — no 는 목록 위치+1(필터로 어긋날 수 있음).
+                    status[rows_list[r["no"] - 1].get("i", r["no"] - 1)] = "skipped"
                     skipped += 1
 
             taxable_work: list[dict] = []
@@ -350,8 +416,11 @@ def make_collect_rows_node(timeout_s: int | None = None):
             for row in apply_rows:
                 idx = row["no"] - 1
                 src = rows_list[idx]
+                # ERP 그리드 행 인덱스는 src['i'] — 저장 제외 필터로 rows_list 위치와
+                # 그리드 인덱스가 어긋날 수 있어 위치(idx)를 그대로 쓰면 엉뚱한 행을 채운다.
+                gi = src.get("i", idx)
                 entry = {
-                    "idx": idx,
+                    "idx": gi,
                     "label": row["no"],
                     "budgetUnit": row.get("budgetUnit") or {},
                     "project": row.get("project") or None,
@@ -361,18 +430,24 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     "projectEdited": bool(row.get("projectEdited")),
                     "noteEdited": bool(row.get("noteEdited")),
                 }
-                if (src.get("VAT_TP") or "").strip() == "과세":
+                # 부가세구분 파티션 — 사용자 최종 제출값(vat) 우선, 없으면(구클라) 계정+가맹점+VAT_TP 자동분류.
+                row_vat = (row.get("vat") or "").strip() or vat_rules.classify_vat(
+                    src.get("VAT_TP"),
+                    (row.get("budgetUnit") or {}).get("bgacctNm"),
+                    merchant=src.get("TRAN_NM"),
+                )
+                if row_vat == vat_rules.TAXABLE:
                     taxable_work.append(entry)
                 else:
                     pending_nontax.append(
                         {**entry, "key": _shared._row_key(src), "merchant": src.get("TRAN_NM") or ""}
                     )
-                    status[idx] = "wait2"
-                    notes[idx] = entry["note"]
+                    status[gi] = "wait2"
+                    notes[gi] = entry["note"]
 
             # 행 분류 전문 로깅 — 승인취소(음수) 행이 어느 패스로 갔는지 사후 진단용.
             def _row_desc(e: dict, tag: str) -> str:
-                src2 = rows_list[e["idx"]]
+                src2 = rows_list[e["label"] - 1]  # label=제출 행번호(위치+1) — idx 는 그리드 인덱스.
                 return (
                     f"{e['label']}행 {(src2.get('TRAN_NM') or '?')[:10]} {src2.get('TRAN_AMT', '?')}"
                     f"(승인 {src2.get('APRVL_NO', '?')}·'{src2.get('VAT_TP', '')}'→{tag})"
@@ -399,7 +474,7 @@ def make_collect_rows_node(timeout_s: int | None = None):
                 if budget or project or note:  # 바꾼 게 하나라도 있을 때만 학습.
                     learn_entries.append(
                         {
-                            "merchant": rows_list[e["idx"]].get("TRAN_NM") or "",
+                            "merchant": rows_list[e["label"] - 1].get("TRAN_NM") or "",
                             "budget": budget,
                             "project": project,
                             "note": note,
@@ -407,6 +482,27 @@ def make_collect_rows_node(timeout_s: int | None = None):
                     )
             _owner = state.get("owner")
             learned_n = await card_learning.record_selections(_owner, learn_entries)
+            # (가맹점 × 계정) → 적요 학습: 사람이 적요를 바꾼 행을, **그 행에 확정된 계정
+            # (budgetUnit.bgacctCd/bgacctNm)** 단위로 누적한다(record_selections 와 병행). 다음 런에서
+            # 같은 가맹점의 같은 계정이 나오면 그 계정 전용 적요를 결정적으로 추천하기 위한 데이터.
+            # 계정코드 없으면 record_account_notes 가 skip(방어).
+            note_entries = []
+            for e in [*taxable_work, *pending_nontax]:
+                if not (e["noteEdited"] and e["note"]):
+                    continue
+                bu = e.get("budgetUnit") or {}
+                acct_code = (bu.get("bgacctCd") or "").strip()
+                if not acct_code:
+                    continue
+                note_entries.append(
+                    {
+                        "merchant": rows_list[e["label"] - 1].get("TRAN_NM") or "",
+                        "acct_code": acct_code,
+                        "acct_name": (bu.get("bgacctNm") or "").strip() or None,
+                        "note": e["note"],
+                    }
+                )
+            account_notes_n = await card_learning.record_account_notes(_owner, note_entries)
             # 항상 로깅(진단): owner 유무·편집 플래그 도착 여부·후보·저장. 0건이면 원인을 바로 좁힌다.
             # 편집표시 0인데 사용자가 바꿨다면 → 프론트 번들 stale(budgetEdited 미전송) 신호.
             _all = [*taxable_work, *pending_nontax]
@@ -416,8 +512,8 @@ def make_collect_rows_node(timeout_s: int | None = None):
             await emit_log(
                 events,
                 f"개입 학습: owner={'있음' if _owner else '없음'} · 편집표시(예산 {_eb}·적요 {_en}·프로젝트 {_ep})"
-                f" · 후보 {len(learn_entries)}건 · 저장 {learned_n}건.",
-                "info" if learned_n else "warn",
+                f" · 후보 {len(learn_entries)}건 · 저장 {learned_n}건 · 계정적요 {account_notes_n}건.",
+                "info" if learned_n or account_notes_n else "warn",
             )
 
             filled, failures, applied_idx = await batch._apply_batch(
@@ -433,11 +529,13 @@ def make_collect_rows_node(timeout_s: int | None = None):
         )
         if failures:
             summary += "\n\n실패 상세:\n- " + "\n- ".join(failures)
+        # 진행 현황 카드(cc-status)를 최종 요약으로 대체 — 같은 내용의 카드가 두 장 남지
+        # 않게 한다(사용자 요청 2026-07-29: 중복 + 채팅 과대).
         await emit_chat(
             events,
-            chat_id="cc-summary",
+            chat_id="cc-status",
             role="assistant",
-            content=summary + "\n\n" + _shared._status_table(rows_list, status, notes),
+            content=summary,
             streaming=False,
         )
         await emit_log(events, f"1차(과세) 처리 완료 — {filled}건 반영(저장 전).", "ok")

@@ -12,28 +12,30 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.core.deps import (
-    SESSION_COOKIE,
-    CurrentUser,
-    DbSession,
-    require_permission,
-    user_has_permission,
-)
-from app.core.permissions import AGENTS_RUN, LOGS_READ, ROLE_ADMIN, ROLE_RANK, role_rank
-from app.core.security import InvalidTokenError, decode_session_token
+from app.core.creds import omnisol_password as _omnisol_password
+from app.core.deps import CurrentUser, DbSession, require_permission, user_has_permission
+from app.core.listing import PageQuery
+from app.core.permissions import AGENTS_RUN, LOGS_READ
 from app.live import store
 from app.live.hitl import hitl_owner, hitl_run_id, resolve_hitl
 from app.live.registry import get_spec
 from app.live.runner import run_workflow
 from app.live.session import cancel_session, create_session, get_session
-from app.models import Agent, AgentOrgAccess, AgentRun, AgentTemplate, OrgUnit
+from app.models import Agent, AgentRun, AgentTemplate
 from app.services.agent_settings import effective_settings
+
+# 숨김 집합의 단일 소스는 services.agent_visibility — 모듈 전역 별칭(_HIDDEN_AGENT_IDS)은
+# 테스트 주입 앵커(test_runs_hidden.py 가 monkeypatch). collect 가 호출 시점에 이 전역을 읽는다.
+from app.services.agent_visibility import HIDDEN_AGENT_IDS as _HIDDEN_AGENT_IDS
+from app.services.agent_visibility import ensure_can_run
+from app.services.org_lookup import user_cost_type
 
 logger = logging.getLogger(__name__)
 # 전 엔드포인트 AGENTS_RUN 강제(라우터 레벨) — 인증 + 실행 권한. 조직구분 접근은 collect 에서 추가.
@@ -42,6 +44,19 @@ router = APIRouter(
     tags=["runs"],
     dependencies=[Depends(require_permission(AGENTS_RUN))],
 )
+
+
+async def _release_db(db) -> None:
+    """SSE 응답 반환 직전에 요청 세션을 반납(commit+close)한다.
+
+    StreamingResponse 는 스트림이 끝나야 의존성 teardown 이 돌므로, 그대로 두면 요청
+    세션이 스트림 수명(HITL 대기 hitl_timeout_s/턴 × 재연결) 내내 idle-in-transaction 으로 풀을
+    점유한다. 스트림 제너레이터(LiveSession.stream)는 인메모리 버퍼만 읽고, 런 기록은
+    live/store 가 자체 세션(get_sessionmaker)을 열므로 이 세션은 이후 쓰이지 않는다.
+    teardown 의 close 재호출은 멱등이라 무해하다.
+    """
+    await db.commit()
+    await db.close()
 
 
 def _sse(events) -> StreamingResponse:
@@ -113,6 +128,47 @@ class GridRowIn(BaseModel):
     noteEdited: bool = False
 
 
+# ── 구매발주 계획서(kind 'planner') 제출 서브모델 — 프론트 buildPlanPayload shape 미러 ──
+# GridRowIn 선례: 경계(Pydantic)에서 필드·상한을 강제해야 model_dump 로 노드까지 온전히
+# 도달한다(모델에 없는 필드는 조용히 버려진다 — 2026-07-05 회귀).
+class PlanModuleIn(BaseModel):
+    # 발주단위로 묶인 모듈(SET) 식별 — 트리그리드 레벨 3 행.
+    itemCode: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=255)
+    spec: str = Field(default="", max_length=255)
+
+
+class PlanVendorGroupIn(BaseModel):
+    # 발주단위 내 거래처 그룹 — 의사 거래처(가공품·판금품)는 실거래처(vendor) 확정 필수
+    # (서버 경량 검증은 노드 planner.validate_plan — 여기는 형태·상한만).
+    vendorClass: str = Field(min_length=1, max_length=64)
+    vendor: str | None = Field(default=None, max_length=128)
+    parts: int = Field(default=0, ge=0)
+    amount: float = Field(default=0, ge=0)  # 합계 표시값(파생 계산 없음 — 프론트 산출 그대로)
+    dueDate: str = Field(default="", max_length=16)
+    note: str = Field(default="", max_length=200)
+
+
+class PlanUnitIn(BaseModel):
+    seq: int = Field(ge=1)
+    purchaseReason: str = Field(default="", max_length=200)
+    dueDate: str = Field(default="", max_length=16)
+    modules: list[PlanModuleIn] = Field(default_factory=list, max_length=100)
+    vendorGroups: list[PlanVendorGroupIn] = Field(default_factory=list, max_length=100)
+
+
+class PlanProjectIn(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=255)
+
+
+class PlanIn(BaseModel):
+    # 구매발주 계획서 확정 제출(kind 'planner') — 발주단위 최대 50개.
+    project: PlanProjectIn
+    wbs: str = Field(default="", max_length=64)
+    units: list[PlanUnitIn] = Field(default_factory=list, max_length=50)
+
+
 class HitlDecision(BaseModel):
     runId: str | None = Field(default=None, max_length=40)
     decisionId: str = Field(min_length=1, max_length=64)
@@ -124,30 +180,8 @@ class HitlDecision(BaseModel):
     done: bool | None = None  # 대화형 폼 '선택 완료' 신호
     # 그리드 HITL 일괄 제출 — 행별 예산단위·프로젝트·적요·건너뜀(최대 500행).
     rows: list[GridRowIn] | None = Field(default=None, max_length=500)
-
-
-def _omnisol_password(request: Request) -> str | None:
-    """세션 쿠키 JWT 의 jti 로 CredCache 에서 옴니솔 비밀번호를 조회(없으면 None).
-
-    비밀번호는 로그인 시 서버 RAM(CredCache)에만 jti 키로 보관된다(디스크/DB 미저장).
-    실 옴니솔 워크플로우(expense-card-chat)의 로그인 노드가 이 값을 쓴다. demo-echo 는
-    비밀번호를 쓰지 않으므로 None 이어도 무해하다. 테스트(lifespan 미실행)에서는 cred_cache
-    가 없거나 쿠키가 없어 None 을 반환한다.
-    """
-    cache = getattr(request.app.state, "cred_cache", None)
-    if cache is None:
-        return None
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        return None
-    try:
-        jti = decode_session_token(token).get("jti")
-    except InvalidTokenError:
-        return None
-    if not jti:
-        return None
-    entry = cache.get(jti)
-    return entry.get("p") if entry else None
+    # 구매발주 계획서 확정 제출(kind 'planner') — buildPlanPayload shape 그대로.
+    plan: PlanIn | None = None
 
 
 def _browser_factory(request: Request):
@@ -174,6 +208,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     if sess is not None:
         if sess.owner and sess.owner != owner:
             return JSONResponse({"error": "이 흐름에 대한 권한이 없습니다."}, status_code=403)
+        await _release_db(db)
         return _sse(sess.stream(body.cursor))
 
     # 세션이 없는데 커서>0 → 흐름이 이미 종료/정리됨(새 브라우저를 띄우지 않는다).
@@ -191,30 +226,12 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
         return JSONResponse(
             {"error": f"실행할 수 없는 에이전트입니다: {body.agentId}"}, status_code=404
         )
-    # 조직구분 접근제어: 명시 설정된 에이전트는 user 롤에 한해 소속 조직구분을 검사(admin+ 우회).
-    role_code = user.role.code if user.role is not None else None
-    if agent_row.access_configured and role_rank(role_code) < ROLE_RANK[ROLE_ADMIN]:
-        if not user.org_unit_id:
-            # 미지정 사용자는 에이전트 접근 설정의 '미지정' 체크(allow_unassigned)로 허용 가능.
-            if not agent_row.allow_unassigned:
-                return JSONResponse(
-                    {"error": "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."},
-                    status_code=403,
-                )
-        else:
-            allowed = (
-                await db.execute(
-                    select(AgentOrgAccess.agent_id).where(
-                        AgentOrgAccess.agent_id == agent_row.id,
-                        AgentOrgAccess.org_unit_id == user.org_unit_id,
-                    )
-                )
-            ).first()
-            if allowed is None:
-                return JSONResponse(
-                    {"error": "이 에이전트를 실행할 권한이 없습니다(조직구분 접근 제한)."},
-                    status_code=403,
-                )
+    # 실행 게이트(숨김 + 조직구분 접근) — agents.py 목록/상세 가시성과 동일 소스
+    # (services.agent_visibility)로 통합. 숨김은 비관리자만 차단(관리자는 게이트 스모크 허용),
+    # 조직접근은 명시 설정된 에이전트에 한해 user 롤만 검사(admin+ 우회).
+    gate_error = await ensure_can_run(db, user, agent_row, hidden_ids=_HIDDEN_AGENT_IDS)
+    if gate_error is not None:
+        return JSONResponse({"error": gate_error}, status_code=403)
 
     spec = get_spec(body.agentId)
     if spec is None:
@@ -242,22 +259,34 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
     # 권한 상승을 차단한다(리뷰 HIGH). 권위 키 집합 = effective_settings 가 그 에이전트에 대해
     # 반환하는 키(스키마 유일소스라 에이전트별 하드코딩 없음) + department/cost_type(서버 주입).
     server_settings = effective_settings(agent_row.id, agent_row.settings)
-    authoritative_keys = set(server_settings) | {"department", "cost_type"}
+    authoritative_keys = set(server_settings) | {
+        "department", "cost_type", "user_display_name", "user_job_title"
+    }
     user_params = {
         k: v for k, v in (body.params or {}).items() if k not in authoritative_keys
     }
     params = {**server_settings, **user_params}
 
+    # 디버그 모드(로그인 화면 체크) — true 면 카드 선택이 종전처럼 전체 카드, 기본(false)은
+    # **본인 카드만**. 클라이언트 값은 불리언 True 만 인정(문자열 'true'·숫자 1 등은 전부
+    # False 강제) — 서버 기본 '본인만'을 타입 조작으로 뒤집을 수 없게 한다(신뢰 최소화).
+    params["debug"] = (body.params or {}).get("debug") is True
+
     # 사용자 소속 팀의 비용구분(판관비/제조원가)을 params 로 주입 → 카드 자동화가 예산계정
     # (판)/(제) 접두사를 우선 선택하는 힌트로 쓴다(팀에만 비용구분이 붙는다).
-    if user.org_unit_id:
-        team = await db.get(OrgUnit, user.org_unit_id)
-        if team is not None and team.cost_type:
-            params.setdefault("cost_type", team.cost_type)
+    team_cost_type = await user_cost_type(db, user)
+    if team_cost_type:
+        params.setdefault("cost_type", team_cost_type)
     # 사용자 부서(BG_NM) 주입 → 출장 자동화가 예산단위(여비교통비-국내출장) 조합을 부서×비용구분
     # 으로 특정한다(카드 경로는 department 를 읽지 않아 불변). body.params 가 있으면 우선.
     if user.department:
         params.setdefault("department", user.department)
+    # 사용자 이름·직책(ERP 프로필 분리값) 주입 → 법인카드 본인 카드 매칭이 로그인ID 외에
+    # 순수 이름("석대현")과 "이름 직책"("석대현 프로") 표기까지 대조할 수 있게 한다.
+    if user.display_name:
+        params["user_display_name"] = user.display_name
+    if user.job_title:
+        params["user_job_title"] = user.job_title
 
     # AUTO 재생(회수): templateId 가 있으면 소유자·워크플로우를 검증하고 저장된 selections 를
     # params["template"] 로 주입한다. chat_form 이 이를 보면 대화 없이 순서대로 적용한다.
@@ -293,6 +322,7 @@ async def collect(body: CollectRequest, request: Request, user: CurrentUser, db:
             await store.set_terminal(tracked_run_id, status, note, logs)
 
     sess = create_session(body.runId, owner, producer, on_terminal)
+    await _release_db(db)
     return _sse(sess.stream(0))
 
 
@@ -320,6 +350,9 @@ async def hitl(body: HitlDecision, user: CurrentUser):
         "done": body.done,
         # 그리드 일괄 제출은 plain dict 목록으로 채널에 전달(노드가 서버검증 후 반영).
         "rows": [r.model_dump() for r in body.rows] if body.rows is not None else None,
+        # 계획서 제출도 payload 에 **동시 추가** — 모델에만 있고 여기 빠지면 조용히 유실된다
+        # (2026-07-05 grid 회귀 선례). 노드(plan)가 validate_plan 후 수락한다.
+        "plan": body.plan.model_dump() if body.plan is not None else None,
     }
     return {"ok": resolve_hitl(body.decisionId, payload)}
 
@@ -437,6 +470,21 @@ def _run_summary(r: AgentRun) -> dict:
     }
 
 
+def _duration_ms(r: AgentRun) -> int | None:
+    """총 소요시간(ms) — started/finished 둘 다 있을 때만(진행 중·크래시 잔존 런은 None).
+
+    SQLite(테스트)는 server_default(started_at)가 naive, finished_at 은 aware 로 섞일 수
+    있어 UTC 로 정규화 후 뺀다(운영 PG 는 둘 다 aware)."""
+    start, end = r.started_at, r.finished_at
+    if start is None or end is None:
+        return None
+    if start.tzinfo is None and end.tzinfo is not None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None and start.tzinfo is not None:
+        end = end.replace(tzinfo=timezone.utc)
+    return int((end - start).total_seconds() * 1000)
+
+
 def _run_detail(r: AgentRun) -> dict:
     return {
         **_run_summary(r),
@@ -444,6 +492,10 @@ def _run_detail(r: AgentRun) -> dict:
         "inputs": _run_inputs(r.result),  # 무엇을 입력했는지(selections/messages)
         "steps": _run_steps(r.logs),  # 어느 단계에서 실패했는지(step+status)
         "logs": r.logs or [],
+        # 디버깅 파생 필드(additive — 기존 키 불변): 총 소요시간·저장 로그 수.
+        # logCount 가 세션 상한(2000)에 붙어 있으면 절단됐을 가능성 힌트로도 쓴다.
+        "durationMs": _duration_ms(r),
+        "logCount": len(r.logs or []),
     }
 
 
@@ -494,23 +546,36 @@ async def delete_template(template_id: str, user: CurrentUser):
 @router.get("")
 async def list_runs(
     user: CurrentUser,
+    page: PageQuery,
     agentId: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    status: str | None = None,
 ):
-    """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우 필터.
+    """실행 이력(에이전트 사용 로깅, 최신순 요약). agentId 로 워크플로우, status 로 실행
+    상태 필터.
 
     스코프: logs:read(관리자)는 전체 유저의 run 을, 그 외는 본인 것만 본다(감사와 달리
     로깅은 관리자가 전체를 봐야 보완 가능)."""
-    limit = max(1, min(limit, 100))
-    offset = max(0, offset)
+    # 수동 clamp(max(1,min(limit,100))) → PageQuery(범위 밖=422). 상한 100→200 · 기본 20→50 은
+    # 의도된 통일 결정(docs/LIST-COMMONALIZATION.md — DEFAULT_LIMIT=50/MAX_LIMIT=200).
     # 관리자(logs:read)는 전체 조회(user_id=None), 일반 사용자는 소유 스코프.
     scope_user_id = None if user_has_permission(user, LOGS_READ) else user.id
     runs = await store.list_runs(
-        user_id=scope_user_id, agent_id=agentId, limit=limit, offset=offset
+        user_id=scope_user_id,
+        agent_id=agentId,
+        status=status,
+        limit=page.limit,
+        offset=page.offset,
     )
-    total = await store.count_runs(user_id=scope_user_id, agent_id=agentId)
-    return {"runs": [_run_summary(r) for r in runs], "total": total}
+    total = await store.count_runs(user_id=scope_user_id, agent_id=agentId, status=status)
+    items = [_run_summary(r) for r in runs]
+    # dual-key: 구 키(runs)와 표준 키(items)에 같은 목록 병기 — FE 전환 후 별도 커밋에서 구 키 제거 예정.
+    return {
+        "runs": items,
+        "items": items,
+        "total": total,
+        "limit": page.limit,
+        "offset": page.offset,
+    }
 
 
 @router.get("/{run_id}")

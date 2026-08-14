@@ -14,7 +14,7 @@ import json
 import logging
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -28,6 +28,7 @@ from app.models import (
     AgentIntervention,
     AgentLog,
     AgentStep,
+    CardSeedNote,
     CardSeedSelection,
     OrgUnit,
     Permission,
@@ -36,34 +37,56 @@ from app.models import (
     User,
 )
 from app.services.agent_fixtures import AGENT_FIXTURES, AGENT_GROUP_FIXTURES
+from app.services.card_learning import sanitize_note
+from app.services.changelog_seed import seed_changelog
+from app.services.org_apply import _erp_id, _existing_path, _norm
 
-# 조직구분 기준 데이터 — alembic 0005 와 동일. create_all 부트스트랩/SQLite 테스트 경로에서도
-# 동일하게 존재하도록 여기서도 멱등 시드한다(리뷰 #5·#12: 마이그레이션에만 있으면 경로 불일치).
-# 조직구분 2뎁스 시드 — 마이그레이션 0011 과 동일한 slug/구조를 유지한다(런타임=마이그레이션).
-# (본부 slug, 본부 라벨, [(팀 라벨, 비용구분), ...]). 팀 id = f"{본부slug}__t{index}".
+# 조직구분 시드 — ERP 조직도를 **전체 깊이**로 미러링한 기본 구조(본부>그룹>팀). org_apply 임포트와
+# **같은 경로해시 id**(_erp_id(정규화 경로))로 심어, 'ERP 조직도 불러오기'가 돌면 그대로 매칭돼
+# 중복/드리프트가 없다(옛 2단계 slug 시드를 대체 — 재시작/재배포마다 실제 ERP 구조 유지).
+# 마이그레이션 0011(2단계 slug)은 레거시로, 라이브 임포트가 prune 해 정리한다.
+# (path=[상위라벨...,self], 비용구분, 인원수). 인원수=서브트리 합계(직속 인원 판별용). 순수
+# 컨테이너(직속 0, 예: 경영본부 31 = 자식합)는 cost_type=None. 직속 인원을 가진 노드(말단 팀,
+# 그리고 재무자원관리그룹 11≠자식합 10 처럼 직속 1 인 중간 그룹)는 판/제 비용구분을 가질 수 있다.
 _SGA = "판관비"
 _MFG = "제조원가"
-_ORG_HIERARCHY: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
-    ("hq_sales_head", "영업본부장", (("영업본부장", _SGA),)),
-    ("hq_sales", "영업본부", (("영업팀", _SGA), ("영업관리팀", _SGA), ("CS팀", _SGA))),
-    ("hq_mgmt", "경영본부", (
-        ("인사기획팀", _SGA), ("총무팀", _SGA), ("회계팀", _SGA),
-        ("구매팀", _MFG), ("자재팀", _MFG), ("품질팀", _MFG),
-    )),
-    ("hq_imp_head", "IMP연구소 본부장", (("IMP연구소 본부장", _SGA),)),
-    ("hq_imp_group", "IMP연구소 그룹장", (("IMP연구소 그룹장", _SGA),)),
-    ("hq_imp", "IMP연구소", (("IMP1팀", _SGA), ("IMP2팀", _SGA), ("IMP3팀", _SGA))),
-    ("hq_fa_head", "FA연구소 본부장", (("FA연구소 본부장", _MFG),)),
-    ("hq_fa_advisor", "FA고문", (("FA고문", _MFG),)),
-    ("hq_fa", "FA연구소", (("연구기획팀", _MFG),)),
-    ("hq_fa_design", "FA연구소 (설계그룹)", (("설계1팀", _MFG), ("설계2팀", _MFG), ("설계3팀", _MFG))),
-    ("hq_fa_control", "FA연구소 (제어그룹)", (("전장팀", _MFG), ("제어1팀", _MFG), ("제어2팀", _MFG))),
-    ("hq_exec", "임원", (("임원실", _SGA),)),
-    ("hq_mfg", "제조본부", (
-        ("제조1-A팀", _MFG), ("제조1-B팀", _MFG), ("제조1-전장팀", _MFG),
-        ("로봇팀", _MFG), ("제조2팀", _MFG), ("생산관리팀", _MFG),
-    )),
-    ("hq_mfg_advisor", "제조고문", (("제조고문", _MFG),)),
+_ORG_TREE_SEED: tuple[tuple[tuple[str, ...], str | None, int], ...] = (
+    (("임원실",), None, 6),
+    (("임원실", "비서실"), _MFG, 1),
+    (("경영본부",), None, 31),
+    (("경영본부", "재무자원관리그룹"), None, 11),
+    (("경영본부", "재무자원관리그룹", "자재팀"), _MFG, 3),
+    (("경영본부", "재무자원관리그룹", "회계팀"), _SGA, 4),
+    (("경영본부", "재무자원관리그룹", "총무팀"), _SGA, 3),
+    (("경영본부", "구매팀"), _MFG, 6),
+    (("경영본부", "인사/기획팀"), _SGA, 4),
+    (("경영본부", "품질팀"), _MFG, 10),
+    (("영업본부",), None, 10),
+    (("영업본부", "영업본부장"), _SGA, 1),
+    (("영업본부", "영업팀"), _SGA, 5),
+    (("영업본부", "CS팀"), _SGA, 1),
+    (("영업본부", "영업관리팀"), _SGA, 3),
+    (("중국법인",), _MFG, 12),
+    (("FA연구소",), None, 44),
+    (("FA연구소", "FA본부장"), _MFG, 1),
+    (("FA연구소", "설계1팀"), _MFG, 7),
+    (("FA연구소", "전장팀"), _MFG, 6),
+    (("FA연구소", "설계2팀"), _MFG, 7),
+    (("FA연구소", "설계3팀"), _MFG, 5),
+    (("FA연구소", "제어1팀"), _MFG, 6),
+    (("FA연구소", "제어2팀"), _MFG, 8),
+    (("FA연구소", "연구기획팀"), _MFG, 2),
+    (("FA연구소", "고문"), _MFG, 2),
+    (("제조본부",), None, 43),
+    (("제조본부", "제조1팀"), _MFG, 25),
+    (("제조본부", "제조2팀"), _MFG, 17),
+    (("제조본부", "고문"), _MFG, 1),
+    (("IMP연구소",), None, 13),
+    (("IMP연구소", "IMP1팀"), _SGA, 4),
+    (("IMP연구소", "IMP2팀"), _SGA, 5),
+    (("IMP연구소", "IMP3팀"), _SGA, 2),
+    (("IMP연구소", "IMP본부장"), _MFG, 1),
+    (("더존컨설팅",), _MFG, 9),
 )
 
 # 로컬 시스템 관리자 계정(옴니솔 미사용, bcrypt 로컬 검증).
@@ -143,6 +166,12 @@ async def seed_agent_groups(db: AsyncSession) -> None:
             group.description = fx.get("description")
         if group.sort_order != fx.get("sort_order", 0):
             group.sort_order = fx.get("sort_order", 0)
+    # 픽스처에서 제거된 그룹은 DB 에서도 정리(자재팀 제거 2026-07-21 — 픽스처가 단일 소스).
+    # 소속 에이전트의 group_id 는 FK ondelete=SET NULL 로 끊기고, 에이전트 자체는 seed_agents 가 prune.
+    fixture_gids = {fx["id"] for fx in AGENT_GROUP_FIXTURES}
+    for gid, group in existing.items():
+        if gid not in fixture_gids:
+            await db.delete(group)
     await db.flush()
 
 
@@ -291,6 +320,12 @@ async def seed_agents(db: AsyncSession) -> None:
                     placeholder=iv.get("placeholder"),
                 )
             )
+    # 픽스처에서 제거된 에이전트는 DB 에서도 정리(자재팀 더미·구 데모 등 — 픽스처가 단일 소스).
+    # steps/logs/interventions 는 Agent 관계 cascade(all, delete-orphan)로 함께 삭제된다.
+    fixture_ids = {fx["id"] for fx in AGENT_FIXTURES}
+    for aid, row in existing.items():
+        if aid not in fixture_ids:
+            await db.delete(row)
     await db.flush()
 
 
@@ -350,34 +385,69 @@ async def seed_local_admin(db: AsyncSession) -> None:
 
 
 async def seed_org_units(db: AsyncSession) -> None:
-    """조직구분 2뎁스(본부→팀) 멱등 시드(id 슬러그 기준, 이미 있으면 건너뜀)."""
-    existing = set((await db.execute(select(OrgUnit.id))).scalars())
-    for hq_i, (hq_slug, hq_label, teams) in enumerate(_ORG_HIERARCHY):
-        if hq_slug not in existing:
-            db.add(OrgUnit(id=hq_slug, label=hq_label, parent_id=None, cost_type=None, sort_order=hq_i))
-        for t_i, (team_label, cost) in enumerate(teams):
-            team_id = f"{hq_slug}__t{t_i}"
-            if team_id not in existing:
-                db.add(OrgUnit(id=team_id, label=team_label, parent_id=hq_slug,
-                               cost_type=cost, sort_order=t_i))
+    """조직구분 시드 — ERP 전체 깊이 기본 구조를 멱등 삽입(경로해시 id, 이미 있으면 건너뜀).
+
+    id/부모 연결은 org_apply.apply_org_tree 와 동일 규칙(_erp_id(정규화 경로)) — 'ERP 조직도
+    불러오기'가 돌면 같은 id 로 매칭돼 중복이 없다. 여기선 prune 하지 않는다(기본 존재만 보장).
+    """
+    existing = (await db.execute(select(OrgUnit))).scalars().all()
+    by_id = {o.id: o for o in existing}
+    # 기존 행을 **정규화 경로**로 인덱싱 — id 가 무엇이든(옛 slug·임포트 재사용 id) 경로가 같으면
+    # 같은 노드로 보고 재사용한다(중복 생성 방지). apply_org_tree 와 동일한 경로 개념.
+    existing_id_by_path: dict[tuple[str, ...], str] = {}
+    for o in existing:
+        existing_id_by_path.setdefault(_existing_path(o, by_id), o.id)
+
+    id_by_path: dict[tuple[str, ...], str] = {}
+    for order, (path, cost, count) in enumerate(_ORG_TREE_SEED):
+        npath = tuple(_norm(lbl) for lbl in path)
+        parent_id = id_by_path.get(npath[:-1]) if len(npath) > 1 else None
+        existing_id = existing_id_by_path.get(npath)
+        if existing_id is not None:
+            node_id = existing_id  # 이미 존재(경로 기준) — id 재사용, 중복 생성 안 함.
+            # 인원수만 백필한다(None 인 기존 행에만). cost_type 은 운영자 설정을 덮지 않도록 건드리지 않음.
+            row = by_id.get(node_id)
+            if row is not None and row.member_count is None:
+                row.member_count = count
+        else:
+            node_id = _erp_id("|".join(npath))
+            db.add(
+                OrgUnit(
+                    id=node_id,
+                    label=path[-1],
+                    parent_id=parent_id,
+                    cost_type=cost,
+                    member_count=count,
+                    sort_order=order,
+                )
+            )
+        id_by_path[npath] = node_id
     await db.flush()
 
 
 # 전사 카드 기초자료 시드 파일(레포 커밋) — app/data/card_seed_selections.json.gz.
 _CARD_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "card_seed_selections.json.gz"
+# (가맹점 × 계정) → 적요 시드 파일(레포 커밋) — app/data/card_seed_notes.json.gz.
+_CARD_SEED_NOTES_PATH = Path(__file__).resolve().parent.parent / "data" / "card_seed_notes.json.gz"
 
 
-async def seed_card_seeds(db: AsyncSession) -> None:
+async def seed_card_seeds(db: AsyncSession, force: bool = False) -> None:
     """전사 카드 기초자료(card_seed_selections) 멱등 시드 — 비어있을 때만 gz 파일에서 적재.
 
     가맹점→계정·적요 집계(레포 커밋 시드). 누적/갱신분(사용·재임포트) 보존을 위해 테이블이
     비어있을 때만 넣는다. 파일이 없으면 경고만 남기고 건너뛴다(스타트업 실패 방지).
+
+    `force=True`면 커밋된 gz 를 진실로 보고 **기존 행을 비우고 다시 적재**한다(커밋 시드를
+    수정한 뒤 반영할 때 — `scripts/reseed_card_seed.py`. card_seed_selections 은 런타임 누적이
+    없어 교체가 안전하다). 스타트업 자동 시드는 force 를 쓰지 않는다.
     """
-    if (await db.execute(select(CardSeedSelection.id).limit(1))).first() is not None:
+    if not force and (await db.execute(select(CardSeedSelection.id).limit(1))).first() is not None:
         return  # 이미 데이터 존재(시드됨 또는 누적) — 건너뜀.
     if not _CARD_SEED_PATH.exists():
         logger.warning("card_seed 파일 없음(%s) — 카드 기초자료 시드 건너뜀.", _CARD_SEED_PATH)
         return
+    if force:
+        await db.execute(delete(CardSeedSelection))  # 커밋 gz 로 전량 교체(재적재).
     with gzip.open(_CARD_SEED_PATH, "rb") as fh:
         rows = json.loads(fh.read().decode("utf-8"))
     for r in rows:
@@ -397,6 +467,45 @@ async def seed_card_seeds(db: AsyncSession) -> None:
     logger.info("card_seed 시드: %d행 적재(%s).", len(rows), _CARD_SEED_PATH.name)
 
 
+async def seed_card_seed_notes(db: AsyncSession, force: bool = False) -> None:
+    """전사 (가맹점 × 계정) → 적요(card_seed_notes) 멱등 시드 — 비어있을 때만 gz 파일에서 적재.
+
+    seed_card_seeds 미러. 누적/갱신분(사용·재임포트) 보존을 위해 테이블이 비어있을 때만 넣는다.
+    파일이 없으면 경고만 남기고 건너뛴다(스타트업 실패 방지).
+
+    `force=True`면 gz 로 전량 교체한다(reseed). ⚠ card_seed_notes 는 `card_seed_remap`
+    (ERP 카탈로그 9자리 재키잉)이 런타임에 갱신하므로, force 재적재 후엔 필요 시 remap 을 다시
+    돌려야 한다. 스타트업 자동 시드는 force 를 쓰지 않는다.
+    """
+    if not force and (await db.execute(select(CardSeedNote.id).limit(1))).first() is not None:
+        return  # 이미 데이터 존재(시드됨 또는 누적) — 건너뜀.
+    if not _CARD_SEED_NOTES_PATH.exists():
+        logger.warning(
+            "card_seed_notes 파일 없음(%s) — 계정별 적요 시드 건너뜀.", _CARD_SEED_NOTES_PATH
+        )
+        return
+    if force:
+        await db.execute(delete(CardSeedNote))  # gz 로 전량 교체(재적재).
+    with gzip.open(_CARD_SEED_NOTES_PATH, "rb") as fh:
+        rows = json.loads(fh.read().decode("utf-8"))
+    for r in rows:
+        db.add(
+            CardSeedNote(
+                norm_merchant=r["norm_merchant"],
+                merchant=r["merchant"],
+                acct_code=r["acct_code"],
+                acct_name=r.get("acct_name"),
+                # 기록 경로 정리 — 시드 gz 에 남은 PII(차량번호·이름 괄호)가 재적재로 재오염되지 않게.
+                note=sanitize_note(r.get("note")),
+                count=r.get("count", 1),
+                dominance=r.get("dominance", 1.0),
+                last_year=r.get("last_year"),
+            )
+        )
+    await db.flush()
+    logger.info("card_seed_notes 시드: %d행 적재(%s).", len(rows), _CARD_SEED_NOTES_PATH.name)
+
+
 async def seed_all(db: AsyncSession) -> None:
     """전체 시드를 1개 트랜잭션 흐름으로 실행. 호출자가 commit 한다."""
     permissions = await seed_permissions(db)
@@ -406,3 +515,6 @@ async def seed_all(db: AsyncSession) -> None:
     await seed_agents(db)
     await seed_org_units(db)
     await seed_card_seeds(db)
+    await seed_card_seed_notes(db)
+    # 릴리스 노트 — 리포 파일이 단일 소스라 AWS·온프렘 양쪽이 같은 변경 이력을 갖는다.
+    await seed_changelog(db)

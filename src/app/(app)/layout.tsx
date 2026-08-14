@@ -1,5 +1,5 @@
 import { DashboardShell } from '@/components/shell/dashboard-shell';
-import { ChatLauncher } from '@/components/assistant/chat-launcher';
+import { DebugModeProvider } from '@/lib/debug-mode';
 import { UserProvider } from './providers/user-provider';
 
 /**
@@ -12,8 +12,11 @@ import { UserProvider } from './providers/user-provider';
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <UserProvider>
-      <DashboardShell>{children}</DashboardShell>
-      <ChatLauncher />
+      <DebugModeProvider>
+        {/* 우하단 AI 어시스턴트 플로팅 런처(ChatLauncher)는 내렸다(사용자 결정 2026-08-11).
+            컴포넌트와 /assistant 화면은 그대로 남아 있어 이 한 줄로 되돌릴 수 있다. */}
+        <DashboardShell>{children}</DashboardShell>
+      </DebugModeProvider>
     </UserProvider>
   );
 }
