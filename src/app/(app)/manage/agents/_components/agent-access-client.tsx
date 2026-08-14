@@ -223,8 +223,9 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
 
   const editing = accessData.find((a) => a.agentId === editingId) ?? null;
   const editingSel = editing ? new Set(effective(editing.agentId)) : new Set<string>();
-  // 모두 선택 여부는 옵션 멤버십으로 판정(선택 집합에 옵션 외 값이 섞여도 견고).
-  const allSelected = options.every((o) => editingSel.has(o.id));
+  // 선택 수는 옵션 멤버십으로 센다(선택 집합에 옵션 외 값이 섞여도 견고).
+  const selectedCount = options.filter((o) => editingSel.has(o.id)).length;
+  const allSelected = selectedCount === options.length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -315,19 +316,41 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
           description="이 에이전트를 실행할 수 있는 조직(팀)을 선택하세요. 저장 버튼을 눌러야 반영됩니다."
           size="lg"
           footer={
-            <div className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => stage(editing.agentId, allSelected ? [] : options.map((o) => o.id))}
-                className="border-border text-foreground-secondary hover:bg-muted hover:text-foreground rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[length:var(--text-body-sm)] font-medium transition-colors"
-              >
-                {allSelected ? '모두 해제' : '모두 선택'}
-              </button>
+            <div className="flex items-center justify-end">
               <Button onClick={() => setEditingId(null)}>닫기</Button>
             </div>
           }
         >
-          <DialogBody>
+          <DialogBody className="gap-3">
+            {/* 일괄 선택 바 — 조직이 37개까지 늘어나 트리가 길다. 스크롤해도 항상 손이 닿도록
+                본문 **상단에 고정**하고, 토글 하나 대신 **전체 선택/전체 해제를 각각** 둔다
+                (사용자 요청 2026-08-14). 종전엔 부분 선택 상태에서 전체 해제하려면 '모두 선택'을
+                거쳐 두 번 눌러야 했다. 현재 상태인 쪽은 비활성이라 무엇이 남았는지도 드러난다. */}
+            <div className="bg-surface border-border-subtle sticky -top-5 z-10 -mx-5 -mt-5 flex flex-wrap items-center justify-between gap-2 border-b px-5 py-3">
+              <p className="text-foreground-secondary text-[length:var(--text-body-sm)]">
+                <b className="text-foreground tabular-nums">{selectedCount}</b>
+                <span className="text-foreground-tertiary"> / {options.length}</span> 선택
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={allSelected}
+                  onClick={() => stage(editing.agentId, options.map((o) => o.id))}
+                >
+                  전체 선택
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={selectedCount === 0}
+                  onClick={() => stage(editing.agentId, [])}
+                >
+                  전체 해제
+                </Button>
+              </div>
+            </div>
+
             <AgentAccessEditor
               forest={forest}
               selected={editingSel}
