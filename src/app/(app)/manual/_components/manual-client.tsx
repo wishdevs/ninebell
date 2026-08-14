@@ -20,27 +20,22 @@ import {
 } from '@/lib/data/manual';
 import { useDebugMode } from '@/lib/debug-mode';
 import { useApiResource } from '@/app/(app)/_lib/use-api-resource';
-import { useOptionalCurrentUser } from '@/app/(app)/providers/user-provider';
 
 /**
  * 메뉴얼 — 왼쪽 분류(섹션별 문서 목록) + 오른쪽 본문.
  *
  * 문서 목록은 정적 등록부(lib/data/manual.ts)가 기준이다 — 일반 문서
  * (GENERAL_MANUAL_SECTIONS) + 에이전트 문서(AGENT_MANUAL_SECTIONS, 종전 `GET /agents`
- * 파생 → 정적 전환 2026-08-13). 비로그인(dev 공개)은 API 의존 없이 정적 목록을
- * 그대로 렌더하고, **로그인 상태는 종전처럼 `GET /agents` 응답과 교집합을 취해**
- * 조직구분(AgentOrgAccess) 접근 필터를 그대로 재현한다. 각 문서는 `/manual/{id}`
- * 고유 주소를 가지며, `docId`가 없으면(/manual) 안내 화면을 보여준다.
+ * 파생 → 정적 전환 2026-08-13). **`GET /agents` 응답과 교집합을 취해** 조직구분
+ * (AgentOrgAccess) 접근 필터를 재현한다. 각 문서는 `/manual/{id}` 고유 주소를
+ * 가지며, `docId`가 없으면(/manual) 안내 화면을 보여준다.
+ * (비인증 공개 분기는 개발환경 전용으로 잠시 있었다가 2026-08-14 회수 — 인증 필수.)
  */
 export function ManualClient({ docId }: { docId?: string }) {
   const debugMode = useDebugMode();
-  // 로그인 여부 = UserProvider 존재(앱 셸 분기, manual/layout.tsx). 로그인 시에만
-  // `GET /agents` 를 불러 백엔드 조직접근 필터(agent_visibility)를 목차에 반영한다.
-  // 비로그인은 path null → 요청 0회·즉시 success(data null)로 정적 목록 경로.
-  const me = useOptionalCurrentUser();
-  const { status, data, error, reload } = useApiResource<Agent[]>(me ? '/agents' : null);
+  const { status, data, error, reload } = useApiResource<Agent[]>('/agents');
 
-  // 에이전트 목록과 **동일 노출 규칙** — (1) 로그인 시 `GET /agents` 응답에 있는 id 만
+  // 에이전트 목록과 **동일 노출 규칙** — (1) `GET /agents` 응답에 있는 id 만
   // 남긴다(조직구분 접근 필터·hidden 제외를 서버와 동일 소스로 재현), (2) 디버그 전용
   // (agents.ts DEBUG_ONLY_AGENT_IDS)은 일반 모드에서 목차·본문 어디에도 나오지 않는다
   // (직접 /manual/{id} 도 미해석).
