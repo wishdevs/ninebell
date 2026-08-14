@@ -90,7 +90,7 @@ export function GroupCard({
       </div>
 
       <div className="border-border-subtle text-foreground-tertiary flex items-center gap-1 border-t pt-3 text-[11px]">
-        <span className="truncate">{names}</span>
+        <span className="min-w-0 truncate">{names}</span>
       </div>
     </div>
   );

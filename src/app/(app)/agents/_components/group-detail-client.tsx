@@ -42,7 +42,7 @@ export function GroupDetailClient({ groupId }: { groupId: string }) {
         </Link>
 
         {group ? (
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-2">
                 <h1 className="text-foreground text-[length:var(--text-heading)] leading-tight font-semibold tracking-tight">
