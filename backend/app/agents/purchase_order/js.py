@@ -55,6 +55,35 @@ SEARCH_KEY_EVENT_JS = r"""() => {
   return true;
 }"""
 
+# ── 상단 고정 필드(D3) — 구매그룹·구매조직·구매사유 ──────────────────────────
+# 코드피커는 **코드(hidden #id) + 표시(#id_text)** 쌍이다(프로브 실측 2026-08-14:
+# i_purgrp_cd=1000 / i_purgrp_cd_text=나인벨). 구매사유(i_rmk_dc)는 평범한 텍스트박스.
+# arg [codeIds, reasonId] → {fields: {id: {code, text}}, reason}.
+HEADER_STATE_JS = r"""([codeIds, reasonId]) => {
+  const val = el => (el ? el.value : null);
+  const fields = {};
+  for (const id of codeIds) {
+    fields[id] = {
+      code: val(document.querySelector('#' + id)),
+      text: val(document.querySelector('#' + id + '_text')),
+    };
+  }
+  return { fields, reason: val(document.querySelector('#' + reasonId)) };
+}"""
+
+# 폼 입력 강제 세팅(네이티브 setter + input/change + blur). arg [id, value] → {ok, after}.
+# ⚠ 코드피커는 **코드만 넣으면 표시가 해석되지 않는다**(프로브 실측) — 호출부가 코드와
+#   표시(#id_text)를 함께 세팅해야 한다. 그리드 setValue 금지 규율과 무관(폼 입력).
+SET_INPUT_JS = r"""([id, value]) => {
+  const el = document.querySelector('#' + id);
+  if (!el) return { ok: false, reason: 'no-field' };
+  const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  d.set.call(el, value);
+  for (const t of ['input', 'change']) el.dispatchEvent(new Event(t, { bubbles: true }));
+  el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  return { ok: true, after: el.value };
+}"""
+
 # 도움창 결과 그리드(플랫 .dews-ui-grid) 상위 limit 행 — PJT_NO/PJT_NM + 담당·기간·상태.
 # arg = limit. 프로브 READ_POPUP_GRID_JS 에 개입 카드 description 용 필드를 추가한 판.
 READ_POPUP_GRID_JS = r"""(limit) => {

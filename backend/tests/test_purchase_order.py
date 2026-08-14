@@ -268,8 +268,14 @@ def test_validate_plan_rejects_non_dict():
 
 
 # ── pick_project 노드(스텝 monkeypatch — 브라우저 없이 적용 사이클) ───────────────
-def _patch_pick(monkeypatch, *, apply_ok=True, bom_rows=337):
-    calls: dict = {"apply": [], "lookup": 0}
+def _patch_pick(monkeypatch, *, apply_ok=True, bom_rows=337, header=None):
+    calls: dict = {"apply": [], "lookup": 0, "header": 0}
+
+    async def _header(page):
+        calls["header"] += 1
+        return header if header is not None else {"ok": True, "repaired": []}
+
+    monkeypatch.setattr(steps_mod, "ensure_fixed_header", _header)
 
     async def _close(page):
         return None
@@ -366,6 +372,132 @@ async def test_pick_project_without_params_is_hard_error(monkeypatch):
     assert calls["apply"] == []
     assert not [f for f in _frames(events) if "hitl" in f]
     assert_keys_declared(PurchaseOrderState, out)
+
+
+@pytest.mark.asyncio
+async def test_pick_project_checks_fixed_header_before_lookup(monkeypatch):
+    """D3 — 프로젝트 적용 후 조회(F2) 전에 상단 고정값을 반드시 확인한다."""
+    calls = _patch_pick(monkeypatch)
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": _q(), "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
+    )
+    assert out["project"]["code"] == "2297"
+    assert calls["header"] == 1 and calls["lookup"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pick_project_reports_fixed_header_repair(monkeypatch):
+    # 보정이 일어나면 조용히 넘어가지 않고 로그로 드러낸다(비정상 상태였다는 신호).
+    _patch_pick(monkeypatch, header={"ok": True, "repaired": ["구매그룹", "구매사유(비움)"]})
+    events = _q()
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": events, "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
+    )
+    assert "project" in out
+    msgs = [str(f["log"]) for f in _frames(events) if "log" in f]
+    assert any("상단 고정값 보정" in m and "구매그룹" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_pick_project_hard_fails_when_fixed_header_unfixable(monkeypatch):
+    # 구매그룹이 틀린 채로 진행하면 잘못된 조직으로 구매요청이 저장될 수 있다 — 하드 실패.
+    calls = _patch_pick(monkeypatch, header={"ok": False, "reason": "'구매그룹' 을 맞추지 못했습니다"})
+    out = await asyncio.wait_for(
+        make_pick_project_node()({"events": _q(), "page": _Page(), "params": _PRESELECT}),
+        timeout=5,
+    )
+    assert "구매그룹" in out["error"]
+    assert calls["lookup"] == 0  # 조회까지 가지 않는다.
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+# ── steps.ensure_fixed_header — 확인이 본업, 세팅은 어긋났을 때만 ────────────────
+class _HeaderPage:
+    """HEADER_STATE_JS/SET_INPUT_JS 만 해석하는 가짜 페이지(폼 상태를 dict 로 들고 있다)."""
+
+    def __init__(self, state: dict, *, resolves_text: bool = True):
+        self.state = dict(state)  # {input id: value}
+        self.resolves_text = resolves_text
+        self.sets: list[tuple[str, str]] = []
+
+    async def evaluate(self, script, arg=None):
+        if script is js_mod.HEADER_STATE_JS:
+            code_ids, reason_id = arg
+            return {
+                "fields": {
+                    i: {"code": self.state.get(i), "text": self.state.get(f"{i}_text")}
+                    for i in code_ids
+                },
+                "reason": self.state.get(reason_id),
+            }
+        if script is js_mod.SET_INPUT_JS:
+            fid, value = arg
+            self.sets.append((fid, value))
+            if fid in self.state or self.resolves_text:
+                self.state[fid] = value
+                return {"ok": True, "after": value}
+            return {"ok": False, "reason": "no-field"}
+        raise AssertionError(f"예상 못한 스크립트: {script[:40]}")
+
+
+_HEADER_OK = {
+    "i_purgrp_cd": "1000", "i_purgrp_cd_text": "나인벨",
+    "i_purorg_cd": "1000", "i_purorg_cd_text": "나인벨",
+    "i_rmk_dc": "",
+}
+
+
+@pytest.mark.asyncio
+async def test_ensure_fixed_header_touches_nothing_when_already_correct():
+    # 정상 경로(ERP 자동 기본값) — 세팅 0회. 멀쩡한 화면을 건드리지 않는다.
+    page = _HeaderPage(_HEADER_OK)
+    r = await steps_mod.ensure_fixed_header(page)
+    assert r == {"ok": True, "repaired": []}
+    assert page.sets == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_fixed_header_sets_code_and_text_together():
+    """⚠ 코드만 세팅하면 표시가 해석되지 않는다(프로브 실측) — 코드+표시를 함께 쓴다."""
+    page = _HeaderPage({**_HEADER_OK, "i_purgrp_cd": "", "i_purgrp_cd_text": ""})
+    r = await steps_mod.ensure_fixed_header(page)
+    assert r["ok"] and r["repaired"] == ["구매그룹"]
+    assert ("i_purgrp_cd", "1000") in page.sets
+    assert ("i_purgrp_cd_text", "나인벨") in page.sets
+    assert page.state["i_purorg_cd"] == "1000"  # 멀쩡한 쪽은 안 건드린다.
+
+
+@pytest.mark.asyncio
+async def test_ensure_fixed_header_clears_top_purchase_reason():
+    # D3 — 상단 구매사유는 비운다(구매사유는 발주단위별로 계획서에서 받는다).
+    page = _HeaderPage({**_HEADER_OK, "i_rmk_dc": "이전 세션 잔상"})
+    r = await steps_mod.ensure_fixed_header(page)
+    assert r["ok"] and r["repaired"] == ["구매사유(비움)"]
+    assert page.state["i_rmk_dc"] == ""
+
+
+@pytest.mark.asyncio
+async def test_ensure_fixed_header_fails_when_repair_does_not_stick():
+    # 세팅→독립 확인 규율: 세팅 반환값이 아니라 화면 재독으로 판정한다.
+    page = _HeaderPage({**_HEADER_OK, "i_purgrp_cd": "", "i_purgrp_cd_text": ""})
+
+    async def _stubborn(script, arg=None):
+        if script is js_mod.SET_INPUT_JS:
+            return {"ok": True, "after": arg[1]}  # 세팅했다고 보고만 하고 실제론 안 변함
+        return await _HeaderPage.evaluate(page, script, arg)
+
+    page.evaluate = _stubborn  # type: ignore[method-assign]
+    r = await steps_mod.ensure_fixed_header(page)
+    assert not r["ok"] and "구매그룹" in r["reason"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_fixed_header_fails_when_field_missing():
+    page = _HeaderPage({k: v for k, v in _HEADER_OK.items() if k != "i_purorg_cd"})
+    r = await steps_mod.ensure_fixed_header(page)
+    assert not r["ok"] and "구매조직" in r["reason"]
 
 
 # ── steps.apply_project — 번호 생략 시 단일 결과만 자동 특정(추측 금지) ─────────────

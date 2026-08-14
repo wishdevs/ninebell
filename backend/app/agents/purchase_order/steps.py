@@ -50,6 +50,15 @@ PROJECT_FIELD_LABEL = "프로젝트"
 CHECKBOX_PURCHASE = "구매요청"
 CHECKBOX_MOVE = "이동요청"
 
+# D3 상단 고정값 — (필드 id, 라벨, 코드, 표시). 진입 시 ERP 자동 기본값과 같은 값이다.
+FIXED_HEADER: tuple[tuple[str, str, str, str], ...] = (
+    ("i_purgrp_cd", "구매그룹", "1000", "나인벨"),
+    ("i_purorg_cd", "구매조직", "1000", "나인벨"),
+)
+# 상단 구매사유 — **비운다**(구매사유는 발주단위별로 계획서에서 받는다, D3/D6).
+PURCHASE_REASON_FIELD = "i_rmk_dc"
+HEADER_SETTLE_MS = 400  # 세팅 후 독립 확인 전 정착
+
 
 async def _poll(page: Any, script: str, pred, cap_ms: int, arg: Any = None):
     """script 평가 결과가 pred 를 만족할 때까지 실시간 폴링. 만족 값 또는 None(상한 도달)."""
@@ -220,6 +229,66 @@ async def apply_project(
     if field_val is None:
         return {"ok": False, "reason": f"적용 후 프로젝트 필드에 '{probe}' 반영을 확인하지 못했습니다."}
     return {"ok": True, "name": name, "pjt_no": pjt_no, "field_value": field_val}
+
+
+async def ensure_fixed_header(page: Any) -> dict:
+    """D3 고정값 보장 — 구매그룹·구매조직 = 나인벨(1000), 상단 구매사유 비움.
+
+    **확인이 본업이고 세팅은 어긋났을 때만 한다.** 정상 경로에선 ERP 가 진입 시 자동 기본값을
+    채우고 프로젝트 적용·조회(F2) 후에도 유지된다(프로브 3지점 실측 2026-08-14). 그래도 D11
+    프리필 불신과 같은 이유로 매 실행 확인한다 — 세션/계정에 따라 비어 있을 수 있고, 잘못된
+    구매그룹으로 구매요청이 저장되면(Phase B) 되돌리기 어렵다.
+
+    세팅은 **코드+표시 동시**다 — 코드만 넣으면 표시가 해석되지 않는다(프로브 실측 (a) 실패
+    → (b) 성공, 복구 후 조회(F2) 257행 정상). 세팅 후 **독립 재확인**으로 판정한다.
+
+    ⚠ Phase B 선행조건: 이 복구는 폼 값(제출값 code + 표시)만 맞춘다. 코드피커 **위젯 내부
+      모델**까지 동기화되는지는 저장 경로가 없어 미검증이다 — 저장 게이트를 열기 전에
+      '복구 후 저장' 을 반드시 실측할 것(정상 경로는 ERP 기본값이라 영향 없음).
+
+    반환 {"ok": True, "repaired": [라벨…]} | {"ok": False, "reason": …}
+    """
+    ids = [f[0] for f in FIXED_HEADER]
+    st = await page.evaluate(js.HEADER_STATE_JS, [ids, PURCHASE_REASON_FIELD])
+    fields = st.get("fields") or {}
+    repaired: list[str] = []
+
+    for fid, label, code, text in FIXED_HEADER:
+        cur = fields.get(fid) or {}
+        if cur.get("code") is None:
+            return {"ok": False, "reason": f"'{label}' 필드를 화면에서 찾지 못했습니다."}
+        if cur.get("code") == code and cur.get("text") == text:
+            continue
+        await page.evaluate(js.SET_INPUT_JS, [fid, code])
+        await page.evaluate(js.SET_INPUT_JS, [f"{fid}_text", text])
+        repaired.append(label)
+
+    if st.get("reason") is None:
+        return {"ok": False, "reason": "상단 구매사유 필드를 화면에서 찾지 못했습니다."}
+    if str(st["reason"]).strip():
+        await page.evaluate(js.SET_INPUT_JS, [PURCHASE_REASON_FIELD, ""])
+        repaired.append("구매사유(비움)")
+
+    if not repaired:
+        return {"ok": True, "repaired": []}
+
+    # 세팅→독립 확인(voucher 무결성 규율) — 세팅 반환값이 아니라 화면을 다시 읽어 판정한다.
+    await verify.DEFAULT_SLEEP(HEADER_SETTLE_MS / 1000)
+    st2 = await page.evaluate(js.HEADER_STATE_JS, [ids, PURCHASE_REASON_FIELD])
+    f2 = st2.get("fields") or {}
+    for fid, label, code, text in FIXED_HEADER:
+        cur = f2.get(fid) or {}
+        if cur.get("code") != code or cur.get("text") != text:
+            return {
+                "ok": False,
+                "reason": (
+                    f"'{label}' 을 {text}({code}) 로 맞추지 못했습니다 "
+                    f"— 현재 코드 {cur.get('code')!r} / 표시 {cur.get('text')!r}."
+                ),
+            }
+    if str(st2.get("reason") or "").strip():
+        return {"ok": False, "reason": "상단 구매사유를 비우지 못했습니다."}
+    return {"ok": True, "repaired": repaired}
 
 
 async def set_checkbox(page: Any, label: str, want_checked: bool) -> dict:

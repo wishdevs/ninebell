@@ -4,7 +4,7 @@
 필수로 받으므로, 여기서는 **적용만** 한다:
 
     도움창 검색(keyword) → 행 선택(PJT_NO, 없으면 단일 결과) → '적용'
-    → 필드 반영 확인 → 조회(F2) → BOM 로드.
+    → 필드 반영 확인 → **상단 고정값(D3) 확인·보정** → 조회(F2) → BOM 로드.
 
 ⚠ 검색 개입(HITL) 폴백은 제거했다(사용자 지시 2026-08-14) — 폼에서 이미 골랐는데 실패했다고
   같은 것을 다시 고르라는 개입을 띄우는 이중 입력이었다. 이제 적용 실패는 **하드 실패**로
@@ -39,7 +39,7 @@ def _ms(t0: float) -> int:
 
 
 async def _apply_and_load(page, events, *, keyword: str, pjt_no: str, label: str) -> dict:
-    """프로젝트 적용 → 필드 반영 확인 → 조회(F2) → BOM 로드 확인.
+    """프로젝트 적용 → 반영 확인 → 상단 고정값(D3) 확인·보정 → 조회(F2) → BOM 로드 확인.
 
     반환 {"ok": True, "project": {...}} | {"ok": False, "reason": …}
     """
@@ -49,7 +49,19 @@ async def _apply_and_load(page, events, *, keyword: str, pjt_no: str, label: str
     name = r.get("name") or label
     code = str(r.get("pjt_no") or pjt_no)
     await emit_log(events, f"프로젝트 '{name}'(코드 {code}) 적용 — 필드 반영 확인 ✅", "ok")
-    # 적용 직후 조회(F2) — BOM 로드까지 확인(계약: 적용→반영 확인→조회).
+
+    # D3 고정값 — 프로젝트 선택 후 구매그룹·구매조직이 비어 있으면 나인벨로 맞추고, 상단
+    # 구매사유는 비운다(사용자 확정 2026-08-14). 조회(F2) **전**에 둬서 이후 단계가 항상
+    # 확정된 헤더를 본다. 정상 경로에선 ERP 기본값이라 아무것도 바꾸지 않는다.
+    h = await steps.ensure_fixed_header(page)
+    if not h.get("ok"):
+        return {"ok": False, "reason": h.get("reason") or "상단 고정값을 확정하지 못했습니다."}
+    if h.get("repaired"):
+        await emit_log(
+            events, f"상단 고정값 보정 — {' · '.join(h['repaired'])}(구매그룹·구매조직 나인벨).", "warn"
+        )
+
+    # 적용 직후 조회(F2) — BOM 로드까지 확인(계약: 적용→반영 확인→고정값→조회).
     await steps.click_lookup(page)
     rows_n = await steps.wait_bom_loaded(page)
     if rows_n <= 0:
