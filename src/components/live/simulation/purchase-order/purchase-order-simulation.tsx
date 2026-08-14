@@ -41,7 +41,8 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
 
   const plan = usePlanState(DEMO_BOM, project);
   const payload = useMemo(
-    () => ((reviewing || confirmed) && project ? buildPlanPayload(DEMO_BOM, project, plan.units) : null),
+    () =>
+      (reviewing || confirmed) && project ? buildPlanPayload(DEMO_BOM, project, plan.units) : null,
     [reviewing, confirmed, project, plan.units],
   );
 

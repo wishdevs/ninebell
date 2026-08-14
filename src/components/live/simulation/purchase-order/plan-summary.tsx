@@ -291,7 +291,9 @@ export function PlanReviewView({
                   className="border-border bg-muted/40 text-foreground-secondary inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]"
                 >
                   {m.name}
-                  {m.spec ? <span className="text-foreground-tertiary">&nbsp;· {m.spec}</span> : null}
+                  {m.spec ? (
+                    <span className="text-foreground-tertiary">&nbsp;· {m.spec}</span>
+                  ) : null}
                 </li>
               ))}
             </ul>
