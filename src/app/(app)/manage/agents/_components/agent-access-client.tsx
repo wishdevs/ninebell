@@ -336,7 +336,12 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
                   variant="secondary"
                   size="sm"
                   disabled={allSelected}
-                  onClick={() => stage(editing.agentId, options.map((o) => o.id))}
+                  onClick={() =>
+                    stage(
+                      editing.agentId,
+                      options.map((o) => o.id),
+                    )
+                  }
                 >
                   전체 선택
                 </Button>
