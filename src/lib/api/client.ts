@@ -8,6 +8,7 @@
  * 토큰을 코드에서 직접 다루지 않는다 — 쿠키는 브라우저가 관리한다.
  */
 
+import { currentReturnPath, loginUrlWithReturn } from '@/lib/auth/return-url';
 import type { CurrentUser } from '@/lib/auth/types';
 
 /**
@@ -88,6 +89,36 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * 401 을 '세션 만료'로 보지 **않는** 경로 — 인증 자체를 시도하는 엔드포인트.
+ *
+ * ⚠ `/auth/login` 은 **비밀번호가 틀려도 401** 을 준다(backend auth.py). 여기서 걸러내지
+ *   않으면 오타 한 번에 화면이 로그인으로 튕겨 오류 메시지가 사라진다.
+ * ⚠ `/auth/me` 는 최초 진입 인증 판정이라 호출부(user-provider)가 직접 처리한다 —
+ *   중앙에서 리다이렉트하면 '로딩 중 화면'이 그려지기도 전에 이동해 깜빡인다.
+ */
+const NO_SESSION_REDIRECT = new Set(['/auth/login', '/auth/logout', '/auth/me']);
+
+/** 동시 다발 401(한 화면이 API 여러 개를 병렬 호출)에 리다이렉트가 겹치지 않게 하는 1회 래치. */
+let sessionExpiredHandled = false;
+
+/**
+ * 세션 만료(401) 공통 처리 — 로그인 화면으로 보내되 **보던 경로를 next 로 실어** 복귀시킨다
+ * (사용자 요청 2026-08-14: 종전엔 메뉴만 이동하고 '안 된다'는 메시지만 떴다).
+ *
+ * router 가 아니라 `location.replace` 를 쓰는 이유: 여기는 컴포넌트 밖(모듈)이라 라우터를 쓸 수
+ * 없고, 죽은 세션의 클라이언트 상태(캐시된 사용자·목록)를 통째로 버리는 편이 안전하다.
+ * replace 라 뒤로가기로 만료된 화면에 되돌아가지 않는다.
+ */
+function handleSessionExpired(path: string): void {
+  if (typeof window === 'undefined') return; // SSR/빌드 시 no-op.
+  if (NO_SESSION_REDIRECT.has(path)) return;
+  if (sessionExpiredHandled) return;
+  if (window.location.pathname.startsWith('/login')) return; // 이미 로그인 화면.
+  sessionExpiredHandled = true;
+  window.location.replace(loginUrlWithReturn(currentReturnPath()));
+}
+
 async function request<T>(method: string, path: string, body?: Json): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method,
@@ -100,6 +131,7 @@ async function request<T>(method: string, path: string, body?: Json): Promise<T>
   const parsed = await parseBody(response);
 
   if (!response.ok) {
+    if (response.status === 401) handleSessionExpired(path);
     throw new ApiError(response.status, parseErrorDetail(parsed));
   }
 

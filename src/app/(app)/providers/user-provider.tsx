@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { getMe } from '@/lib/api/client';
+import { currentReturnPath, loginUrlWithReturn } from '@/lib/auth/return-url';
 import { Spinner } from '@/components/ui/spinner';
 import type { CurrentUser } from '@/lib/auth/types';
 
@@ -61,9 +62,10 @@ export function UserProvider({
         if (!active) {
           return;
         }
-        // 쿠키가 만료/무효일 때(미들웨어를 통과해 들어온 경우) 로그인으로.
+        // 쿠키가 만료/무효일 때(미들웨어를 통과해 들어온 경우) 로그인으로 — 보던 경로를
+        // next 로 실어 로그인 후 그 화면으로 돌아오게 한다(client.ts 401 처리와 같은 규약).
         setState({ status: 'unauthenticated', user: null });
-        router.replace('/login');
+        router.replace(loginUrlWithReturn(currentReturnPath()));
       });
     return () => {
       active = false;

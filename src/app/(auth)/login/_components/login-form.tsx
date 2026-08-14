@@ -1,12 +1,13 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { ApiError, api } from '@/lib/api/client';
+import { resolveReturnPath } from '@/lib/auth/return-url';
 import { readDebugMode, writeDebugMode } from '@/lib/debug-mode';
 import { IS_DEV_ENV } from '@/lib/env';
 import { requestHitlNotificationPermission } from '@/lib/live/use-hitl-notification';
@@ -63,6 +64,8 @@ type LoginResponse =
  */
 export function LoginForm() {
   const router = useRouter();
+  // 세션 만료로 튕겨온 경우 보던 경로가 ?next= 에 실려 온다 — 로그인 후 그곳으로 돌아간다.
+  const nextPath = resolveReturnPath(useSearchParams().get('next'));
   const [userid, setUserid] = useState('');
   const [password, setPassword] = useState('');
   const [saveId, setSaveId] = useState(false);
@@ -113,8 +116,9 @@ export function LoginForm() {
         router.push('/signup');
         return;
       }
-      // 세션 쿠키 발급 완료 → 보호 라우트로. refresh로 미들웨어가 쿠키를 재평가하게 한다.
-      router.replace('/');
+      // 세션 쿠키 발급 완료 → 보호 라우트로(만료 전 보던 화면이 있으면 그곳으로).
+      // refresh로 미들웨어가 쿠키를 재평가하게 한다.
+      router.replace(nextPath);
       router.refresh();
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 401) {

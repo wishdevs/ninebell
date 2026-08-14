@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { isSafeReturnPath } from '@/lib/auth/return-url';
 
 /**
  * 라우트 보호 프록시 (Next 16 `proxy` 컨벤션 — 구 middleware).
@@ -23,8 +24,14 @@ export function proxy(req: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
+  // 보던 경로를 next 로 실어 로그인 후 그곳으로 돌려보낸다(client.ts 401 처리와 같은 규약).
+  // ⚠ clone() 은 원 쿼리를 그대로 들고 오므로 반드시 비운다 — 안 그러면 `/audit?tab=x` 가
+  //   `/login?tab=x` 가 되어 로그인 화면이 남의 파라미터를 물고 있게 된다.
   const loginUrl = req.nextUrl.clone();
+  const back = pathname + req.nextUrl.search;
   loginUrl.pathname = '/login';
+  loginUrl.search = '';
+  if (isSafeReturnPath(back)) loginUrl.searchParams.set('next', back);
   return NextResponse.redirect(loginUrl);
 }
 
