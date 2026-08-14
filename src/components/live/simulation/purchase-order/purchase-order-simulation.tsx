@@ -9,7 +9,7 @@ import type { SimulationPanelProps } from '../index';
 import { buildPlanPayload, createPlanBom } from './model';
 import { ModulePoolTable } from './module-pool-table';
 import { OrderUnitCard } from './order-unit-card';
-import { ConfirmedView, PlanFooter, PlanHeader } from './plan-summary';
+import { ConfirmedView, PlanFooter, PlanHeader, PlanReviewView } from './plan-summary';
 import { SimSectionHeader } from './ui';
 import { usePlanState } from './use-plan-state';
 
@@ -36,11 +36,13 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
     next: { code: string; name: string } | null;
   } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  // 확정 2단계(사용자 요청 2026-08-14) — [전체 계획서 검토] → [다음 단계로 진행] → 확정 뷰.
+  const [reviewing, setReviewing] = useState(false);
 
   const plan = usePlanState(DEMO_BOM, project);
   const payload = useMemo(
-    () => (confirmed && project ? buildPlanPayload(DEMO_BOM, project, plan.units) : null),
-    [confirmed, project, plan.units],
+    () => ((reviewing || confirmed) && project ? buildPlanPayload(DEMO_BOM, project, plan.units) : null),
+    [reviewing, confirmed, project, plan.units],
   );
 
   /** 프로젝트 적용 = 계획 초기화 — units·선택·확정이 프로젝트 BOM 에 종속이라 함께 비운다. */
@@ -48,6 +50,7 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
     setProject(next);
     plan.reset();
     setConfirmed(false);
+    setReviewing(false);
     setPendingProject(null);
   };
 
@@ -103,6 +106,16 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
             payload={payload}
             onEdit={() => setConfirmed(false)}
           />
+        ) : reviewing && payload ? (
+          <PlanReviewView
+            payload={payload}
+            totals={plan.totals}
+            onBack={() => setReviewing(false)}
+            onProceed={() => {
+              setConfirmed(true);
+              setReviewing(false);
+            }}
+          />
         ) : (
           <>
             <ModulePoolTable
@@ -149,7 +162,7 @@ export function PurchaseOrderSimulation({ agent }: SimulationPanelProps) {
               totals={plan.totals}
               assignedModules={plan.assigned.size}
               gate={plan.gate}
-              onConfirm={() => setConfirmed(true)}
+              onConfirm={() => setReviewing(true)}
             />
           </>
         )}

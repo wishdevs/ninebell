@@ -3,18 +3,23 @@
 import { useMemo, useState } from 'react';
 import {
   RiArrowDownSLine,
+  RiArrowLeftLine,
   RiArrowRightSLine,
   RiCheckboxCircleLine,
+  RiFileList3Line,
   RiPencilLine,
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { Spinner } from '@/components/ui/spinner';
+import { StatusPill } from '@/components/ui/status-pill';
 import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
 import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
+import type { PlanSubmit } from '@/lib/live/types';
 import { projectFavoritesOf, searchProjects } from './catalog';
 import type { OrderUnit, PlanBom, PlanGate, PlanTotals } from './model';
+import { Td, Th } from './ui';
 
 /**
  * A(헤더 컨텍스트·자동 단계)와 D(하단 요약·확정)를 한 파일에 둔다 — 둘 다 계획 상태를
@@ -196,6 +201,8 @@ export function PlanFooter({
             </span>
           ) : null}
         </p>
+        {/* 확정은 2단계다(사용자 요청 2026-08-14) — 여기서 바로 제출하지 않고 전체 계획서
+            검토 화면으로 넘어가, 거기서 '다음 단계로 진행'을 눌러야 제출된다. */}
         <Button size="sm" onClick={onConfirm} disabled={!gate.ready || busy}>
           {busy ? (
             <>
@@ -204,8 +211,8 @@ export function PlanFooter({
             </>
           ) : (
             <>
-              <RiCheckboxCircleLine size={14} aria-hidden />
-              계획 확정
+              <RiFileList3Line size={14} aria-hidden />
+              전체 계획서 검토
             </>
           )}
         </Button>
@@ -218,6 +225,148 @@ export function PlanFooter({
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+// ── 검토 뷰 — 전체 계획서(제출 페이로드 그대로) + 다음 단계 진행 ─────────────
+
+interface PlanReviewViewProps {
+  /** 제출될 페이로드 자체를 그린다 — '보이는 것 = 전달되는 것' 보장(buildPlanPayload 산출). */
+  payload: PlanSubmit;
+  totals: PlanTotals;
+  onBack: () => void;
+  onProceed: () => void;
+  /** 제출 전송 중(라이브) — 진행 버튼 비활성 + 스피너. */
+  busy?: boolean;
+}
+
+/**
+ * 전체 계획서 검토(사용자 요청 2026-08-14) — 확정 직전에 작성 내용 전체를 한 번 더 보여주고,
+ * [다음 단계로 진행]을 눌러야 제출된다. 편집 상태는 호출부가 들고 있으므로 [수정으로
+ * 돌아가기]는 작성 내용을 그대로 보존한다. 라이브·데모가 공유한다.
+ */
+export function PlanReviewView({
+  payload,
+  totals,
+  onBack,
+  onProceed,
+  busy = false,
+}: PlanReviewViewProps) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="border-accent/30 bg-accent/5 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3">
+        <RiFileList3Line size={17} aria-hidden className="text-accent mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
+            전체 계획서 검토 — {payload.project.name}
+          </p>
+          <p className="text-foreground-secondary mt-0.5 text-[11px] leading-relaxed">
+            아래 내용이 그대로 다음 단계로 전달됩니다. 수정하려면 돌아가세요.
+            {payload.wbs ? ` · WBS ${payload.wbs}` : ''}
+          </p>
+        </div>
+      </div>
+
+      {payload.units.map((u) => (
+        <section
+          key={u.seq}
+          className="border-border bg-surface overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-card)]"
+        >
+          {/* 발주단위 카드와 같은 밴드 문법 — 검토에서도 '한 발주 = 한 덩어리'로 읽힌다. */}
+          <div className="bg-muted/50 border-border/70 flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
+            <StatusPill label={`발주 ${u.seq}`} variant="info" />
+            <span className="text-foreground text-[length:var(--text-body)] font-semibold">
+              {u.purchaseReason}
+            </span>
+            <span className="text-foreground-tertiary text-[11px] tabular-nums">
+              납기예정일 {u.dueDate}
+            </span>
+          </div>
+          <div className="flex flex-col gap-3 p-4">
+            <ul className="flex flex-wrap gap-1.5">
+              {u.modules.map((m) => (
+                <li
+                  key={m.itemCode}
+                  className="border-border bg-muted/40 text-foreground-secondary inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]"
+                >
+                  {m.name}
+                  {m.spec ? <span className="text-foreground-tertiary">&nbsp;· {m.spec}</span> : null}
+                </li>
+              ))}
+            </ul>
+            <div className="border-border overflow-x-auto rounded-[var(--radius-md)] border">
+              <table className="w-full min-w-[640px] border-collapse text-[11px]">
+                <thead className="bg-muted/70 text-foreground-tertiary">
+                  <tr>
+                    <Th>거래처</Th>
+                    <Th className="text-right">부품 수</Th>
+                    <Th className="text-right">금액</Th>
+                    <Th className="w-28">납기예정일</Th>
+                    <Th>비고</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {u.vendorGroups.map((g) => (
+                    <tr key={g.vendorClass} className="border-border/50 border-t align-middle">
+                      <Td>
+                        {g.vendor && g.vendor !== g.vendorClass ? (
+                          <span className="text-foreground-secondary whitespace-nowrap">
+                            {g.vendorClass} <span aria-hidden>→</span>{' '}
+                            <b className="text-foreground">{g.vendor}</b>
+                          </span>
+                        ) : (
+                          <span className="text-foreground-secondary whitespace-nowrap">
+                            {g.vendor ?? g.vendorClass}
+                          </span>
+                        )}
+                      </Td>
+                      <Td className="text-foreground-secondary text-right tabular-nums">
+                        {g.parts}
+                      </Td>
+                      <Td className="text-foreground-secondary text-right whitespace-nowrap tabular-nums">
+                        {formatInteger(g.amount)}
+                      </Td>
+                      <Td className="text-foreground-secondary whitespace-nowrap tabular-nums">
+                        {g.dueDate}
+                      </Td>
+                      <Td className="text-foreground-secondary">{g.note || '—'}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      ))}
+
+      <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+        <p className="text-foreground-secondary text-[length:var(--text-body-sm)]">
+          발주단위 <b className="text-foreground tabular-nums">{totals.units}</b> · 거래처 그룹{' '}
+          <b className="text-foreground tabular-nums">{totals.vendorGroups}</b> · 부품{' '}
+          <b className="text-foreground tabular-nums">{totals.parts}</b> · 총{' '}
+          <b className="text-foreground tabular-nums">{formatInteger(totals.amount)}</b>원
+        </p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={onBack} disabled={busy}>
+            <RiArrowLeftLine size={14} aria-hidden />
+            수정으로 돌아가기
+          </Button>
+          <Button size="sm" onClick={onProceed} disabled={busy}>
+            {busy ? (
+              <>
+                <Spinner size={14} />
+                전송 중…
+              </>
+            ) : (
+              <>
+                <RiCheckboxCircleLine size={14} aria-hidden />
+                다음 단계로 진행
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

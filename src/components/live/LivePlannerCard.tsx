@@ -8,7 +8,7 @@ import type { LiveHitl, PlanSubmit } from '@/lib/live/types';
 import { buildPlanPayload, createPlanBom, type PlanBom } from './simulation/purchase-order/model';
 import { ModulePoolTable } from './simulation/purchase-order/module-pool-table';
 import { OrderUnitCard } from './simulation/purchase-order/order-unit-card';
-import { PlanFooter, PlanHeader } from './simulation/purchase-order/plan-summary';
+import { PlanFooter, PlanHeader, PlanReviewView } from './simulation/purchase-order/plan-summary';
 import { SimSectionHeader } from './simulation/purchase-order/ui';
 import { usePlanState } from './simulation/purchase-order/use-plan-state';
 
@@ -62,6 +62,9 @@ function PlannerBody({
   const plan = usePlanState(bom, project);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 확정 2단계(사용자 요청 2026-08-14) — [전체 계획서 검토]가 이 뷰를 열고, 검토 화면의
+  // [다음 단계로 진행]이 실제 제출이다. 뒤로 가면 작성 상태는 그대로다(usePlanState 유지).
+  const [reviewing, setReviewing] = useState(false);
 
   async function submit() {
     if (sending || busy) return;
@@ -75,17 +78,26 @@ function PlannerBody({
     }
   }
 
+  if (reviewing) {
+    return (
+      <div className="flex flex-col gap-4">
+        {hitl.notice ? <PlannerNotice notice={hitl.notice} /> : null}
+        <PlanReviewView
+          payload={buildPlanPayload(bom, project, plan.units)}
+          totals={plan.totals}
+          onBack={() => setReviewing(false)}
+          onProceed={() => void submit()}
+          busy={sending || busy}
+        />
+        {error ? <span className="text-danger text-[12px]">{error}</span> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {/* 재개입 공지 — 서버 검증이 계획을 거부한 사유(hitl.notice, LiveGridCard 와 동일 계약). */}
-      {hitl.notice ? (
-        <div className="border-danger/30 bg-danger/10 text-danger flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
-          <RiErrorWarningLine size={16} aria-hidden className="mt-0.5 shrink-0" />
-          <p className="text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
-            {hitl.notice}
-          </p>
-        </div>
-      ) : null}
+      {hitl.notice ? <PlannerNotice notice={hitl.notice} /> : null}
 
       <PlanHeader bom={bom} project={project} showFlowSteps={false} />
 
@@ -131,11 +143,23 @@ function PlannerBody({
         totals={plan.totals}
         assignedModules={plan.assigned.size}
         gate={plan.gate}
-        onConfirm={() => void submit()}
+        onConfirm={() => setReviewing(true)}
         busy={sending || busy}
       />
 
       {error ? <span className="text-danger text-[12px]">{error}</span> : null}
+    </div>
+  );
+}
+
+/** 재개입 공지 배너 — 검토/작성 두 화면이 공유(서버 검증 거부 사유). */
+function PlannerNotice({ notice }: { notice: string }) {
+  return (
+    <div className="border-danger/30 bg-danger/10 text-danger flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
+      <RiErrorWarningLine size={16} aria-hidden className="mt-0.5 shrink-0" />
+      <p className="text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
+        {notice}
+      </p>
     </div>
   );
 }
