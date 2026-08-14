@@ -437,6 +437,133 @@ async def test_pick_project_without_params_opens_hitl(monkeypatch):
         await task
 
 
+# ── steps.open_and_search_once — 도움창 실측 정정 반영(2026-08-14 프로브 4/4) ──────
+# 라이브 사전선택 529ms 2연속 실패의 원인: trusted Enter 가 #keyword 의 <form> 네이티브 제출
+# → SPA 소프트리셋으로 팝업 영구 소멸. 수정: untrusted 제출(SUBMIT_KEYWORD_JS) + 도움창 특정
+# 준비 판정(POPUP_STATE_JS) + 사전검색 시그니처 변화 수락 + 소멸 연속 2폴 디바운스.
+_READY = {"present": True, "gridReady": True}
+_NOT_READY = {"present": True, "gridReady": False}
+_GONE = {"present": False, "gridReady": False}
+# 팝업이 열리면서 자동 사전검색된 기본 1행(메인폼 현재 프로젝트) — 내 검색 결과가 아니다.
+_PRESEARCH_GRID = {"ok": True, "rowCount": 1, "rows": [{"PJT_NO": "2013", "PJT_NM": "MISC-ESR3 #2"}]}
+_RESULT_GRID = {"ok": True, "rowCount": 1, "rows": [dict(_SEARCH_ROW)]}
+
+
+class _PopupPage:
+    """open_and_search_once 용 fake page — evaluate 를 JS 상수로 디스패치.
+
+    popup_states/grids 는 각 스크립트 호출마다 순서대로 소진하고 마지막 값을 유지한다
+    (열림 대기 폴 → 제출 전 시그니처 → 검색 정착 폴 → 재시도까지 하나의 평면 타임라인).
+    """
+
+    def __init__(self, popup_states, grids=None):
+        self._popup_states = list(popup_states)
+        self._grids = list(grids or [_PRESEARCH_GRID, _RESULT_GRID])
+        self.clicks = 0
+        self.submits = 0
+        self.keyword_sets = 0
+        self.popup_polls = 0
+        page = self
+
+        class _Mouse:
+            async def click(self, x, y):
+                page.clicks += 1
+
+        self.mouse = _Mouse()
+
+    @staticmethod
+    def _take(seq):
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    async def evaluate(self, script, arg=None):
+        from nbkit.omnisol import js_lib
+
+        if script == js_lib.PROJECT_PICKER_BOX_JS:
+            return {"x": 1, "y": 1}
+        if script == js_mod.POPUP_STATE_JS:
+            self.popup_polls += 1
+            return self._take(self._popup_states)
+        if script == js_mod.SET_KEYWORD_JS:
+            self.keyword_sets += 1
+            return True
+        if script == js_mod.SUBMIT_KEYWORD_JS:
+            self.submits += 1
+            return True
+        if script == js_mod.READ_POPUP_GRID_JS:
+            return self._take(self._grids)
+        raise AssertionError(f"예상 밖 스크립트 평가: {script[:60]}")
+
+
+def _instant_sleep(monkeypatch):
+    from nbkit.omnisol import verify
+
+    async def _nosleep(seconds):
+        return None
+
+    monkeypatch.setattr(verify, "DEFAULT_SLEEP", _nosleep)
+
+
+@pytest.mark.asyncio
+async def test_search_waits_for_popup_ready_then_accepts_changed_grid(monkeypatch):
+    # 창 셸/이물 창 단계(present=False)와 그리드 미초기화(gridReady=False) 동안은 제출하지
+    # 않고 기다렸다가, 준비 완료 후 untrusted 제출 → 시그니처 변화 즉시 수락.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage([_GONE, _GONE, _NOT_READY, _READY])
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is True and out["attempt"] == 1
+    assert out["rows"][0]["PJT_NO"] == "2297"
+    assert page.clicks == 1 and page.keyword_sets == 1 and page.submits == 1
+
+
+@pytest.mark.asyncio
+async def test_search_does_not_accept_stale_presearch_grid_early(monkeypatch):
+    # 검색 결과가 사전검색과 시그니처까지 같으면(변화 미관측) 최소 정착(MIN) 후에야 수락 —
+    # 자동 사전검색 행을 내 검색 결과로 오독하는 조기 수락 방지.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage([_READY], grids=[_PRESEARCH_GRID])
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is True and out["attempt"] == 1
+    # MIN_SEARCH_SETTLE_MS(1200)/POLL_MS(300) → 정착 폴 최소 5회(준비 1회 제외).
+    assert page.popup_polls >= 6
+
+
+@pytest.mark.asyncio
+async def test_search_survives_transient_popup_vanish(monkeypatch):
+    # 제출 직후 재렌더로 1폴 동안 invisible — 소멸 확정(연속 2폴) 전에 복귀하면 재시도 없이
+    # 같은 팝업에서 결과를 수락한다.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage([_READY, _GONE, _READY])
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is True and out["attempt"] == 1
+    assert page.clicks == 1 and page.submits == 1
+
+
+@pytest.mark.asyncio
+async def test_search_reopens_after_confirmed_vanish(monkeypatch):
+    # 연속 2폴 '없음' = 소멸 확정 → 재오픈 재시도(attempt 2)로 회복한다.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage(
+        [_READY, _GONE, _GONE, _READY],
+        grids=[_PRESEARCH_GRID, _PRESEARCH_GRID, _RESULT_GRID],  # 시도별 사전 스냅샷 2회.
+    )
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is True and out["attempt"] == 2
+    assert page.clicks == 2 and page.submits == 2
+
+
+@pytest.mark.asyncio
+async def test_search_never_opens_fails_after_full_wait(monkeypatch):
+    # 도움창이 끝내 준비되지 않으면 실패하되, 각 시도에서 열림 상한까지 폴링한다 — 라이브
+    # 회귀(즉시 실패·즉시 HITL 폴백) 방어. 검색어 주입·제출도 없어야 한다.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage([_GONE])
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is False and "소멸" in out["reason"]
+    assert page.keyword_sets == 0 and page.submits == 0 and page.clicks == 2
+    # POPUP_OPEN_CAP_MS(5s)/POLL_MS(300ms) ≈ 시도당 17+폴 × 2회 시도.
+    assert page.popup_polls >= 30
+
+
 # ── 실행 전 폼 params 파싱 ────────────────────────────────────────────────────
 def test_purchase_order_params_reads_nested_and_flat():
     from app.agents.purchase_order.params import parse_purchase_order_params

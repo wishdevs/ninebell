@@ -81,9 +81,16 @@
   CX85-137·ZJ90-130 2/2): 검색(팝업당 **1회만**) → 행 선택(`setCurrent`+`setSelection`,
   fieldName='PJT_NM') → 적용 클릭 → 팝업 닫힘 → 메인 필드 반영(`FIELD_DISPLAY_JS`) →
   조회(F2) → BOM 로드. ZJ90-130 = PJT_NO **2261**(실재 확인).
-  ⚠ **팝업 불안정 완화책(표준 채택)**: 같은 팝업 인스턴스에서 2회째 검색 시 간헐 소멸
-  (비결정적, 첫 검색은 5/6 성공) — **팝업당 검색 1회, 결과 미확보 시 재오픈 재시도(상한 2회)**.
-  근본 원인 추적은 비용 대비 낮아 중단(완화책으로 후속 프로브 전부 안정 통과).
+  ⚠ **팝업 소멸 근본 원인 확정(2026-08-14 라이브 프로브 4/4 — 종전 '간헐 소멸' 정정)**:
+  `#keyword` 는 action/method/onsubmit 없는 `<form>` 안이라 **trusted Enter**
+  (`page.keyboard.press`)가 네이티브 폼 제출을 유발하고, SPA 가 이를 앱 소프트리셋
+  (MainContainer 재마운트 — framenavigated 0건·URL 불변)으로 처리해 팝업이 **영구** 소멸한다.
+  대기시간·그리드 준비 여부와 무관(결정적). 검색 제출은 **untrusted KeyboardEvent 디스패치**
+  (`js.SUBMIT_KEYWORD_JS`)로만 한다. 추가 실측: 팝업은 열리면서 메인폼 현재 프로젝트값으로
+  **자동 사전검색**돼 1행이 이미 떠 있고(빈 목록 아님), 창 셸 출현(클릭 후 79~187ms)과
+  `#keyword`/그리드 준비(345~449ms)가 분리돼 있다 → 열림 판정은 `#keyword` 를 품은 창 +
+  그리드 dewsControl 준비(`js.POPUP_STATE_JS`), 검색 수락은 제출 전 시그니처(rowCount·첫행
+  PJT_NO) 변화 1차 판정. **팝업당 검색 1회 + 재오픈 재시도(상한 2회)** 완화책은 유지.
 - **D11 프리필 불신(프로브 실측)**: 프로젝트 필드는 세션/계정에 이전 값이 남아 자동 프리필된다
   (진입 즉시 'CX85-137, 12CH PROCESS' 코드 2297 채워짐). 자동화는 프리필을 신뢰하지 말고
   **항상 명시적으로 재검색·선택**한다.
@@ -202,3 +209,14 @@ D1(실행 중 HITL)의 구현 레시피. 선례 = `grid` kind(card_collect)가 �
   xlsx 픽스처와 모듈별 완전 일치), wbs=`PO-2026-07-4136`, plan 왕복·notice 재방출 PASS.
   회귀 방지: JS 소스 계약 트립와이어 테스트(단일 인덱스 공간·1..count 경계) 추가.
   pytest 1685 passed·tsc 클린.
+- 2026-08-14 팝업 소멸 근본 원인 프로브·수정(라이브 사전선택 529ms 2연속 실패 → HITL 폴백
+  오발 신고 건): ① 진단 프로브(50ms 타임라인·콘솔/네트워크/framenavigated 계측, 4/4 재현) —
+  trusted Enter = `<form>` 네이티브 제출 → SPA 소프트리셋(MainContainer 재마운트)으로 팝업
+  **영구** 소멸(레이스 아님·결정적), 이물 창 가설(H1)·동기 주입 가설(H2)·대기 연장 해법(H4)
+  전부 반박. 자동 사전검색·창 셸(79~187ms)/입력 준비(345~449ms) 분리 신규 실측. ② 후보 검증
+  프로브 — untrusted 제출 후보 중 **jQuery.Event trigger 합격**(리셋 마커 0건, 그리드 갱신
+  164ms; 네이티브 untrusted KeyboardEvent 는 기능 성공했으나 마커 1건으로 배제), 이어서
+  전체 사전선택 경로(검색→선택 2261→적용 211ms 닫힘→필드 반영→F2→BOM 73행 607ms) 라이브
+  PASS. 수정: `js.SUBMIT_KEYWORD_JS`(untrusted 제출)·`js.POPUP_STATE_JS`(도움창 특정 준비
+  판정)·시그니처 변화+연속 2폴 정착 수락·소멸 연속 2폴 디바운스, e2e
+  `project_apply`/`checkbox_filter` 프로브 정렬. steps 단위테스트 5종 추가.

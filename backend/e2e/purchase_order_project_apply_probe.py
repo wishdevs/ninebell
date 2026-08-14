@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend 루트
 
 from playwright.async_api import Page, async_playwright  # noqa: E402
 
+from app.agents.purchase_order.js import SUBMIT_KEYWORD_JS  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.live.runner import LIVE_VIEWPORT, _ScaledPage  # noqa: E402
 from nbkit.omnisol import js_lib  # noqa: E402
@@ -159,7 +160,8 @@ async def _open_and_search_once(page: Page, box: dict, keyword: str, *, retries:
         if not win_before:
             continue  # 오픈 자체 실패 — 재시도
         await page.evaluate(SET_KEYWORD_JS, keyword)
-        await page.keyboard.press("Enter")
+        # trusted Enter 금지 — 네이티브 폼 제출→앱 소프트리셋으로 팝업 영구 소멸(2026-08-14 실측).
+        await page.evaluate(SUBMIT_KEYWORD_JS)
         await page.wait_for_timeout(1_500)
         win_after = await page.evaluate(WIN_STATE_JS)
         if win_after:
