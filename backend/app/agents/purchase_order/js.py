@@ -11,23 +11,52 @@
 
 from __future__ import annotations
 
-# 화면에 떠 있는 k-window(팝업) 타이틀 목록 — 도움창 열림/소멸 판정(프로브 실측: 같은 팝업
-# 인스턴스 2회째 검색 시 간헐 소멸 → 열림 상태를 매번 이걸로 확인한다).
-WIN_STATE_JS = r"""() => {
-  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+# 프로젝트 도움창 **특정** 상태 — 임의의 visible .k-window 존재 판정(구 WIN_STATE_JS)으로는
+# 창 셸 출현(클릭 후 79~187ms)과 입력 준비(#keyword 접근 가능 345~449ms — 자동 사전검색
+# AJAX 완료 후)를 구분하지 못해 미준비 팝업에 검색어 주입을 시도하다 시도를 낭비한다
+# (2026-08-14 라이브 프로브 실측). present = #keyword 를 품은 visible k-window 존재,
+# gridReady = 그 창의 결과 그리드 dewsControl 초기화 완료(= 검색 제출을 받을 준비).
+POPUP_STATE_JS = r"""() => {
+  const kw = document.querySelector('#keyword');
   const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
-  return wins.map(w => ({ title: c((w.querySelector('.k-window-title')||{}).innerText) }));
+  const dlg = kw ? wins.find(w => w.contains(kw)) : null;
+  let gridReady = false;
+  if (dlg) {
+    try {
+      const el = dlg.querySelector('.dews-ui-grid');
+      gridReady = !!(el && window.jQuery(el).data('dewsControl')._grid);
+    } catch (e) {}
+  }
+  return { present: !!dlg, gridReady };
 }"""
 
 # 프로젝트 도움창 검색어 입력(#keyword — 네이티브 setter + input 이벤트). arg = q.
-# ⚠ 검색 자동화에 쓰지 말 것(2026-08-14 실측): 이 세터 + SEARCH_KEY_EVENT_JS 조합은 팝업이
-#   죽는다. 검색은 **실타이핑**(오픈 직후 #keyword 포커스+전체선택 → keyboard.type 교체)
-#   + 합성 Enter 만 생존이 확인됐다(steps.open_and_search_once). 값 검증용으로만 남긴다.
+# ⛔ **검색에 쓰지 말 것**(2026-08-14 매트릭스 프로브 2/2 재현): 이 세터로 값을 넣으면
+#   제출 방식과 무관하게(jQuery trigger·네이티브 KeyboardEvent 둘 다) 팝업이 소멸한다.
+#   실타이핑(steps._type_keyword)은 두 제출 방식 모두에서 생존한다 — 갈림길은 제출이
+#   아니라 **주입**이다. 이 상수는 다른 폼 입력 참고용으로만 남긴다.
 SET_KEYWORD_JS = r"""(q) => {
   const i = document.querySelector('#keyword');
   if (!i) return false;
   const s = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(i), 'value').set;
   s.call(i, q); i.dispatchEvent(new Event('input', { bubbles: true })); i.focus();
+  return true;
+}"""
+
+# 도움창 검색 제출 — ⚠ trusted Enter(page.keyboard.press) 금지: 이 팝업의 #keyword 는
+# action/method/onsubmit 없는 <form> 안이라 trusted Enter 가 네이티브 폼 제출을 유발하고,
+# SPA 가 이를 앱 소프트리셋(MainContainer 재마운트)으로 처리해 팝업 포함 화면 상태가 통째로
+# **영구** 소멸한다(2026-08-14 라이브 프로브 4/4 재현 — 대기시간·그리드 준비 여부와 무관).
+# untrusted 디스패치는 네이티브 기본동작(폼 제출)을 유발하지 않으므로 검색 핸들러만 탄다.
+# jQuery.Event trigger 채택(DEWS/Kendo 는 jQuery 델리게이트 핸들러) — 라이브 검증 2026-08-14:
+# 리셋 마커 0건, 그리드 갱신 164ms, 검색→선택→적용→F2→BOM 로드 전 경로 PASS. 네이티브
+# untrusted KeyboardEvent 후보도 기능은 동작했으나 검증 중 리셋 마커 1건이 관측돼 배제.
+SUBMIT_KEYWORD_JS = r"""() => {
+  const i = document.querySelector('#keyword');
+  if (!i || !window.jQuery) return false;
+  const $ = window.jQuery;
+  $(i).trigger($.Event('keydown', { keyCode: 13, which: 13 }));
+  $(i).trigger($.Event('keypress', { keyCode: 13, which: 13 }));
   return true;
 }"""
 
@@ -40,19 +69,6 @@ KEYWORD_BOX_JS = r"""() => {
   if (!i || i.offsetParent === null) return null;
   const r = i.getBoundingClientRect();
   return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
-}"""
-
-# 합성 Enter(untrusted KeyboardEvent) — 위젯의 검색 리스너만 발화한다.
-# ⚠ **물리 Enter 금지**(2026-08-14 실측): 다이얼로그 기본 버튼(적용)이 발화해 창이 닫힌다.
-#   2026-08-13 프로브에선 물리 Enter 가 검색이었으나 ERP 동작이 바뀌었다(어제 7/8 → 오늘 0/10).
-#   합성 이벤트는 untrusted 라 기본 버튼을 발화시키지 않고 위젯 keydown 리스너만 돌린다.
-SEARCH_KEY_EVENT_JS = r"""() => {
-  const i = document.querySelector('#keyword');
-  if (!i) return false;
-  for (const t of ['keydown', 'keypress', 'keyup']) {
-    i.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-  }
-  return true;
 }"""
 
 # ── 상단 고정 필드(D3) — 구매그룹·구매조직·구매사유 ──────────────────────────

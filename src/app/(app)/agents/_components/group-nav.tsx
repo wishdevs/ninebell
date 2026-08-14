@@ -89,9 +89,8 @@ export function GroupCard({
             className="text-foreground-tertiary group-hover:text-accent mt-0.5 shrink-0 transition-colors"
           />
         </div>
-
         <div className="border-border-subtle text-foreground-tertiary flex items-center gap-1 border-t pt-3 text-[11px]">
-          <span className="truncate">{names}</span>
+          <span className="min-w-0 truncate">{names}</span>
         </div>
       </div>
     </div>

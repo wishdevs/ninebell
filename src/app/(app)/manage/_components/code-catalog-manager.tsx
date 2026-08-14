@@ -379,9 +379,9 @@ export function CodeCatalogManager({
         >
           <div
             ref={listScrollRef}
-            className="border-border max-h-[520px] overflow-y-auto rounded-[var(--radius-md)] border"
+            className="border-border max-h-[520px] overflow-x-auto overflow-y-auto rounded-[var(--radius-md)] border"
           >
-            <table className="w-full text-[12px]">
+            <table className="w-full min-w-[560px] text-[12px]">
               <thead>
                 <tr>
                   {headers.map((h, idx) => (
