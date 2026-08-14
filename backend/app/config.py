@@ -56,8 +56,9 @@ class Settings(BaseSettings):
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
-    # gemini-2.0-flash retired(404) → 2.5 → 3.5 → 3.6-flash 상향(GA 2026-07-21, env GEMINI_MODEL 오버라이드).
-    gemini_model: str = "gemini-3.6-flash"
+    # gemini-2.0-flash retired(404) → 2.5 → 3.5 → 3.6 → 3.7-flash 상향(2026-08-14 사용자 지시).
+    # 상향 전 models API 로 실재 확인(폐기 모델 지정 = 런타임 404). env GEMINI_MODEL 오버라이드.
+    gemini_model: str = "gemini-3.7-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     # LLM 프로바이더 선택 — 'gemini'(기본: GitHub/AWS 배포) | 'etribe'(온프렘 GitLab 배포, 사내
     # Etribe-LLM OpenAI 호환 서버 — 회계 데이터·ERP 스크린샷이 사외로 나가지 않는다). env LLM_PROVIDER.

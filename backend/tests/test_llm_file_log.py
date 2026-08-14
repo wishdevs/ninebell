@@ -14,7 +14,7 @@ import pytest
 from app.agents.common import llm_file_log, prompt_capture
 from app.config import get_settings
 
-_URL_GEMINI = "https://llm.example/v1beta/models/gemini-3.6-flash:generateContent"
+_URL_GEMINI = "https://llm.example/v1beta/models/gemini-3.7-flash:generateContent"
 
 
 @pytest.fixture
