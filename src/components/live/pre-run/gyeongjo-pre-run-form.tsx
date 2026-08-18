@@ -248,21 +248,28 @@ export function GyeongjoPreRunForm({ disabled, initialParams, onStart }: PreRunF
           label="근속 1년 미만?"
           hint="근속 1년 미만이면 최종 공급가액이 정액의 50%로 계산됩니다."
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 pointer-coarse:min-h-11">
             <Switch
+              id="gj-under1year"
               checked={under1Year}
               disabled={disabled}
               onCheckedChange={setUnder1Year}
               aria-label="근속 1년 미만 여부"
             />
-            <span
+            <label
+              htmlFor="gj-under1year"
+              onClick={(e) => {
+                // label→button 클릭 전달은 브라우저마다 달라(포커스만 주기도) 전달을 막고 직접 토글.
+                e.preventDefault();
+                if (!disabled) setUnder1Year(!under1Year);
+              }}
               className={cn(
-                'text-sm',
+                'inline-flex items-center self-stretch text-sm',
                 under1Year ? 'text-accent font-medium' : 'text-foreground-secondary',
               )}
             >
               {under1Year ? '예 (50% 적용)' : '아니오 (정액 그대로)'}
-            </span>
+            </label>
           </div>
         </FormField>
 
@@ -310,12 +317,18 @@ export function GyeongjoPreRunForm({ disabled, initialParams, onStart }: PreRunF
         </div>
       </div>
 
-      <div className="flex items-center justify-end">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-end md:gap-3">
+        {/* 비활성 사유 — disabled:pointer-events-none 라 title 툴팁은 안 뜨므로 인라인으로 안내. */}
+        {!canSubmit ? (
+          <p className="text-foreground-tertiary text-xs md:text-right">
+            모든 필수 입력을 완료하면 실행할 수 있습니다.
+          </p>
+        ) : null}
         <Button
           type="button"
           onClick={submit}
           disabled={!canSubmit}
-          title={canSubmit ? undefined : '모든 필수 입력을 완료하면 실행할 수 있습니다.'}
+          className="max-md:h-11 max-md:w-full"
         >
           <RiPlayLine size={15} aria-hidden />
           실행

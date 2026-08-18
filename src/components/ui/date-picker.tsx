@@ -117,7 +117,7 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
             type="button"
             onClick={prevMonth}
             aria-label="이전 달"
-            className="text-foreground-tertiary hover:text-foreground hover:bg-muted/60 rounded-sm p-1 transition-colors"
+            className="text-foreground-tertiary hover:text-foreground hover:bg-muted/60 rounded-sm p-1 transition-colors pointer-coarse:p-3"
           >
             <RiArrowLeftSLine size={18} aria-hidden />
           </button>
@@ -128,7 +128,7 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
             type="button"
             onClick={nextMonth}
             aria-label="다음 달"
-            className="text-foreground-tertiary hover:text-foreground hover:bg-muted/60 rounded-sm p-1 transition-colors"
+            className="text-foreground-tertiary hover:text-foreground hover:bg-muted/60 rounded-sm p-1 transition-colors pointer-coarse:p-3"
           >
             <RiArrowRightSLine size={18} aria-hidden />
           </button>
@@ -161,7 +161,8 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
                 onClick={() => pick(d)}
                 aria-pressed={selected}
                 className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-sm text-[13px] tabular-nums transition-colors',
+                  // 터치 셀 h-10 w-10: 7×40px + 6×2px 갭 + 팝오버 p-3 = 318px — 320px 뷰포트 안.
+                  'flex h-8 w-8 items-center justify-center rounded-sm text-[13px] tabular-nums transition-colors pointer-coarse:h-10 pointer-coarse:w-10',
                   selected
                     ? 'bg-accent text-accent-foreground font-semibold'
                     : 'text-foreground hover:bg-muted/70',

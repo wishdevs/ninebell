@@ -42,6 +42,9 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
   // 새 말풍선/스트리밍 갱신 시 목록을 맨 아래로 — 안 내려가면 최신 응답을 못 본다
   // (사용자 보고 2026-07-29). 스트리밍 중에는 content 길이 변화로도 따라 내려간다.
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // WebKit 은 조합 확정 Enter 의 keydown '이전'에 compositionend 를 발화해 isComposing 만으론
+  // 못 거른다 — 종료 직후(<100ms) Enter 도 조합 확정으로 간주한다.
+  const imeEndedAtRef = useRef(0);
   const lastContentLen = lastMessage?.content.length ?? 0;
   useEffect(() => {
     const el = scrollRef.current;
@@ -100,7 +103,13 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onCompositionEnd={() => {
+            imeEndedAtRef.current = performance.now();
+          }}
           onKeyDown={(e) => {
+            // 한글 IME 조합 확정 Enter 는 전송이 아니다 — 조합 중 텍스트가 오발송된다.
+            if (e.nativeEvent.isComposing || performance.now() - imeEndedAtRef.current < 100)
+              return;
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               void send();
@@ -116,6 +125,7 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
           onClick={() => void send()}
           aria-label="전송"
           disabled={!draft.trim() || busy || streaming || completing}
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11"
         >
           <RiSendPlaneLine size={15} aria-hidden />
         </Button>
@@ -130,7 +140,7 @@ export function LiveChatCard({ hitl, messages, onSend, onComplete }: LiveChatCar
           variant="secondary"
           onClick={() => void complete()}
           disabled={busy || completing}
-          className="border-accent/30 text-accent hover:bg-accent/10 shrink-0"
+          className="border-accent/30 text-accent hover:bg-accent/10 shrink-0 pointer-coarse:min-h-11"
         >
           <RiCheckLine size={14} aria-hidden />
           {completing ? '완료 중…' : '선택 완료'}

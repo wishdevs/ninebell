@@ -257,7 +257,9 @@ samp {
   }
 }
 .animate-page-enter {
-  animation: page-enter var(--duration-normal) var(--ease-out) both;
+  /* fill-mode 는 backwards — both 로 두면 종료 후에도 transform 이 computed 값으로 남아
+     자손 position:fixed(바텀시트 등)의 containing block 이 뷰포트가 아닌 이 요소가 된다. */
+  animation: page-enter var(--duration-normal) var(--ease-out) backwards;
 }
 
 /* ==========================================================================

@@ -340,6 +340,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
         <div
           className={cn(
             'grid grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-out lg:min-h-0 lg:flex-1 lg:items-stretch',
+            // idle 폼(마지막 자식)은 모바일 1열에서 대기 스테이지보다 위로 — DOM 순서는 lg 2열
+            // 배치(좌 스테이지·우 패널)가 소유하므로 order 로만 뒤집는다. 라이브 전환 시 원복.
+            preRunActive && 'max-lg:[&>*:last-child]:order-first',
             layoutLevel === 'full'
               ? 'lg:grid-cols-1' // 라이브 숨김 — 개입 패널이 전체폭
               : layoutLevel === 'split'

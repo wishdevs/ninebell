@@ -267,12 +267,18 @@ export function HakjagumPreRunForm({ disabled, initialParams, onStart }: PreRunF
         </div>
       </div>
 
-      <div className="flex items-center justify-end">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-end md:gap-3">
+        {/* 비활성 사유 — disabled:pointer-events-none 라 title 툴팁은 안 뜨므로 인라인으로 안내. */}
+        {!canSubmit ? (
+          <p className="text-foreground-tertiary text-xs md:text-right">
+            모든 필수 입력을 완료하면 실행할 수 있습니다.
+          </p>
+        ) : null}
         <Button
           type="button"
           onClick={submit}
           disabled={!canSubmit}
-          title={canSubmit ? undefined : '모든 필수 입력을 완료하면 실행할 수 있습니다.'}
+          className="max-md:h-11 max-md:w-full"
         >
           <RiPlayLine size={15} aria-hidden />
           실행

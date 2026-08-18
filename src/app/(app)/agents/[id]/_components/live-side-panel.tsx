@@ -68,7 +68,9 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
   return (
     <section
       className={cn(
-        'border-border bg-surface flex min-h-[440px] flex-col overflow-hidden rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:min-w-0',
+        // overflow-hidden 은 lg 전용 — lg 미만(페이지 스크롤 모드)에선 그리드 카드의 sticky
+        // 하단 제출 바와 콤보박스 팝오버가 잘리지 않도록 풀어 둔다.
+        'border-border bg-surface flex min-h-[440px] flex-col rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:min-w-0 lg:overflow-hidden',
         plannerActive ? 'lg:self-start' : 'lg:h-full lg:min-h-0',
       )}
     >
@@ -99,7 +101,8 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
           {hasResult ? <TabsTrigger value="result">결과</TabsTrigger> : null}
         </TabsList>
 
-        <TabsContent value="intervention" className="min-h-0 flex-1 overflow-hidden p-4">
+        {/* overflow-hidden 도 lg 전용 — 위 section 과 같은 이유(sticky·팝오버). */}
+        <TabsContent value="intervention" className="min-h-0 flex-1 p-4 lg:overflow-hidden">
           {run.hitl ? (
             run.hitl.kind === 'chat' ? (
               <LiveChatCard

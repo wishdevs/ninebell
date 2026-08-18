@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { RiCheckLine, RiHand, RiSendPlaneLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import type { HitlPayload, LiveHitl } from '@/lib/live/types';
@@ -27,6 +27,9 @@ export function LiveChoiceCard({ hitl, onSubmit }: LiveChoiceCardProps) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // WebKit 은 조합 확정 Enter 의 keydown '이전'에 compositionend 를 발화해 isComposing 만으론
+  // 못 거른다 — 종료 직후(<100ms) Enter 도 조합 확정으로 간주한다.
+  const imeEndedAtRef = useRef(0);
 
   async function submit(payload: HitlPayload) {
     if (busy) return;
@@ -122,7 +125,13 @@ export function LiveChoiceCard({ hitl, onSubmit }: LiveChoiceCardProps) {
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onCompositionEnd={() => {
+              imeEndedAtRef.current = performance.now();
+            }}
             onKeyDown={(e) => {
+              // 한글 IME 조합 확정 Enter 는 제출이 아니다 — 단일 응답 HITL 이라 오발송은 비가역.
+              if (e.nativeEvent.isComposing || performance.now() - imeEndedAtRef.current < 100)
+                return;
               if (e.key === 'Enter' && text.trim()) {
                 e.preventDefault();
                 void submit(textPayload());
@@ -137,6 +146,7 @@ export function LiveChoiceCard({ hitl, onSubmit }: LiveChoiceCardProps) {
             aria-label="전송"
             disabled={!text.trim() || busy}
             onClick={() => void submit(textPayload())}
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11"
           >
             <RiSendPlaneLine size={15} aria-hidden />
           </Button>
@@ -148,7 +158,7 @@ export function LiveChoiceCard({ hitl, onSubmit }: LiveChoiceCardProps) {
           size="sm"
           disabled={busy || checked.size === 0}
           onClick={() => void submit({ values: [...checked] })}
-          className="w-full"
+          className="w-full pointer-coarse:min-h-11"
         >
           <RiCheckLine size={14} aria-hidden />
           선택 확인 ({checked.size})

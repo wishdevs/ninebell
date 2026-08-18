@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { RiAddLine, RiDeleteBinLine, RiPlayLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -35,12 +36,12 @@ const MAX_KM = 10_000;
 // 차량종류 폴백 id — 설정 로드 전/목록이 비었을 때의 기본 선택(기본 목록 첫 항목).
 const FALLBACK_CAR_CLASS = DEFAULT_FUEL_CLASSES[0].id;
 
-// 표(그리드) 열 템플릿 — 헤더행과 데이터행이 공유한다.
+// 표(그리드) 열 템플릿 — md 이상에서 헤더행과 데이터행이 공유한다. md 미만은 행당 카드 스택.
 // # · 유형 · 프로젝트 · 계산서일 · 거래처|차량 · 금액|주행거리 · 적요 · 삭제
 // 거래처/차량 열은 좁게(minmax 7rem,1fr) — 이름/차량 라벨은 셀 안에서 truncate.
-// 유형 열은 '유류비 지원'(6자)이 한 줄에 들어가도록 7.5rem.
+// 유형 열은 '유류비 지원'(6자)이 한 줄에 들어가도록 7.5rem. 삭제 열은 아이콘 버튼이 드는 2.5rem.
 const ROW_GRID =
-  'grid grid-cols-[1.75rem_7.5rem_minmax(9rem,1.4fr)_8.5rem_minmax(7rem,1fr)_minmax(7.5rem,1fr)_minmax(8rem,1.1fr)_1.75rem] items-start gap-x-2 gap-y-1';
+  'md:grid md:grid-cols-[1.75rem_7.5rem_minmax(9rem,1.4fr)_8.5rem_minmax(7rem,1fr)_minmax(7.5rem,1fr)_minmax(8rem,1.1fr)_2.5rem] md:items-start md:gap-x-2 md:gap-y-1';
 
 type RowType = 'toll' | 'fuel';
 
@@ -372,15 +373,15 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
       description="행마다 계산서일(증빙일)과 통행료·유류비 지원을 표에 입력하면 무개입으로 채워 저장합니다. 회계일자는 계산서일 중 가장 마지막일로 자동 지정됩니다."
       density="comfortable"
     >
-      {/* 폼 열이 그리드 최소폭(52rem)보다 좁아지면 가로 스크롤 — min-w 를 풀면 고정폭 열들이
-          카드 밖으로 삐져나간다(스크롤 없이 clip 되던 버그라 모든 폭에서 허용). */}
+      {/* md 이상 표: 폼 열이 그리드 최소폭(52rem)보다 좁아지면 가로 스크롤 — min-w 를 풀면 고정폭
+          열들이 카드 밖으로 삐져나간다(스크롤 없이 clip 되던 버그). md 미만은 카드 스택이라 min-w 없음. */}
       <div className="overflow-x-auto">
-        <div className="flex min-w-[52rem] flex-col gap-1">
-          {/* 표 헤더(sm 이상에서만; 모바일은 각 셀 aria-label 로 대체) */}
+        <div className="flex flex-col gap-3 md:min-w-[52rem] md:gap-1">
+          {/* 표 헤더(md 이상 표 전용) — md 미만 카드는 셀마다 인라인 라벨(FieldLabel)을 붙인다 */}
           <div
             className={cn(
               ROW_GRID,
-              'border-border/60 text-foreground-tertiary border-b px-1 pb-1.5 text-[10px] font-semibold tracking-wider uppercase',
+              'border-border/60 text-foreground-tertiary hidden border-b px-1 pb-1.5 text-[10px] font-semibold tracking-wider uppercase',
             )}
           >
             <span aria-hidden />
@@ -411,12 +412,14 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
+      {/* md 미만은 contents 로 풀어 행 추가는 흐름에 두고 합계·실행만 sticky 하단 바로 분리 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 max-md:contents">
+        <div className="flex items-center gap-3 max-md:flex-wrap">
           <Button
             type="button"
             variant="secondary"
             size="sm"
+            className="max-md:h-10"
             onClick={addRow}
             disabled={disabled || rows.length >= MAX_ROWS}
           >
@@ -430,7 +433,19 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-3">
+        {/* 합계+실행 — md 미만은 페이지 스크롤 기준 sticky(SectionCard 조상 체인에 overflow 제약 없음) */}
+        <div
+          className={cn(
+            'flex items-center gap-3',
+            'max-md:sticky max-md:bottom-0 max-md:z-10 max-md:-mx-6 max-md:flex-col max-md:items-stretch max-md:gap-2',
+            'max-md:border-border/60 max-md:bg-surface/95 max-md:border-t max-md:px-6 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:backdrop-blur',
+          )}
+        >
+          {!canSubmit && !disabled ? (
+            <p className="text-foreground-tertiary text-xs">
+              모든 필수 입력을 완료하면 실행할 수 있습니다.
+            </p>
+          ) : null}
           <span className="text-foreground-secondary text-sm">
             합계{' '}
             <span className="text-foreground text-base font-semibold tabular-nums">
@@ -442,7 +457,7 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
             type="button"
             onClick={submit}
             disabled={!canSubmit}
-            title={canSubmit ? undefined : '모든 필수 입력을 완료하면 실행할 수 있습니다.'}
+            className="max-md:h-11 max-md:w-full"
           >
             <RiPlayLine size={15} aria-hidden />
             실행
@@ -450,6 +465,15 @@ export function TripPreRunForm({ agent, disabled, initialParams, onStart }: PreR
         </div>
       </div>
     </SectionCard>
+  );
+}
+
+// ── 인라인 필드 라벨 — md 미만 카드에서만 표시(md 이상은 표 헤더가 라벨) ────────
+function FieldLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="text-foreground-tertiary block text-[11px] font-medium md:hidden">
+      {children}
+    </span>
   );
 }
 
@@ -486,19 +510,30 @@ function RowEditor({
       : null;
 
   return (
-    <div className={cn(ROW_GRID, 'border-border/50 border-b py-1.5 last:border-b-0')}>
-      {/* # */}
-      <span className="text-foreground-tertiary pt-2.5 text-center text-xs font-semibold tabular-nums">
-        {index + 1}
-      </span>
+    <div
+      className={cn(
+        ROW_GRID,
+        'max-md:border-border/60 max-md:relative max-md:flex max-md:flex-col max-md:gap-2.5 max-md:rounded-[var(--radius-md)] max-md:border max-md:p-3',
+        'md:border-border/50 md:border-b md:py-1.5 md:last:border-b-0',
+      )}
+    >
+      {/* 행 번호+유형 — md 미만 카드 헤더 한 줄, md 이상은 contents 로 그리드 셀에 풀린다 */}
+      <div className="flex items-center gap-2 pr-10 md:contents">
+        {/* # */}
+        <span className="text-foreground-tertiary text-center text-xs font-semibold tabular-nums md:pt-2.5">
+          {index + 1}
+          <span className="md:hidden">행</span>
+        </span>
 
-      {/* 유형 */}
-      <div className="min-w-0">
-        <TypeSelect value={row.type} disabled={disabled} onChange={onType} />
+        {/* 유형 */}
+        <div className="min-w-0 max-md:flex-1">
+          <TypeSelect value={row.type} disabled={disabled} onChange={onType} />
+        </div>
       </div>
 
       {/* 프로젝트 */}
-      <div className="min-w-0">
+      <div className="min-w-0 max-md:space-y-1">
+        <FieldLabel>프로젝트</FieldLabel>
         <CatalogCombobox
           value={{ code: row.projectCode, name: row.projectName }}
           placeholder="프로젝트 선택"
@@ -519,7 +554,8 @@ function RowEditor({
       </div>
 
       {/* 계산서일(증빙일) */}
-      <div className="min-w-0">
+      <div className="min-w-0 max-md:space-y-1">
+        <FieldLabel>계산서일</FieldLabel>
         <DatePicker
           ariaLabel={`${index + 1}행 계산서일`}
           value={row.invoiceDate}
@@ -529,7 +565,8 @@ function RowEditor({
       </div>
 
       {/* 거래처 / 차량종류 */}
-      <div className="min-w-0">
+      <div className="min-w-0 max-md:space-y-1">
+        <FieldLabel>{row.type === 'toll' ? '거래처' : '차량종류'}</FieldLabel>
         {row.type === 'toll' ? (
           <CatalogCombobox
             value={{ code: row.partnerCode, name: row.partnerName }}
@@ -555,6 +592,7 @@ function RowEditor({
 
       {/* 금액 / 주행거리 */}
       <div className="flex min-w-0 flex-col gap-1">
+        <FieldLabel>{row.type === 'toll' ? '금액(공급가액)' : '주행거리'}</FieldLabel>
         {row.type === 'toll' ? (
           <>
             <Input
@@ -607,7 +645,8 @@ function RowEditor({
       </div>
 
       {/* 적요 */}
-      <div className="min-w-0">
+      <div className="min-w-0 max-md:space-y-1">
+        <FieldLabel>적요</FieldLabel>
         <Input
           aria-label={`${index + 1}행 적요`}
           value={row.note}
@@ -616,13 +655,13 @@ function RowEditor({
         />
       </div>
 
-      {/* 삭제 */}
+      {/* 삭제 — md 미만 카드에선 우상단 44px 터치 타겟 */}
       {canRemove ? (
         <Button
           type="button"
           variant="ghost"
-          size="sm"
-          className="text-foreground-tertiary hover:text-danger mt-1 px-0"
+          size="icon"
+          className="text-foreground-tertiary hover:text-danger max-md:absolute max-md:top-1.5 max-md:right-1.5 max-md:h-11 max-md:w-11 md:mt-0.5"
           onClick={onRemove}
           disabled={disabled}
           aria-label={`${index + 1}번째 행 삭제`}
@@ -630,7 +669,7 @@ function RowEditor({
           <RiDeleteBinLine size={15} aria-hidden />
         </Button>
       ) : (
-        <span aria-hidden />
+        <span aria-hidden className="max-md:hidden" />
       )}
     </div>
   );

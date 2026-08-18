@@ -360,8 +360,11 @@ export function PhaseStepPanel({ planSteps, liveSteps = [], runStatus }: PhaseSt
   };
 
   // 활성/개입 phase 로 자동 스크롤 — 진행 위치가 항상 화면에 보이게.
+  // lg 미만에서는 패널 내부 스크롤이 없어 페이지 전체가 끌려가 라이브 화면 시청을
+  // 방해하므로 생략한다(2026-08-18 사용자 결정 — 스크롤 포커스 해제).
   const activeRef = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
+    if (!window.matchMedia('(min-width: 1024px)').matches) return;
     activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [activeGroupId, urgentGroupId, runningStep?.id]);
 

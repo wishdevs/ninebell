@@ -213,7 +213,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
             type="button"
             disabled={disabled}
             onClick={() => setManual((v) => !v)}
-            className="text-accent hover:text-accent/80 text-xs font-semibold underline underline-offset-2 disabled:opacity-50"
+            className="text-accent hover:text-accent/80 inline-flex items-center text-xs font-semibold underline underline-offset-2 disabled:opacity-50 pointer-coarse:-mx-2 pointer-coarse:min-h-11 pointer-coarse:px-2"
           >
             {manual ? '카탈로그에서 선택하기' : '카탈로그에 없나요? 직접 입력'}
           </button>
@@ -232,6 +232,9 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
                 value={manualKeyword}
                 disabled={disabled}
                 placeholder="예: CX85-137"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 onChange={(e) => setManualKeyword(e.target.value)}
               />
             </FormField>
@@ -267,14 +270,18 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
         </div>
       </div>
 
-      <div className="flex items-center justify-end">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-end md:gap-3">
+        {/* 비활성 사유 — disabled:pointer-events-none 라 title 툴팁은 안 뜨므로 인라인으로 안내. */}
+        {!canSubmit ? (
+          <p className="text-foreground-tertiary text-xs md:text-right">
+            프로젝트를 고르거나 검색어를 입력하면 실행할 수 있습니다.
+          </p>
+        ) : null}
         <Button
           type="button"
           onClick={submit}
           disabled={!canSubmit}
-          title={
-            canSubmit ? undefined : '프로젝트를 고르거나 검색어를 입력하면 실행할 수 있습니다.'
-          }
+          className="max-md:h-11 max-md:w-full"
         >
           <RiPlayLine size={15} aria-hidden />
           실행

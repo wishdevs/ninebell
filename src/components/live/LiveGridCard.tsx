@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { Spinner } from '@/components/ui/spinner';
+import { ComboPanel, isDesktopViewport, useOutsideClose } from '@/components/live/combo-popover';
 import {
   cardOwnerOf,
   groupRowsByOwner,
   OwnerBar,
   OwnerGroupHeaderRow,
+  OwnerGroupSectionHeader,
   type OwnerGroup,
 } from '@/components/live/grid-owner-filter';
 import { fetchNoteSuggest } from '@/lib/api/me-codes';
@@ -120,7 +122,8 @@ function VatBadge({
           : `부가세구분 — 카드내역 원본 '${rawVatType || '—'}'. 클릭해 과세/불공 전환`
       }
       className={cn(
-        'shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+        // 모바일 카드에선 토글 히트영역을 40px 로 — md+ 테이블은 기존 밀도 유지.
+        'shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-60 max-md:min-h-10 max-md:px-3',
         nd
           ? 'bg-warning/15 text-warning hover:bg-warning/25'
           : 'bg-info/15 text-info hover:bg-info/25',
@@ -131,6 +134,20 @@ function VatBadge({
     </button>
   );
 }
+
+/** edits 에 아직 없는 행의 렌더 폴백 — 테이블·모바일 카드가 같은 값을 쓴다. */
+const EMPTY_EDIT: RowEdit = {
+  budgetUnitCode: '',
+  projectCode: '',
+  projectName: '',
+  projectWbsNo: '',
+  note: '',
+  skip: false,
+  budgetSource: null,
+  projectSource: null,
+  noteSource: null,
+  vat: '과세',
+};
 
 function initEdits(rows: readonly LiveGridRow[]): Record<number, RowEdit> {
   return Object.fromEntries(
@@ -211,6 +228,20 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   // 예산계정 맞춤 적요 조회 중인 행(미세 로딩 표시). 행 no → 조회 중 여부.
   const [suggesting, setSuggesting] = useState<Record<number, boolean>>({});
   const tableWrapRef = useRef<HTMLDivElement>(null);
+  // 테이블(md+)과 카드 스택(md 미만)을 모두 담는 루트 — 행 스크롤 이동이 보이는 쪽을 찾는 기준.
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // md 기준으로 테이블/카드 중 한쪽만 마운트 — CSS 숨김만으로는 두 골격이 모두 살아 있어
+  // 40행 기준 행 편집 컨트롤이 2배(콤보 ~80개)가 된다. 첫 렌더(SSR·hydration)는 null 로
+  // 두 골격을 모두 렌더해 기존 CSS 분기(max-md:hidden/md:hidden)에 맡긴다(불일치 방지).
+  const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const sync = () => setIsDesktopLayout(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
   // 계정 맞춤 적요 재추천 — 행별 디바운스 타이머 + 요청 토큰(레이스 방지: 최신 요청만 반영).
   const suggestTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const suggestTokens = useRef<Map<number, number>>(new Map());
@@ -235,11 +266,14 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
 
   // 그리드 도착(HITL) 시 첫 행 예산단위 콤보박스 트리거로 포커스 — 키보드 진입·40행 이동 개선.
   // (BudgetSelect→BudgetCombobox 교체로 select 가 사라져 data-budget-trigger 로 식별)
+  // md 미만은 자동 포커스 생략(가상 키보드·스크롤 점프 방지), md+ 는 preventScroll 로
+  // 가로 스크롤 래퍼가 편집 컬럼 쪽으로 점프하던 것을 막는다.
   useEffect(() => {
+    if (!isDesktopViewport()) return;
     const trigger = tableWrapRef.current?.querySelector<HTMLButtonElement>(
       'tbody tr [data-budget-trigger]',
     );
-    trigger?.focus();
+    trigger?.focus({ preventScroll: true });
   }, [hitl.id]);
 
   // 예산단위 코드 → 옵션(이름·부서) 조회. 자주쓰는 우선. 프리셀렉트가 그룹 밖 코드여도
@@ -393,20 +427,131 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   const firstInvalidNo = nonSkip.find((r) => !isRowValid(r.no))?.no ?? null;
 
   const scrollToRow = useCallback((no: number) => {
-    const rowEl = tableWrapRef.current?.querySelector<HTMLTableRowElement>(
-      `tr[data-row-no="${no}"]`,
-    );
+    // 같은 행이 테이블(md+)·카드(md 미만) 양쪽 DOM 에 있으므로 보이는 쪽(offsetParent 有)만 잡는다.
+    const rowEl = Array.from(
+      rootRef.current?.querySelectorAll<HTMLElement>(`[data-row-no="${no}"]`) ?? [],
+    ).find((el) => el.offsetParent !== null);
     if (!rowEl) return;
     rowEl.scrollIntoView({ block: 'center' });
-    rowEl.querySelector<HTMLSelectElement>('select')?.focus();
+    rowEl.querySelector<HTMLButtonElement>('[data-budget-trigger]')?.focus({ preventScroll: true });
   }, []);
 
-  // 오류 내비게이션 — 첫 무효 행으로 스크롤 + 그 행 예산단위 select 에 포커스.
+  // 오류 내비게이션 — 첫 무효 행으로 스크롤 + 그 행 예산단위 트리거에 포커스.
   // (범위 밖 행은 검증하지 않으므로 대상은 항상 현재 화면에 렌더돼 있다.)
   const jumpToFirstInvalid = useCallback(() => {
     if (firstInvalidNo == null) return;
     scrollToRow(firstInvalidNo);
   }, [firstInvalidNo, scrollToRow]);
+
+  /** 행 편집 컨트롤 3종(예산계정·프로젝트·적요) — md+ 테이블 셀과 md 미만 카드가 같은
+   * JSX·핸들러를 공유한다(상태·로직 단일 소스, 렌더 골격만 분기). */
+  const rowEditors = (r: LiveGridRow, e: RowEdit, rowInvalid: boolean) => ({
+    budget: (
+      <div className="flex items-center gap-1.5">
+        {e.budgetSource ? <SourceBadge source={e.budgetSource} /> : null}
+        <BudgetCombobox
+          value={e.budgetUnitCode}
+          favorites={bFavList}
+          mineExclFav={bMineExclFav}
+          allExclFav={bAllExclFav}
+          selectedOption={budgetByCode.get(e.budgetUnitCode)}
+          disabled={e.skip || disabled}
+          invalid={rowInvalid && e.budgetUnitCode === ''}
+          onChange={(code) => {
+            // 계정 변경 시 부가세구분 재도출 — 불공 계정이면 불공, 아니면 원본(가맹점 AI·
+            // VAT_TP) 기준으로 복원한다. 예: 해외출장(불공)→사무용품비로 바꾸면 다시 과세로.
+            const vat = isNondeductibleAcct(budgetByCode.get(code)?.bgacctNm)
+              ? '불공'
+              : baseVat(r.vatType, r.vatDeduction);
+            setRow(r.no, { budgetUnitCode: code, budgetSource: null, vat });
+            // 예산단위(=계정) 변경 → 그 계정 맞춤 적요 실시간 재추천(디바운스·보호규칙).
+            // 선택 해제(code='')여도 호출 — 대기 중 추천을 취소하고 진행 중 요청을 무효화한다.
+            scheduleNoteSuggest(r.no, code, r.merchant);
+          }}
+        />
+        <FavoriteToggle
+          className="max-md:size-11"
+          active={bFav.has(e.budgetUnitCode)}
+          disabled={e.skip || disabled || e.budgetUnitCode === ''}
+          onToggle={() => {
+            const o = budgetByCode.get(e.budgetUnitCode);
+            void bFav.toggle(
+              e.budgetUnitCode,
+              o?.name ?? e.budgetUnitCode,
+              o ? { bizplanNm: o.bizplanNm ?? '', bgacctNm: o.bgacctNm ?? '' } : null,
+            );
+          }}
+        />
+      </div>
+    ),
+    project: (
+      <div className="flex items-center gap-1.5">
+        {e.projectSource ? <SourceBadge source={e.projectSource} /> : null}
+        <ProjectCombobox
+          code={e.projectCode}
+          name={e.projectName}
+          favorites={pFavList}
+          searchResults={searchResults}
+          searchQuery={searchQuery}
+          disabled={e.skip || disabled}
+          onSelect={(code, name, wbsNo) =>
+            setRow(r.no, {
+              projectCode: code,
+              projectName: name,
+              projectWbsNo: wbsNo,
+              projectSource: null,
+            })
+          }
+          onClear={() =>
+            setRow(r.no, {
+              projectCode: '',
+              projectName: '',
+              projectWbsNo: '',
+              projectSource: null,
+            })
+          }
+          onSearch={onQuery}
+        />
+        <FavoriteToggle
+          className="max-md:size-11"
+          active={pFav.has(e.projectCode)}
+          disabled={e.skip || disabled || e.projectCode === ''}
+          onToggle={() =>
+            void pFav.toggle(e.projectCode, e.projectName || e.projectCode, {
+              wbsNo: e.projectWbsNo,
+              wbsNm: '',
+            })
+          }
+        />
+      </div>
+    ),
+    note: (
+      <div className="flex items-center gap-1.5">
+        {suggesting[r.no] ? (
+          <Spinner
+            size={12}
+            label="적요 추천 조회 중"
+            className="text-foreground-tertiary shrink-0"
+          />
+        ) : e.noteSource ? (
+          <SourceBadge source={e.noteSource} />
+        ) : null}
+        <input
+          value={e.note}
+          onChange={(ev) => setRow(r.no, { note: ev.target.value, noteSource: null })}
+          disabled={e.skip || disabled}
+          maxLength={200}
+          placeholder="적요"
+          aria-invalid={rowInvalid && e.note.trim() === ''}
+          className={cn(
+            'border-border bg-surface text-foreground placeholder:text-muted-foreground h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none max-md:min-h-11',
+            'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
+            'aria-invalid:border-danger disabled:opacity-50',
+          )}
+        />
+      </div>
+    ),
+  });
 
   async function submit() {
     if (!allValid || disabled) return;
@@ -457,7 +602,7 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col gap-3">
       <GridHeader title={hitl.title} prompt={hitl.prompt} />
 
       {/* 재개입 공지 — 직전 저장(F7)이 왜 실패했고 무엇을 고칠지. 계정 불일치는 아래 행별로도
@@ -520,298 +665,329 @@ export function LiveGridCard({ hitl, onQuery, onSubmit }: LiveGridCardProps) {
       {/* 출처 배지 범례 — 툴팁 없이도 배지 의미를 알 수 있게 한 줄로 상시 노출. */}
       <SourceLegend />
 
-      <div
-        ref={tableWrapRef}
-        className="border-border min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border"
-      >
-        <table className="w-full min-w-[1080px] border-collapse text-[11px]">
-          <thead className="bg-muted/70 text-foreground-tertiary sticky top-0 z-10">
-            <tr>
-              <Th className="w-10 text-center">번호</Th>
-              {TX_COLUMNS.map((c) => (
-                <Th key={c.key} className={c.align === 'right' ? 'text-right' : 'text-left'}>
-                  {c.header}
-                </Th>
-              ))}
-              <Th className="min-w-[220px]">예산계정</Th>
-              <Th className="min-w-[220px]">프로젝트</Th>
-              <Th className="min-w-[180px]">적요</Th>
-              <Th className="w-14 text-center">제외</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayRows.map((r) => {
-              const e = edits[r.no] ?? {
-                budgetUnitCode: '',
-                projectCode: '',
-                projectName: '',
-                projectWbsNo: '',
-                note: '',
-                skip: false,
-                budgetSource: null,
-                projectSource: null,
-                noteSource: null,
-                vat: '과세',
-              };
-              const rowInvalid = !e.skip && !isRowValid(r.no);
-              const rowTr = (
-                <tr
-                  key={r.no}
-                  data-row-no={r.no}
-                  className={cn(
-                    // 셀 수직 중앙 정렬 — 읽기 컬럼(텍스트)과 입력 컬럼(콤보/배지) 높이 차이로 어긋나 보이던 것 교정.
-                    'border-border/50 border-t align-middle',
-                    e.skip && 'opacity-40',
-                    rowInvalid && 'bg-danger/[0.04]',
-                    r.error && 'bg-danger/[0.07] ring-danger/30 ring-1 ring-inset',
-                  )}
-                >
-                  <Td className="text-foreground-tertiary text-center tabular-nums">{r.no}</Td>
-                  {TX_COLUMNS.map((c) => (
-                    <Td
-                      key={c.key}
-                      className={cn(
-                        'text-foreground-secondary whitespace-nowrap tabular-nums',
-                        c.align === 'right' ? 'text-right' : 'text-left',
-                      )}
-                    >
-                      {c.key === 'vatType' ? (
-                        // 부가세구분 = 과세/불공(편집형 배지). 원시 VAT_TP 대신 분류값을 보여주고 토글한다.
-                        <VatBadge
-                          value={e.vat}
-                          rawVatType={r.vatType}
-                          disabled={e.skip || disabled}
-                          onChange={(v) => setRow(r.no, { vat: v })}
-                        />
-                      ) : (
-                        (r[c.key] ?? '')
-                      )}
-                    </Td>
-                  ))}
+      {/* md+ — 실 테이블(가로 스크롤 폴백). md 미만은 아래 카드 스택이 대신한다. */}
+      {isDesktopLayout !== false && (
+        <div
+          ref={tableWrapRef}
+          className="border-border min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border max-md:hidden"
+        >
+          <table className="w-full min-w-[1080px] border-collapse text-[11px]">
+            <thead className="bg-muted/70 text-foreground-tertiary sticky top-0 z-10">
+              <tr>
+                <Th className="w-10 text-center">번호</Th>
+                {TX_COLUMNS.map((c) => (
+                  <Th key={c.key} className={c.align === 'right' ? 'text-right' : 'text-left'}>
+                    {c.header}
+                  </Th>
+                ))}
+                <Th className="min-w-[220px]">예산계정</Th>
+                <Th className="min-w-[220px]">프로젝트</Th>
+                <Th className="min-w-[180px]">적요</Th>
+                <Th className="w-14 text-center">제외</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((r) => {
+                const e = edits[r.no] ?? EMPTY_EDIT;
+                const rowInvalid = !e.skip && !isRowValid(r.no);
+                const editors = rowEditors(r, e, rowInvalid);
+                const rowTr = (
+                  <tr
+                    key={r.no}
+                    data-row-no={r.no}
+                    className={cn(
+                      // 셀 수직 중앙 정렬 — 읽기 컬럼(텍스트)과 입력 컬럼(콤보/배지) 높이 차이로 어긋나 보이던 것 교정.
+                      'border-border/50 border-t align-middle',
+                      e.skip && 'opacity-40',
+                      rowInvalid && 'bg-danger/[0.04]',
+                      r.error && 'bg-danger/[0.07] ring-danger/30 ring-1 ring-inset',
+                    )}
+                  >
+                    <Td className="text-foreground-tertiary text-center tabular-nums">{r.no}</Td>
+                    {TX_COLUMNS.map((c) => (
+                      <Td
+                        key={c.key}
+                        className={cn(
+                          'text-foreground-secondary whitespace-nowrap tabular-nums',
+                          c.align === 'right' ? 'text-right' : 'text-left',
+                        )}
+                      >
+                        {c.key === 'vatType' ? (
+                          // 부가세구분 = 과세/불공(편집형 배지). 원시 VAT_TP 대신 분류값을 보여주고 토글한다.
+                          <VatBadge
+                            value={e.vat}
+                            rawVatType={r.vatType}
+                            disabled={e.skip || disabled}
+                            onChange={(v) => setRow(r.no, { vat: v })}
+                          />
+                        ) : (
+                          (r[c.key] ?? '')
+                        )}
+                      </Td>
+                    ))}
 
-                  {/* 예산단위 combobox + ★ */}
-                  <Td>
-                    <div className="flex items-center gap-1.5">
-                      {e.budgetSource ? <SourceBadge source={e.budgetSource} /> : null}
-                      <BudgetCombobox
-                        value={e.budgetUnitCode}
-                        favorites={bFavList}
-                        mineExclFav={bMineExclFav}
-                        allExclFav={bAllExclFav}
-                        selectedOption={budgetByCode.get(e.budgetUnitCode)}
-                        disabled={e.skip || disabled}
-                        invalid={rowInvalid && e.budgetUnitCode === ''}
-                        onChange={(code) => {
-                          // 계정 변경 시 부가세구분 재도출 — 불공 계정이면 불공, 아니면 원본(가맹점 AI·
-                          // VAT_TP) 기준으로 복원한다. 예: 해외출장(불공)→사무용품비로 바꾸면 다시 과세로.
-                          const vat = isNondeductibleAcct(budgetByCode.get(code)?.bgacctNm)
-                            ? '불공'
-                            : baseVat(r.vatType, r.vatDeduction);
-                          setRow(r.no, { budgetUnitCode: code, budgetSource: null, vat });
-                          // 예산단위(=계정) 변경 → 그 계정 맞춤 적요 실시간 재추천(디바운스·보호규칙).
-                          // 선택 해제(code='')여도 호출 — 대기 중 추천을 취소하고 진행 중 요청을 무효화한다.
-                          scheduleNoteSuggest(r.no, code, r.merchant);
-                        }}
+                    {/* 예산단위 combobox + ★ */}
+                    <Td>
+                      {editors.budget}
+                      {r.error ? (
+                        <p className="text-danger mt-1.5 flex items-start gap-1 text-[11px] leading-snug">
+                          <span aria-hidden>⚠</span>
+                          <span>{r.error}</span>
+                        </p>
+                      ) : null}
+                    </Td>
+
+                    {/* 프로젝트 combobox + ★ */}
+                    <Td>{editors.project}</Td>
+
+                    {/* 적요 — 프리필 출처 배지(학습/전사) 표시, 사용자가 바꾸면 배지 제거.
+                      예산계정 변경 시엔 그 계정 맞춤 적요를 조회하는 동안 미세 스피너를 노출. */}
+                    <Td>{editors.note}</Td>
+
+                    {/* 제외 */}
+                    <Td className="text-center">
+                      <input
+                        type="checkbox"
+                        checked={e.skip}
+                        disabled={disabled}
+                        onChange={(ev) => setRow(r.no, { skip: ev.target.checked })}
+                        aria-label={`${r.no}행 제외`}
+                        className="accent-accent size-4 cursor-pointer disabled:cursor-not-allowed"
                       />
-                      <FavoriteToggle
-                        active={bFav.has(e.budgetUnitCode)}
-                        disabled={e.skip || disabled || e.budgetUnitCode === ''}
-                        onToggle={() => {
-                          const o = budgetByCode.get(e.budgetUnitCode);
-                          void bFav.toggle(
-                            e.budgetUnitCode,
-                            o?.name ?? e.budgetUnitCode,
-                            o ? { bizplanNm: o.bizplanNm ?? '', bgacctNm: o.bgacctNm ?? '' } : null,
-                          );
-                        }}
+                    </Td>
+                  </tr>
+                );
+                // 소유자 그룹 첫 행 앞에 그룹 헤더 행(소유자 · 건수 · 금액 합)을 끼워 넣는다.
+                const group = headerBeforeNo.get(r.no);
+                return group ? (
+                  <Fragment key={r.no}>
+                    <OwnerGroupHeaderRow
+                      group={group}
+                      colSpan={GRID_COL_COUNT}
+                      includedCount={group.rows.filter((gr) => !edits[gr.no]?.skip).length}
+                      disabled={disabled}
+                      onToggleAll={(include) =>
+                        setSkipForRows(
+                          group.rows.map((gr) => gr.no),
+                          !include,
+                        )
+                      }
+                    />
+                    {rowTr}
+                  </Fragment>
+                ) : (
+                  rowTr
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* md 미만 — 행당 카드 스택(소유자 그룹 섹션 헤더 + 카드). 테이블과 편집 상태·검증을
+          공유하며 렌더 골격만 다르다(로직 단일 소스 = edits/rowEditors). */}
+      {isDesktopLayout !== true && (
+        <div className="flex min-h-0 flex-col gap-4 md:hidden">
+          {visibleGroups.map((group) => (
+            <section key={group.owner} className="flex flex-col gap-2">
+              <OwnerGroupSectionHeader
+                group={group}
+                includedCount={group.rows.filter((gr) => !edits[gr.no]?.skip).length}
+                disabled={disabled}
+                onToggleAll={(include) =>
+                  setSkipForRows(
+                    group.rows.map((gr) => gr.no),
+                    !include,
+                  )
+                }
+              />
+              {group.rows.map((r) => {
+                const e = edits[r.no] ?? EMPTY_EDIT;
+                const rowInvalid = !e.skip && !isRowValid(r.no);
+                const editors = rowEditors(r, e, rowInvalid);
+                // 카드내역=과세 인데 불공 처리 = 재분류. 툴팁을 못 보는 터치에선 사유를 인라인 노출.
+                const reclassified = e.vat === '불공' && (r.vatType ?? '').trim() === '과세';
+                return (
+                  <div
+                    key={r.no}
+                    data-row-no={r.no}
+                    className={cn(
+                      // 행 상태 = 카드 보더/배경(테이블 행 상태 표현에 상응).
+                      'border-border flex flex-col gap-2.5 rounded-[var(--radius-md)] border p-3',
+                      e.skip && 'opacity-40',
+                      rowInvalid && 'border-danger/30 bg-danger/[0.04]',
+                      r.error && 'border-danger/40 bg-danger/[0.07]',
+                    )}
+                  >
+                    {/* 카드 헤더 — 가맹점 + 승인액 */}
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-foreground min-w-0 truncate text-[13px] font-semibold">
+                        {r.merchant || '(가맹점 미상)'}
+                      </span>
+                      <span className="text-foreground shrink-0 text-[13px] font-semibold tabular-nums">
+                        {r.amount ?? ''}
+                      </span>
+                    </div>
+
+                    {/* 보조행 — 행 식별 정보 + 부가세 배지 */}
+                    <div className="text-foreground-tertiary flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                      <span className="tabular-nums">#{r.no}</span>
+                      {r.card ? <span className="min-w-0 truncate">{r.card}</span> : null}
+                      <span className="tabular-nums">
+                        {[r.date, r.time].filter(Boolean).join(' ')}
+                      </span>
+                      {r.approved ? <span>{r.approved}</span> : null}
+                      <VatBadge
+                        value={e.vat}
+                        rawVatType={r.vatType}
+                        disabled={e.skip || disabled}
+                        onChange={(v) => setRow(r.no, { vat: v })}
                       />
                     </div>
+                    {reclassified ? (
+                      <p className="text-warning text-[11px] leading-snug">
+                        카드내역은 &lsquo;과세&rsquo;이지만 매입세액 불공제 대상이라
+                        &lsquo;불공&rsquo;으로 처리합니다.
+                      </p>
+                    ) : null}
                     {r.error ? (
-                      <p className="text-danger mt-1.5 flex items-start gap-1 text-[11px] leading-snug">
+                      <p className="text-danger flex items-start gap-1 text-[11px] leading-snug">
                         <span aria-hidden>⚠</span>
                         <span>{r.error}</span>
                       </p>
                     ) : null}
-                  </Td>
 
-                  {/* 프로젝트 combobox + ★ */}
-                  <Td>
-                    <div className="flex items-center gap-1.5">
-                      {e.projectSource ? <SourceBadge source={e.projectSource} /> : null}
-                      <ProjectCombobox
-                        code={e.projectCode}
-                        name={e.projectName}
-                        favorites={pFavList}
-                        searchResults={searchResults}
-                        searchQuery={searchQuery}
-                        disabled={e.skip || disabled}
-                        onSelect={(code, name, wbsNo) =>
-                          setRow(r.no, {
-                            projectCode: code,
-                            projectName: name,
-                            projectWbsNo: wbsNo,
-                            projectSource: null,
-                          })
-                        }
-                        onClear={() =>
-                          setRow(r.no, {
-                            projectCode: '',
-                            projectName: '',
-                            projectWbsNo: '',
-                            projectSource: null,
-                          })
-                        }
-                        onSearch={onQuery}
-                      />
-                      <FavoriteToggle
-                        active={pFav.has(e.projectCode)}
-                        disabled={e.skip || disabled || e.projectCode === ''}
-                        onToggle={() =>
-                          void pFav.toggle(e.projectCode, e.projectName || e.projectCode, {
-                            wbsNo: e.projectWbsNo,
-                            wbsNm: '',
-                          })
-                        }
-                      />
-                    </div>
-                  </Td>
-
-                  {/* 적요 — 프리필 출처 배지(학습/전사) 표시, 사용자가 바꾸면 배지 제거.
-                      예산계정 변경 시엔 그 계정 맞춤 적요를 조회하는 동안 미세 스피너를 노출. */}
-                  <Td>
-                    <div className="flex items-center gap-1.5">
-                      {suggesting[r.no] ? (
-                        <Spinner
-                          size={12}
-                          label="적요 추천 조회 중"
-                          className="text-foreground-tertiary shrink-0"
-                        />
-                      ) : e.noteSource ? (
-                        <SourceBadge source={e.noteSource} />
-                      ) : null}
-                      <input
-                        value={e.note}
-                        onChange={(ev) => setRow(r.no, { note: ev.target.value, noteSource: null })}
-                        disabled={e.skip || disabled}
-                        maxLength={200}
-                        placeholder="적요"
-                        aria-invalid={rowInvalid && e.note.trim() === ''}
+                    {/* 본문 — 인라인 라벨 + 편집 컨트롤 세로 스택 */}
+                    <div className="flex flex-col gap-2">
+                      <CardField label="예산계정">{editors.budget}</CardField>
+                      <CardField label="프로젝트">{editors.project}</CardField>
+                      <CardField label="적요">{editors.note}</CardField>
+                      {/* 제외 — 행 전체 label 로 히트영역 44px 확보. */}
+                      <label
                         className={cn(
-                          'border-border bg-surface text-foreground placeholder:text-muted-foreground h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none',
-                          'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
-                          'aria-invalid:border-danger disabled:opacity-50',
+                          'border-border bg-muted/30 flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] border px-3',
+                          disabled && 'cursor-not-allowed opacity-60',
                         )}
-                      />
+                      >
+                        <span className="text-foreground-secondary text-[11px]">
+                          이 행 제외(저장 안 함)
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={e.skip}
+                          disabled={disabled}
+                          onChange={(ev) => setRow(r.no, { skip: ev.target.checked })}
+                          aria-label={`${r.no}행 제외`}
+                          className="accent-accent size-4 disabled:cursor-not-allowed"
+                        />
+                      </label>
                     </div>
-                  </Td>
-
-                  {/* 제외 */}
-                  <Td className="text-center">
-                    <input
-                      type="checkbox"
-                      checked={e.skip}
-                      disabled={disabled}
-                      onChange={(ev) => setRow(r.no, { skip: ev.target.checked })}
-                      aria-label={`${r.no}행 제외`}
-                      className="accent-accent size-4 cursor-pointer disabled:cursor-not-allowed"
-                    />
-                  </Td>
-                </tr>
-              );
-              // 소유자 그룹 첫 행 앞에 그룹 헤더 행(소유자 · 건수 · 금액 합)을 끼워 넣는다.
-              const group = headerBeforeNo.get(r.no);
-              return group ? (
-                <Fragment key={r.no}>
-                  <OwnerGroupHeaderRow
-                    group={group}
-                    colSpan={GRID_COL_COUNT}
-                    includedCount={group.rows.filter((gr) => !edits[gr.no]?.skip).length}
-                    disabled={disabled}
-                    onToggleAll={(include) =>
-                      setSkipForRows(
-                        group.rows.map((gr) => gr.no),
-                        !include,
-                      )
-                    }
-                  />
-                  {rowTr}
-                </Fragment>
-              ) : (
-                rowTr
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* 검증 요약 + 적용(저장 안전 게이트) */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-foreground-secondary text-[11px]">
-          {nonSkip.length}행 중{' '}
-          <span
-            className={cn('font-semibold tabular-nums', allValid ? 'text-success' : 'text-warning')}
-          >
-            {validCount}행
-          </span>{' '}
-          입력 완료
-          {owner ? (
-            // 범위 고지 — 이번 저장은 이 사용자 행만 대상이다(나머지는 처리되지 않는다).
-            <span className="text-foreground-tertiary"> — {owner} 행만 처리</span>
-          ) : null}
-          {nonSkip.length - validCount > 0 ? (
-            <>
-              {' '}
-              ·{' '}
-              <button
-                type="button"
-                onClick={jumpToFirstInvalid}
-                title="첫 미입력 행으로 이동"
-                className="text-warning cursor-pointer underline underline-offset-2 hover:opacity-80"
-              >
-                예산단위·적요 미입력 {nonSkip.length - validCount}행
-              </button>
-              <span className="text-foreground-tertiary">
-                {' '}
-                — 해당 행을 &lsquo;제외&rsquo;하면 나머지만 저장됩니다.
-              </span>
-            </>
-          ) : null}
-        </p>
-
-        {/* 1클릭 제출(사용자 확정 2026-07-05: 확인 단계 제거) — 저장 규모는 버튼 옆에 상시
-            표기해 '실 ERP N건 저장' 인지는 유지한다. */}
-        <div className="flex flex-wrap items-center gap-2">
-          {!busy && !submitted ? (
-            <span className="text-foreground-tertiary text-[11px]">
-              실 ERP에{' '}
-              <span className="text-foreground-secondary font-semibold tabular-nums">
-                {nonSkip.length}건
-              </span>{' '}
-              저장{skipCount > 0 ? ` · 제외 ${skipCount}건` : ''}
-            </span>
-          ) : null}
-          <Button size="sm" onClick={() => void submit()} disabled={!allValid || disabled}>
-            {submitted ? (
-              <>
-                <Spinner size={14} />
-                반영·저장 진행 중…
-              </>
-            ) : busy ? (
-              <>
-                <Spinner size={14} />
-                전송 중…
-              </>
-            ) : (
-              <>
-                <RiCheckLine size={14} aria-hidden />
-                입력 완료
-              </>
-            )}
-          </Button>
+                  </div>
+                );
+              })}
+            </section>
+          ))}
         </div>
-      </div>
+      )}
 
-      {error ? <span className="text-danger text-[12px]">{error}</span> : null}
+      {/* 검증 요약 + 적용(저장 안전 게이트) — md 미만에선 페이지 스크롤(dashboard-shell) 기준
+          하단 고정 바(패널 p-4 를 -m 으로 메워 가장자리까지). 조상 overflow 는 live-side-panel
+          이 lg 미만에서 풀어 준다. */}
+      <div
+        className={cn(
+          'flex flex-col gap-3',
+          // -mb 없이 bottom-0 — 음수 하단 마진이 있으면 sticky 고정 위치가 그만큼 스크롤포트
+          // 밖으로 밀린다(실측 828>812). 스크롤 끝에서 패널 p-4 만큼 위에 뜨는 것은 감수.
+          'max-md:border-border max-md:bg-surface/95 max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:rounded-[var(--radius-md)] max-md:border max-md:px-4 max-md:pt-3 max-md:pb-[max(1rem,env(safe-area-inset-bottom))] max-md:backdrop-blur',
+        )}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-foreground-secondary text-[11px]">
+            {nonSkip.length}행 중{' '}
+            <span
+              className={cn(
+                'font-semibold tabular-nums',
+                allValid ? 'text-success' : 'text-warning',
+              )}
+            >
+              {validCount}행
+            </span>{' '}
+            입력 완료
+            {owner ? (
+              // 범위 고지 — 이번 저장은 이 사용자 행만 대상이다(나머지는 처리되지 않는다).
+              <span className="text-foreground-tertiary"> — {owner} 행만 처리</span>
+            ) : null}
+            {nonSkip.length - validCount > 0 ? (
+              <>
+                {' '}
+                ·{' '}
+                <button
+                  type="button"
+                  onClick={jumpToFirstInvalid}
+                  title="첫 미입력 행으로 이동"
+                  // 모바일은 -m/p 로 히트영역만 확장(시각 크기 유지).
+                  className="text-warning cursor-pointer underline underline-offset-2 hover:opacity-80 max-md:-my-2 max-md:inline-block max-md:py-2"
+                >
+                  예산단위·적요 미입력 {nonSkip.length - validCount}행
+                </button>
+                <span className="text-foreground-tertiary">
+                  {' '}
+                  — 해당 행을 &lsquo;제외&rsquo;하면 나머지만 저장됩니다.
+                </span>
+              </>
+            ) : null}
+          </p>
+
+          {/* 1클릭 제출(사용자 확정 2026-07-05: 확인 단계 제거) — 저장 규모는 버튼 옆에 상시
+            표기해 '실 ERP N건 저장' 인지는 유지한다. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {!busy && !submitted ? (
+              <span className="text-foreground-tertiary text-[11px]">
+                실 ERP에{' '}
+                <span className="text-foreground-secondary font-semibold tabular-nums">
+                  {nonSkip.length}건
+                </span>{' '}
+                저장{skipCount > 0 ? ` · 제외 ${skipCount}건` : ''}
+              </span>
+            ) : null}
+            <Button
+              size="sm"
+              className="max-md:h-11 max-md:flex-1"
+              onClick={() => void submit()}
+              disabled={!allValid || disabled}
+            >
+              {submitted ? (
+                <>
+                  <Spinner size={14} />
+                  반영·저장 진행 중…
+                </>
+              ) : busy ? (
+                <>
+                  <Spinner size={14} />
+                  전송 중…
+                </>
+              ) : (
+                <>
+                  <RiCheckLine size={14} aria-hidden />
+                  입력 완료
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {error ? <span className="text-danger text-[12px]">{error}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 모바일 카드의 라벨+컨트롤 한 행 — 인라인 라벨(고정폭) 뒤에 편집 컨트롤. */
+function CardField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-foreground-tertiary w-12 shrink-0 text-[11px]">{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
@@ -869,7 +1045,7 @@ function BulkBar({
         allExclFav={budgetAllExclFav}
         disabled={disabled}
         placeholder="예산단위 전체 적용"
-        className="w-48 text-[11px]"
+        className="w-48 text-[11px] max-md:w-full"
         onChange={(code) => {
           if (code) onBulkBudget(code);
         }}
@@ -882,7 +1058,7 @@ function BulkBar({
           const p = projectFavs.find((x) => x.code === ev.target.value);
           if (p) onBulkProject(p.code, p.name, p.wbsNo ?? '');
         }}
-        className="border-border bg-surface text-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-48 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
+        className="border-border bg-surface text-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-48 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50 max-md:h-10 max-md:w-full"
       >
         <option value="">프로젝트 전체 적용(자주쓰는)</option>
         {projectFavs.map((p) => (
@@ -904,12 +1080,12 @@ function BulkBar({
         disabled={disabled}
         maxLength={200}
         placeholder="적요 일괄 입력"
-        className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-40 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
+        className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-40 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50 max-md:h-10 max-md:w-full"
       />
       <Button
         size="sm"
         variant="secondary"
-        className="h-8 px-2"
+        className="h-8 px-2 max-md:h-10 max-md:w-full"
         disabled={disabled || !bulkNote.trim()}
         onClick={() => onBulkNote(bulkNote)}
       >
@@ -976,15 +1152,8 @@ function BudgetCombobox({
   const wrapRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  // 바깥 클릭 시 닫기(ProjectCombobox 와 동일 패턴).
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (ev: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  // 바깥 pointerdown 시 닫기(ProjectCombobox 와 동일 패턴).
+  useOutsideClose(open, wrapRef, () => setOpen(false));
 
   const q = normalizeQuery(text);
   // 그룹 순서 유지(자주쓰는 → 내 부서 → 전체), 필터 후 빈 그룹은 숨김.
@@ -1033,7 +1202,7 @@ function BudgetCombobox({
         aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
         className={cn(
-          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none max-md:min-h-11',
           'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
           'aria-invalid:border-danger disabled:opacity-50',
         )}
@@ -1051,9 +1220,9 @@ function BudgetCombobox({
       </button>
 
       {open ? (
-        <div className="border-border bg-surface absolute left-0 z-20 mt-1 w-[320px] rounded-[var(--radius-md)] border p-2 shadow-[var(--shadow-card)]">
+        <ComboPanel onClose={close} className="md:w-[min(320px,calc(100vw-2rem))]">
           <input
-            autoFocus
+            autoFocus={isDesktopViewport()}
             role="combobox"
             aria-expanded
             aria-controls={listId}
@@ -1079,20 +1248,20 @@ function BudgetCombobox({
               }
             }}
             placeholder="이름·사업계획·예산계정 검색"
-            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2"
+            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full shrink-0 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2"
           />
 
           <div
             id={listId}
             role="listbox"
             aria-label="예산단위"
-            className="mt-2 max-h-60 overflow-y-auto"
+            className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain md:max-h-60 md:flex-none"
           >
             {value !== '' ? (
               <button
                 type="button"
                 onClick={() => pick('')}
-                className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
+                className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px] max-md:py-2.5"
               >
                 선택 해제
               </button>
@@ -1119,7 +1288,7 @@ function BudgetCombobox({
                         onClick={() => pick(o.code)}
                         onMouseEnter={() => setActiveIdx(idx)}
                         className={cn(
-                          'flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]',
+                          'flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px] max-md:py-2.5',
                           idx === active && 'bg-muted/60',
                         )}
                       >
@@ -1149,7 +1318,7 @@ function BudgetCombobox({
               </p>
             ) : null}
           </div>
-        </div>
+        </ComboPanel>
       ) : null}
     </div>
   );
@@ -1188,15 +1357,8 @@ function ProjectCombobox({
     setSearching(false);
   }, [searchResults, searchQuery]);
 
-  // 바깥 클릭 시 닫기.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (ev: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  // 바깥 pointerdown 시 닫기.
+  useOutsideClose(open, wrapRef, () => setOpen(false));
 
   const q = text.trim().toLowerCase();
   const filteredFavs = q
@@ -1225,7 +1387,7 @@ function ProjectCombobox({
         onClick={() => setOpen((v) => !v)}
         title="검색하여 선택"
         className={cn(
-          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'border-border bg-surface flex h-8 w-full items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none max-md:min-h-11',
           'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2 disabled:opacity-50',
         )}
       >
@@ -1239,10 +1401,10 @@ function ProjectCombobox({
       </button>
 
       {open ? (
-        <div className="border-border bg-surface absolute left-0 z-20 mt-1 w-[280px] rounded-[var(--radius-md)] border p-2 shadow-[var(--shadow-card)]">
-          <div className="flex items-center gap-1.5">
+        <ComboPanel onClose={() => setOpen(false)} className="md:w-[min(280px,calc(100vw-2rem))]">
+          <div className="flex shrink-0 items-center gap-1.5">
             <input
-              autoFocus
+              autoFocus={isDesktopViewport()}
               value={text}
               onChange={(ev) => setText(ev.target.value)}
               onKeyDown={(ev) => {
@@ -1258,7 +1420,7 @@ function ProjectCombobox({
             <Button
               size="sm"
               variant="secondary"
-              className="h-8 shrink-0 px-2"
+              className="h-8 shrink-0 px-2 max-md:h-11"
               disabled={!text.trim() || searching}
               onClick={() => void runSearch()}
             >
@@ -1267,7 +1429,7 @@ function ProjectCombobox({
             </Button>
           </div>
 
-          <div className="mt-2 max-h-52 overflow-y-auto">
+          <div className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain md:max-h-52 md:flex-none">
             {code ? (
               <button
                 type="button"
@@ -1275,7 +1437,7 @@ function ProjectCombobox({
                   onClear();
                   setOpen(false);
                 }}
-                className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
+                className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px] max-md:py-2.5"
               >
                 선택 해제
               </button>
@@ -1313,7 +1475,7 @@ function ProjectCombobox({
               </p>
             ) : null}
           </div>
-        </div>
+        </ComboPanel>
       ) : null}
     </div>
   );
@@ -1326,7 +1488,7 @@ function ProjectOptionRow({ option, onClick }: { option: ProjectOption; onClick:
     <button
       type="button"
       onClick={onClick}
-      className="hover:bg-muted/60 flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]"
+      className="hover:bg-muted/60 flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px] max-md:py-2.5"
     >
       <span className="flex min-w-0 items-center gap-1.5">
         {codeLabel ? (

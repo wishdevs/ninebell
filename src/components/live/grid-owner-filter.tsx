@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { RiSearchLine } from '@remixicon/react';
+import { ComboPanel, isDesktopViewport, useOutsideClose } from '@/components/live/combo-popover';
 import type { LiveGridRow } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
@@ -149,14 +150,8 @@ function OwnerCombobox({
   const wrapRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (ev: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  // 바깥 pointerdown 시 닫기(예산단위·프로젝트 콤보박스와 동일 패턴).
+  useOutsideClose(open, wrapRef, () => setOpen(false));
 
   const q = text.toLowerCase().replace(/\s+/g, '');
   const matched = q ? groups.filter((g) => g.owner.toLowerCase().includes(q)) : groups;
@@ -191,7 +186,7 @@ function OwnerCombobox({
   const triggerLabel = owner ? `${owner} ${selected?.rows.length ?? 0}행` : `전체 ${totalCount}행`;
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className="relative max-md:min-w-0 max-md:flex-1">
       <button
         type="button"
         aria-haspopup="listbox"
@@ -199,7 +194,7 @@ function OwnerCombobox({
         aria-label="사용자 선택(보기)"
         onClick={() => (open ? close() : setOpen(true))}
         className={cn(
-          'border-border bg-surface flex h-8 w-52 items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none',
+          'border-border bg-surface flex h-8 w-52 items-center justify-between gap-1.5 rounded-[var(--radius-sm)] border px-2 text-left text-[11px] outline-none max-md:min-h-11 max-md:w-full',
           'focus-visible:border-accent focus-visible:ring-accent/40 focus-visible:ring-2',
           owner && 'border-accent text-accent font-semibold',
         )}
@@ -209,9 +204,9 @@ function OwnerCombobox({
       </button>
 
       {open ? (
-        <div className="border-border bg-surface absolute left-0 z-20 mt-1 w-[260px] rounded-[var(--radius-md)] border p-2 shadow-[var(--shadow-card)]">
+        <ComboPanel onClose={close} className="md:w-[min(260px,calc(100vw-2rem))]">
           <input
-            autoFocus
+            autoFocus={isDesktopViewport()}
             role="combobox"
             aria-expanded
             aria-controls={listId}
@@ -237,14 +232,14 @@ function OwnerCombobox({
               }
             }}
             placeholder="사용자 검색"
-            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2"
+            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full shrink-0 rounded-[var(--radius-sm)] border px-2 text-[11px] outline-none focus-visible:ring-2"
           />
 
           <div
             id={listId}
             role="listbox"
             aria-label="사용자"
-            className="mt-2 max-h-60 overflow-y-auto"
+            className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain md:max-h-60 md:flex-none"
           >
             {options.map((o, idx) => (
               <button
@@ -256,7 +251,7 @@ function OwnerCombobox({
                 onClick={() => pick(o.value)}
                 onMouseEnter={() => setActiveIdx(idx)}
                 className={cn(
-                  'flex w-full items-baseline gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px]',
+                  'flex w-full items-baseline gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[11px] max-md:py-2.5',
                   idx === active && 'bg-muted/60',
                 )}
               >
@@ -279,7 +274,7 @@ function OwnerCombobox({
               </p>
             ) : null}
           </div>
-        </div>
+        </ComboPanel>
       ) : null}
     </div>
   );
@@ -368,5 +363,53 @@ export function OwnerGroupHeaderRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+/**
+ * 모바일(md 미만) 카드 스택용 소유자 그룹 섹션 헤더 — 테이블 그룹 헤더 행과 같은 정보
+ * (소유자명·건수·금액 합)에, 터치용으로 키우고 자기설명 라벨을 단 전체 제외/포함 토글.
+ */
+export function OwnerGroupSectionHeader({
+  group,
+  includedCount,
+  disabled = false,
+  onToggleAll,
+}: {
+  group: OwnerGroup;
+  /** 이 그룹에서 저장 대상인 행 수(제외되지 않은 행). */
+  includedCount: number;
+  disabled?: boolean;
+  /** include=true 면 그룹 전체 제외 해제, false 면 전체 제외. */
+  onToggleAll: (include: boolean) => void;
+}) {
+  const total = group.rows.length;
+  const allExcluded = includedCount === 0;
+  return (
+    <div className="bg-muted/50 border-border/50 flex items-center gap-2 rounded-[var(--radius-md)] border px-3 py-1.5">
+      <span
+        className={cn(
+          'min-w-0 truncate text-[12px] font-semibold',
+          allExcluded ? 'text-foreground-tertiary line-through' : 'text-foreground',
+        )}
+      >
+        {group.owner}
+      </span>
+      <span className="text-foreground-tertiary shrink-0 text-[11px] tabular-nums">
+        {total}행 · {formatWonSum(group.amountSum)}
+      </span>
+      <BarButton
+        disabled={disabled}
+        onClick={() => onToggleAll(allExcluded)}
+        title={
+          allExcluded
+            ? `${group.owner} ${total}행의 '제외'를 해제합니다.`
+            : `${group.owner} ${total}행을 '제외'로 표시합니다(저장에서 빠집니다).`
+        }
+        className="ml-auto min-h-10 shrink-0 px-3"
+      >
+        {allExcluded ? '전체 포함' : '전체 제외'}
+      </BarButton>
+    </div>
   );
 }

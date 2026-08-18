@@ -23,6 +23,11 @@ export function projectCodeLabel(code: string, pjtNo?: string): string {
   return pjtNo ?? code.split('|')[0] ?? code;
 }
 
+/** 터치 기기 여부 — 팝오버가 열리자마자 가상 키보드가 목록을 덮지 않게 자동 포커스를 가른다. */
+function isCoarsePointer(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+}
+
 /**
  * 카탈로그 콤보박스(거래처·프로젝트 공용) — 자주쓰는 필터 + ERP 검색(Enter/버튼) 팝오버.
  * 트리거는 돋보기 어포던스(목록 select 와 구분). 출장 국내/해외 폼이 공유한다.
@@ -107,10 +112,17 @@ export function CatalogCombobox({
         </button>
       </PopoverTrigger>
 
-      <PopoverContent className="w-[300px] max-w-[calc(100vw-3rem)] p-2 shadow-[var(--shadow-card)]">
+      <PopoverContent
+        className="w-[300px] max-w-[calc(100vw-3rem)] p-2 shadow-[var(--shadow-card)]"
+        onOpenAutoFocus={(e) => {
+          // 터치에서는 Radix 가 첫 포커서블(검색 input)로 포커스를 옮겨 키보드를 띄우므로 막는다.
+          if (isCoarsePointer()) e.preventDefault();
+        }}
+      >
         <div className="flex items-center gap-1.5">
           <input
-            autoFocus
+            autoFocus={!isCoarsePointer()}
+            enterKeyHint="search"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -121,13 +133,13 @@ export function CatalogCombobox({
               if (e.key === 'Escape') setOpen(false);
             }}
             placeholder="자주쓰는 필터 / ERP 검색어"
-            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 min-w-0 flex-1 rounded-sm border px-2 text-[length:var(--text-body-sm)] outline-none focus-visible:ring-2"
+            className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 min-w-0 flex-1 rounded-sm border px-2 text-[length:var(--text-body-sm)] outline-none focus-visible:ring-2 pointer-coarse:h-10"
           />
           <Button
             type="button"
             size="sm"
             variant="secondary"
-            className="h-8 shrink-0 px-2"
+            className="h-8 shrink-0 px-2 pointer-coarse:h-10"
             disabled={!text.trim() || searching}
             onClick={() => void runSearch()}
           >
@@ -136,7 +148,8 @@ export function CatalogCombobox({
           </Button>
         </div>
 
-        <div className="mt-2 max-h-56 overflow-y-auto">
+        {/* 목록 높이는 dvh 로도 캡 — 가상 키보드가 열려 가시 높이가 줄어도 목록이 밖으로 안 나간다. */}
+        <div className="mt-2 max-h-[min(14rem,40dvh)] overflow-y-auto">
           {value.code ? (
             <button
               type="button"
@@ -144,7 +157,7 @@ export function CatalogCombobox({
                 onClear();
                 setOpen(false);
               }}
-              className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)]"
+              className="text-foreground-tertiary hover:bg-muted/60 flex w-full items-center rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)] pointer-coarse:py-2.5"
             >
               선택 해제
             </button>
@@ -168,7 +181,7 @@ export function CatalogCombobox({
                 type="button"
                 size="sm"
                 variant="secondary"
-                className="h-7 shrink-0 px-2"
+                className="h-7 shrink-0 px-2 pointer-coarse:h-10"
                 disabled={searching}
                 onClick={() => void runSearch()}
               >
@@ -206,7 +219,7 @@ function OptionRow({ option, onClick }: { option: ComboOption; onClick: () => vo
     <button
       type="button"
       onClick={onClick}
-      className="hover:bg-muted/60 flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)]"
+      className="hover:bg-muted/60 flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left text-[length:var(--text-body)] pointer-coarse:py-2.5"
     >
       {/* 두 줄 구성(모바일 회귀 2026-08-14): 종전엔 이름과 sub(WBS 등)가 한 줄을 나눠 쓰고
           sub 가 shrink-0 라, 좁은 폭에서 정작 식별자인 이름이 '12C…' 로 뭉개졌다. 이름을
