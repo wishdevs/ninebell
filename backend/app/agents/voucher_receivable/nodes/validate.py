@@ -27,9 +27,13 @@ def make_validate_params_node():
 
         scope = "전체(조회된 전 건)" if p.max_rows is None else f"최대 {p.max_rows}건"
         mode = "디버그 — 가상 상신(목록 유지)" if p.debug else "전자결재 실제 상신"
+        # 전표유형/메뉴 필터(2026-08-20 유형별 병합) — 미지정 시 생략(종전 로그 형태 유지).
+        extra = f" · 전표유형 {'·'.join(p.docu_types)}" if p.docu_types else ""
+        if p.menu_filters:
+            extra += f" · 메뉴 필터 {'·'.join(p.menu_filters)}"
         await emit_log(
             events,
-            f"실행 파라미터 확인 — 회계일 {p.period_label} · {scope} 순회 · {mode}.",
+            f"실행 파라미터 확인 — 회계일 {p.period_label} · {scope} 순회{extra} · {mode}.",
             "ok",
         )
         await emit_step(events, "validate_params", "done")
@@ -37,6 +41,8 @@ def make_validate_params_node():
             "max_rows": p.max_rows,
             "period_from": p.period_from,
             "period_to": p.period_to,
+            "docu_types": p.docu_types,
+            "menu_filters": p.menu_filters,
             "debug_mode": p.debug,
         }
 

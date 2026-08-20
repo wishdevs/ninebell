@@ -1,9 +1,11 @@
-"""voucher-receivable 그래프/등록/fixture 승격 단위테스트 — compile + registry + 회귀 방지.
+"""voucher-by-type 그래프/등록/fixture 단위테스트 — compile + registry + 병합 회귀 방지.
 
+외상매출금/외상매입금 병합(2026-08-20): 그래프는 build_voucher_by_type_graph 하나이고
+전표유형은 실행 전 폼 선택(state.docu_types)이 우선한다.
 - 그래프: 노드 집합·진입점(validate_params)·선형 종료(loop_approvals→END)·recursion_limit.
-- registry: voucher-receivable 등록(demo-echo·card-collect·trip-domestic 회귀 금지) + delay_scale.
+- registry: voucher-by-type 등록 + 구 워크플로우(voucher-receivable/voucher-payable) 제거 확인.
 - menu_nav 파라미터화: 기본 EXPENSE_CARD 유지 + VOUCHER_RECEIVABLE 주입 동작(하위호환).
-- fixture: voucher-trade-receivable 더미 승격(workflow_id·flow_graph·steps.key 가 그래프 노드와 1:1, hidden).
+- fixture: voucher-by-type 단일 픽스처(workflow_id·flow_graph·steps.key 가 그래프 노드와 1:1).
 """
 
 from __future__ import annotations
@@ -12,13 +14,13 @@ import asyncio
 
 import pytest
 
-import app.agents  # noqa: F401 — import 시 'voucher-receivable' 등록
+import app.agents  # noqa: F401 — import 시 'voucher-by-type' 등록
 from app.agents.common.nodes import make_menu_nav_node
 from app.agents.voucher_receivable.graph import (
     RECURSION_LIMIT,
-    build_voucher_payable_graph,
-    build_voucher_receivable_graph,
+    build_voucher_by_type_graph,
 )
+from app.agents.voucher_receivable.steps import DOCU_TYPE_CHOICES
 from app.live.registry import get_spec, get_workflow, list_workflows
 from app.services.agent_fixtures import AGENT_FIXTURES
 from nbkit.omnisol.menu_schemas import EXPENSE_CARD, VOUCHER_RECEIVABLE
@@ -43,70 +45,51 @@ def _graph_nodes(g) -> set[str]:
 
 # ── 그래프 ────────────────────────────────────────────────────────────────────
 def test_graph_compiles_with_expected_nodes_and_entry():
-    g = build_voucher_receivable_graph()
+    g = build_voucher_by_type_graph()
     assert _graph_nodes(g) == _EXPECTED_NODES_BATCH
     starts = [e.target for e in g.get_graph().edges if e.source == "__start__"]
     assert starts == ["validate_params"]
 
 
 def test_loop_approvals_terminates_at_end():
-    g = build_voucher_receivable_graph()
+    g = build_voucher_by_type_graph()
     targets = {e.target for e in g.get_graph().edges if e.source == "loop_approvals"}
     assert targets == {"__end__"}
 
 
 def test_recursion_limit_configured():
-    g = build_voucher_receivable_graph()
+    g = build_voucher_by_type_graph()
     assert g.config.get("recursion_limit") == RECURSION_LIMIT == 20
 
 
 def test_graph_is_recompilable():
-    assert build_voucher_receivable_graph() is not None
+    assert build_voucher_by_type_graph() is not None
 
 
-# ── 외상매입금(voucher-payable) — 공유 그래프 재사용, 전표유형만 다름 ──────────────────
-def test_payable_graph_same_backbone_as_receivable():
-    # 전표유형만 파라미터로 다르고 노드 백본은 매출금과 완전 동일해야 한다(공유 빌더 +
-    # 배치 결재 — 2026-08-07 매입 확대: count_details 포함).
-    assert _graph_nodes(build_voucher_payable_graph()) == _EXPECTED_NODES_BATCH
-
-
-def test_payable_workflow_registered():
-    assert "voucher-payable" in list_workflows()
-    spec = get_spec("voucher-payable")
-    assert spec is not None and spec.needs_browser is True and spec.delay_scale == 0.4
-
-
-def _voucher_payable_fixture() -> dict:
-    return next(a for a in AGENT_FIXTURES if a["id"] == "voucher-trade-payable")
-
-
-def test_payable_fixture_promoted_and_lockstep():
-    fx = _voucher_payable_fixture()
-    assert fx["workflow_id"] == "voucher-payable"
-    assert fx["group_id"] == "voucher" and fx["name"] == "외상매입금"
-    assert fx["hidden"] is False
-    # steps 키가 그래프 노드와 1:1(진행 하이라이트 정합) — 매출과 동일 백본(배치 포함).
-    assert {s["key"] for s in fx["steps"]} == _EXPECTED_NODES_BATCH
+def test_docu_type_choices_are_the_merge_superset():
+    # 병합 계약: 폼 선택지 = 구 매출(국내/해외) + 구 매입(내수구매). ERP 는 SYSDEF_NM 라벨 매칭.
+    assert DOCU_TYPE_CHOICES == ("국내매출", "해외매출", "내수구매")
 
 
 # ── registry ──────────────────────────────────────────────────────────────────
 def test_workflow_registered_without_regressing_others():
     wfs = list_workflows()
-    assert "voucher-receivable" in wfs
+    assert "voucher-by-type" in wfs
+    # 병합으로 구 워크플로우 id 는 제거됐다(잔존 시 프론트 진입점이 두 갈래가 되는 회귀).
+    assert "voucher-receivable" not in wfs and "voucher-payable" not in wfs
     # 회귀 금지.
     assert "card-collect" in wfs and "demo-echo" in wfs and "trip-domestic" in wfs
 
 
 def test_registered_factory_returns_invokable_graph():
-    factory = get_workflow("voucher-receivable")
+    factory = get_workflow("voucher-by-type")
     assert factory is not None
     graph = factory()
     assert callable(getattr(graph, "ainvoke", None))
 
 
 def test_spec_delay_scale_and_browser():
-    spec = get_spec("voucher-receivable")
+    spec = get_spec("voucher-by-type")
     assert spec is not None
     assert spec.needs_browser is True
     assert spec.delay_scale == 0.4
@@ -144,19 +127,18 @@ async def test_menu_nav_accepts_voucher_schema(monkeypatch):
     assert out == {} and seen["schema"] is VOUCHER_RECEIVABLE
 
 
-# ── fixture 승격 검증 ─────────────────────────────────────────────────────────
+# ── fixture(병합 단일 픽스처) ─────────────────────────────────────────────────
 def _voucher_fixture() -> dict:
-    return next(a for a in AGENT_FIXTURES if a["id"] == "voucher-trade-receivable")
+    return next(a for a in AGENT_FIXTURES if a["id"] == "voucher-by-type")
 
 
-def test_fixture_promoted_to_real_workflow():
+def test_fixture_merged_to_single_agent():
     fx = _voucher_fixture()
-    assert fx["workflow_id"] == "voucher-receivable"
+    assert fx["workflow_id"] == "voucher-by-type"
     assert fx["group_id"] == "voucher"
+    assert fx["name"] == "유형별 전표조회 승인"
     assert fx["flow_graph"] is not None
     assert fx["handoff_note"] and "상신" in fx["handoff_note"]
-    # 완전 공개(사용자 결정 2026-07-21) — 목록 노출 + 실행 허용. 배치(allow_batch)는 코드 게이트,
-    # 실행 자체는 hidden 아님. (라이브 단건 스모크 PASS 2026-07-21.)
     assert fx["hidden"] is False
 
 
@@ -172,7 +154,9 @@ def test_fixture_phases_cover_steps_in_order():
     assert phases == ["접속", "접속", "접속", "접속", "조회", "조회", "조회", "결재"]
 
 
-def test_other_voucher_dummies_still_present():
+def test_old_split_fixtures_removed_and_card_kept():
     ids = {a["id"] for a in AGENT_FIXTURES}
-    # 형제 더미는 그대로(회귀 금지).
-    assert {"voucher-trade-payable", "voucher-card-payable"} <= ids
+    # 병합으로 구 두 픽스처는 제거됐다 — 잔존 시 시드가 구 에이전트를 되살린다.
+    assert "voucher-trade-receivable" not in ids and "voucher-trade-payable" not in ids
+    # 카드는 별도 유지(회귀 금지).
+    assert "voucher-card-payable" in ids

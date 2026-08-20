@@ -61,8 +61,11 @@ from e2e.voucher_product import (  # noqa: E402
     step_status,
 )
 
-AGENT_ID = "voucher-trade-receivable"  # 대시보드 에이전트 상세 URL(/agents/<id>)
-WORKFLOW_ID = "voucher-receivable"  # agent_runs.agent_id (제품 경로 증거 조회 키)
+# 병합(2026-08-20): 외상매출금 에이전트는 '유형별 전표조회 승인'(voucher-by-type)으로 통합됐다.
+# 이 스모크는 그 에이전트를 **국내매출+해외매출 선택**으로 실행하는 시나리오다 — 실행 전 폼에
+# 전표유형 다중 선택이 생겼으므로, fill 단계에서 두 유형을 선택해야 한다(아래 TODO).
+AGENT_ID = "voucher-by-type"  # 대시보드 에이전트 상세 URL(/agents/<id>)
+WORKFLOW_ID = "voucher-by-type"  # agent_runs.agent_id (제품 경로 증거 조회 키)
 TAG = "voucher_receivable_product"
 DOCU_TYPES = v_steps.DOCU_TYPES_RECEIVABLE  # ("국내매출", "해외매출")
 
@@ -94,6 +97,9 @@ async def main() -> int:
     # ── phase1 — 제품 UI 완주 ────────────────────────────────────────────────────
     async def fill(page) -> None:
         await fill_period(page, p_from, p_to)
+        # TODO(voucher-by-type 병합 2026-08-20): 실행 전 폼의 전표유형 다중 선택에서
+        # **국내매출+해외매출**을 선택하는 스텝을 프론트 폼 셀렉터 확정 후 추가할 것 —
+        # 미선택 실행은 폼 기본 선택으로 돈다(파라미터 계약: params.voucher.docu_types).
 
     run = await run_product(
         agent_id=AGENT_ID,

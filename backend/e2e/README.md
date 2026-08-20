@@ -205,9 +205,14 @@ PASS 가 아니면 나머지 사이클을 돌리지 않는다(회귀 상태에�
 
 | 스크립트 | 에이전트 | 전표유형 | 특징 |
 |---|---|---|---|
-| `voucher_receivable_smoke.py` | `voucher-receivable` | 국내매출·해외매출 | **배치 결재**(묶음 1개 = 결제창 1개) · EAP 자식창 캡처 · D7 정합성 |
-| `voucher_payable_smoke.py` | `voucher-payable` | 내수구매 | 위 하네스 재사용, **건별** 순회 |
+| `voucher_receivable_smoke.py` | `voucher-by-type` | 국내매출·해외매출(폼 선택) | **배치 결재**(묶음 1개 = 결제창 1개) · EAP 자식창 캡처 · D7 정합성 |
+| `voucher_payable_smoke.py` | `voucher-by-type` | 내수구매(폼 선택) | 위 하네스 재사용(동일 배치 백본) |
 | `voucher_card_smoke.py` | `voucher-card` | 일반 | 위 하네스 재사용 + **카드 3대 델타**(아래) |
+
+> 병합(2026-08-20): 외상매출금/외상매입금 에이전트는 '유형별 전표조회 승인'(`voucher-by-type`)
+> 하나로 통합됐다 — 전표유형은 실행 전 폼의 다중 선택(`params.voucher.docu_types`), 메뉴(MENU_NM)
+> 필터는 `params.voucher.menu_filters`. 두 스모크는 각 유형 선택 시나리오로 남긴다(폼 셀렉터
+> 확정 후 fill 에 전표유형 선택 스텝 추가 — 각 파일 TODO 참조).
 
 공통 골격은 `voucher_product.py`(phase0 기간 선별 · SSE 탭 · `agent_runs.logs` 파서)이고,
 제품 UI 조작(로그인 → 폼 → 실행 → 종료 판정 → `agent_runs` 확인)은 결의서입력 4종과 같은

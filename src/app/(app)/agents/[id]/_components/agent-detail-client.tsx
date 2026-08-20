@@ -46,12 +46,11 @@ const CLEANUP_WORKFLOWS: Record<string, string> = {
   scholarship: 'hakjagum-grant-cleanup',
 };
 
-// 전자결재 상신 취소(hidden) — 실제 상신을 실행하는 회계전표 3종에서만, 디버그 모드에서만
+// 전자결재 상신 취소(hidden) — 실제 상신을 실행하는 회계전표 에이전트에서만, 디버그 모드에서만
 // 노출한다(2026-08-12). 상신문서함의 '진행' 문서를 목록으로 띄우고 체크한 건만 취소한다.
 const APPROVAL_CANCEL_WORKFLOW = 'eap-approval-cancel';
 const APPROVAL_CANCEL_AGENTS = new Set([
-  'voucher-trade-receivable',
-  'voucher-trade-payable',
+  'voucher-by-type', // 유형별 전표조회 승인(종전 외상매출금+외상매입금 통합)
   'voucher-card-payable',
 ]);
 

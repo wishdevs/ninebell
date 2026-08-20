@@ -485,3 +485,98 @@ async def test_count_details_unverified_row_becomes_solo_with_warning(monkeypatc
     )
     assert out["approval_plan"][0]["kind"] == "unknown"
     assert any("하위 건수 확인 실패" in m for m in _logs(_drain(q)))
+
+
+# ── count_details 메뉴 필터(2026-08-20 유형별 병합) ────────────────────────────
+def _patch_menus(monkeypatch, menus: list[str]):
+    async def _read(page, n):
+        return {
+            "ok": True,
+            "rows": [{"idx": i, "menu": m, "docu_no": f"FI-{i}"} for i, m in enumerate(menus)],
+        }
+
+    monkeypatch.setattr(cd_mod.steps, "read_master_menus", _read)
+
+
+async def test_count_details_menu_filter_excludes_rows_from_plan(monkeypatch):
+    """필터 밖 메뉴의 행은 행별 순회·targets·approval_plan 에 아예 들어가지 않는다.
+    제외 행은 그리드에 남으므로 포함 행의 **원 인덱스**가 계획에 그대로 쓰인다."""
+    _patch_counts(monkeypatch, [3, 3, 3, 3])
+    _patch_menus(monkeypatch, ["매출등록", "수출비용입력[나인벨]", "매출취소", "매출등록"])
+    detail_reads: list[int] = []
+
+    async def _detail(page, idx, docu_no=None):
+        detail_reads.append(idx)
+        return {"ok": True, "count": 3, "verified": True}
+
+    monkeypatch.setattr(cd_mod.steps, "read_detail_count", _detail)
+    q = _q()
+    out = await make_count_details_node(DETAIL_BATCH_LIMIT)(
+        {
+            "events": q,
+            "page": _StubPage(),
+            "master_rowcount": 4,
+            "menu_filters": ["매출등록", "매출취소"],
+        }
+    )
+    assert detail_reads == [0, 2, 3]  # idx 1(수출비용입력)은 행별 순회 자체를 건너뛴다.
+    planned = [i for g in out["approval_plan"] for i in g["indexes"]]
+    assert sorted(planned) == [0, 2, 3]
+    logs = _logs(_drain(q))
+    assert any("메뉴 필터(매출등록·매출취소) — 대상 4건 중 1건 제외" in m for m in logs)
+    # 진행 총계는 포함 건수(3) 기준.
+    assert any("대상 3건의 하위" in m for m in logs)
+
+
+async def test_count_details_menu_filter_all_excluded_returns_empty_plan(monkeypatch):
+    _patch_counts(monkeypatch, [3, 3])
+    _patch_menus(monkeypatch, ["수출비용입력[나인벨]", "기타메뉴"])
+    q = _q()
+    out = await make_count_details_node(DETAIL_BATCH_LIMIT)(
+        {"events": q, "page": _StubPage(), "master_rowcount": 2, "menu_filters": ["매출등록"]}
+    )
+    assert out == {"approval_plan": [], "detail_counts": {}}
+    assert any("전 건이 제외" in m for m in _logs(_drain(q)))
+
+
+async def test_count_details_menu_read_failure_hard_stops(monkeypatch):
+    """일괄 메뉴 읽기 실패 = 하드 중단(실패 표면화) — 조용히 무필터로 상신하면 사용자가
+    지정한 제약 밖 전표가 상신되는 사고라 error 로 단락한다."""
+    _patch_counts(monkeypatch, [3, 3])
+
+    async def _fail(page, n):
+        return {"ok": False, "reason": "grid-not-ready"}
+
+    monkeypatch.setattr(cd_mod.steps, "read_master_menus", _fail)
+    out = await make_count_details_node(DETAIL_BATCH_LIMIT)(
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 2, "menu_filters": ["매출등록"]}
+    )
+    assert "메뉴 컬럼을 읽지 못해" in out["error"]
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_count_details_menu_partial_rows_hard_stops(monkeypatch):
+    """일괄 읽기가 대상 행수보다 적게 돌아오면(미확정 행 존재) 무필터 오인 방지를 위해 중단."""
+    _patch_counts(monkeypatch, [3, 3, 3])
+    _patch_menus(monkeypatch, ["매출등록"])  # 3행 대상인데 1행만 읽힘.
+    out = await make_count_details_node(DETAIL_BATCH_LIMIT)(
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 3, "menu_filters": ["매출등록"]}
+    )
+    assert "메뉴 컬럼을 읽지 못해" in out["error"]
+
+
+async def test_count_details_no_menu_filter_reads_all_rows(monkeypatch):
+    """menu_filters 미지정(None/[]) = 종전 동작 그대로 — 일괄 메뉴 읽기를 호출하지 않는다."""
+    _patch_counts(monkeypatch, [3, 3])
+    called: list = []
+
+    async def _read(page, n):
+        called.append(n)
+        return {"ok": True, "rows": []}
+
+    monkeypatch.setattr(cd_mod.steps, "read_master_menus", _read)
+    out = await make_count_details_node(DETAIL_BATCH_LIMIT)(
+        {"events": _q(), "page": _StubPage(), "master_rowcount": 2, "menu_filters": []}
+    )
+    assert called == []
+    assert sum(len(g["indexes"]) for g in out["approval_plan"]) == 2

@@ -1,4 +1,4 @@
-"""전표조회승인(voucher-receivable) — 신규 노드(진입 앞단 이후)."""
+"""전표조회승인(voucher-by-type) — 신규 노드(진입 앞단 이후)."""
 
 from __future__ import annotations
 

@@ -18,6 +18,15 @@
 | 학자금신청서 | 🟢 완료 | `app/agents/hakjagum_grant/` ([PROCESS.md](hakjagum_grant/PROCESS.md)) | 경조금 형제·단건. 예산단위 복리후생비-기타(511010600/811010600)·적요 학자금-{본인이름}·증빙10·회계일=사용자입력·50% 규칙 없음. 결의구분 56. 상대계정 미사용 확정. 라이브 10/10·프론트 폼·노출 완료(2026-07-15) |
 | 세금계산서 | 🟡 진행중 | `app/agents/tax_invoice/` ([PROCESS.md](tax_invoice/PROCESS.md)) | 증빙유형 10종(발행 전/후×분할×과세성격, 원증빙 11/13)·발행 후 전자세금계산서 팝업 HITL·분할=분할처리 팝업+차액반영+자금과목 필수. 결의구분 51. **라이브 스모크 20/20**(발행 전 10·분할 10, 2026-08-19). 발행 후 실데이터 검증만 잔여(환경 데이터 0건) — 완료까지 디버그 전용 노출 |
 
+## 전표조회승인(GLDDOC00700) 계열 — 조회+결재 아키타입
+
+결의서입력과 별개의 **조회+결재** 계열이다(`voucher_receivable/build_voucher_graph` 공유 백본).
+
+| 에이전트 | 상태 | 위치 | 비고 |
+|---|---|---|---|
+| 유형별 전표조회 승인 (`voucher-by-type`) | 🟢 운영 | `app/agents/voucher_receivable/` | 구 외상매출금/외상매입금 **병합**(2026-08-20, alembic 0036). 전표유형(국내매출/해외매출/내수구매)은 실행 전 폼의 다중 선택(`params.voucher.docu_types`), 메뉴(MENU_NM) 필터는 `params.voucher.menu_filters`(마스터 목록 = 관리자 설정 `menu_items`) — count_details 가 계획 단계에서 제외 적용. 배치 결재(하위 200 기준)·실상신(allow_submit) |
+| 미지급금 법인카드 (`voucher-card`) | 🟢 운영 | `app/agents/voucher_card/` | 병합과 무관하게 **별도 유지** — 전표유형 일반(11) + 결의서조회승인 결재번호 수집·참조문서 훅(건별 순회) |
+
 ## 참고
 
 - 기존 `app/agents/expense_card/`(expense-card-chat)는 **카드 단건 대화형 폼 채움**(증빙유형→상세필드).

@@ -32,6 +32,109 @@ def test_effective_settings_empty_for_schemaless_agent():
     assert effective_settings("demo", {"acct_cutoff_day": 4}) == {}
 
 
+# ── 메뉴 항목(menu_items — voucher-by-type, 2026-08-20 유형별 병합) ─────────────
+def test_effective_settings_menu_items_defaults():
+    from app.services.agent_settings import DEFAULT_MENU_ITEMS
+
+    eff = effective_settings("voucher-by-type", None)
+    assert eff == {"menu_items": DEFAULT_MENU_ITEMS}
+    assert [m["id"] for m in eff["menu_items"]] == ["sales-entry", "sales-cancel", "export-cost"]
+    assert [m["defaultSelected"] for m in eff["menu_items"]] == [True, True, False]
+
+
+def test_effective_settings_menu_items_stored_overrides():
+    stored = {"menu_items": [{"id": "custom", "label": "커스텀메뉴", "defaultSelected": True}]}
+    eff = effective_settings("voucher-by-type", stored)
+    assert eff["menu_items"] == [{"id": "custom", "label": "커스텀메뉴", "defaultSelected": True}]
+
+
+def test_effective_settings_menu_items_invalid_stored_falls_back():
+    from app.services.agent_settings import DEFAULT_MENU_ITEMS
+
+    # 저장값이 깨졌으면(빈 목록 등) 기본 3종으로 폴백 — 실행 경로가 죽지 않게.
+    assert effective_settings("voucher-by-type", {"menu_items": []})["menu_items"] == DEFAULT_MENU_ITEMS
+
+
+def test_validate_menu_items_normalizes_missing_default_selected():
+    from app.services.agent_settings import validate_settings
+
+    out = validate_settings(
+        "voucher-by-type", {"menu_items": [{"id": "a", "label": "메뉴A"}]}
+    )
+    assert out == {"menu_items": [{"id": "a", "label": "메뉴A", "defaultSelected": False}]}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [],  # 최소 1개.
+        [{"id": "a", "label": "메뉴"}] * 21,  # 최대 20개.
+        [{"id": "a", "label": "메뉴"}, {"id": "a", "label": "메뉴2"}],  # id 중복.
+        [{"id": "", "label": "메뉴"}],  # id 필수.
+        [{"id": "a", "label": ""}],  # label 필수.
+        [{"id": "a", "label": "메뉴", "defaultSelected": 1}],  # bool 아님.
+        "매출등록",  # 목록 아님.
+    ],
+)
+def test_validate_menu_items_rejects_bad_input(bad):
+    from app.services.agent_settings import validate_settings
+
+    with pytest.raises(ValueError):
+        validate_settings("voucher-by-type", {"menu_items": bad})
+
+
+def test_validate_settings_unknown_key_rejected_for_menu_agent():
+    from app.services.agent_settings import validate_settings
+
+    with pytest.raises(ValueError):
+        validate_settings("voucher-by-type", {"acct_cutoff_day": 4})
+
+
+@pytest.mark.asyncio
+async def test_get_agent_includes_menu_items_settings(client, make_user, auth_as):
+    """GET /agents/voucher-by-type 직렬화에 settings.menu_items(기본 3종) + 빈 스키마가 포함된다
+    (스키마를 []로 선언해 settings 포함을 트리거 — 프론트 실행 전 폼의 기본 선택 소스)."""
+    uid = await make_user("s-menu-reader", "admin")
+    auth_as(uid)
+    r = await client.get("/agents/voucher-by-type")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["settingsSchema"] == []
+    assert [m["label"] for m in body["settings"]["menu_items"]] == [
+        "매출등록",
+        "매출취소",
+        "수출비용입력[나인벨]",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patch_menu_items_admin_ok_and_reflected(client, make_user, auth_as):
+    uid = await make_user("s-menu-admin", "admin")
+    auth_as(uid)
+    items = [
+        {"id": "sales-entry", "label": "매출등록", "defaultSelected": True},
+        {"id": "custom", "label": "신규메뉴", "defaultSelected": False},
+    ]
+    r = await client.patch(
+        "/agents/voucher-by-type/settings", json={"settings": {"menu_items": items}}
+    )
+    assert r.status_code == 200
+    assert r.json()["settings"]["menu_items"] == items
+    r2 = await client.get("/agents/voucher-by-type")
+    assert r2.json()["settings"]["menu_items"] == items
+
+
+@pytest.mark.asyncio
+async def test_patch_menu_items_invalid_400(client, make_user, auth_as):
+    uid = await make_user("s-menu-bad", "admin")
+    auth_as(uid)
+    r = await client.patch(
+        "/agents/voucher-by-type/settings", json={"settings": {"menu_items": []}}
+    )
+    assert r.status_code == 400
+    assert "메뉴 항목" in r.json()["detail"]
+
+
 # ── GET 직렬화(settings/settingsSchema 포함 여부) ─────────────────────────────
 @pytest.mark.asyncio
 async def test_get_agents_includes_settings_for_card_chat(client, make_user, auth_as):

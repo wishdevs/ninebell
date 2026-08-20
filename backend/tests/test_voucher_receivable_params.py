@@ -50,6 +50,59 @@ def test_legacy_allow_batch_key_ignored():
     assert p.max_rows == 5
 
 
+# ── 전표유형/메뉴 필터(2026-08-20 유형별 병합) ──────────────────────────────────
+def test_docu_types_default_none():
+    # 미지정 = None → 그래프 빌드 기본값(전체 3종) 사용.
+    assert parse_voucher_params({}).docu_types is None
+    assert parse_voucher_params({}).menu_filters is None
+
+
+def test_docu_types_accepted_and_order_kept():
+    p = parse_voucher_params({"voucher": {"docu_types": ["해외매출", "국내매출"]}})
+    assert p.docu_types == ["해외매출", "국내매출"]  # 순서 유지.
+
+
+def test_docu_types_dedup_keeps_first_order():
+    p = parse_voucher_params({"voucher": {"docu_types": ["국내매출", "국내매출", "내수구매"]}})
+    assert p.docu_types == ["국내매출", "내수구매"]
+
+
+def test_docu_types_unknown_label_rejected():
+    with pytest.raises(ValueError):
+        parse_voucher_params({"voucher": {"docu_types": ["일반"]}})
+
+
+def test_docu_types_empty_list_rejected():
+    # 존재하는데 빈 목록 = 선택 0건 실행 사고 방지(미지정과 구분해 거부).
+    with pytest.raises(ValueError):
+        parse_voucher_params({"voucher": {"docu_types": []}})
+
+
+def test_docu_types_non_list_rejected():
+    with pytest.raises(ValueError):
+        parse_voucher_params({"voucher": {"docu_types": "국내매출"}})
+
+
+def test_menu_filters_stripped_and_deduped():
+    p = parse_voucher_params({"voucher": {"menu_filters": [" 매출등록 ", "매출취소", "매출등록"]}})
+    assert p.menu_filters == ["매출등록", "매출취소"]
+
+
+def test_menu_filters_empty_list_means_no_filter():
+    # 계약: absent OR empty → 미필터(None 정규화).
+    assert parse_voucher_params({"voucher": {"menu_filters": []}}).menu_filters is None
+
+
+def test_menu_filters_blank_item_rejected():
+    with pytest.raises(ValueError):
+        parse_voucher_params({"voucher": {"menu_filters": ["매출등록", "  "]}})
+
+
+def test_menu_filters_over_20_rejected():
+    with pytest.raises(ValueError):
+        parse_voucher_params({"voucher": {"menu_filters": [f"메뉴{i}" for i in range(21)]}})
+
+
 def test_debug_flag_parsed_from_top_level_only():
     # 디버그 모드(2026-08-10): runs.py 가 **최상위** params["debug"] 로 정규화해 주입한다 —
     # 중첩(voucher) dict 가 있어도 최상위에서 읽어야 한다. True 판정은 정확히 is True.
