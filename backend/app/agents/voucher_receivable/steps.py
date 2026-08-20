@@ -21,6 +21,7 @@ from nbkit.omnisol.modals import dismiss_notice_popup
 
 from app.agents.common import ERR_REASON_MAX
 
+from . import docu_types as docu_type_consts
 from . import js
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,8 @@ DOCU_TYPES_RECEIVABLE = ("국내매출", "해외매출")  # 외상매출금(vouc
 DOCU_TYPES_PAYABLE = ("내수구매",)
 # 유형별 전표조회 승인(voucher-by-type) — 실행 전 폼이 이 중에서 다중 선택한다(2026-08-20 병합).
 # ERP 피커는 SYSDEF_NM 한글 라벨로 매칭하므로 라벨이 곧 계약값이다(set_docu_types 참조).
-DOCU_TYPE_CHOICES = ("국내매출", "해외매출", "내수구매")
+# 실측 전량(62종) 카탈로그는 경량 모듈 docu_types.py 가 단일소스다 — 여기선 하위호환 재노출만.
+DOCU_TYPE_CHOICES = docu_type_consts.DOCU_TYPE_CHOICES
 DOCU_TYPE_TARGETS = DOCU_TYPES_RECEIVABLE  # set_docu_types 기본값(하위호환)
 DOCU_ST_SELECT = "#s_docu_st_cd"  # native kendo dropdownlist
 DOCU_ST_TARGET = "미결"

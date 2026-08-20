@@ -37,9 +37,36 @@ def test_effective_settings_menu_items_defaults():
     from app.services.agent_settings import DEFAULT_MENU_ITEMS
 
     eff = effective_settings("voucher-by-type", None)
-    assert eff == {"menu_items": DEFAULT_MENU_ITEMS}
+    # menu_items(관리자 편집) + docu_type_choices(읽기 전용 카탈로그) 두 키.
+    assert set(eff.keys()) == {"menu_items", "docu_type_choices"}
+    assert eff["menu_items"] == DEFAULT_MENU_ITEMS
     assert [m["id"] for m in eff["menu_items"]] == ["sales-entry", "sales-cancel", "export-cost"]
     assert [m["defaultSelected"] for m in eff["menu_items"]] == [True, True, False]
+
+
+def test_effective_settings_docu_type_choices_catalog():
+    """전표유형 선택지(읽기 전용, 2026-08-20 실측 62종) — {code, label} shape 로 폼이 렌더한다.
+    코드 상수(docu_types.DOCU_TYPE_CATALOG)가 유일 소스라 저장값이 있어도 덮이지 않는다."""
+    from app.agents.voucher_receivable.docu_types import DOCU_TYPE_CATALOG
+
+    eff = effective_settings("voucher-by-type", None)
+    choices = eff["docu_type_choices"]
+    assert len(choices) == 62
+    assert choices[0] == {"code": "11", "label": "일반"}
+    assert choices == [{"code": c, "label": l} for c, l in DOCU_TYPE_CATALOG]
+    # 저장값에 같은 키를 심어도 무시된다(읽기 전용 — 코드 상수 승리).
+    tampered = effective_settings(
+        "voucher-by-type", {"docu_type_choices": [{"code": "99", "label": "위조"}]}
+    )
+    assert tampered["docu_type_choices"] == choices
+
+
+def test_validate_settings_rejects_docu_type_choices_write():
+    """docu_type_choices 는 저장 불가(미지 키로 거부) — 실측 카탈로그를 DB 로 덮는 경로 차단."""
+    from app.services.agent_settings import validate_settings
+
+    with pytest.raises(ValueError):
+        validate_settings("voucher-by-type", {"docu_type_choices": [{"code": "11", "label": "일반"}]})
 
 
 def test_effective_settings_menu_items_stored_overrides():
@@ -133,6 +160,19 @@ async def test_patch_menu_items_invalid_400(client, make_user, auth_as):
     )
     assert r.status_code == 400
     assert "메뉴 항목" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_docu_type_choices_rejected_400(client, make_user, auth_as):
+    """docu_type_choices 는 읽기 전용 — PATCH 로 저장을 시도하면 미지 키로 400."""
+    uid = await make_user("s-dtc-bad", "admin")
+    auth_as(uid)
+    r = await client.patch(
+        "/agents/voucher-by-type/settings",
+        json={"settings": {"docu_type_choices": [{"code": "11", "label": "일반"}]}},
+    )
+    assert r.status_code == 400
+    assert "알 수 없는 설정" in r.json()["detail"]
 
 
 # ── GET 직렬화(settings/settingsSchema 포함 여부) ─────────────────────────────

@@ -29,8 +29,8 @@ from app.agents.common.nodes import (
 from app.agents.common.state import BaseAgentState
 from nbkit.omnisol.menu_schemas import VOUCHER_RECEIVABLE
 
-from . import steps  # 전표유형 상수(DOCU_TYPE_CHOICES 등)
 from .batching import DETAIL_BATCH_LIMIT
+from .docu_types import DOCU_TYPE_DEFAULT  # 빌드 기본 전표유형(실측 카탈로그 모듈)
 from .nodes import (
     make_batch_approvals_node,
     make_count_details_node,
@@ -145,11 +145,12 @@ def build_voucher_by_type_graph():
     """유형별 전표조회 승인(voucher-by-type) — **배치 결재** + 상신 게이트 개방.
 
     외상매출금/외상매입금 병합(2026-08-20): 전표유형은 실행 전 폼 선택(state.docu_types,
-    validate_params 산출)이 우선하고, 미지정이면 빌드 기본값(DOCU_TYPE_CHOICES 전체 3종)이다.
-    메뉴(MENU_NM) 필터는 count_details 가 계획 단계에서 적용한다(state.menu_filters).
-    배치 규율(2026-08-07 사용자 확정): 하위(계정정보) 200건 이상 전표는 단독으로 먼저,
-    나머지는 합계가 200 미만이 되도록 묶어 결재창을 묶음당 1회 연다.
+    validate_params 산출 — 허용셋은 실측 62종 DOCU_TYPE_CHOICES)이 우선하고, 미지정이면 빌드
+    기본값 DOCU_TYPE_DEFAULT(병합 전 두 에이전트의 합집합 3종 — 미지정 실행이 62종 전체로
+    돌아가는 사고 방지)다. 메뉴(MENU_NM) 필터는 count_details 가 계획 단계에서 적용한다
+    (state.menu_filters). 배치 규율(2026-08-07 사용자 확정): 하위(계정정보) 200건 이상 전표는
+    단독으로 먼저, 나머지는 합계가 200 미만이 되도록 묶어 결재창을 묶음당 1회 연다.
     """
     return build_voucher_graph(
-        steps.DOCU_TYPE_CHOICES, batch_limit=DETAIL_BATCH_LIMIT, allow_submit=True
+        DOCU_TYPE_DEFAULT, batch_limit=DETAIL_BATCH_LIMIT, allow_submit=True
     )

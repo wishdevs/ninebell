@@ -85,8 +85,9 @@ async def test_validate_docu_types_and_menu_filters_passthrough():
 
 
 async def test_validate_unknown_docu_type_errors():
+    # '일반' 등 카탈로그 62종은 이제 전부 유효(2026-08-20 확장) — 실측 목록 밖 라벨만 거부.
     node = make_validate_params_node()
-    out = await node({"events": _q(), "params": {"voucher": {"docu_types": ["일반"]}}})
+    out = await node({"events": _q(), "params": {"voucher": {"docu_types": ["없는유형"]}}})
     assert "전표유형" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
 

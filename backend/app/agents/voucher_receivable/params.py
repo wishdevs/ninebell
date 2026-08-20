@@ -4,7 +4,8 @@
 사용자 입력은 네 가지다:
   max_rows                  한 실행에서 처리할 행 수.
   period_from / period_to   회계일 조회기간(실행 전 폼 입력, 기본값 = 당월 1일~말일).
-  docu_types                전표유형 다중 선택(2026-08-20 매출/매입 병합 — 미지정 시 전체 3종).
+  docu_types                전표유형 다중 선택(2026-08-20 매출/매입 병합 — 허용셋은 실측 62종
+                            DOCU_TYPE_CHOICES, 미지정 시 빌드 기본 DOCU_TYPE_DEFAULT 3종).
   menu_filters              메뉴(MENU_NM) 필터 라벨 목록(미지정/빈 목록 = 필터 없음).
 
 사용자 결정 2026-07-21: **기본 전체 진행**(조회된 전 건을 순회). `max_rows` 를 명시(양수)하면
@@ -20,7 +21,8 @@ from pydantic import Field, ValidationError, field_validator
 
 from app.agents.common.voucher_period import VoucherPeriodParams
 
-from .steps import DOCU_TYPE_CHOICES
+# 경량 카탈로그 모듈에서 직접 — steps(nbkit 등 브라우저 의존) 경유 금지.
+from .docu_types import DOCU_TYPE_CHOICES
 
 # 메뉴 필터 상한 — 관리자 설정 메뉴 목록(MAX_MENU_ITEMS)과 동일한 20.
 MAX_MENU_FILTERS = 20
@@ -31,8 +33,8 @@ class VoucherReceivableParams(VoucherPeriodParams):
 
     max_rows      한 실행에서 순회할 최대 행 수. **None(기본) = 전체**(조회된 전 건).
                   양수를 주면 그 수만큼만(부분 처리·테스트용). 0 이하는 거부.
-    docu_types    전표유형 라벨 목록(DOCU_TYPE_CHOICES 부분집합, 중복 제거·순서 유지).
-                  None(기본) = 그래프 빌드 기본값(전체 3종). 빈 목록은 거부.
+    docu_types    전표유형 라벨 목록(실측 62종 DOCU_TYPE_CHOICES 부분집합, 중복 제거·순서 유지).
+                  None(기본) = 그래프 빌드 기본값(DOCU_TYPE_DEFAULT 3종). 빈 목록은 거부.
     menu_filters  메뉴(MENU_NM) 라벨 목록 — 이 중 하나와 일치하는 행만 결재 대상.
                   None/빈 목록 = 필터 없음(전 행 대상). 항목 공백 제거·중복 제거·최대 20개.
     """
@@ -53,8 +55,9 @@ class VoucherReceivableParams(VoucherPeriodParams):
         for item in v:
             label = str(item or "").strip()
             if label not in DOCU_TYPE_CHOICES:
+                # 허용셋은 62종이라 전량 나열하지 않는다 — 목록은 설정 docu_type_choices 참조.
                 raise ValueError(
-                    f"지원하지 않는 전표유형입니다: {item!r} (허용: {'·'.join(DOCU_TYPE_CHOICES)})"
+                    f"지원하지 않는 전표유형입니다: {item!r} (전표유형 피커 실측 목록에 없는 라벨)"
                 )
             if label not in seen:
                 seen.add(label)

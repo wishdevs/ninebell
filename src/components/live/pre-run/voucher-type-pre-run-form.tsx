@@ -1,15 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   RiAddLine,
+  RiArrowDownSLine,
   RiCheckLine,
   RiCloseLine,
   RiInformationLine,
   RiPlayLine,
 } from '@remixicon/react';
 import { toast } from 'sonner';
+import { ComboPanel, isDesktopViewport, useOutsideClose } from '@/components/live/combo-popover';
 import { Button } from '@/components/ui/button';
+import { Chip, ChipSet } from '@/components/ui/chip-set';
 import { DatePicker } from '@/components/ui/date-picker';
 import { FormField } from '@/components/ui/form-field';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
@@ -32,17 +35,44 @@ import type { PreRunFormProps } from './index';
  * 백엔드 계약: `params["voucher"] = { period_from, period_to, docu_types, menu_filters? }`.
  * docu_types 는 전표유형 라벨(SYSDEF_NM) 배열, menu_filters 는 그리드 '메뉴' 텍스트 배열
  * (미선택 = 키 자체를 보내지 않음 = 필터 없이 전체 메뉴).
+ *
+ * 전표유형 후보는 `settings.docu_type_choices`(백엔드가 ERP 피커 실측, 읽기 전용 62종)를
+ * 쓴다 — 개수가 많아 pills 대신 검색 콤보(체크박스 목록) + 선택 칩으로 렌더한다.
  */
 
-// 전표유형(SYSDEF_NM) 후보 — 백엔드 set_docu_types 가 이 라벨로 피커를 체크한다.
-const ALL_DOCU_TYPES = ['국내매출', '해외매출', '내수구매'] as const;
-type DocuType = (typeof ALL_DOCU_TYPES)[number];
+/** 전표유형 카탈로그 한 항목 — settings.docu_type_choices 원소(ERP 피커 순서, 읽기 전용). */
+interface DocuTypeChoice {
+  code: string;
+  label: string;
+}
 
-// 종전 에이전트와 같은 조합을 한 번에 선택하는 프리셋 — 현재 선택을 통째로 교체한다.
-const PRESETS: readonly { label: string; types: readonly DocuType[] }[] = [
+// settings 부재/파손 시 폴백 — 종전 3종(SYSDEF_CD 매출 21/23·내수구매 31).
+const FALLBACK_DOCU_TYPE_CHOICES: readonly DocuTypeChoice[] = [
+  { code: '21', label: '국내매출' },
+  { code: '23', label: '해외매출' },
+  { code: '31', label: '내수구매' },
+];
+
+// 종전 에이전트와 같은 조합(라벨)을 한 번에 선택하는 프리셋 — 현재 선택을 통째로 교체한다.
+const PRESETS: readonly { label: string; types: readonly string[] }[] = [
   { label: '외상매출금', types: ['국내매출', '해외매출'] },
   { label: '외상매입금', types: ['내수구매'] },
 ];
+
+/** settings.docu_type_choices 를 방어적으로 파싱한다 — 부재·비배열·항목 파손은 폴백/스킵. */
+function parseDocuTypeChoices(settings: Record<string, unknown> | undefined): DocuTypeChoice[] {
+  const raw = settings?.docu_type_choices;
+  if (!Array.isArray(raw)) return [...FALLBACK_DOCU_TYPE_CHOICES];
+  const choices: DocuTypeChoice[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { code, label } = entry as Record<string, unknown>;
+    if (typeof code !== 'string' || !code || typeof label !== 'string' || !label) continue;
+    if (choices.some((c) => c.label === label)) continue;
+    choices.push({ code, label });
+  }
+  return choices.length > 0 ? choices : [...FALLBACK_DOCU_TYPE_CHOICES];
+}
 
 /** 메뉴 필터 한 항목 — 에이전트 settings.menu_items 원소(관리자가 공유 관리). */
 interface VoucherMenuItem {
@@ -113,11 +143,14 @@ function seedRange(seed: Record<string, unknown>): { from: string; to: string } 
   };
 }
 
-/** 마지막 제출 params → 전표유형 복원. 없으면 빈 선택(사용자가 직접 고른다). */
-function seedDocuTypes(seed: Record<string, unknown>): DocuType[] {
+/** 마지막 제출 params → 전표유형 복원(카탈로그에 실존하는 라벨만). 없으면 빈 선택. */
+function seedDocuTypes(
+  seed: Record<string, unknown>,
+  choices: readonly DocuTypeChoice[],
+): string[] {
   const raw = seed.docu_types;
   if (!Array.isArray(raw)) return [];
-  return ALL_DOCU_TYPES.filter((t) => raw.includes(t));
+  return choices.filter((c) => raw.includes(c.label)).map((c) => c.label);
 }
 
 /**
@@ -147,7 +180,16 @@ export function VoucherTypePreRunForm({
   const [range] = useState(() => seedRange(seed));
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);
-  const [docuTypes, setDocuTypes] = useState<DocuType[]>(() => seedDocuTypes(seed));
+  // 전표유형 — 카탈로그(읽기 전용, settings.docu_type_choices) + 선택 상태(라벨 배열).
+  const [docuTypeChoices] = useState<DocuTypeChoice[]>(() => parseDocuTypeChoices(agent.settings));
+  const [docuTypes, setDocuTypes] = useState<string[]>(() =>
+    seedDocuTypes(seed, parseDocuTypeChoices(agent.settings)),
+  );
+  const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [typeQuery, setTypeQuery] = useState('');
+  const [typeActiveIdx, setTypeActiveIdx] = useState(0);
+  const typeWrapRef = useRef<HTMLDivElement>(null);
+  const typeListId = useId();
 
   // 메뉴 필터 — 항목 목록은 관리자 공유 데이터(settings.menu_items), 체크 상태는 이 실행 한정.
   const [menuItems, setMenuItems] = useState<VoucherMenuItem[]>(() =>
@@ -163,9 +205,46 @@ export function VoucherTypePreRunForm({
   const rangeInvalid = !!from && !!to && from > to;
   const canSubmit = !disabled && !!from && !!to && !rangeInvalid && docuTypes.length > 0;
 
-  const toggleDocuType = (t: DocuType) => {
-    setDocuTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const closeTypePicker = () => {
+    setTypePickerOpen(false);
+    setTypeQuery('');
+    setTypeActiveIdx(0);
   };
+  useOutsideClose(typePickerOpen, typeWrapRef, closeTypePicker);
+
+  // 검색은 라벨/코드 부분일치(공백 무시). 다중선택이라 행을 토글해도 패널은 닫지 않는다.
+  const tq = typeQuery.toLowerCase().replace(/\s+/g, '');
+  const matchedChoices = tq
+    ? docuTypeChoices.filter(
+        (c) =>
+          c.label.toLowerCase().replace(/\s+/g, '').includes(tq) ||
+          c.code.toLowerCase().includes(tq),
+      )
+    : docuTypeChoices;
+  const typeActive =
+    matchedChoices.length === 0 ? -1 : Math.min(typeActiveIdx, matchedChoices.length - 1);
+
+  useEffect(() => {
+    if (!typePickerOpen || typeActive < 0) return;
+    document
+      .getElementById(`${typeListId}-opt-${typeActive}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [typePickerOpen, typeActive, typeListId]);
+
+  const toggleDocuType = (label: string) => {
+    setDocuTypes((prev) =>
+      prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label],
+    );
+  };
+
+  /** 프리셋 = 선택 통째 교체(카탈로그에 실존하는 라벨만). */
+  const applyPreset = (types: readonly string[]) => {
+    const labels = new Set(docuTypeChoices.map((c) => c.label));
+    setDocuTypes(types.filter((t) => labels.has(t)));
+  };
+
+  // 표시(칩)·제출 모두 카탈로그(ERP 피커) 순서로 정렬한다.
+  const selectedChoices = docuTypeChoices.filter((c) => docuTypes.includes(c.label));
 
   const toggleMenu = (id: string) => {
     setSelectedMenuIds((prev) => {
@@ -223,7 +302,7 @@ export function VoucherTypePreRunForm({
 
   const submit = () => {
     if (!canSubmit) return;
-    const selectedTypes = ALL_DOCU_TYPES.filter((t) => docuTypes.includes(t));
+    const selectedTypes = selectedChoices.map((c) => c.label);
     const selectedMenus = menuItems
       .filter((it) => selectedMenuIds.has(it.id))
       .map((it) => it.label);
@@ -300,34 +379,151 @@ export function VoucherTypePreRunForm({
                   key={preset.label}
                   type="button"
                   disabled={disabled}
-                  onClick={() => setDocuTypes([...preset.types])}
+                  onClick={() => applyPreset(preset.types)}
                   className="border-border text-foreground-secondary hover:bg-muted/60 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 max-md:min-h-11"
                 >
                   {preset.label}
                 </button>
               ))}
             </div>
-            <div className="flex flex-wrap gap-2">
-              {ALL_DOCU_TYPES.map((t) => {
-                const active = docuTypes.includes(t);
-                return (
-                  <button
-                    key={t}
-                    type="button"
-                    aria-pressed={active}
-                    disabled={disabled}
-                    onClick={() => toggleDocuType(t)}
-                    className={cn(
-                      'rounded-[var(--radius-md)] border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 max-md:min-h-11',
-                      active
-                        ? 'border-accent bg-accent/10 text-foreground'
-                        : 'border-border text-foreground-secondary hover:bg-muted/60',
-                    )}
+
+            {/* 선택된 유형 칩 — X 로 개별 해제, 본문 클릭은 선택 패널 열기. */}
+            <ChipSet>
+              {selectedChoices.length === 0 ? (
+                <Chip dashed>선택된 유형 없음</Chip>
+              ) : (
+                selectedChoices.map((c) => (
+                  <Chip
+                    key={c.label}
+                    shape="badge"
+                    onClick={() => setTypePickerOpen(true)}
+                    onRemove={() => toggleDocuType(c.label)}
+                    removeLabel={`${c.label} 선택 해제`}
                   >
-                    {t}
-                  </button>
-                );
-              })}
+                    {c.label}
+                  </Chip>
+                ))
+              )}
+            </ChipSet>
+
+            <div ref={typeWrapRef} className="relative">
+              <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={typePickerOpen}
+                disabled={disabled}
+                onClick={() => (typePickerOpen ? closeTypePicker() : setTypePickerOpen(true))}
+                className={cn(
+                  'border-border bg-surface hover:bg-muted/40 flex h-9 w-full max-w-64 items-center justify-between gap-1.5 rounded-[var(--radius-md)] border px-3 text-left text-sm transition-colors disabled:opacity-50 max-md:min-h-11 max-md:max-w-none',
+                  typePickerOpen && 'border-accent bg-accent/5',
+                )}
+              >
+                <span className="text-foreground-secondary min-w-0 truncate">
+                  유형 선택
+                  {selectedChoices.length
+                    ? ` (${selectedChoices.length}/${docuTypeChoices.length})`
+                    : ''}
+                </span>
+                <RiArrowDownSLine
+                  size={16}
+                  aria-hidden
+                  className="text-foreground-tertiary shrink-0"
+                />
+              </button>
+
+              {typePickerOpen ? (
+                <ComboPanel
+                  onClose={closeTypePicker}
+                  className="md:w-[min(320px,calc(100vw-2rem))]"
+                >
+                  <input
+                    autoFocus={isDesktopViewport()}
+                    role="combobox"
+                    aria-expanded
+                    aria-controls={typeListId}
+                    aria-activedescendant={
+                      typeActive >= 0 ? `${typeListId}-opt-${typeActive}` : undefined
+                    }
+                    value={typeQuery}
+                    onChange={(ev) => {
+                      setTypeQuery(ev.target.value);
+                      setTypeActiveIdx(0);
+                    }}
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'ArrowDown') {
+                        ev.preventDefault();
+                        setTypeActiveIdx(Math.min(typeActive + 1, matchedChoices.length - 1));
+                      } else if (ev.key === 'ArrowUp') {
+                        ev.preventDefault();
+                        setTypeActiveIdx(Math.max(typeActive - 1, 0));
+                      } else if (ev.key === 'Enter') {
+                        ev.preventDefault();
+                        if (typeActive >= 0) toggleDocuType(matchedChoices[typeActive].label);
+                      } else if (ev.key === 'Escape') {
+                        ev.preventDefault();
+                        closeTypePicker();
+                      }
+                    }}
+                    placeholder="전표유형 검색(라벨·코드)"
+                    className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full shrink-0 rounded-[var(--radius-sm)] border px-2 text-xs outline-none focus-visible:ring-2"
+                  />
+
+                  <div
+                    id={typeListId}
+                    role="listbox"
+                    aria-label="전표유형"
+                    aria-multiselectable
+                    className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain md:max-h-64 md:flex-none"
+                  >
+                    {matchedChoices.map((c, idx) => {
+                      const checked = docuTypes.includes(c.label);
+                      return (
+                        <button
+                          key={c.label}
+                          type="button"
+                          id={`${typeListId}-opt-${idx}`}
+                          role="option"
+                          aria-selected={checked}
+                          onClick={() => toggleDocuType(c.label)}
+                          onMouseEnter={() => setTypeActiveIdx(idx)}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs max-md:min-h-11',
+                            idx === typeActive && 'bg-muted/60',
+                          )}
+                        >
+                          <span
+                            aria-hidden
+                            className={cn(
+                              'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
+                              checked
+                                ? 'border-accent bg-accent text-white'
+                                : 'border-border-strong bg-surface',
+                            )}
+                          >
+                            {checked ? <RiCheckLine size={13} /> : null}
+                          </span>
+                          <span
+                            className={cn(
+                              'min-w-0 truncate',
+                              checked ? 'text-foreground font-medium' : 'text-foreground-secondary',
+                            )}
+                          >
+                            {c.label}
+                          </span>
+                          <span className="text-foreground-tertiary ml-auto shrink-0 tabular-nums">
+                            {c.code}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {matchedChoices.length === 0 ? (
+                      <p className="text-foreground-tertiary px-2 py-2 text-xs">
+                        일치하는 전표유형이 없습니다.
+                      </p>
+                    ) : null}
+                  </div>
+                </ComboPanel>
+              ) : null}
             </div>
           </div>
         </FormField>
