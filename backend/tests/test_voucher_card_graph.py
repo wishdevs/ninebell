@@ -18,7 +18,7 @@ from app.agents.voucher_card.graph import (
 )
 from app.agents.voucher_receivable.graph import (
     RECURSION_LIMIT,
-    build_voucher_receivable_graph,
+    build_voucher_by_type_graph,
 )
 from app.live.registry import get_spec, get_workflow, list_workflows
 from app.services.agent_fixtures import AGENT_FIXTURES
@@ -78,16 +78,16 @@ def test_state_declares_card_keys():
 
 # ── 공유 백본 무영향(하위호환) ─────────────────────────────────────────────────
 def test_shared_backbone_has_no_collect_payments():
-    # 매출(그리고 내수매입)은 build_voucher_graph 를 pre_loop_node 없이 쓰므로 collect_payments 가 없다.
-    assert "collect_payments" not in _graph_nodes(build_voucher_receivable_graph())
+    # 유형별(구 매출/매입 병합)은 build_voucher_graph 를 pre_loop_node 없이 쓰므로 collect_payments 가 없다.
+    assert "collect_payments" not in _graph_nodes(build_voucher_by_type_graph())
 
 
 # ── registry ──────────────────────────────────────────────────────────────────
 def test_workflow_registered_without_regressing_others():
     wfs = list_workflows()
     assert "voucher-card" in wfs
-    # 형제 회귀 금지.
-    for wid in ("voucher-receivable", "voucher-payable", "card-collect", "demo-echo", "trip-domestic"):
+    # 형제 회귀 금지(매출/매입은 voucher-by-type 으로 병합 — 2026-08-20).
+    for wid in ("voucher-by-type", "card-collect", "demo-echo", "trip-domestic"):
         assert wid in wfs
 
 
@@ -135,4 +135,5 @@ def test_fixture_phases_cover_steps_in_order():
 
 def test_sibling_voucher_fixtures_still_present():
     ids = {a["id"] for a in AGENT_FIXTURES}
-    assert {"voucher-trade-receivable", "voucher-trade-payable", "voucher-card-payable"} <= ids
+    # 매출/매입은 voucher-by-type 하나로 병합됐다(2026-08-20) — 카드는 별도 유지.
+    assert {"voucher-by-type", "voucher-card-payable"} <= ids

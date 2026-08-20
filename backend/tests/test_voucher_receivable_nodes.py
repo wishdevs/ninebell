@@ -48,8 +48,46 @@ def _logs(frames: list[dict]) -> list[str]:
 async def test_validate_default_all_declares_keys():
     node = make_validate_params_node()
     out = await node({"events": _q(), "params": {}})
-    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월) + 디버그 기본 꺼짐(2026-08-10).
-    assert out == {"max_rows": None, "period_from": None, "period_to": None, "debug_mode": False}
+    # 전체(사용자 결정 2026-07-21) + 기간 미지정(=화면 기본 당월) + 디버그 기본 꺼짐(2026-08-10)
+    # + 전표유형/메뉴 필터 미지정(2026-08-20 유형별 병합 — None=빌드 기본/미필터).
+    assert out == {
+        "max_rows": None,
+        "period_from": None,
+        "period_to": None,
+        "docu_types": None,
+        "menu_filters": None,
+        "debug_mode": False,
+    }
+    assert_keys_declared(VoucherReceivableState, out)
+
+
+async def test_validate_docu_types_and_menu_filters_passthrough():
+    """유형별 병합(2026-08-20): 폼의 전표유형/메뉴 필터 선택이 정규화돼 state 로 넘어가고
+    확인 로그에도 표기된다."""
+    node = make_validate_params_node()
+    q = _q()
+    out = await node(
+        {
+            "events": q,
+            "params": {
+                "voucher": {
+                    "docu_types": ["국내매출", "해외매출"],
+                    "menu_filters": ["매출등록", "매출취소"],
+                }
+            },
+        }
+    )
+    assert out["docu_types"] == ["국내매출", "해외매출"]
+    assert out["menu_filters"] == ["매출등록", "매출취소"]
+    assert_keys_declared(VoucherReceivableState, out)
+    logs = _logs(_drain(q))
+    assert any("전표유형 국내매출·해외매출" in m and "메뉴 필터 매출등록·매출취소" in m for m in logs)
+
+
+async def test_validate_unknown_docu_type_errors():
+    node = make_validate_params_node()
+    out = await node({"events": _q(), "params": {"voucher": {"docu_types": ["일반"]}}})
+    assert "전표유형" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
 
 
@@ -174,6 +212,36 @@ async def test_set_query_passes_docu_types(monkeypatch):
     monkeypatch.setattr(query.steps, "set_docu_types", _capture)
     out = await make_set_query_node(("내수구매",))({"events": _q(), "page": _FakePage()})
     assert out == {} and seen["targets"] == ("내수구매",)
+
+
+async def test_set_query_state_docu_types_override_build_default(monkeypatch):
+    # 유형별 병합(2026-08-20): 실행 전 폼 선택(state.docu_types)이 빌드 기본값을 덮는다.
+    _patch_set_query_ok(monkeypatch, [])
+    seen: dict = {}
+
+    async def _capture(page, targets):
+        seen["targets"] = targets
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "set_docu_types", _capture)
+    node = make_set_query_node(("국내매출", "해외매출", "내수구매"))
+    out = await node({"events": _q(), "page": _FakePage(), "docu_types": ["해외매출"]})
+    assert out == {} and seen["targets"] == ("해외매출",)
+
+
+async def test_set_query_empty_state_docu_types_falls_back_to_default(monkeypatch):
+    # state.docu_types 가 None/빈 목록이면 빌드 기본값 그대로(하위호환 — 미지정 실행 경로).
+    _patch_set_query_ok(monkeypatch, [])
+    seen: dict = {}
+
+    async def _capture(page, targets):
+        seen["targets"] = targets
+        return {"ok": True}
+
+    monkeypatch.setattr(query.steps, "set_docu_types", _capture)
+    node = make_set_query_node(("국내매출", "해외매출", "내수구매"))
+    out = await node({"events": _q(), "page": _FakePage(), "docu_types": None})
+    assert out == {} and seen["targets"] == ("국내매출", "해외매출", "내수구매")
 
 
 # ── run_query ─────────────────────────────────────────────────────────────────

@@ -13,8 +13,8 @@
 
 ## 안전 경계
 - 실제 전표 저장(F7/BTN_SAVE)은 원칙적으로 미실행 — 폼 채움·적용까지만. 예외는 사용자가 저장 자동화를 명시 승인한 플로우(card_collect 등)뿐이다
-- 상신(결재)은 원칙적으로 클릭하지 않는다. 예외는 **회계전표(voucher) 3종**(외상매출/외상매입/미지급금카드)으로, 결제창에서 실제 상신까지 실행한다 (2026-08-07 사용자 승인 — `backend/e2e/eap_approval_cancel_probe.py` 로 결재취소→상신취소→임시보관 삭제가 되어 가역이다). 그 외 에이전트는 여전히 상신 금지이며, 보관 버튼은 어느 에이전트도 클릭하지 않는다
-- 그 회수 경로는 2026-08-12 부터 에이전트로도 있다 — `eap-approval-cancel`(`backend/app/agents/eap_cancel/`, hidden). 상신문서함 '진행' 목록을 HITL 로 띄우고 **체크한 문서만** 결재취소→상신취소→삭제한다(비가역). 실행 경로는 관리자 + 회계전표 3종 상세의 디버그 버튼뿐이다
+- 상신(결재)은 원칙적으로 클릭하지 않는다. 예외는 **회계전표(voucher) 계열 2에이전트**(유형별 전표조회 승인·미지급금카드 — 2026-08-20 외상매출/외상매입을 유형별로 병합)로, 결제창에서 실제 상신까지 실행한다 (2026-08-07 사용자 승인 — `backend/e2e/eap_approval_cancel_probe.py` 로 결재취소→상신취소→임시보관 삭제가 되어 가역이다). 그 외 에이전트는 여전히 상신 금지이며, 보관 버튼은 어느 에이전트도 클릭하지 않는다
+- 그 회수 경로는 2026-08-12 부터 에이전트로도 있다 — `eap-approval-cancel`(`backend/app/agents/eap_cancel/`, hidden). 상신문서함 '진행' 목록을 HITL 로 띄우고 **체크한 문서만** 결재취소→상신취소→삭제한다(비가역). 실행 경로는 관리자 + 회계전표 계열 상세의 디버그 버튼뿐이다
 - e2e 반복 테스트는 실저장→검증→삭제(F6)→잔존 0 확인 사이클로 한다. 삭제 수단이 없는 화면은 비가역 동사 직전에서 멈춘다
 
 ## 플로우 구축 절차
@@ -23,7 +23,7 @@
 
 ## 에이전트 구조
 - 결의서입력(GLDDOC00300) 계열은 진입 앞단(login→회계 유저타입→메뉴 진입)을 expense_card 노드로 공유하고, 문서 종류별 에이전트(card_collect·trip_domestic·trip_overseas 등)로 분리한다 — `backend/app/agents/RESOLUTIONS.md`
-- 회계전표 3종(외상매출/외상매입/미지급금카드)은 `voucher_receivable` 의 `build_voucher_graph(docu_types)` 백본을 공유하며 전표유형(SYSDEF_CD)만 다르다: 외상매출 = 국내매출 21 + 해외매출 23, 외상매입 = 내수구매 31, 미지급금 법인카드 = 일반 11
+- 회계전표 계열은 `voucher_receivable` 의 `build_voucher_graph(docu_types)` 백본을 공유한다. 2026-08-20 외상매출/외상매입을 **유형별 전표조회 승인(voucher-by-type)** 하나로 병합 — 전표유형(국내매출 21·해외매출 23·내수구매 31, ERP 매칭은 SYSDEF_NM 한글 라벨)은 실행 전 폼의 다중선택이고, 메뉴(MENU_NM) 필터(항목 목록은 agents.settings.menu_items, 관리자 추가/삭제)로 대상을 추린다. 미지급금 법인카드(voucher-card, 일반 11)는 별도 유지
 - 새 워크플로우는 `registry.register_workflow(agent_id, graph_factory)` 로 등록하고 agents.workflow_id 가 프론트 실행 진입점과 연결한다
 
 ## 배포

@@ -22,10 +22,7 @@ from .trip_domestic.graph import TRIP_GUBUN_LABEL, build_trip_domestic_graph
 from .trip_overseas.graph import TRIP_GUBUN_LABEL as TRIP_OVERSEAS_GUBUN_LABEL
 from .trip_overseas.graph import build_trip_overseas_graph
 from .voucher_card.graph import build_voucher_card_graph
-from .voucher_receivable.graph import (
-    build_voucher_payable_graph,
-    build_voucher_receivable_graph,
-)
+from .voucher_receivable.graph import build_voucher_by_type_graph
 
 # 1회 컴파일 후 재사용(demo_echo 등록 패턴과 동일).
 _expense_card_chat_graph = build_expense_card_chat_graph()
@@ -80,15 +77,13 @@ _purchase_order_graph = build_purchase_order_graph()
 # delay_scale 0.4: 진입·도움창·조회 사이클을 검증한 읽기 프로브가 전부 0.4 로 PASS 한 배율.
 register_workflow("purchase-order", lambda: _purchase_order_graph, delay_scale=0.4)
 
-_voucher_receivable_graph = build_voucher_receivable_graph()
+# 유형별 전표조회 승인 — 외상매출금/외상매입금 병합(2026-08-20). 전표유형은 실행 전 폼의
+# 다중 선택(국내매출/해외매출/내수구매)이고 메뉴(MENU_NM) 필터는 count_details 가 적용한다.
 # delay_scale 0.4: 헤드리스 프로브(2026-07-20~21, 단건·3건 배치 그린)가 검증한 대기 배율.
 # 조회+결재(결제창=별도 팝업 Page) 아키타입. ⚠ 실제 상신 실행(allow_submit 개방, 사용자 승인
 # 2026-08-07 — EAP 결재취소 e2e 로 회수 가능) · 보관 미클릭 · 전체 진행.
-register_workflow("voucher-receivable", lambda: _voucher_receivable_graph, delay_scale=0.4)
-
-# 외상매입금 — 외상매출금과 전부 공유하고 전표유형만 내수구매(build_voucher_graph 재사용).
-_voucher_payable_graph = build_voucher_payable_graph()
-register_workflow("voucher-payable", lambda: _voucher_payable_graph, delay_scale=0.4)
+_voucher_by_type_graph = build_voucher_by_type_graph()
+register_workflow("voucher-by-type", lambda: _voucher_by_type_graph, delay_scale=0.4)
 
 # 미지급금 법인카드 — 공유 백본(전표조회승인 조회+결재) + 카드 3대 확장(결의서조회승인 결재번호
 # 수집 · 참조문서 선택 훅). ⚠ 참조문서 확인·실제 상신 모두 실행(2026-08-07 게이트 개방).
@@ -104,7 +99,6 @@ __all__ = [
     "build_purchase_order_graph",
     "build_trip_domestic_graph",
     "build_trip_overseas_graph",
+    "build_voucher_by_type_graph",
     "build_voucher_card_graph",
-    "build_voucher_payable_graph",
-    "build_voucher_receivable_graph",
 ]

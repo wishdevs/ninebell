@@ -220,6 +220,25 @@ READ_ROW_KEY_JS = r"""(idx) => {
   } catch (e) { return null; }
 }"""
 
+# 마스터 그리드 상위 n행의 메뉴(MENU_NM)+전표번호(DOCU_NO) 일괄 읽기(왕복 1회) — 메뉴 필터
+# (count_details) 전용. MENU_NM 은 실측 컬럼이다(e2e/artifacts/voucher_receivable_probe_results.json
+# D3 master_columns: field 'MENU_NM', header '메뉴' — 추정 금지, 실측 단일소스).
+# arg=n. 반환 {ok, rows:[{idx, menu, docu_no}]} | {ok:false, reason}.
+READ_MASTER_MENUS_JS = r"""(n) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const total = ds.getRowCount();
+    const take = Math.min(total, n || 0);
+    const rows = take > 0 ? ds.getJsonRows(0, take - 1) : [];
+    return { ok: true, rows: rows.map((r, i) => ({
+      idx: i,
+      menu: String(r.MENU_NM == null ? '' : r.MENU_NM).trim(),
+      docu_no: String(r.DOCU_NO == null ? '' : r.DOCU_NO).trim(),
+    })) };
+  } catch (e) { return { ok: false, reason: String(e).slice(0, 140) }; }
+}"""
+
 # 마스터 그리드 idx 행의 결의서번호(ABDOCU_NO) 읽기 — 카드 참조문서(on_popup) 훅이 이 값으로
 # payment_map(ABDOCU_NO→GWDOCU_NO)을 조회한다. 매출/매입 백본은 호출하지 않는다(on_popup=None).
 # arg=idx. 반환 문자열 또는 null(ABDOCU_NO 없는 행 — 결의서입력 미경유 전표).

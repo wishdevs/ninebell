@@ -90,6 +90,69 @@ def fuel_classes_for(stored: dict | None) -> list[dict]:
         return [dict(c) for c in DEFAULT_FUEL_CLASSES]
 
 
+# ── 메뉴 필터 항목(동적 목록) ────────────────────────────────────────────────
+# 유형별 전표조회 승인(voucher-by-type)의 메뉴(MENU_NM) 필터 마스터 목록 — **관리자가
+# 추가/삭제**한다(fuel_classes 와 동일 패턴). 각 행 = {id(안정 식별자), label(ERP 메뉴 표시명),
+# defaultSelected(실행 전 폼 기본 선택 여부)}. 실행별 실제 필터는 폼이 이 목록에서 골라
+# params.voucher.menu_filters(라벨 목록)로 보낸다 — ERP 대조 값은 label 이다.
+MENU_ITEMS_KEY = "menu_items"
+MAX_MENU_ITEMS = 20
+
+DEFAULT_MENU_ITEMS: list[dict] = [
+    {"id": "sales-entry", "label": "매출등록", "defaultSelected": True},
+    {"id": "sales-cancel", "label": "매출취소", "defaultSelected": True},
+    {"id": "export-cost", "label": "수출비용입력[나인벨]", "defaultSelected": False},
+]
+
+
+def _valid_menu_item(row: object) -> dict | None:
+    """한 메뉴 항목 검증 → 정규화 dict{id,label,defaultSelected} | None(형식 오류).
+
+    id/label 은 비어있지 않은 문자열, defaultSelected 는 bool(누락 시 False).
+    """
+    if not isinstance(row, dict):
+        return None
+    mid = str(row.get("id") or "").strip()
+    label = str(row.get("label") or "").strip()
+    selected = row.get("defaultSelected", False)
+    if not mid or not label:
+        return None
+    if not isinstance(selected, bool):
+        return None
+    return {"id": mid, "label": label, "defaultSelected": selected}
+
+
+def _validate_menu_items(value: object) -> list[dict]:
+    """관리자 입력 menu_items 목록 검증 → 정규화 리스트. 위반 시 ValueError(한국어).
+
+    최소 1행·최대 MAX_MENU_ITEMS, id 중복 금지, 각 행은 id+라벨 필수(defaultSelected 는 bool).
+    """
+    if not isinstance(value, list) or not value:
+        raise ValueError("메뉴 항목을 최소 1개 이상 등록하세요.")
+    if len(value) > MAX_MENU_ITEMS:
+        raise ValueError(f"메뉴 항목은 최대 {MAX_MENU_ITEMS}개까지 등록할 수 있습니다.")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, row in enumerate(value):
+        norm = _valid_menu_item(row)
+        if norm is None:
+            raise ValueError(f"{i + 1}번째 메뉴 항목의 식별자·이름(기본선택은 불리언)을 확인하세요.")
+        if norm["id"] in seen:
+            raise ValueError(f"메뉴 항목 식별자가 중복됩니다: {norm['id']}")
+        seen.add(norm["id"])
+        out.append(norm)
+    return out
+
+
+def menu_items_for(stored: dict | None) -> list[dict]:
+    """저장된 메뉴 항목 목록(유효하면) 또는 기본 3종. 실효 설정·직렬화 공용."""
+    raw = (stored or {}).get(MENU_ITEMS_KEY)
+    try:
+        return _validate_menu_items(raw)
+    except ValueError:
+        return [dict(m) for m in DEFAULT_MENU_ITEMS]
+
+
 # 에이전트 id → 설정 항목 정의 목록. 스키마가 없는 에이전트는 설정 기능 자체가 없다.
 AGENT_SETTINGS_SCHEMA: dict[str, list[SettingDef]] = {
     "corporate-card": [
@@ -121,11 +184,19 @@ AGENT_SETTINGS_SCHEMA: dict[str, list[SettingDef]] = {
             description="유류비 지원 금액 = 주행거리 ÷ 기준연비 × 기준단가(원 단위 반올림).",
         ),
     ],
+    # voucher-by-type: 스칼라 설정은 없고 메뉴 항목(동적 목록, 아래 별도 처리)만 갖는다 —
+    # 빈 스키마([])를 명시해 settings_schema_dicts 가 None 이 아닌 [] 를 돌려주고,
+    # serialize_agent 가 settings(menu_items 포함)를 응답에 포함하게 한다.
+    "voucher-by-type": [],
 }
 
 # 차량종류(동적 목록) 설정을 갖는 에이전트 — 실효 설정에 fuel_classes 를 포함하고 PATCH 에서
 # fuel_classes 목록 입력을 허용한다. 현재는 출장(국내/자차)만.
 _AGENTS_WITH_FUEL_CLASSES: frozenset[str] = frozenset({"trip-domestic"})
+
+# 메뉴 항목(동적 목록) 설정을 갖는 에이전트 — 실효 설정에 menu_items 를 포함하고 PATCH 에서
+# menu_items 목록 입력을 허용한다. ⚠ **에이전트 id** 기준(workflow id 아님).
+_AGENTS_WITH_MENU_ITEMS: frozenset[str] = frozenset({"voucher-by-type"})
 
 
 def settings_schema_dicts(agent_id: str) -> list[dict] | None:
@@ -152,6 +223,8 @@ def effective_settings(agent_id: str, stored: dict | None) -> dict:
         out = {d.key: stored.get(d.key, d.default) for d in defs}
     if agent_id in _AGENTS_WITH_FUEL_CLASSES:
         out[FUEL_CLASSES_KEY] = fuel_classes_for(stored)
+    if agent_id in _AGENTS_WITH_MENU_ITEMS:
+        out[MENU_ITEMS_KEY] = menu_items_for(stored)
     return out
 
 
@@ -162,13 +235,18 @@ def validate_settings(agent_id: str, incoming: dict) -> dict:
     """
     defs = {d.key: d for d in AGENT_SETTINGS_SCHEMA.get(agent_id, [])}
     has_fuel_classes = agent_id in _AGENTS_WITH_FUEL_CLASSES
-    if not defs and not has_fuel_classes:
+    has_menu_items = agent_id in _AGENTS_WITH_MENU_ITEMS
+    if not defs and not has_fuel_classes and not has_menu_items:
         raise ValueError("이 에이전트는 설정 항목이 없습니다.")
     validated: dict = {}
     for key, value in incoming.items():
         # 차량종류(동적 목록) — 스칼라 스키마 밖의 특수 항목. 리스트 검증 후 정규화 저장.
         if has_fuel_classes and key == FUEL_CLASSES_KEY:
             validated[key] = _validate_fuel_classes(value)
+            continue
+        # 메뉴 항목(동적 목록) — voucher-by-type 의 메뉴 필터 마스터 목록(동일 패턴).
+        if has_menu_items and key == MENU_ITEMS_KEY:
+            validated[key] = _validate_menu_items(value)
             continue
         d = defs.get(key)
         if d is None:

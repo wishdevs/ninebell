@@ -529,9 +529,9 @@ _HAKJAGUM_GRANT_FIXTURE: dict = {
 VOUCHER_RECEIVABLE_BATCH_FLOW: dict = {
     "nodes": [
         {"id": "access", "kind": "start", "status": "done", "title": "전표조회승인 접속", "sub": "전사공통(회계)", **_col(0)},
-        {"id": "setq", "kind": "step", "status": "done", "title": "조회 조건 세팅", "sub": "미결·전자결재저장·국내/해외매출", **_col(1)},
+        {"id": "setq", "kind": "step", "status": "done", "title": "조회 조건 세팅", "sub": "미결·전자결재저장·선택한 전표유형", **_col(1)},
         {"id": "query", "kind": "step", "status": "active", "title": "조회(F2)", "sub": "대상 전표 목록", **_col(2)},
-        {"id": "count", "kind": "step", "status": "pending", "title": "하위 건수 파악", "sub": "전표별 계정정보 행수", **_col(3)},
+        {"id": "count", "kind": "step", "status": "pending", "title": "하위 건수 파악", "sub": "메뉴 필터 적용·전표별 계정정보 행수", **_col(3)},
         {"id": "plan", "kind": "decision", "status": "pending", "title": "배치 계획", "sub": "단독 200↑ 먼저 · 나머지 합계 200 미만", **_col(4)},
         {"id": "pick", "kind": "step", "status": "pending", "title": "묶음 선택(checkRow)", "sub": "그룹 행 일괄 체크", **_col(5)},
         {"id": "pay", "kind": "step", "status": "pending", "title": "결제창 열기", "sub": "묶음 1회 = 자식창 1개", **_col(6)},
@@ -553,19 +553,19 @@ VOUCHER_RECEIVABLE_BATCH_FLOW: dict = {
     ],
 }
 
-# ── 외상매출금 전표결재 — 실동작 승격(voucher-receivable 워크플로우) ──────────────
-# voucher-trade-receivable 더미를 제자리 승격한다(agent id 유지 — 프론트/시드 연속성).
-# 완전 공개(hidden=False, 사용자 결정 2026-07-21) — 목록 노출 + 실행 허용. 라이브 스모크·EAP
-#   담당자 확인 전이지만 사용자 요청으로 노출한다. ⚠ 결제창을 여는 것만으로 EAP 임시문서가
-#   생길 수 있음(handoff_note·PROCESS.md 안전섹션 참조). 배치(allow_batch)는 여전히 코드 게이트.
+# ── 유형별 전표조회 승인 — 외상매출금/외상매입금 병합(voucher-by-type, 2026-08-20) ──
+# 두 에이전트(voucher-trade-receivable/voucher-trade-payable)를 하나로 병합했다 — 전표유형이
+# 실행 전 폼의 다중 선택(국내매출/해외매출/내수구매)이 됐고, 메뉴(MENU_NM) 필터가 추가됐다
+# (마스터 목록은 관리자 설정 menu_items — agent_settings.DEFAULT_MENU_ITEMS).
+# DB 이관은 alembic 0036(조직 접근·즐겨찾기·런 이력 이관 후 구 행 삭제).
 #   steps 의 key 는 그래프 노드(emit_step 키)와 1:1(진행 하이라이트 정합).
-_VOUCHER_RECEIVABLE_FIXTURE: dict = {
-    "id": "voucher-trade-receivable",
-    "workflow_id": "voucher-receivable",
+_VOUCHER_BY_TYPE_FIXTURE: dict = {
+    "id": "voucher-by-type",
+    "workflow_id": "voucher-by-type",
     "group_id": "voucher",
     "hidden": False,
-    "name": "외상매출금",
-    "description": "미결·전자결재저장 상태의 매출전표(국내/해외)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 전자결재로 상신합니다.",
+    "name": "유형별 전표조회 승인",
+    "description": "실행 시 선택한 전표유형(국내매출/해외매출/내수구매)의 미결·전자결재저장 전표를 조회해, 메뉴 필터로 대상을 추린 뒤 전표별 하위(계정정보) 건수를 파악해 묶음 단위로 결제창을 열어 전자결재로 상신합니다.",
     "handoff_note": "이 에이전트는 조회된 전표를 전자결재로 **실제 상신**합니다(2026-08-07 정책 전환). 상신 실패 건이 있으면 런이 중단되고 사유가 보고됩니다. 잘못 상신된 건은 전자결재 > 상신/보관함 > 상신문서에서 결재취소 → 미결문서 상신취소 → 임시보관문서 삭제로 회수할 수 있습니다. ⚠ 보관 버튼은 클릭하지 않습니다.",
     "drive": "browser",
     "interaction": "autonomous",
@@ -582,35 +582,16 @@ _VOUCHER_RECEIVABLE_FIXTURE: dict = {
     "last_run_at": None,
     "flow_graph": VOUCHER_RECEIVABLE_BATCH_FLOW,
     "steps": [
-        {"key": "validate_params", "label": "실행 파라미터 확인", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "처리 건수(기본 1건)를 확인하고 배치 안전 게이트를 적용"},
+        {"key": "validate_params", "label": "실행 파라미터 확인", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "회계일 기간·전표유형 선택·메뉴 필터·처리 건수를 확인"},
         {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
         {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
         {"key": "menu_nav", "label": "전표조회승인 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "총계정원장 > 전표관리 > 전표조회승인(GLDDOC00700) 진입"},
-        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 국내/해외매출"},
+        {"key": "set_query", "label": "조회 조건 세팅", "skill": "field-input", "status": "pending", "phase": "조회", "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·실행 시 선택한 전표유형(국내매출/해외매출/내수구매)"},
         {"key": "run_query", "label": "조회(F2)", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "조건으로 대상 전표를 조회하고 건수를 보고"},
-        {"key": "count_details", "label": "하위 건수 파악·배치 계획", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "전표별 하위(계정정보) 행수를 읽어, 단독 200건 이상은 단독으로 · 나머지는 합계 200 미만이 되도록 결재 묶음을 계획"},
+        {"key": "count_details", "label": "하위 건수 파악·배치 계획", "skill": "grid-read", "status": "pending", "phase": "조회", "detail": "메뉴 필터로 대상을 추린 뒤 전표별 하위(계정정보) 행수를 읽어, 단독 200건 이상은 단독으로 · 나머지는 합계 200 미만이 되도록 결재 묶음을 계획"},
         {"key": "loop_approvals", "label": "묶음 결재 상신", "skill": "eap-submit", "status": "pending", "phase": "결재", "detail": "계획된 묶음마다 대상 행을 함께 체크해 결제창을 열고 상신 버튼을 클릭(묶음 1회=N건 상신, 보관 미클릭). 상신 실패 시 즉시 중단"},
     ],
     "logs": [],
-}
-
-
-# 외상매입금 — 외상매출금과 전부 공유, 전표유형만 내수구매(build_voucher_payable_graph).
-# 픽스처도 receivable 를 스프레드로 재사용하고 id/workflow_id/name/설명·set_query detail 만 덮는다.
-# 배치 결재도 매출금과 동일(2026-08-07 사용자 확정 — 하위 200건 기준 단독/묶음): flow_graph
-# (VOUCHER_RECEIVABLE_BATCH_FLOW)·count_details 포함 steps 를 그대로 상속한다.
-_VOUCHER_PAYABLE_FIXTURE: dict = {
-    **_VOUCHER_RECEIVABLE_FIXTURE,
-    "id": "voucher-trade-payable",
-    "workflow_id": "voucher-payable",
-    "name": "외상매입금",
-    "description": "미결·전자결재저장 상태의 매입전표(내수구매)를 조회해, 전표별 하위(계정정보) 건수를 파악한 뒤 묶음 단위로 결제창을 열어 전자결재로 상신합니다.",
-    "steps": [
-        {**s, "detail": "작성부서 전체·회계일 지정기간(기본 당월)·전표상태 미결·전자결재상태 저장·전표유형 내수구매"}
-        if s["key"] == "set_query"
-        else s
-        for s in _VOUCHER_RECEIVABLE_FIXTURE["steps"]
-    ],
 }
 
 
@@ -924,9 +905,8 @@ AGENT_FIXTURES.extend(
         _GYEONGJO_GRANT_FIXTURE,  # family-event 더미 → 실동작 승격(gyeongjo-grant).
         _HAKJAGUM_GRANT_FIXTURE,  # scholarship 더미 → 실동작 승격(hakjagum-grant, 노출).
         _TAX_INVOICE_FIXTURE,  # 결의서입력 — 프론트 화면 시뮬레이션(실행 비활성).
-        # 회계전표 그룹 — 표시 순서: 외상매입금 → 외상매출금 → 미지급금 법인카드(사용자 지정 2026-07-21).
-        _VOUCHER_PAYABLE_FIXTURE,  # voucher-trade-payable → voucher-payable(내수구매)
-        _VOUCHER_RECEIVABLE_FIXTURE,  # voucher-trade-receivable → voucher-receivable
+        # 회계전표 그룹 — 유형별 전표조회 승인(매출/매입 병합, 2026-08-20) → 미지급금 법인카드.
+        _VOUCHER_BY_TYPE_FIXTURE,  # voucher-by-type(국내매출/해외매출/내수구매 실행 시 선택)
         _VOUCHER_CARD_FIXTURE,  # voucher-card-payable → voucher-card(미지급금 법인카드)
     ]
 )

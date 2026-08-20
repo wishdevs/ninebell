@@ -21,13 +21,16 @@ def _ms(t0: float) -> int:
 
 def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
     """조회 조건 세팅 — 패널 확장 → 작성부서 전체 → 회계일(폼 지정 기간, 기본 당월) → 작성자 비움
-    → 전표상태 미결 → 전자결재상태 저장 → 전표유형(docu_types). 전표유형만 에이전트별로 다르다."""
+    → 전표상태 미결 → 전자결재상태 저장 → 전표유형. 전표유형은 실행 전 폼 선택
+    (state.docu_types)이 우선하고, 미지정이면 빌드 인자(docu_types)가 기본값이다(2026-08-20 병합)."""
 
     async def set_query(state: dict) -> dict:
         if state.get("error"):
             return {}
         events = state["events"]
         page = state["page"]
+        # 실행 전 폼의 전표유형 선택(validate_params 산출)이 빌드 기본값을 덮는다.
+        selected = tuple(state.get("docu_types") or ()) or docu_types
         await emit_step(events, "set_query", "running")
         t0 = time.monotonic()
 
@@ -78,14 +81,14 @@ def make_set_query_node(docu_types: tuple[str, ...] = steps.DOCU_TYPE_TARGETS):
             return await fail("전자결재상태", r.get("reason"))
         await warn_if_unverified("전자결재상태", r)
 
-        r = await steps.set_docu_types(page, docu_types)
+        r = await steps.set_docu_types(page, selected)
         if not r.get("ok"):
             return await fail("전표유형", r.get("reason"))
         await warn_if_unverified("전표유형", r)
 
         await emit_log(
             events,
-            f"조회 조건 세팅 완료(미결·전자결재저장·전표유형 {'·'.join(docu_types)}).",
+            f"조회 조건 세팅 완료(미결·전자결재저장·전표유형 {'·'.join(selected)}).",
             "ok",
         )
         await emit_shot(events.put, page)

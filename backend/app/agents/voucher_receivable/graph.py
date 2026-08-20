@@ -1,4 +1,4 @@
-"""전표조회승인(voucher-receivable) — LangGraph StateGraph 조립.
+"""전표조회승인(voucher-by-type) — LangGraph StateGraph 조립.
 
 결의서입력(문서 생성) 계열과 다른 **조회+결재** 아키타입이다: 조회 조건을 세팅해 미결·전자결재저장
 상태의 매출전표를 조회하고, 대상을 결제창까지 열어 **상신(allow_submit 게이트)까지 실행한다**
@@ -29,7 +29,7 @@ from app.agents.common.nodes import (
 from app.agents.common.state import BaseAgentState
 from nbkit.omnisol.menu_schemas import VOUCHER_RECEIVABLE
 
-from . import steps  # 전표유형 상수(DOCU_TYPES_RECEIVABLE/PAYABLE)
+from . import steps  # 전표유형 상수(DOCU_TYPE_CHOICES 등)
 from .batching import DETAIL_BATCH_LIMIT
 from .nodes import (
     make_batch_approvals_node,
@@ -53,6 +53,8 @@ class VoucherReceivableState(BaseAgentState, total=False):
     max_rows: int | None  # validate_params 산출 — 처리 최대 행 수(None=전체)
     period_from: str | None  # validate_params 산출 — 회계일 조회 시작일 YYYYMMDD(None=당월)
     period_to: str | None  # validate_params 산출 — 회계일 조회 종료일 YYYYMMDD(None=당월)
+    docu_types: list[str] | None  # validate_params 산출 — 전표유형 선택(None=빌드 기본 전체)
+    menu_filters: list[str] | None  # validate_params 산출 — 메뉴(MENU_NM) 필터(None=미필터)
     debug_mode: bool  # validate_params 산출 — True 면 상신 게이트 런타임 강제 닫힘(가상 상신)
     master_rowcount: int  # run_query 산출 — 조회 결과 마스터 그리드 행 수
     processed: int  # loop_approvals — 상신(게이트 개방) 또는 가상 상신 처리 건수
@@ -75,7 +77,9 @@ def build_voucher_graph(
     """전표조회승인 조회+결재 체인을 컴파일해 반환(stateless·재사용).
 
     전표유형(docu_types)만 에이전트별로 다르고 나머지(조회 8필드·결과그리드·checkRow·결제창·
-    D7·로딩대기·진행)는 전부 공유한다 — 외상매출금/외상매입금이 이 빌더를 값만 바꿔 쓴다.
+    D7·로딩대기·진행)는 전부 공유한다 — 유형별 전표조회 승인(voucher-by-type)·카드가 이 빌더를
+    값만 바꿔 쓴다. docu_types 는 **빌드 기본값**이고, state.docu_types(실행 전 폼 선택)가
+    있으면 set_query 가 그것을 우선한다(2026-08-20 매출/매입 병합).
 
     카드(미지급금 법인카드) 확장을 위한 optional 훅(전부 기본 None → 매출/매입 무영향):
       state_cls      그래프 State TypedDict(신규 키 선언용). 카드는 payment_map 등을 더한
@@ -137,20 +141,15 @@ def build_voucher_graph(
     return g.compile().with_config({"recursion_limit": RECURSION_LIMIT})
 
 
-def build_voucher_receivable_graph():
-    """외상매출금(voucher-receivable) — 전표유형 국내매출+해외매출 + **배치 결재** + 상신 게이트 개방."""
-    return build_voucher_graph(
-        steps.DOCU_TYPES_RECEIVABLE, batch_limit=DETAIL_BATCH_LIMIT, allow_submit=True
-    )
+def build_voucher_by_type_graph():
+    """유형별 전표조회 승인(voucher-by-type) — **배치 결재** + 상신 게이트 개방.
 
-
-def build_voucher_payable_graph():
-    """외상매입금(voucher-payable) — 전표유형 내수구매 + **배치 결재** + 상신 게이트 개방.
-
-    배치 확대(2026-08-07 사용자 확정): 매출금과 동일 규율 — 하위(계정정보) 200건 이상 전표는
-    단독으로 먼저, 나머지는 합계가 200 미만이 되도록 묶어 결재창을 묶음당 1회 연다.
-    (종전 건별 순회는 배치 도입 이전의 원형 백본이었다.)
+    외상매출금/외상매입금 병합(2026-08-20): 전표유형은 실행 전 폼 선택(state.docu_types,
+    validate_params 산출)이 우선하고, 미지정이면 빌드 기본값(DOCU_TYPE_CHOICES 전체 3종)이다.
+    메뉴(MENU_NM) 필터는 count_details 가 계획 단계에서 적용한다(state.menu_filters).
+    배치 규율(2026-08-07 사용자 확정): 하위(계정정보) 200건 이상 전표는 단독으로 먼저,
+    나머지는 합계가 200 미만이 되도록 묶어 결재창을 묶음당 1회 연다.
     """
     return build_voucher_graph(
-        steps.DOCU_TYPES_PAYABLE, batch_limit=DETAIL_BATCH_LIMIT, allow_submit=True
+        steps.DOCU_TYPE_CHOICES, batch_limit=DETAIL_BATCH_LIMIT, allow_submit=True
     )

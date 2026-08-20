@@ -1,4 +1,4 @@
-"""전표조회승인(voucher-receivable) 스텝 프리미티브 — 브라우저 조작 단위(노드가 조립).
+"""전표조회승인(voucher-by-type) 스텝 프리미티브 — 브라우저 조작 단위(노드가 조립).
 
 e2e/voucher_receivable_probe.py(3회 그린) 로직을 그대로 이식한다: 조회조건 8필드 세팅 →
 조회(F2) → 행 checkRow → 결제(결재)창(별도 팝업 Page) 열기/렌더대기/닫기. 셀렉터/JS 는
@@ -35,6 +35,9 @@ DOCU_TYPES_RECEIVABLE = ("국내매출", "해외매출")  # 외상매출금(vouc
 # 외상매입금(voucher-payable) 전표유형 — 내수구매(SYSDEF_CD=31). 사용자 확정 2026-07-21
 #   ("내구수매"는 오타였고 피커 실존값은 "내수구매"임을 프로브로 확인).
 DOCU_TYPES_PAYABLE = ("내수구매",)
+# 유형별 전표조회 승인(voucher-by-type) — 실행 전 폼이 이 중에서 다중 선택한다(2026-08-20 병합).
+# ERP 피커는 SYSDEF_NM 한글 라벨로 매칭하므로 라벨이 곧 계약값이다(set_docu_types 참조).
+DOCU_TYPE_CHOICES = ("국내매출", "해외매출", "내수구매")
 DOCU_TYPE_TARGETS = DOCU_TYPES_RECEIVABLE  # set_docu_types 기본값(하위호환)
 DOCU_ST_SELECT = "#s_docu_st_cd"  # native kendo dropdownlist
 DOCU_ST_TARGET = "미결"
@@ -769,6 +772,19 @@ async def read_master_rows(page: Any, limit: int = 5) -> dict:
 async def read_row_key(page: Any, idx: int) -> str | None:
     """마스터 그리드 idx 행의 키(DOCU_NO). 못 읽으면 None."""
     return await page.evaluate(js.READ_ROW_KEY_JS, idx)
+
+
+async def read_master_menus(page: Any, n: int) -> dict:
+    """마스터 그리드 상위 n행의 메뉴(MENU_NM)+전표번호(DOCU_NO)를 한 번에 읽는다(왕복 1회).
+
+    메뉴 필터(count_details, 2026-08-20 유형별 병합)가 행별 순회(372ms/행) **전에** 제외 대상을
+    확정하는 용도. 반환 {ok, rows:[{idx, menu, docu_no}]} | {ok:False, reason}.
+    """
+    try:
+        res = await page.evaluate(js.READ_MASTER_MENUS_JS, n)
+        return res if isinstance(res, dict) else {"ok": False, "reason": f"비정상 반환: {res!r}"}
+    except Exception as exc:  # noqa: BLE001 — 크래시 대신 실패 반환(호출부가 하드 중단 판단).
+        return {"ok": False, "reason": str(exc)[:ERR_REASON_MAX]}
 
 
 async def read_row_abdocu_no(page: Any, idx: int) -> str | None:
