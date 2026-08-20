@@ -1,11 +1,8 @@
 /**
- * 1단계 질문의 답 모델 + 경로 규칙.
+ * 1단계 질문의 답 모델 + 경로 규칙 (시뮬레이션에서 승격 — 규칙 동일).
  *
- * 화면(questions-step.tsx)이 어떤 질문 행을 보여줄지는 경로(questionPath)가 정한다 — 규칙이
+ * 화면(questions-section.tsx)이 어떤 질문 행을 보여줄지는 경로(questionPath)가 정한다 — 규칙이
  * JSX 안 조건문으로 흩어지면 발행 전/후 분기가 두 곳에서 어긋나기 때문에 여기 모아 둔다.
- *
- * 답 타입(QuestionAnswers)과 완료 판정(answersComplete)은 뒤 단계들이 쓰는 계약이라
- * 여기 두고 questions-step.tsx 가 그대로 다시 내보낸다(기존 import 경로 유지).
  */
 
 import { defaultInvoiceRange } from './model';
@@ -13,10 +10,10 @@ import type { IssueState, NondeductReason, SplitChoice, TaxKind } from './model'
 
 // ── 답 ──────────────────────────────────────────────────────────────────────
 
-/** 1단계에서 모으는 답 — 이후 모든 화면의 분기 근거. */
+/** 1단계에서 모으는 답 — 이후 모든 입력 섹션의 분기 근거. */
 export interface QuestionAnswers {
   issue: IssueState | null;
-  /** 세금계산서일 조회기간 — 발행 후에만 사용(리스트 필터). */
+  /** 세금계산서일 조회기간 — 발행 후에만 사용(라이브 조회 조건). */
   invoiceFrom: string;
   invoiceTo: string;
   split: SplitChoice | null;
@@ -26,7 +23,7 @@ export interface QuestionAnswers {
 
 /**
  * 빈 답 — **무효화 프리미티브**다. 발행 여부를 바꿀 때 뒤 답을 지우는 데 재사용되므로
- * (questions-step 의 pickIssue) 여기에 프리셋을 넣으면 안 된다. 시작 상태는 defaultAnswers.
+ * (questions-section 의 pickIssue) 여기에 프리셋을 넣으면 안 된다. 시작 상태는 defaultAnswers.
  */
 export function emptyAnswers(): QuestionAnswers {
   return { issue: null, invoiceFrom: '', invoiceTo: '', split: null, tax: null, nondeduct: null };
@@ -50,7 +47,7 @@ export function defaultAnswers(): QuestionAnswers {
   };
 }
 
-/** 다음 단계로 갈 수 있는가 — 이 경로의 마지막 질문까지 답이 채워졌는지. */
+/** 질문이 이 경로의 마지막까지 답해졌는지(증빙유형·기간이 확정 가능한지). */
 export function answersComplete(a: QuestionAnswers): boolean {
   if (!a.issue || !a.tax) return false;
   if (a.issue === 'before') return true; // 발행 전은 분할 질문 자체가 없다(아래 questionPath 주석).

@@ -1,15 +1,15 @@
 /**
- * 세금계산서 결의서 — 프론트 더미 시뮬레이션 모델(타입·더미데이터·선택지·포맷터).
+ * 세금계산서 결의서 — 실행 전 폼 모델(타입·증빙유형 매핑·기간·분할 계산·포맷터).
  *
- * 백엔드 자동화 그래프는 아직 없다. 이 화면은 "무엇을 물어보고 무엇을 입력받아야 하는가"를
- * 먼저 확정하기 위한 화면 시뮬레이션이며, 실행 API(`POST /runs/collect`)를 타지 않는다.
- * 실제 연동 시 이 파일의 선택지(예산단위·프로젝트·자금과목…)는 `/me/codes` 카탈로그로,
- * INVOICE_ROWS 는 옴니솔 세금계산서 조회 결과로 교체한다.
+ * 시뮬레이션(`src/components/live/simulation/tax-invoice/` — .recycles/ 이동)에서 승격.
+ * 백엔드 계약 `params["tax_invoice"]` 와 짝이다 — 특히 evidenceFor 는 서버의
+ * evidence_for(issue, split, tax, nondeduct_reason) 와 **같은 매핑**이어야 한다
+ * (두 구현이 어긋나면 안 된다. 계약: 03/04/05/06/07/11/13/22/23/24).
  */
 
 // ── 1단계 질문 값 ────────────────────────────────────────────────────────────
 
-/** 세금계산서 발행 전/후 — 이후 경로(바로 입력 vs 리스트 선택)를 가른다. */
+/** 세금계산서 발행 전/후 — 이후 경로(바로 입력 vs 라이브 리스트 선택)를 가른다. */
 export type IssueState = 'before' | 'after';
 
 /** 비용분할 여부. */
@@ -43,9 +43,38 @@ export const NONDEDUCT_LABEL: Record<NondeductReason, string> = {
   'exempt-business': '면세사업과 관련된분',
 };
 
+// ── 백엔드 계약 값 매핑 ──────────────────────────────────────────────────────
+// params["tax_invoice"] 의 문자열 값. tax 는 UI 값과 동일 문자열이라 매핑이 필요 없다.
+
+/** UI 발행 여부 ↔ 계약 issue("pre"|"post"). */
+export const API_ISSUE: Record<IssueState, 'pre' | 'post'> = { before: 'pre', after: 'post' };
+
+/** UI 불공 사유 ↔ 계약 nondeduct_reason("none_biz"|"car"|"exempt_biz"). */
+export const API_NONDEDUCT: Record<NondeductReason, 'none_biz' | 'car' | 'exempt_biz'> = {
+  'no-business': 'none_biz',
+  'small-car': 'car',
+  'exempt-business': 'exempt_biz',
+};
+
+/** 계약값 → UI 값 역매핑(마지막 제출 params 복원용). 모르는 값은 null. */
+export function issueFromApi(v: unknown): IssueState | null {
+  return v === 'pre' ? 'before' : v === 'post' ? 'after' : null;
+}
+
+export function taxFromApi(v: unknown): TaxKind | null {
+  return v === 'taxable' || v === 'exempt' || v === 'nondeduct' ? v : null;
+}
+
+export function nondeductFromApi(v: unknown): NondeductReason | null {
+  const entry = (Object.entries(API_NONDEDUCT) as [NondeductReason, string][]).find(
+    ([, api]) => api === v,
+  );
+  return entry ? entry[0] : null;
+}
+
 // ── 증빙유형 ────────────────────────────────────────────────────────────────
 // 1단계 질문의 답이 곧 ERP 증빙유형 코드다(발행 여부 × 과세성격 × 불공사유 → 코드 1개).
-// 요약 화면이 params 스키마의 출발점이므로 여기서 코드를 확정해 보여준다.
+// 코드 도출 자체는 서버(evidence_for)가 하지만, 폼이 같은 매핑으로 미리 보여준다.
 
 export const EVIDENCE_LABEL: Record<string, string> = {
   '03': '세금계산서',
@@ -224,71 +253,7 @@ export const QUICK_PICK_GROUPS: readonly { name: string; picks: readonly QuickPi
   },
 ];
 
-// ── 세금계산서 리스트(더미) ──────────────────────────────────────────────────
-
-export interface TaxInvoiceRow {
-  no: number;
-  /** (세금)계산서일 — yyyy-mm-dd. */
-  invoiceDate: string;
-  bizNo: string;
-  bizName: string;
-  subBizNo: string;
-  partnerCode: string;
-  partnerBizNo: string;
-  partnerName: string;
-  partnerSubBizNo: string;
-  /** 공급가액 — 취소분은 음수. */
-  supplyAmount: number;
-  /** 세액 — 취소분은 음수. */
-  taxAmount: number;
-}
-
-/**
- * 옴니솔 세금계산서 조회 화면 실측 더미(사용자 제공 스크린샷 그대로).
- * 4번 행은 3번 행의 취소분(음수) — 음수 행도 리스트에 정상 표시되고 선택 가능해야 한다.
- */
-export const INVOICE_ROWS: readonly TaxInvoiceRow[] = [
-  row(1, '2026-07-01', '15745', '543-86-02659', '노무법인 좋은', 400_000, 40_000),
-  row(2, '2026-07-01', '20326', '143-81-32507', '법무법인 비트', 1_000_000, 100_000),
-  row(3, '2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', 214_000, 21_400),
-  row(4, '2026-07-03', '10117', '114-86-62779', '(주) 에스테크엘', -214_000, -21_400),
-  row(5, '2026-07-03', '15311', '109-83-02763', '인천공항세관', 5_476_039, 547_600),
-  row(6, '2026-07-03', '10042', '129-29-40129', '유앤아이관세사무소', 103_830, 10_383),
-  row(7, '2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 537_554, 53_755),
-  row(8, '2026-07-06', '30140', '220-05-53810', '특허사무소 시선', 1_500_000, 150_000),
-  row(9, '2026-07-06', '10132', '102-81-42945', '주식회사 케이티', 34_000, 3_400),
-  row(10, '2026-07-09', '15892', '222-82-75825', '르네상스대표자회', 145_990, 14_600),
-  row(11, '2026-07-10', '10168', '202-81-00978', '중소기업은행', 136_363, 13_637),
-];
-
-/** 자사(사업장) 정보는 전 행 동일 — 반복을 줄이려 팩토리로 만든다. */
-function row(
-  no: number,
-  invoiceDate: string,
-  partnerCode: string,
-  partnerBizNo: string,
-  partnerName: string,
-  supplyAmount: number,
-  taxAmount: number,
-): TaxInvoiceRow {
-  return {
-    no,
-    invoiceDate,
-    bizNo: '123-81-44708',
-    bizName: '(주)나인벨',
-    subBizNo: '',
-    partnerCode,
-    partnerBizNo,
-    partnerName,
-    partnerSubBizNo: '',
-    supplyAmount,
-    taxAmount,
-  };
-}
-
-/** 더미 리스트가 덮는 (세금)계산서일 범위 — 기간 힌트 표시용. */
-export const INVOICE_DATE_MIN = '2026-07-01';
-export const INVOICE_DATE_MAX = '2026-07-10';
+// ── 조회기간 ─────────────────────────────────────────────────────────────────
 
 function isoDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -329,99 +294,25 @@ export const RANGE_PRESETS: readonly { id: string; label: string; range: () => D
   { id: 'months-2', label: '두 달 전', range: () => monthsAgoToToday(2) },
 ];
 
-/** 기간 기본값 — 한 달 전부터 오늘까지. 필요하면 사용자가 달력으로 바꾼다. */
+/** 기간 기본값 — 계약 기본과 동일하게 이번 달 1일~오늘(period_from/to 기본값). */
 export function defaultInvoiceRange(): DateRange {
-  return monthsAgoToToday(1);
+  return thisMonthToToday();
 }
 
-// ── 입력항목 선택지(더미) ────────────────────────────────────────────────────
+// ── 비용분할 계획 ────────────────────────────────────────────────────────────
 
-export const BUDGET_UNITS: readonly string[] = [
-  '지급수수료-경영지원팀(판)',
-  '지급수수료-개발팀(판)',
-  '세금과공과-경영지원팀(판)',
-  '통신비-경영지원팀(판)',
-  '수출제비용-영업팀(판)',
-  '소모품비-개발팀(제)',
-];
-
-/** 프로젝트 — 500/800(공통비 배부) 또는 개별 프로젝트 선택. */
-export const PROJECTS: readonly string[] = [
-  '500',
-  '800',
-  'PJT-2026-011 옴니솔 자동화',
-  'PJT-2026-024 해외영업 확대',
-  'PJT-2025-097 사내 인프라 개선',
-];
-
-/** 거래처 — 발행 전 경로의 직접 선택용. 더미 리스트의 거래처명을 그대로 재사용한다. */
-export const PARTNER_NAMES: readonly string[] = [
-  ...new Set(INVOICE_ROWS.map((r) => r.partnerName)),
-];
-
-export const FUND_ACCOUNTS: readonly string[] = ['일반경비', '급여', '외주비', '설비투자'];
-
-export const PAY_TERMS: readonly string[] = ['당월결제', '익월결제', '즉시결제'];
-
-/** 비과세일 때만 노출되는 사유구분. */
-export const EXEMPT_REASONS: readonly string[] = ['일반면세', '면세농산물', '기타면세'];
-
-/** 비용분할 행의 비용센터. */
-export const COST_CENTERS: readonly string[] = [
-  '경영지원팀',
-  '개발팀',
-  '영업팀',
-  '해외사업팀',
-  '생산팀',
-];
-
-// ── 입력값 ───────────────────────────────────────────────────────────────────
-
-export interface EntryValues {
-  /** 거래처 — 발행 전 전용(발행 후는 선택한 리스트 행이 거래처를 가진다). */
-  partner: string;
-  /** 공급가액 — 발행 전 전용(발행 후는 선택 행 합계). 원 단위 정수 문자열. */
-  supplyAmount: string;
-  budgetUnit: string;
-  note: string;
-  project: string;
-  /** 회계일 — 발행 후면 (세금)계산서일과 동일하게 자동 세팅된다. */
-  acctDate: string;
-  fundAccount: string;
-  payTerm: string;
-  fundDueDate: string;
-  /** 사유구분 — 비과세일 때만 사용. */
-  exemptReason: string;
-}
-
-export function emptyEntry(): EntryValues {
-  return {
-    partner: '',
-    supplyAmount: '',
-    budgetUnit: '',
-    note: '',
-    project: '',
-    acctDate: '',
-    // 3-1 고정 기본값(사용자 정의) — 자금과목 일반경비 · 결제조건 당월결제.
-    fundAccount: FUND_ACCOUNTS[0],
-    payTerm: PAY_TERMS[0],
-    fundDueDate: '',
-    exemptReason: EXEMPT_REASONS[0],
-  };
-}
-
-// ── 비용분할 ─────────────────────────────────────────────────────────────────
-
+/** 계약 split_rows 한 행의 편집 상태. amount 는 원 단위 정수 문자열(마지막 행은 차액반영=미입력). */
 export interface SplitRow {
   id: string;
-  budgetUnit: string;
   note: string;
-  project: string;
-  /** 원 단위 정수 문자열(음수 허용 — 취소분 분할). 검증·잔액 계산의 단일 원천. */
-  amount: string;
-  /** 퍼센트 입력값(퍼센트 모드에서 amount 를 파생시킨다). */
-  percent: string;
+  /** 프로젝트 — 카탈로그 선택(code = 'PJT_NO|WBS_NO' 합성, 제출은 WBS 만). */
+  projectCode: string;
+  projectName: string;
   costCenter: string;
+  /** 원 단위 정수 문자열(음수 허용 — 취소분 분할). 마지막 행은 차액반영이라 비워 둔다. */
+  amount: string;
+  /** 퍼센트 입력값(퍼센트 모드에서 amount 를 파생시킨다 — 참고 총액이 있을 때만). */
+  percent: string;
 }
 
 let splitSeq = 0;
@@ -429,17 +320,21 @@ export function newSplitRow(): SplitRow {
   splitSeq += 1;
   return {
     id: `s${splitSeq}`,
-    budgetUnit: '',
     note: '',
-    project: '',
+    projectCode: '',
+    projectName: '',
+    costCenter: '',
     amount: '',
     percent: '',
-    costCenter: '',
   };
 }
 
 /** 분할 입력 방식 — 금액 직접 입력 ↔ 퍼센트 입력(금액 자동 계산). */
 export type SplitMode = 'amount' | 'percent';
+
+/** 분할 행 수 제한(계약: 2~20행). */
+export const MIN_SPLIT_ROWS = 2;
+export const MAX_SPLIT_ROWS = 20;
 
 // ── 포맷·파싱 ────────────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import { EmptyNote } from '@/components/ui/empty-note';
 import { LiveChatCard } from '@/components/live/LiveChatCard';
 import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
 import { LiveGridCard } from '@/components/live/LiveGridCard';
+import { InvoiceGridCard } from '@/components/live/InvoiceGridCard';
 import { LivePlannerCard } from '@/components/live/LivePlannerCard';
 import type {
   LiveLogLevel,
@@ -116,6 +117,11 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
                 hitl={run.hitl}
                 onQuery={(query) => run.sendQuery(run.hitl!.id, query)}
                 onSubmit={(rows) => run.sendRows(run.hitl!.id, rows)}
+              />
+            ) : run.hitl.kind === 'invoice-grid' ? (
+              <InvoiceGridCard
+                hitl={run.hitl}
+                onSubmit={(rows, splitPlan) => run.sendRows(run.hitl!.id, rows, splitPlan)}
               />
             ) : run.hitl.kind === 'planner' ? (
               <LivePlannerCard

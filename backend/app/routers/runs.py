@@ -128,6 +128,16 @@ class GridRowIn(BaseModel):
     noteEdited: bool = False
 
 
+class SplitPlanRowIn(BaseModel):
+    # 계산서 개입(kind 'invoice-grid') 비용분할 계획 1행 — ERP 분할처리 팝업의 행에 1:1.
+    # rows(GridRowIn)와 **함께** 제출된다: 선택 1행의 금액을 이 계획대로 쪼갠다.
+    # amount=None 은 마지막 행(차액반영) — ERP 가 잔액을 흡수하므로 금액을 계산해 보내지 않는다.
+    note: str = Field(default="", max_length=200)
+    amount: int | None = None
+    costCenter: str = Field(default="", max_length=255)
+    projectWbs: str = Field(default="", max_length=64)
+
+
 # ── 구매발주 계획서(kind 'planner') 제출 서브모델 — 프론트 buildPlanPayload shape 미러 ──
 # GridRowIn 선례: 경계(Pydantic)에서 필드·상한을 강제해야 model_dump 로 노드까지 온전히
 # 도달한다(모델에 없는 필드는 조용히 버려진다 — 2026-07-05 회귀).
@@ -180,6 +190,8 @@ class HitlDecision(BaseModel):
     done: bool | None = None  # 대화형 폼 '선택 완료' 신호
     # 그리드 HITL 일괄 제출 — 행별 예산단위·프로젝트·적요·건너뜀(최대 500행).
     rows: list[GridRowIn] | None = Field(default=None, max_length=500)
+    # 계산서 개입(kind 'invoice-grid') 분할 계획 — rows 와 동시 제출(계약 하한 2행·상한 20행).
+    splitPlan: list[SplitPlanRowIn] | None = Field(default=None, max_length=20)
     # 구매발주 계획서 확정 제출(kind 'planner') — buildPlanPayload shape 그대로.
     plan: PlanIn | None = None
 
@@ -350,6 +362,10 @@ async def hitl(body: HitlDecision, user: CurrentUser):
         "done": body.done,
         # 그리드 일괄 제출은 plain dict 목록으로 채널에 전달(노드가 서버검증 후 반영).
         "rows": [r.model_dump() for r in body.rows] if body.rows is not None else None,
+        # 계산서 분할 계획도 같은 이유로 여기 함께 실어야 노드까지 도달한다(rows 와 짝).
+        "splitPlan": (
+            [r.model_dump() for r in body.splitPlan] if body.splitPlan is not None else None
+        ),
         # 계획서 제출도 payload 에 **동시 추가** — 모델에만 있고 여기 빠지면 조용히 유실된다
         # (2026-07-05 grid 회귀 선례). 노드(plan)가 validate_plan 후 수락한다.
         "plan": body.plan.model_dump() if body.plan is not None else None,

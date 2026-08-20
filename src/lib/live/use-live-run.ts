@@ -26,6 +26,7 @@ import type {
   LiveStepState,
   LiveWindow,
   PlanSubmit,
+  SplitPlanRowSubmit,
   UseLiveRunReturn,
 } from './types';
 
@@ -449,11 +450,18 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
     [],
   );
 
-  const sendRows = useCallback((decisionId: string, rows: GridRowSubmit[]): Promise<boolean> => {
-    // 제출 즉시 개입 패널 축소·화면 원복(낙관적). 무효 제출이면 백엔드가 그리드를 재방출한다.
-    dispatch({ type: 'clearHitl' });
-    return postHitl(runIdRef.current, decisionId, { rows });
-  }, []);
+  const sendRows = useCallback(
+    (
+      decisionId: string,
+      rows: GridRowSubmit[],
+      splitPlan?: SplitPlanRowSubmit[],
+    ): Promise<boolean> => {
+      // 제출 즉시 개입 패널 축소·화면 원복(낙관적). 무효 제출이면 백엔드가 그리드를 재방출한다.
+      dispatch({ type: 'clearHitl' });
+      return postHitl(runIdRef.current, decisionId, splitPlan ? { rows, splitPlan } : { rows });
+    },
+    [],
+  );
 
   const sendPlan = useCallback((decisionId: string, plan: PlanSubmit): Promise<boolean> => {
     // 계획서(kind=planner) 확정 제출 — sendRows 와 동일하게 낙관적으로 개입을 닫는다.

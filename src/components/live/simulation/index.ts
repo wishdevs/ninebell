@@ -12,7 +12,6 @@
 
 import type { ComponentType } from 'react';
 import type { Agent } from '@/lib/data/agents';
-import { TaxInvoiceSimulation } from './tax-invoice/tax-invoice-simulation';
 import { PurchaseOrderSimulation } from './purchase-order/purchase-order-simulation';
 
 export interface SimulationPanelProps {
@@ -20,7 +19,7 @@ export interface SimulationPanelProps {
 }
 
 export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProps>> = {
-  'tax-invoice': TaxInvoiceSimulation,
+  // tax-invoice 는 2026-08-19 pre-run/PRE_RUN_FORMS('tax-invoice')로 승격 — 여기서 제거.
   // 데모 전용 — 실 연동 구매발주(purchase-order)는 SCM-구매 실측 후 pre-run 으로 승격 예정.
   'purchase-order-demo': PurchaseOrderSimulation,
 };

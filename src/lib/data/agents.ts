@@ -240,9 +240,8 @@ export const DEBUG_ONLY_WORKFLOW_IDS: ReadonlySet<string> = new Set([]);
  * 일반 모드에서 숨길 **에이전트 id** — 실행 워크플로우가 없어 workflowId 로는 못 거르는 건.
  * (`DEBUG_ONLY_WORKFLOW_IDS` 는 workflowId 매칭이라 workflow_id=null 인 에이전트엔 무력하다.)
  *
- * · `tax-invoice` — 세금계산서. 화면 흐름만 확인하는 **시뮬레이션**이고 실 옴니솔 조회·저장이
- *   아직 없다(workflow_id=null). 완성된 자동화로 오해되지 않게 일반 모드에서 감춘다
- *   (사용자 지정 2026-08-12). 자동화가 붙어 정식 공개할 때 이 한 줄을 지운다.
+ * · `tax-invoice` — 세금계산서. 실행 전 폼으로 승격됐지만(2026-08-19) 스모크 사이클을 아직
+ *   통과하지 않았다 — 통과 전 정식 공개 금지. 통과 후 이 한 줄을 지운다.
  * · 구매팀 그룹 전체(`purchase-order`·`item-bulk-register`·`purchase-order-demo`) — 구축 중
  *   (구매발주 Phase A: 계획서까지, 실 발주 저장 없음)이라 일반 모드에서 감춘다(사용자 지정
  *   2026-08-14). 그룹 카드·메뉴얼 '구매팀' 분류는 소속 에이전트가 전부 걸러지면 함께

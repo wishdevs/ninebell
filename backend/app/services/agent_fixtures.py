@@ -688,33 +688,77 @@ _VOUCHER_CARD_FIXTURE: dict = {
 }
 
 
-# ── 세금계산서 — 화면 시뮬레이션 단계(자동화 그래프 미구축) ──────────────────
-# workflow_id 없음 = 실행 컨트롤 비활성(프론트 게이트). 프론트가 agent id 로 화면 시뮬레이션
-# 패널(src/components/live/simulation)을 렌더해 질문→리스트→입력→분할→요약 흐름만 확정한다.
-# steps/flow_graph 는 비운다 — 그래프가 없어 계획을 그리면 거짓이 된다. 그래프 구축 시
-# workflow_id·steps·flow_graph·handoff_note 를 채워 실동작으로 승격한다(경조금·학자금 관례).
+# ── 세금계산서 결의 플로우 그래프 (tax-invoice 그래프의 사람용 요약) ────────────
+# 발행 전/후·분할 여부로 갈리는 3경로를 한 그래프에 요약한다: 발행 후만 계산서 리스트(HITL)를
+# 지나고, 분할일 때만 분할처리 팝업을 지난다. 저장 후 상신은 사용자가 ERP 에서 직접.
+TAX_INVOICE_FLOW: dict = {
+    "nodes": [
+        {"id": "access", "kind": "start", "status": "done", "title": "결의서 입력 접속", "sub": "전사공통(회계)", **_col(0)},
+        {"id": "kind", "kind": "step", "status": "done", "title": "결의구분 = 세금계산서", "sub": "추가(F3)", **_col(1)},
+        {"id": "evd", "kind": "step", "status": "active", "title": "증빙유형 확정", "sub": "발행·과세·분할 → 10종 코드(서버 도출)", **_col(2)},
+        {"id": "list", "kind": "decision", "status": "pending", "title": "계산서 선택·입력", "sub": "발행 후만 · 행 선택 + 행별 입력(개입)", **_col(3)},
+        {"id": "fill", "kind": "step", "status": "pending", "title": "본문 입력", "sub": "발행 전 폼 / 발행 후 개입값을 행별 반영", **_col(4)},
+        {"id": "split", "kind": "decision", "status": "pending", "title": "비용분할", "sub": "분할처리 팝업 다행 분개", **_col(5)},
+        {"id": "save", "kind": "step", "status": "pending", "title": "저장(F7)", "sub": "저장 후 재조회 지속 확인", **_col(6)},
+        {"id": "submit", "kind": "end", "status": "pending", "title": "전자결재 상신", "sub": "사용자가 ERP 에서 직접", **_col(7)},
+    ],
+    "edges": [
+        {"id": "e-access-kind", "source": "access", "target": "kind"},
+        {"id": "e-kind-evd", "source": "kind", "target": "evd"},
+        {"id": "e-evd-list", "source": "evd", "target": "list", "label": "발행 후", "kind": "branch"},
+        {"id": "e-evd-fill", "source": "evd", "target": "fill", "label": "발행 전·분할", "kind": "branch"},
+        {"id": "e-list-fill", "source": "list", "target": "fill"},
+        {"id": "e-fill-split", "source": "fill", "target": "split", "label": "분할일 때", "kind": "branch"},
+        {"id": "e-fill-save", "source": "fill", "target": "save", "label": "분할 없음", "kind": "branch"},
+        {"id": "e-split-save", "source": "split", "target": "save"},
+        {"id": "e-save-submit", "source": "save", "target": "submit", "label": "저장 후", "kind": "branch"},
+    ],
+}
+
+
+# ── 세금계산서 — 실동작 승격(tax-invoice 워크플로우, 2026-08-19) ────────────────
+# 화면 시뮬레이션 더미를 제자리 승격한다(agent id "tax-invoice" 유지 — 프론트/시드 연속성).
+# 증빙유형 10종은 서버 도출(app.agents.tax_invoice.params.evidence_for — 프론트 evidenceFor 와
+# 패리티 테스트로 lockstep). steps 의 key 는 그래프 노드(emit_step 키)와 1:1.
+# 검증 상태(2026-08-19): 발행 전(22)은 쓰기 프로브 완전 사이클 PASS(RN202608190004 저장→독립
+# 검증→F6 삭제). 분할(11)은 headed 동반 세션에서 레시피가 확정됐고(RN202608190005 저장 성공 —
+# 자금과목 채움이 F7 반려 해소의 핵심) 10사이클 스모크는 미완이다.
 _TAX_INVOICE_FIXTURE: dict = {
     "id": "tax-invoice",
-    "workflow_id": None,
+    "workflow_id": "tax-invoice",
     "group_id": "resolution",
     "hidden": False,
     "name": "세금계산서",
-    "description": "세금계산서 결의서를 대신 작성합니다. 현재는 화면 흐름만 확인하는 시뮬레이션이며, 실제 옴니솔 조회·저장은 하지 않습니다.",
+    "description": "발행 전/후·과세성격·비용분할에 맞는 증빙유형으로 세금계산서 결의서를 작성해 저장(F7)까지 자동 진행합니다. 발행 후에는 전자발행 계산서 목록에서 반영할 행을 직접 선택합니다.",
+    "handoff_note": "저장된 결의서는 아직 상신 전입니다 — 상신은 ERP 에서 직접 진행해 주세요. ⚠ 발행 후(전자발행 계산서 행 선택) 경로는 테스트 환경에 전자발행 데이터가 없어 실데이터 검증 미완입니다 — 첫 실사용은 결과를 꼭 확인해 주세요.",
     "drive": "browser",
-    "interaction": "conversational",
+    "interaction": "autonomous",
     "target_system": "더존 옴니솔",
     "target_url": "erp.ninebell.co.kr",
     "status": "idle",
     "progress": 0,
     "timeout_seconds": 240,
     "elapsed_seconds": 0,
-    "current_action": "화면 시뮬레이션 — 자동화는 아직 연결되지 않았습니다",
+    "current_action": "대기 중 — 입력을 완료하고 실행하면 시작합니다",
     "run_count": 0,
     "success_rate": 0.0,
     "avg_seconds": 0,
     "last_run_at": None,
-    "flow_graph": None,
-    "steps": [],
+    "flow_graph": TAX_INVOICE_FLOW,
+    "steps": [
+        {"key": "validate_params", "label": "입력 검증", "skill": "field-input", "status": "pending", "phase": "접속", "detail": "실행 전 폼 입력을 검증하고 증빙유형 코드(10종)를 서버에서 확정"},
+        {"key": "login", "label": "로그인", "skill": "login", "status": "pending", "phase": "접속", "detail": "더존 옴니솔 인증 후 세션 확보"},
+        {"key": "user_type", "label": "회계 사용자 전환", "skill": "user-type", "status": "pending", "phase": "접속", "detail": "사용자 유형을 '회계'로 전환"},
+        {"key": "menu_nav", "label": "결의서입력 화면", "skill": "menu-nav", "status": "pending", "phase": "접속", "detail": "전사공통(회계) 결의서 입력 화면 진입"},
+        {"key": "set_gubun", "label": "결의구분: 세금계산서", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "결의구분 드롭다운을 세금계산서(51)로 설정"},
+        {"key": "add_row", "label": "상세행 추가(F3)", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "F3로 결의 상세행 생성"},
+        {"key": "select_evdn", "label": "증빙유형 적용", "skill": "field-input", "status": "pending", "phase": "결의서 준비", "detail": "확정 코드 적용 + '전자발행된 증빙' 다이얼로그 응답(발행 전·분할=아니요, 발행 후=예)"},
+        {"key": "pick_invoices", "label": "계산서 선택·입력", "skill": "grid-read", "status": "pending", "phase": "계산서 선택", "detail": "발행 후만 — 조회(F2)→전자세금계산서 팝업 기간 조회→계산서 그리드 개입(행 선택 + 행별 예산단위·프로젝트·적요, 분할이면 분할 계획)"},
+        {"key": "apply_invoices", "label": "계산서 반영", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "발행 후만 — 선택한 계산서를 문서에 적용하고 생성된 상세 행마다 예산단위·프로젝트·적요·자금과목을 입력"},
+        {"key": "fill_rows", "label": "본문 입력", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "발행 전만 — 거래처(정확명)·적요·예산단위·공급가액(타이핑, 세액 자동)·프로젝트(WBS)·[비과세 사유구분]·[회계일]·자금과목(일반경비)을 입력"},
+        {"key": "split_costs", "label": "비용분할", "skill": "grid-input", "status": "pending", "phase": "건별 입력", "detail": "분할일 때만 — 분할처리 팝업 행 구성+차액반영+잉여 행 정리+전 행 비용센터/프로젝트→적용"},
+        {"key": "save_doc", "label": "저장(F7)", "skill": "save", "status": "pending", "phase": "저장", "detail": "저장 확인 '예' 후 재조회로 문서 지속을 검증(상신은 하지 않음)"},
+    ],
     "logs": [],
 }
 

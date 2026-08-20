@@ -40,6 +40,7 @@ export type LiveHitlKind =
   | 'search'
   | 'chat'
   | 'grid'
+  | 'invoice-grid'
   | 'planner'
   | (string & {});
 
@@ -85,6 +86,32 @@ export interface LiveGridRow {
   noteSource?: PrefillSource | null;
   /** 저장 실패 재시도 시 이 행의 조치 안내(예: 예산계정이 무엇과 같아야 하는지). 있으면 강조. */
   error?: string;
+}
+
+/**
+ * 계산서 개입(kind='invoice-grid') 한 행 — 발행 후 '전자세금계산서/전자계산서' 팝업 그리드의
+ * 계산서 1건. 표시 전용이며, 사용자는 **처리할 행을 고르고**(기본 미선택) 고른 행에만
+ * 예산단위·프로젝트·적요를 채운다. no 는 행 식별자(제출 시 키).
+ *
+ * 카드 그리드(kind='grid', {@link LiveGridRow})와 표시 컬럼이 전혀 달라 별도 타입이며,
+ * 프레임에서도 별도 키(invoiceRows)로 온다 — planner 의 plannerBom 과 같은 관례.
+ * 백엔드 진화 중 컬럼이 빠질 수 있어 no 외 표시 필드는 모두 옵셔널이다.
+ */
+export interface InvoiceGridRow {
+  no: number;
+  /** 계산서일(START_DT) — 표시 그대로. 선택 행의 마지막 값이 회계일이 된다. */
+  invoiceDate?: string;
+  partnerName?: string;
+  partnerCode?: string;
+  /** 원 단위 정수. 취소분은 음수. */
+  supplyAmount?: number;
+  taxAmount?: number;
+  sumAmount?: number;
+  /** 국세청 승인번호(NTS_APRVL_NO). */
+  ntsAprvlNo?: string;
+  itemName?: string;
+  /** 전자세금계산서종류(DATA_FG_NM) — '취소'가 들어가면 취소분으로 표시한다. */
+  dataKind?: string;
 }
 
 /** 그리드 프리셀렉트 출처. ai=AI 추천(높은 확신), default=기본지정 즐겨찾기 폴백,
@@ -225,9 +252,13 @@ export interface LiveHitl {
   searchPlaceholder?: string;
   /** kind=grid — 채워야 할 거래내역 행(없으면 빈 그리드). */
   rows?: LiveGridRow[];
-  /** kind=grid — 예산단위 보기(자주쓰는/전체). */
+  /** kind=invoice-grid — 고를 계산서 행(없으면 빈 그리드). */
+  invoiceRows?: InvoiceGridRow[];
+  /** kind=invoice-grid — 비용분할(증빙 11/13) 여부. true 면 계산서 1행 선택 + 분할 계획을 함께 받는다. */
+  split?: boolean;
+  /** kind=grid·invoice-grid — 예산단위 보기(자주쓰는/전체). */
   budgetUnits?: HitlBudgetUnits;
-  /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). */
+  /** kind=grid — 프로젝트 보기(자주쓰는/검색결과). invoice-grid 는 favorites 만 쓴다(검색은 카탈로그 API). */
   projects?: HitlProjects;
   /** kind=planner — 발주 계획서 BOM(프로젝트 + 장비→모듈→부품). */
   plannerBom?: PlannerBom;
@@ -251,6 +282,21 @@ export interface GridRowSubmit {
   budgetEdited?: boolean;
   projectEdited?: boolean;
   noteEdited?: boolean;
+}
+
+/**
+ * 비용분할 계획 한 행(kind='invoice-grid' 분할 모드) — ERP 분할처리 팝업의 행 1개에 대응.
+ *
+ * **마지막 행은 amount=null** — ERP 의 '차액반영' 버튼이 잔액을 흡수한다(수동 계산 금지).
+ * 실행 전 폼 계약 `split_rows` 와 같은 규칙이며, 입력받는 자리만 개입 화면으로 옮겨졌다.
+ */
+export interface SplitPlanRowSubmit {
+  note: string;
+  /** 원 단위 정수(음수 허용 — 취소분). 마지막 행은 null=차액반영. */
+  amount: number | null;
+  costCenter: string;
+  /** 프로젝트 WBS 요소(WBS_NO). */
+  projectWbs: string;
 }
 
 /** SSE chat 프레임(백엔드 emit_chat) — 화면 표시용 ChatMessage 로 변환된다. */
@@ -316,8 +362,10 @@ export interface HitlPayload {
   query?: string;
   message?: string;
   done?: boolean;
-  /** kind=grid 일괄 제출 — 행별 예산단위·프로젝트·적요·제외. */
+  /** kind=grid·invoice-grid 일괄 제출 — 행별 예산단위·프로젝트·적요·제외. */
   rows?: GridRowSubmit[];
+  /** kind=invoice-grid 분할 모드 제출 — rows 와 함께 보낸다(선택 1행의 분할 계획). */
+  splitPlan?: SplitPlanRowSubmit[];
   /** kind=planner 제출 — 발주 계획(발주단위·거래처 그룹). */
   plan?: PlanSubmit;
 }
@@ -397,8 +445,12 @@ export interface LiveRunActions {
   finishChat: (decisionId: string) => Promise<boolean>;
   /** 그리드 개입 — 프로젝트 ERP 검색 질의(BE 가 searchResults 를 채운 새 hitl 프레임을 보냄). */
   sendQuery: (decisionId: string, query: string) => Promise<boolean>;
-  /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). */
-  sendRows: (decisionId: string, rows: GridRowSubmit[]) => Promise<boolean>;
+  /** 그리드 개입 — 행 일괄 제출(채움 실행 재개). splitPlan 은 계산서 분할 개입에서만 동봉한다. */
+  sendRows: (
+    decisionId: string,
+    rows: GridRowSubmit[],
+    splitPlan?: SplitPlanRowSubmit[],
+  ) => Promise<boolean>;
   /** 계획서 개입(kind=planner) — 발주 계획 확정 제출(실행 재개, 낙관적 clearHitl). */
   sendPlan: (decisionId: string, plan: PlanSubmit) => Promise<boolean>;
   /** 라이브 뷰 창 수동 전환(부모창/자식창 탭). 자식 창은 열릴 때 자동 활성화된다. */

@@ -18,6 +18,7 @@ from .expense_card import build_expense_card_chat_graph
 from .gyeongjo_grant.graph import GYEONGJO_GUBUN_LABEL, build_gyeongjo_grant_graph
 from .hakjagum_grant.graph import HAKJAGUM_GUBUN_LABEL, build_hakjagum_grant_graph
 from .purchase_order.graph import build_purchase_order_graph
+from .tax_invoice.graph import build_tax_invoice_graph
 from .trip_domestic.graph import TRIP_GUBUN_LABEL, build_trip_domestic_graph
 from .trip_overseas.graph import TRIP_GUBUN_LABEL as TRIP_OVERSEAS_GUBUN_LABEL
 from .trip_overseas.graph import build_trip_overseas_graph
@@ -75,6 +76,12 @@ _hakjagum_grant_graph = build_hakjagum_grant_graph()
 # 경조금 형제 클론(동일 detail 스키마·프리미티브 재사용, 단건) → 같은 delay_scale(0.4). env 우선.
 register_workflow("hakjagum-grant", lambda: _hakjagum_grant_graph, delay_scale=0.4)
 
+_tax_invoice_graph = build_tax_invoice_graph()
+# 세금계산서 결의서입력(2026-08-19) — 발행 전(22)·분할(11) 쓰기 프로브 완전 사이클 PASS 조합.
+# delay_scale 0.4: 프로브 전 라운드가 검증한 대기 배율(형제 결의서 계열과 동일). ⚠ F7 실저장
+# 실행(사용자 승인 2026-08-19) · 상신 금지 · 발행 후(계산서 행 선택) 경로는 실데이터 검증 미완.
+register_workflow("tax-invoice", lambda: _tax_invoice_graph, delay_scale=0.4)
+
 _purchase_order_graph = build_purchase_order_graph()
 # 구매발주 Phase A(읽기+계획서 HITL, 2026-08-13) — 저장(F7)·결재 없음(계획 확정까지).
 # delay_scale 0.4: 진입·도움창·조회 사이클을 검증한 읽기 프로브가 전부 0.4 로 PASS 한 배율.
@@ -102,6 +109,7 @@ __all__ = [
     "build_gyeongjo_grant_graph",
     "build_hakjagum_grant_graph",
     "build_purchase_order_graph",
+    "build_tax_invoice_graph",
     "build_trip_domestic_graph",
     "build_trip_overseas_graph",
     "build_voucher_card_graph",
