@@ -67,10 +67,22 @@ def test_docu_types_dedup_keeps_first_order():
     assert p.docu_types == ["국내매출", "내수구매"]
 
 
+def test_docu_types_any_catalog_label_accepted():
+    """허용셋 확장(2026-08-20): 실측 62종 카탈로그(docu_types.DOCU_TYPE_CATALOG)의 어느 라벨도
+    유효하다 — 카탈로그 전량을 한 번에 넣어도 통과(순서 유지)."""
+    from app.agents.voucher_receivable.docu_types import DOCU_TYPE_CHOICES
+
+    assert len(DOCU_TYPE_CHOICES) == 62
+    p = parse_voucher_params({"voucher": {"docu_types": ["일반", "국내수금"]}})  # 카탈로그 임의 라벨.
+    assert p.docu_types == ["일반", "국내수금"]
+    p_all = parse_voucher_params({"voucher": {"docu_types": list(DOCU_TYPE_CHOICES)}})
+    assert p_all.docu_types == list(DOCU_TYPE_CHOICES)
+
+
 def test_docu_types_unknown_label_rejected():
-    # ⚠ '일반'(SYSDEF_CD 11)은 62종 확장으로 **유효 라벨**이 됐다 — 카탈로그에 없는 값으로 검증.
+    # 카탈로그(실측 62종)에 없는 라벨은 거부 — ERP 피커 무매칭으로 이어질 입력을 앞단 차단.
     with pytest.raises(ValueError):
-        parse_voucher_params({"voucher": {"docu_types": ["없는전표유형"]}})
+        parse_voucher_params({"voucher": {"docu_types": ["없는유형"]}})
 
 
 def test_docu_types_empty_list_rejected():

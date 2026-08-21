@@ -66,17 +66,38 @@ def test_graph_is_recompilable():
     assert build_voucher_by_type_graph() is not None
 
 
-def test_docu_type_choices_cover_full_erp_catalog():
-    # 폼 선택지는 ERP 전체 62종(2026-08-20 확장) — 라벨(SYSDEF_NM)이 계약값이다.
-    assert len(DOCU_TYPE_CHOICES) == 62
-    assert {"국내매출", "해외매출", "내수구매", "일반", "급여"} <= set(DOCU_TYPE_CHOICES)
+def test_docu_type_catalog_and_default():
+    """확장(2026-08-20): 허용셋 = 실측 카탈로그 62종(중복 없음, ERP 는 SYSDEF_NM 라벨 매칭),
+    빌드 기본값 = 병합 전 두 에이전트의 합집합 3종(미지정 실행이 62종 전체로 돌지 않게)."""
+    from app.agents.voucher_receivable.docu_types import (
+        DOCU_TYPE_CATALOG,
+        DOCU_TYPE_DEFAULT,
+    )
+
+    assert len(DOCU_TYPE_CATALOG) == 62
+    assert len(DOCU_TYPE_CHOICES) == 62 == len(set(DOCU_TYPE_CHOICES))
+    assert DOCU_TYPE_CHOICES == tuple(label for _, label in DOCU_TYPE_CATALOG)
+    assert DOCU_TYPE_DEFAULT == ("국내매출", "해외매출", "내수구매")
+    assert set(DOCU_TYPE_DEFAULT) <= set(DOCU_TYPE_CHOICES)
+    # 코드/라벨 전부 비어있지 않은 문자열(아티팩트 재생성 회귀 방지).
+    assert all(c.strip() and l.strip() for c, l in DOCU_TYPE_CATALOG)
 
 
-def test_docu_type_defaults_keep_merge_behaviour():
-    # 폼 미지정 시 기본값은 병합 전 조합 그대로 — 구 매출(국내/해외) + 구 매입(내수구매).
-    from app.agents.voucher_receivable.steps import DOCU_TYPE_DEFAULTS
+def test_build_uses_default_not_full_catalog(monkeypatch):
+    """빌드 인자 = DOCU_TYPE_DEFAULT(3종) — 62종 전체가 기본 조회 조건이 되는 사고 방지."""
+    import app.agents.voucher_receivable.graph as graph_mod
+    from app.agents.voucher_receivable.docu_types import DOCU_TYPE_DEFAULT
 
-    assert DOCU_TYPE_DEFAULTS == ("국내매출", "해외매출", "내수구매")
+    seen: dict = {}
+    real = graph_mod.build_voucher_graph
+
+    def _capture(docu_types, **kw):
+        seen["docu_types"] = docu_types
+        return real(docu_types, **kw)
+
+    monkeypatch.setattr(graph_mod, "build_voucher_graph", _capture)
+    assert graph_mod.build_voucher_by_type_graph() is not None
+    assert seen["docu_types"] == DOCU_TYPE_DEFAULT == ("국내매출", "해외매출", "내수구매")
 
 
 # ── registry ──────────────────────────────────────────────────────────────────

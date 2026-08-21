@@ -14,6 +14,10 @@ import copy
 import re
 from dataclasses import asdict, dataclass
 
+# 전표유형 실측 카탈로그(62종) — 경량 상수 모듈에서 직접 import 한다(steps 경유 금지:
+# steps 는 nbkit 등 무거운 브라우저 의존을 끌고 온다).
+from app.agents.voucher_receivable.docu_types import DOCU_TYPE_CATALOG
+
 
 @dataclass(frozen=True)
 class SettingDef:
@@ -98,6 +102,8 @@ def fuel_classes_for(stored: dict | None) -> list[dict]:
 # defaultSelected(실행 전 폼 기본 선택 여부)}. 실행별 실제 필터는 폼이 이 목록에서 골라
 # params.voucher.menu_filters(라벨 목록)로 보낸다 — ERP 대조 값은 label 이다.
 MENU_ITEMS_KEY = "menu_items"
+# 실효 설정 전용 읽기 키 — 전표유형 실측 카탈로그(저장/PATCH 대상 아님).
+DOCU_TYPE_CHOICES_KEY = "docu_type_choices"
 MAX_MENU_ITEMS = 20
 
 DEFAULT_MENU_ITEMS: list[dict] = [
@@ -766,6 +772,11 @@ def effective_settings(agent_id: str, stored: dict | None) -> dict:
         out[FUEL_CLASSES_KEY] = fuel_classes_for(stored)
     if agent_id in _AGENTS_WITH_MENU_ITEMS:
         out[MENU_ITEMS_KEY] = menu_items_for(stored)
+        # 전표유형 선택지(읽기 전용, 2026-08-20 실측 62종) — 프론트 실행 전 폼이 이 목록으로
+        # 렌더한다. 코드 상수가 유일 소스라 **저장 불가**(validate_settings 가 미지 키로 거부).
+        out[DOCU_TYPE_CHOICES_KEY] = [
+            {"code": code, "label": label} for code, label in DOCU_TYPE_CATALOG
+        ]
     if agent_id in _AGENTS_WITH_ORDER_PATTERNS:
         out[ORDER_PATTERNS_KEY] = order_patterns_for(stored)
     return out

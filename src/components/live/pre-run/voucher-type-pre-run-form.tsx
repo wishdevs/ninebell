@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   RiArrowDownSLine,
   RiCheckLine,
@@ -11,6 +11,7 @@ import {
 } from '@remixicon/react';
 import { ComboPanel, isDesktopViewport, useOutsideClose } from '@/components/live/combo-popover';
 import { Button } from '@/components/ui/button';
+import { Chip, ChipSet } from '@/components/ui/chip-set';
 import { DatePicker } from '@/components/ui/date-picker';
 import { FormField } from '@/components/ui/form-field';
 import { SectionCard } from '@/components/ui/section-card';
@@ -30,95 +31,45 @@ import type { PreRunFormProps } from './index';
  * 백엔드 계약: `params["voucher"] = { period_from, period_to, docu_types, menu_filters? }`.
  * docu_types 는 전표유형 라벨(SYSDEF_NM) 배열, menu_filters 는 그리드 '메뉴' 텍스트 배열
  * (미선택 = 키 자체를 보내지 않음 = 필터 없이 전체 메뉴).
+ *
+ * 두 다중선택 항목의 원본 목록은 모두 **에이전트 설정에서 읽기만** 한다 —
+ * 전표유형은 `settings.docu_type_choices`(백엔드가 ERP 피커를 실측한 62종, 저장 불가),
+ * 메뉴는 `settings.menu_items`(관리자가 에이전트 관리에서 추가/삭제하는 공유 목록).
  */
 
-// 전표유형(SYSDEF_CD/SYSDEF_NM) 전체 카탈로그 — ERP 피커 실측 62종
-// (backend/e2e/artifacts/voucher_receivable_docu_type_diag.json). 백엔드 상수
-// `DOCU_TYPE_CATALOG`(app/agents/voucher_receivable/steps.py)와 **패리티 테스트로 잠겨 있다**.
-// 백엔드 set_docu_types 는 라벨(SYSDEF_NM)로 피커를 체크하므로 라벨이 곧 계약값이고,
-// 코드는 검색·표시용이다(같은 라벨이 없어 라벨만으로도 유일).
-const DOCU_TYPE_CATALOG: readonly { code: string; label: string }[] = [
-  { code: '11', label: '일반' },
-  { code: '12', label: '결산대체' },
-  { code: '13', label: '결산역분개' },
+/** 전표유형 카탈로그 한 항목 — settings.docu_type_choices 원소(ERP 피커 순서, 읽기 전용). */
+interface DocuTypeChoice {
+  code: string;
+  label: string;
+}
+
+// settings 부재/파손 시 폴백 — 종전 3종(SYSDEF_CD 매출 21/23·내수구매 31).
+const FALLBACK_DOCU_TYPE_CHOICES: readonly DocuTypeChoice[] = [
   { code: '21', label: '국내매출' },
-  { code: '22', label: '국내수금' },
   { code: '23', label: '해외매출' },
-  { code: '24', label: '해외수금' },
-  { code: '25', label: '선수금' },
-  { code: '26', label: '선수금 반제' },
-  { code: '27', label: '해외선수금' },
-  { code: '28', label: '해외선수금 반제' },
   { code: '31', label: '내수구매' },
-  { code: '32', label: '외자구매' },
-  { code: '14A', label: '결산손익역분개' },
-  { code: '33', label: '선급금' },
-  { code: '15A', label: '결산원가역분개' },
-  { code: '34', label: '선급금반제' },
-  { code: '41', label: '입고전기' },
-  { code: '42', label: '출고전기' },
-  { code: '43', label: '이동전기' },
-  { code: '19', label: '일반전표역분개' },
-  { code: '44', label: '이전전기' },
-  { code: '51', label: '생산출고' },
-  { code: '52', label: '생산입고' },
-  { code: '53', label: '연산품입고' },
-  { code: '54', label: '부산물입고' },
-  { code: '55', label: '연산품출고(취소)' },
-  { code: '56', label: '부산물출고(취소)' },
-  { code: '61', label: '수출제비용' },
-  { code: '62', label: '수입부대비용' },
-  { code: '63', label: '미착정산' },
-  { code: '29', label: '결산대체(자산)' },
-  { code: '71', label: '급여' },
-  { code: '72', label: '퇴직금' },
-  { code: '73', label: '사업/기타소득' },
-  { code: '74', label: '복리후생' },
-  { code: '75', label: '교육' },
-  { code: '14', label: '결산손익대체' },
-  { code: '15', label: '결산원가대체' },
-  { code: '35', label: '내수구매비용' },
-  { code: '81', label: 'PS정산' },
-  { code: '82', label: 'PM정산' },
-  { code: '91', label: '리스임차' },
-  { code: '16', label: '결산외화평가' },
-  { code: '17', label: '결산역분개외화평가' },
-  { code: '18', label: '건설중인자산대체' },
-  { code: '76', label: '출장' },
-  { code: '77', label: '퇴직금추계액' },
-  { code: '94', label: '진행매출' },
-  { code: '94A', label: '진행매출역분개' },
-  { code: '95', label: '결산원가' },
-  { code: '96', label: '급여안분' },
-  { code: '97', label: '자산이동' },
-  { code: '98', label: '리스임대' },
-  { code: '99', label: '리스임대수납' },
-  { code: '100', label: '자산처분' },
-  { code: '101', label: '충당금결산' },
-  { code: '102', label: '재고평가' },
-  { code: '103', label: '원가정산' },
-  { code: '104', label: '전자상거래 국내매출' },
-  { code: '105', label: '전자상거래 해외매출' },
-  { code: '106', label: 'IU(MIG)' },
-] as const;
+];
 
-type DocuType = string;
-const ALL_DOCU_TYPES: readonly DocuType[] = DOCU_TYPE_CATALOG.map((t) => t.label);
-// 폼 기본 선택 — 병합 전 두 에이전트(외상매출금·외상매입금)와 같은 조합(백엔드 기본값과 동일).
-const DEFAULT_DOCU_TYPES: readonly DocuType[] = ['국내매출', '해외매출', '내수구매'];
-
-// 종전 에이전트와 같은 조합을 한 번에 선택하는 프리셋 — 현재 선택을 통째로 교체한다.
-const PRESETS: readonly { label: string; types: readonly DocuType[] }[] = [
+// 종전 에이전트와 같은 조합(라벨)을 한 번에 선택하는 프리셋 — 현재 선택을 통째로 교체한다.
+const PRESETS: readonly { label: string; types: readonly string[] }[] = [
   { label: '외상매출금', types: ['국내매출', '해외매출'] },
   { label: '외상매입금', types: ['내수구매'] },
 ];
 
-// 셀렉트 항목 변환 — 토글 키 = 라벨(백엔드 계약값), 코드는 보조 표기·코드 검색용.
-const DOCU_COMBO_ITEMS: readonly MultiComboItem[] = DOCU_TYPE_CATALOG.map((t) => ({
-  key: t.label,
-  label: t.label,
-  code: t.code,
-}));
+/** settings.docu_type_choices 를 방어적으로 파싱한다 — 부재·비배열·항목 파손은 폴백/스킵. */
+function parseDocuTypeChoices(settings: Record<string, unknown> | undefined): DocuTypeChoice[] {
+  const raw = settings?.docu_type_choices;
+  if (!Array.isArray(raw)) return [...FALLBACK_DOCU_TYPE_CHOICES];
+  const choices: DocuTypeChoice[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { code, label } = entry as Record<string, unknown>;
+    if (typeof code !== 'string' || !code || typeof label !== 'string' || !label) continue;
+    if (choices.some((c) => c.label === label)) continue;
+    choices.push({ code, label });
+  }
+  return choices.length > 0 ? choices : [...FALLBACK_DOCU_TYPE_CHOICES];
+}
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -160,12 +111,17 @@ function seedRange(seed: Record<string, unknown>): { from: string; to: string } 
   };
 }
 
-/** 마지막 제출 params → 전표유형 복원. 시드가 없으면 기본 3종(병합 전 동작)으로 시작한다. */
-function seedDocuTypes(seed: Record<string, unknown>): DocuType[] {
+/**
+ * 마지막 제출 params → 전표유형 복원(카탈로그에 실존하는 라벨만). 없으면 빈 선택 —
+ * 실제 상신까지 가는 에이전트라 대상 유형은 매 실행 명시적으로 고르게 한다.
+ */
+function seedDocuTypes(
+  seed: Record<string, unknown>,
+  choices: readonly DocuTypeChoice[],
+): string[] {
   const raw = seed.docu_types;
-  if (!Array.isArray(raw)) return [...DEFAULT_DOCU_TYPES];
-  const restored = ALL_DOCU_TYPES.filter((t) => raw.includes(t));
-  return restored.length > 0 ? restored : [...DEFAULT_DOCU_TYPES];
+  if (!Array.isArray(raw)) return [];
+  return choices.filter((c) => raw.includes(c.label)).map((c) => c.label);
 }
 
 /**
@@ -195,7 +151,15 @@ export function VoucherTypePreRunForm({
   const [range] = useState(() => seedRange(seed));
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);
-  const [docuTypes, setDocuTypes] = useState<DocuType[]>(() => seedDocuTypes(seed));
+
+  // 전표유형 — 카탈로그(읽기 전용, settings.docu_type_choices) + 선택 상태(라벨 배열).
+  const [docuTypeChoices] = useState<DocuTypeChoice[]>(() => parseDocuTypeChoices(agent.settings));
+  const [docuTypes, setDocuTypes] = useState<string[]>(() =>
+    seedDocuTypes(seed, parseDocuTypeChoices(agent.settings)),
+  );
+  // 패널 열림은 부모가 쥔다 — 선택 칩 본문 클릭으로도 같은 패널을 열기 때문.
+  const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [menuPickerOpen, setMenuPickerOpen] = useState(false);
 
   // 메뉴 필터 — 항목 목록은 관리자가 에이전트 관리에서 관리하는 공유 데이터(settings.menu_items)라
   // 여기서는 읽기 전용이고, 체크 상태만 이 실행 한정으로 고른다.
@@ -207,9 +171,20 @@ export function VoucherTypePreRunForm({
   const rangeInvalid = !!from && !!to && from > to;
   const canSubmit = !disabled && !!from && !!to && !rangeInvalid && docuTypes.length > 0;
 
-  const toggleDocuType = (t: DocuType) => {
-    setDocuTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const toggleDocuType = (label: string) => {
+    setDocuTypes((prev) =>
+      prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label],
+    );
   };
+
+  /** 프리셋 = 선택 통째 교체(카탈로그에 실존하는 라벨만). */
+  const applyPreset = (types: readonly string[]) => {
+    const labels = new Set(docuTypeChoices.map((c) => c.label));
+    setDocuTypes(types.filter((t) => labels.has(t)));
+  };
+
+  // 표시(칩)·제출 모두 카탈로그(ERP 피커) 순서로 정렬한다.
+  const selectedChoices = docuTypeChoices.filter((c) => docuTypes.includes(c.label));
 
   const toggleMenu = (id: string) => {
     setSelectedMenuIds((prev) => {
@@ -222,7 +197,7 @@ export function VoucherTypePreRunForm({
 
   const submit = () => {
     if (!canSubmit) return;
-    const selectedTypes = ALL_DOCU_TYPES.filter((t) => docuTypes.includes(t)); // 카탈로그 순서 고정.
+    const selectedTypes = selectedChoices.map((c) => c.label);
     const selectedMenus = menuItems
       .filter((it) => selectedMenuIds.has(it.id))
       .map((it) => it.label);
@@ -288,39 +263,61 @@ export function VoucherTypePreRunForm({
           <DatePicker ariaLabel="회계일 종료일" value={to} disabled={disabled} onChange={setTo} />
         </FormField>
 
-        <FormField id="voucher-docu-types" label="전표유형" required>
-          <div className="grid gap-1.5">
-            {/* 헤더 행 — 좌: 선택 수, 우: 프리셋. */}
-            <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
-              <span className="text-foreground-tertiary text-xs tabular-nums">
-                {docuTypes.length}종 선택
-              </span>
-              <div className="flex items-center gap-0.5">
-                <span className="text-foreground-tertiary mr-1 text-xs">프리셋</span>
-                {PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    disabled={disabled}
-                    title={`${preset.types.join('·')} 조합으로 교체`}
-                    onClick={() => setDocuTypes([...preset.types])}
-                    className="text-accent hover:bg-accent/10 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50 max-md:min-h-9 max-md:px-2"
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
+        <FormField
+          id="voucher-docu-types"
+          label="전표유형"
+          required
+          hint="1개 이상 선택하세요. 프리셋은 종전 외상매출금·외상매입금과 같은 조합으로 선택을 교체합니다."
+        >
+          <div className="grid gap-2">
+            {/* 헤더 행 — 프리셋(선택 통째 교체). */}
+            <div className="flex min-h-6 flex-wrap items-center gap-1.5">
+              <span className="text-foreground-tertiary text-xs">프리셋</span>
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  disabled={disabled}
+                  title={`${preset.types.join('·')} 조합으로 교체`}
+                  onClick={() => applyPreset(preset.types)}
+                  className="border-border text-foreground-secondary hover:bg-muted/60 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 max-md:min-h-9"
+                >
+                  {preset.label}
+                </button>
+              ))}
             </div>
+
+            {/* 선택된 유형 칩 — X 로 개별 해제, 본문 클릭은 선택 패널 열기. */}
+            <ChipSet>
+              {selectedChoices.length === 0 ? (
+                <Chip dashed>선택된 유형 없음</Chip>
+              ) : (
+                selectedChoices.map((c) => (
+                  <Chip
+                    key={c.label}
+                    shape="badge"
+                    onClick={() => setTypePickerOpen(true)}
+                    onRemove={() => toggleDocuType(c.label)}
+                    removeLabel={`${c.label} 선택 해제`}
+                  >
+                    {c.label}
+                  </Chip>
+                ))
+              )}
+            </ChipSet>
 
             <MultiSelectCombo
               ariaLabel="전표유형 선택"
               disabled={disabled}
-              items={DOCU_COMBO_ITEMS}
+              items={docuTypeChoices.map((c) => ({ key: c.label, label: c.label, code: c.code }))}
               selectedKeys={docuTypes}
               onToggle={toggleDocuType}
-              placeholder="전표유형 선택"
+              placeholder="유형 선택"
               searchPlaceholder="검색 — 이름 또는 코드(예: 매출, 31, 결산)"
               unit="종"
+              summaryMode="count"
+              open={typePickerOpen}
+              onOpenChange={setTypePickerOpen}
             />
           </div>
         </FormField>
@@ -346,6 +343,8 @@ export function VoucherTypePreRunForm({
               searchPlaceholder="메뉴 검색"
               unit="개"
               footerHint="체크한 메뉴의 전표만 상신 대상 · 항목 관리는 에이전트 관리에서"
+              open={menuPickerOpen}
+              onOpenChange={setMenuPickerOpen}
             />
           </div>
         </FormField>
@@ -388,14 +387,17 @@ interface MultiComboItem {
   /** 토글 키(전표유형=라벨(계약값), 메뉴=항목 id). */
   key: string;
   label: string;
-  /** 보조 표기 + 코드 접두 검색용(전표유형만). */
+  /** 보조 표기 + 코드 부분일치 검색용(전표유형만). */
   code?: string;
 }
 
 /**
- * 폼 스케일 다중선택 셀렉트 — 트리거(선택 요약)를 누르면 검색 + 체크 목록 패널이 열린다.
+ * 폼 스케일 다중선택 셀렉트 — 트리거를 누르면 검색 + 체크 목록 패널이 열린다.
  * 패널 셸(md 미만 바텀시트 / md+ 팝오버)·바깥 닫기는 combo-popover 공용을 쓰고, 체크
  * 토글이라 항목을 눌러도 닫지 않는다(닫기 = 바깥 클릭·Esc·모바일 완료 버튼).
+ *
+ * 62종 전표유형처럼 목록이 길어도 손을 떼지 않게 검색창에서 ↑↓ 로 이동하고 Enter 로 토글한다
+ * (aria-activedescendant 패턴 — 포커스는 계속 입력창에 있다).
  */
 function MultiSelectCombo({
   ariaLabel,
@@ -406,44 +408,70 @@ function MultiSelectCombo({
   placeholder,
   searchPlaceholder,
   unit,
+  summaryMode = 'labels',
   footerHint,
+  open,
+  onOpenChange,
 }: {
   ariaLabel: string;
   items: readonly MultiComboItem[];
   selectedKeys: readonly string[];
   onToggle: (key: string) => void;
   disabled?: boolean;
-  /** 선택 0개일 때 트리거 문구. */
+  /** 선택 0개일 때 트리거 문구(summaryMode 'count' 는 선택 후에도 이 문구 + 개수). */
   placeholder: string;
   searchPlaceholder: string;
   /** 개수 단위('종'/'개') — 패널 푸터 카운터에 쓴다. */
   unit: string;
+  /**
+   * 트리거 요약 방식 — 'labels' 는 선택 라벨을 이어 쓰고, 'count' 는 '(선택/전체)' 만 쓴다.
+   * 선택 목록을 칩으로 따로 보여주는 필드(전표유형)는 'count' 로 중복 표기를 피한다.
+   */
+  summaryMode?: 'labels' | 'count';
   footerHint?: string;
+  /** 열림 상태는 호출부 소유 — 트리거 말고 칩 등 패널 바깥에서도 열기 때문. */
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [activeIdx, setActiveIdx] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   const close = () => {
-    setOpen(false);
+    onOpenChange(false);
     setQuery('');
+    setActiveIdx(0);
   };
   useOutsideClose(open, wrapRef, close);
 
-  // 라벨 부분일치 + 코드 접두 일치(사용자가 '31' 같은 코드로도 찾는다).
-  const q = query.trim().toLowerCase();
+  // 라벨·코드 부분일치(공백 무시) — 사용자가 '31' 같은 코드로도 찾는다.
+  const q = query.toLowerCase().replace(/\s+/g, '');
   const visible = q
     ? items.filter(
         (it) =>
-          it.label.toLowerCase().includes(q) || (it.code?.toLowerCase().startsWith(q) ?? false),
+          it.label.toLowerCase().replace(/\s+/g, '').includes(q) ||
+          (it.code?.toLowerCase().includes(q) ?? false),
       )
     : items;
+  const active = visible.length === 0 ? -1 : Math.min(activeIdx, visible.length - 1);
+
+  useEffect(() => {
+    if (!open || active < 0) return;
+    document.getElementById(`${listId}-opt-${active}`)?.scrollIntoView({ block: 'nearest' });
+  }, [open, active, listId]);
 
   const selectedSet = new Set(selectedKeys);
-  const summary = items
-    .filter((it) => selectedSet.has(it.key))
-    .map((it) => it.label)
-    .join(' · ');
+  const selectedCount = items.filter((it) => selectedSet.has(it.key)).length;
+  const summary =
+    summaryMode === 'count'
+      ? selectedCount
+        ? `${placeholder} (${selectedCount}/${items.length})`
+        : ''
+      : items
+          .filter((it) => selectedSet.has(it.key))
+          .map((it) => it.label)
+          .join(' · ');
 
   return (
     <div ref={wrapRef} className="relative">
@@ -453,7 +481,7 @@ function MultiSelectCombo({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => (open ? close() : onOpenChange(true))}
         className={cn(
           // DatePicker 트리거와 같은 폼 스케일(h-10·px-3·text-sm) — 폼 컨트롤 라인 통일.
           'border-border bg-surface flex h-10 w-full items-center justify-between gap-2 rounded-sm border px-3 text-left text-sm outline-none',
@@ -482,12 +510,28 @@ function MultiSelectCombo({
             <RiSearchLine size={14} aria-hidden className="text-foreground-tertiary shrink-0" />
             <input
               autoFocus={isDesktopViewport()}
+              role="combobox"
+              aria-expanded
+              aria-controls={listId}
+              aria-activedescendant={active >= 0 ? `${listId}-opt-${active}` : undefined}
               value={query}
               placeholder={searchPlaceholder}
               aria-label={`${ariaLabel} 검색`}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActiveIdx(0);
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Escape') {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setActiveIdx(Math.min(active + 1, visible.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setActiveIdx(Math.max(active - 1, 0));
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (active >= 0) onToggle(visible[active].key);
+                } else if (e.key === 'Escape') {
                   e.preventDefault();
                   close();
                 }
@@ -507,8 +551,10 @@ function MultiSelectCombo({
           </div>
 
           <div
-            role="group"
+            id={listId}
+            role="listbox"
             aria-label={ariaLabel}
+            aria-multiselectable
             className="mt-2 grid min-h-0 flex-1 gap-0.5 overflow-y-auto overscroll-contain md:max-h-60 md:flex-none"
           >
             {visible.length === 0 ? (
@@ -516,33 +562,36 @@ function MultiSelectCombo({
                 {`'${query}' 와 일치하는 항목이 없습니다.`}
               </p>
             ) : (
-              visible.map((it) => {
-                const active = selectedSet.has(it.key);
+              visible.map((it, idx) => {
+                const checked = selectedSet.has(it.key);
                 return (
                   <button
                     key={it.key}
                     type="button"
-                    role="checkbox"
-                    aria-checked={active}
+                    id={`${listId}-opt-${idx}`}
+                    role="option"
+                    aria-selected={checked}
                     disabled={disabled}
                     onClick={() => onToggle(it.key)}
+                    onMouseEnter={() => setActiveIdx(idx)}
                     className={cn(
                       'flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition-colors disabled:opacity-50 max-md:min-h-11',
-                      active
+                      checked
                         ? 'bg-accent/10 text-foreground font-medium'
-                        : 'text-foreground-secondary hover:bg-muted/60',
+                        : 'text-foreground-secondary',
+                      idx === active && !checked && 'bg-muted/60',
                     )}
                   >
                     <span
                       aria-hidden
                       className={cn(
                         'flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors',
-                        active
+                        checked
                           ? 'border-accent bg-accent text-white'
                           : 'border-border-strong bg-surface',
                       )}
                     >
-                      {active ? <RiCheckLine size={11} /> : null}
+                      {checked ? <RiCheckLine size={11} /> : null}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{it.label}</span>
                     {it.code ? (
