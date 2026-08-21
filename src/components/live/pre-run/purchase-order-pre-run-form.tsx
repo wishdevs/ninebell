@@ -120,7 +120,8 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
     let alive = true;
     void (async () => {
       try {
-        const favs = await fetchFavorites('project');
+        // 구매팀 스코프 즐겨찾기 — 결의서용('project')과 별도 목록이다(/manage/projects?scope=purchase).
+        const favs = await fetchFavorites('project_purchase');
         if (alive) setFavorites(toProjectOptions(favs));
       } catch {
         /* 백엔드 미배포 — 검색만 사용 */

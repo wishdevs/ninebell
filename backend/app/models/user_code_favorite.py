@@ -1,7 +1,8 @@
 """UserCodeFavorite ORM 모델 — 사용자별 즐겨찾는 ERP 코드(예산단위/프로젝트).
 
 카드결의 등에서 자주 쓰는 예산단위·프로젝트 코드를 사용자가 즐겨찾기로 고정해 둔다.
-kind='budget_unit'|'project'. 소유자(user_id)만 조회·추가·삭제·순서변경할 수 있다.
+kind='budget_unit'|'project'|'project_purchase'|'partner'|'agent'.
+소유자(user_id)만 조회·추가·삭제·순서변경할 수 있다.
 name/extra 는 코드 카탈로그에서 복사해 온 스냅샷(카탈로그가 갱신돼도 즐겨찾기는 유지).
 """
 
@@ -50,7 +51,9 @@ class UserCodeFavorite(UuidPkMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # 'budget_unit'(예산단위) | 'project'(프로젝트).
+    # 'budget_unit'(예산단위) | 'project'(결의서용 프로젝트) | 'project_purchase'(구매팀용
+    # 프로젝트, 카탈로그는 'project' 공유) | 'partner'(거래처) | 'agent'(자주쓰는 에이전트).
+    # String(16) 에 'project_purchase' 가 정확히 들어찬다 — 더 긴 kind 는 넣을 수 없다.
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

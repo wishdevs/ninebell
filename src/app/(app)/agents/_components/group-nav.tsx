@@ -28,6 +28,7 @@ export interface GroupTool {
 export const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
   resolution: [
     { label: '예산단위 관리', href: '/manage/budget-units' },
+    { label: '프로젝트 관리', href: '/manage/projects' },
     { label: '거래처 관리', href: '/manage/partners' },
     { label: '법인카드 설정', href: '/manage/agents/corporate-card', icon: RiEqualizer2Line },
     { label: '출장(국내/자차) 설정', href: '/manage/agents/trip-domestic', icon: RiEqualizer2Line },
@@ -39,7 +40,12 @@ export const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
       icon: RiEqualizer2Line,
     },
   ],
-  purchase: [{ label: '발주 패턴', href: '/manage/order-patterns' }],
+  // 프로젝트 카탈로그는 결의서 계열과 공유하지만 자주쓰는 목록은 구매팀 스코프
+  // (?scope=purchase = 즐겨찾기 kind 'project_purchase')로 따로 담는다.
+  purchase: [
+    { label: '프로젝트 관리', href: '/manage/projects?scope=purchase' },
+    { label: '발주 패턴', href: '/manage/order-patterns' },
+  ],
 };
 
 /**

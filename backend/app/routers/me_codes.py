@@ -49,7 +49,10 @@ router = APIRouter(prefix="/me", tags=["me-codes"])
 _VALID_KINDS = ("budget_unit", "project", "partner", "org_unit")
 # 즐겨찾기 kind — 스키마 레벨에서 강제(무효 kind 행 축적 방지, 리뷰 MEDIUM #4).
 # 'agent' = 홈 '자주쓰는 에이전트'(code=에이전트 id, name=에이전트명) — 즐겨찾기 전용.
-CodeKind = Literal["budget_unit", "project", "partner", "agent"]
+# 'project_purchase' = 구매팀 자주쓰는 프로젝트 — 카탈로그(kind='project')는 그대로 공유하고
+# 즐겨찾기 네임스페이스만 용도별로 가른다(2026-08-21). (user,kind,code) 유니크 + kind별
+# is_default 부분 유니크(0034)가 kind 단위라 마이그레이션 없이 독립 목록·독립 기본지정이 된다.
+CodeKind = Literal["budget_unit", "project", "project_purchase", "partner", "agent"]
 
 # 백그라운드 동기화 태스크 강참조 — 무참조 태스크는 GC 대상이라(파이썬 asyncio 규약) 실행 중
 # 소멸하면 브라우저 누수 + 세마포어 미반납으로 영구 409 가 될 수 있다(리뷰 MEDIUM #2).

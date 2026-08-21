@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { FavoriteToggle } from '@/components/ui/favorite-toggle';
 import { ListStatePanel } from '@/components/ui/list-state';
+import { MetaChip } from '@/components/ui/meta-chip';
 import { Pagination } from '@/components/ui/pagination';
 import { SearchInput } from '@/components/ui/search-input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -32,6 +33,7 @@ import {
   type CatalogKind,
   type CodeExtra,
   type Favorite,
+  type FavoriteKind,
   type SyncStatus,
 } from '@/lib/api/me-codes';
 import { formatDateTime } from '@/lib/data/format';
@@ -51,6 +53,14 @@ interface CodeCatalogManagerProps {
   description: string;
   /** 예산단위 — '전체 부서' 토글 노출(기본은 내 부서). */
   supportsDept?: boolean;
+  /**
+   * 즐겨찾기를 담을 네임스페이스 — 생략하면 `kind` 와 같다. 카탈로그(전체 목록·검색·동기화)는
+   * 언제나 `kind` 를 쓰므로, 같은 코드 목록을 용도별 즐겨찾기로 갈라 쓸 때만 지정한다
+   * (프로젝트 관리 = 결의서용 'project' / 구매팀용 'project_purchase').
+   */
+  favoriteKind?: FavoriteKind;
+  /** 즐겨찾기 섹션 제목 옆 용도 배지 — favoriteKind 를 나눠 쓸 때 어느 목록인지 밝힌다. */
+  favoriteLabel?: string;
 }
 
 /** 카탈로그 테이블 컬럼 헤더(주 컬럼이 첫 컬럼). */
@@ -74,6 +84,8 @@ const SEARCH_PLACEHOLDER: Record<CatalogOnlyKind, string> = {
  * 검색 디바운스·페이지·URL(q·page) 동기화와 loading/error/empty 3분기는 공용 레일
  * (useListParams·SearchInput·ListStatePanel) 소유 — sticky 헤더 내부 스크롤 테이블 셸은
  * 의도된 변형이라 TableCard 로 바꾸지 않는다.
+ * 즐겨찾기는 favoriteKind(기본 = kind) 네임스페이스에 담긴다 — 카탈로그는 공유하고 즐겨찾기만
+ * 용도별로 가르는 화면(프로젝트 관리의 결의서용/구매팀용)이 이 갈래를 쓴다.
  */
 export function CodeCatalogManager({
   kind,
@@ -81,7 +93,11 @@ export function CodeCatalogManager({
   title,
   description,
   supportsDept = false,
+  favoriteKind,
+  favoriteLabel,
 }: CodeCatalogManagerProps) {
+  // 즐겨찾기 호출은 전부 이 스코프로 — 카탈로그(fetchCatalog·sync)는 kind 그대로 쓴다.
+  const favScope: FavoriteKind = favoriteKind ?? kind;
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -118,11 +134,11 @@ export function CodeCatalogManager({
 
   const loadFavorites = useCallback(async () => {
     try {
-      setFavorites(await fetchFavorites(kind));
+      setFavorites(await fetchFavorites(favScope));
     } catch (err) {
       toast.error(errorMessage(err, '자주쓰는 목록을 불러오지 못했습니다.'));
     }
-  }, [kind]);
+  }, [favScope]);
 
   const loadCatalog = useCallback(async () => {
     setLoading(true);
@@ -212,7 +228,12 @@ export function CodeCatalogManager({
   const addFav = async (item: CatalogItem) => {
     setBusy(true);
     try {
-      const fav = await addFavorite({ kind, code: item.code, name: item.name, extra: item.extra });
+      const fav = await addFavorite({
+        kind: favScope,
+        code: item.code,
+        name: item.name,
+        extra: item.extra,
+      });
       setFavorites((prev) => (prev.some((f) => f.code === fav.code) ? prev : [...prev, fav]));
     } catch (err) {
       toast.error(errorMessage(err, '자주쓰는 추가에 실패했습니다.'));
@@ -260,7 +281,7 @@ export function CodeCatalogManager({
     setFavorites(reordered);
     try {
       await reorderFavorites(
-        kind,
+        favScope,
         reordered.map((f) => f.id),
       );
     } catch (err) {
@@ -294,9 +315,14 @@ export function CodeCatalogManager({
     >
       {/* 자주쓰는 — 순서변경 + 기본지정 + 삭제 */}
       <div className="flex flex-col gap-2">
-        <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
+        <p className="text-foreground flex items-center gap-1.5 text-[length:var(--text-body-sm)] font-semibold">
           자주쓰는
-          <span className="text-foreground-tertiary ml-1.5 text-[11px] tabular-nums">
+          {favoriteLabel ? (
+            <MetaChip className="border-accent/40 bg-accent/10 text-accent">
+              {favoriteLabel}
+            </MetaChip>
+          ) : null}
+          <span className="text-foreground-tertiary text-[11px] tabular-nums">
             {favorites.length}
           </span>
         </p>

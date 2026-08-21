@@ -25,6 +25,14 @@ import { api } from './client';
 /** 코드 종류 — 예산단위 / 프로젝트 / 거래처 / 에이전트(즐겨찾기 전용 — 카탈로그·동기화 없음). */
 export type CatalogKind = 'budget_unit' | 'project' | 'partner' | 'agent' | 'org_unit';
 
+/**
+ * 즐겨찾기 네임스페이스 — 카탈로그 kind 에 용도별 스코프를 더한다.
+ * 'project_purchase' = 구매팀 자주쓰는 프로젝트. 카탈로그(코드 목록)는 'project' 를 그대로
+ * 공유하고 즐겨찾기·기본지정만 갈라 쓴다(2026-08-21) — 백엔드가 kind 단위로 유니크·기본지정을
+ * 걸고 있어(0034) 새 kind 가 곧 독립 네임스페이스다.
+ */
+export type FavoriteKind = CatalogKind | 'project_purchase';
+
 /** 부가 데이터 — 백엔드 JSON 객체.
  * 예산단위 = {bizplanCd, bizplanNm, bgacctCd, bgacctNm} (선택 단위 = BG×사업계획×예산계정 조합 행),
  * 프로젝트 = {pjtNo, wbsNo, wbsNm, loc, useYn, partnerNm} (선택 단위 = WBS 행, code=PJT_NO|WBS_NO),
@@ -48,7 +56,7 @@ export interface CodeExtra {
 /** 자주쓰는(즐겨찾기) 한 항목. extra 는 부서명 등 부가 표시(예산단위=deptNm). */
 export interface Favorite {
   id: string;
-  kind: CatalogKind;
+  kind: FavoriteKind;
   code: string;
   name: string;
   extra: CodeExtra | null;
@@ -104,7 +112,7 @@ export interface SyncStatus {
 }
 
 export interface AddFavoriteInput {
-  kind: CatalogKind;
+  kind: FavoriteKind;
   code: string;
   name: string;
   extra?: CodeExtra | null;
@@ -122,7 +130,7 @@ export interface CatalogQuery {
 }
 
 /** `GET /me/favorites?kind` — 자주쓰는 목록(sortOrder 순). */
-export async function fetchFavorites(kind: CatalogKind): Promise<Favorite[]> {
+export async function fetchFavorites(kind: FavoriteKind): Promise<Favorite[]> {
   const res = await api.get<{ items?: Favorite[] }>(`/me/favorites?kind=${kind}`);
   return res.items ?? [];
 }
@@ -143,7 +151,7 @@ export function removeFavorite(id: string): Promise<void> {
 }
 
 /** `POST /me/favorites/reorder` — 자주쓰는 순서 변경(전체 id 순서 전달). */
-export function reorderFavorites(kind: CatalogKind, orderedIds: string[]): Promise<void> {
+export function reorderFavorites(kind: FavoriteKind, orderedIds: string[]): Promise<void> {
   return api.post<void>('/me/favorites/reorder', { kind, orderedIds });
 }
 

@@ -131,6 +131,60 @@ async def test_favorite_partner_kind_crud_roundtrip(client, make_user, auth_as):
     assert (await client.get("/me/favorites?kind=partner")).json() == {"items": []}
 
 
+async def test_favorite_project_purchase_is_separate_namespace(client, make_user, auth_as):
+    """kind='project_purchase'(구매팀 자주쓰는 프로젝트)는 'project'(결의서용)와 별도 목록."""
+    uid = await make_user("fav-pjt-purchase", "user")
+    auth_as(uid)
+
+    await client.post("/me/favorites", json={"kind": "project", "code": "PJ1", "name": "결의서용"})
+    created = await client.post(
+        "/me/favorites", json={"kind": "project_purchase", "code": "PJ2", "name": "구매팀용"}
+    )
+    assert created.status_code == 201
+    assert created.json()["kind"] == "project_purchase"
+
+    resolution = await client.get("/me/favorites?kind=project")
+    assert [i["code"] for i in resolution.json()["items"]] == ["PJ1"]
+    purchase = await client.get("/me/favorites?kind=project_purchase")
+    assert [i["code"] for i in purchase.json()["items"]] == ["PJ2"]
+
+
+async def test_set_default_is_scoped_per_project_purpose(client, make_user, auth_as):
+    """기본지정도 용도별 독립 — project 기본 지정이 project_purchase 기본을 해제하지 않는다."""
+    uid = await make_user("fav-pjt-default", "user")
+    auth_as(uid)
+
+    pj = await client.post(
+        "/me/favorites", json={"kind": "project", "code": "PJ1", "name": "결의서용"}
+    )
+    pp = await client.post(
+        "/me/favorites", json={"kind": "project_purchase", "code": "PJ2", "name": "구매팀용"}
+    )
+    await client.post(f"/me/favorites/{pj.json()['id']}/default")
+    await client.post(f"/me/favorites/{pp.json()['id']}/default")
+
+    pj_items = (await client.get("/me/favorites?kind=project")).json()["items"]
+    pp_items = (await client.get("/me/favorites?kind=project_purchase")).json()["items"]
+    assert [i["isDefault"] for i in pj_items] == [True]
+    assert [i["isDefault"] for i in pp_items] == [True]
+
+
+async def test_favorite_invalid_kind_returns_422(client, make_user, auth_as):
+    """즐겨찾기 kind 화이트리스트 — project_purchase 추가 후에도 미지원 kind 는 422."""
+    uid = await make_user("fav-badkind", "user")
+    auth_as(uid)
+    resp = await client.post("/me/favorites", json={"kind": "vendor", "code": "V1", "name": "v"})
+    assert resp.status_code == 422
+
+
+async def test_catalog_project_purchase_kind_returns_422(client, make_user, auth_as):
+    """project_purchase 는 즐겨찾기 전용 — 카탈로그·동기화 화이트리스트에는 없다."""
+    uid = await make_user("cat-pjt-purchase", "user")
+    auth_as(uid)
+    assert (await client.get("/me/catalog?kind=project_purchase")).status_code == 422
+    assert (await client.get("/me/catalog/sync-status?kind=project_purchase")).status_code == 422
+
+
 async def test_favorite_duplicate_is_idempotent(client, make_user, auth_as):
     uid = await make_user("fav-dup", "user")
     auth_as(uid)
