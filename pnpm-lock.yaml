@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hyunbinseo/holidays-kr':
+        specifier: ^5.2027.1
+        version: 5.2027.1
       '@radix-ui/react-popover':
         specifier: ^1.1.15
         version: 1.1.17(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -255,6 +258,10 @@ packages:
   '@humanwhocodes/retry@0.4.3':
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
+
+  '@hyunbinseo/holidays-kr@5.2027.1':
+    resolution: {integrity: sha512-oKgJSH3SRCa0J+Mf/0LgN+QefHPIYpy3zArKLWLH6jHYTf6KMOPjIhIyEShl1i++JkfHMzOLyVtDGZD+Q1zQYA==}
+    engines: {node: '>=18'}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -3253,6 +3260,8 @@ snapshots:
   '@humanwhocodes/module-importer@1.0.1': {}
 
   '@humanwhocodes/retry@0.4.3': {}
+
+  '@hyunbinseo/holidays-kr@5.2027.1': {}
 
   '@img/colour@1.1.0':
     optional: true
