@@ -16,6 +16,7 @@ import type {
   UseLiveRunReturn,
 } from '@/lib/live/types';
 import type { WorkflowStep } from '@/lib/data/agents';
+import type { PatternGroup } from '@/lib/purchase/order-patterns';
 import { cn } from '@/lib/utils';
 import { InterventionEmpty } from './intervention-empty';
 import { PhaseStepPanel } from './phase-step-panel';
@@ -33,6 +34,11 @@ interface LiveSidePanelProps {
    * 박스와 구분된 안내로 보여준다(예: 저장된 결의서를 옴니솔에서 결제 상신). 없으면 미표시.
    */
   handoffNote?: string | null;
+  /**
+   * 발주 패턴 그룹(agents.settings.order_patterns 파생) — 계획서 개입(kind=planner)이 열릴 때
+   * 발주단위를 미리 편성하는 재료다. 설정에 없으면 파서가 기본 9그룹으로 폴백한다.
+   */
+  orderPatterns: readonly PatternGroup[];
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
@@ -42,7 +48,7 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProps) {
+export function LiveSidePanel({ run, planSteps, handoffNote, orderPatterns }: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -126,6 +132,7 @@ export function LiveSidePanel({ run, planSteps, handoffNote }: LiveSidePanelProp
             ) : run.hitl.kind === 'planner' ? (
               <LivePlannerCard
                 hitl={run.hitl}
+                patterns={orderPatterns}
                 onSubmit={(plan) => run.sendPlan(run.hitl!.id, plan)}
               />
             ) : (

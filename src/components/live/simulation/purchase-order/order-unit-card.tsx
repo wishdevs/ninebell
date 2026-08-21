@@ -12,29 +12,35 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
-import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
+import { CatalogCombobox } from '@/components/live/pre-run/catalog-combobox';
 import { formatInteger } from '@/lib/data/format';
-import { VENDOR_FAVORITES, searchVendors, vendorSearchPoolOf } from './catalog';
+import type { BaseDates } from '@/lib/purchase/order-patterns';
+import { searchVendors, vendorCategoryOf } from './catalog';
 import {
-  defaultNoteOf,
-  effectiveVendorOf,
+  isSwappableVendorClass,
   modulesOf,
   moduleLabel,
   unitModuleSummary,
   unitTotals,
-  vendorDueOf,
+  vendorDefaultsOf,
   vendorGroupsOf,
   type OrderUnit,
   type PlanBom,
+  type UnifiedVendors,
+  type VendorDefaults,
   type VendorEdit,
   type VendorGroup,
 } from './model';
 import { PartsTable, Td, Th } from './ui';
 
 interface OrderUnitCardProps {
-  /** 주입된 BOM 컨텍스트 — 모듈 조회·거래처 검색 풀의 원천. */
+  /** 주입된 BOM 컨텍스트 — 모듈 조회의 원천. */
   bom: PlanBom;
   unit: OrderUnit;
+  /** 상단 통합 거래처 지정 — 그룹 오버라이드가 없을 때 접히는 기본값. */
+  unified: UnifiedVendors;
+  /** 상단 통합 기준일 — 그룹 예외 납기('FRAME −3주' 등)를 해석하는 출발점. */
+  baseDates: BaseDates;
   /** 구매사유·납기 등 단순 필드 패치(불변 업데이트는 호출부 소유). */
   onPatch: (patch: Partial<Pick<OrderUnit, 'purchaseReason' | 'dueDate'>>) => void;
   /** 거래처 그룹 오버라이드 패치 — vendorEdits[vendorClass] 에 병합된다. */
@@ -50,10 +56,15 @@ interface OrderUnitCardProps {
  * 인플레이스 1행 폼(구매사유·납기 — 위저드 없음) + 모듈 칩 + 거래처 그룹 테이블.
  * 거래처 그룹은 카드 모듈들의 부품을 vendorClass 로 렌더 시 파생하며, 그룹 편집값
  * (실거래처·납기 오버라이드·비고)만 vendorEdits 에 저장한다(기본값 복제 저장 금지).
+ *
+ * 그룹 행에 보이는 값은 전부 리졸버(vendorDefaultsOf) 산출이다 — 개별 수정 > 패턴 예외 >
+ * 내장 기본이 이미 접혀 있고, 예외가 이긴 셀에는 그 근거를 마이크로 캡션으로 붙인다.
  */
 export function OrderUnitCard({
   bom,
   unit,
+  unified,
+  baseDates,
   onPatch,
   onVendorPatch,
   onRemoveModule,
@@ -62,8 +73,11 @@ export function OrderUnitCard({
   const modules = useMemo(() => modulesOf(bom, unit), [bom, unit]);
   const groups = useMemo(() => vendorGroupsOf(modules), [modules]);
   const totals = useMemo(() => unitTotals(bom, unit), [bom, unit]);
-  // 실거래처 검색 풀 — 주입된 BOM 에서 파생(자주쓰는 + 등장 실거래처).
-  const vendorPool = useMemo(() => vendorSearchPoolOf(bom.modules), [bom]);
+  const defaults = useMemo(
+    () => vendorDefaultsOf(unit, groups, baseDates, unified),
+    [unit, groups, baseDates, unified],
+  );
+  const rule = unit.patternRule;
 
   return (
     // ⚠ 카드 경계(사용자 리포트 2026-08-14): 종전엔 얇은 테두리 하나뿐이라 발주1·발주2 가
@@ -109,6 +123,14 @@ export function OrderUnitCard({
           <div className="grid w-40 gap-1.5">
             <Label htmlFor={`${unit.id}-due`}>
               납기예정일 <span className="text-danger">*</span>
+              {/* 패턴 납기 규칙 — 어느 통합 기준일에서 세팅됐는지 그 자리에서 알려준다. */}
+              {rule ? (
+                <span className="text-foreground-tertiary ml-1 font-normal">
+                  기준: {rule.due.base}
+                  {rule.due.offsetWeeks > 0 ? ` −${rule.due.offsetWeeks}주` : ''} · {rule.groupName}
+                  {unit.dueTouched ? ' · 직접 수정함' : ''}
+                </span>
+              ) : null}
             </Label>
             <DatePicker
               value={unit.dueDate}
@@ -118,6 +140,14 @@ export function OrderUnitCard({
             />
           </div>
         </div>
+
+        {/* 적용된 그룹 규칙 한 줄 — 예외는 아래 표의 셀에 실반영되고, 근거는 셀 캡션이 단다. */}
+        {rule ? (
+          <p className="text-foreground-tertiary text-[11px]">
+            그룹 규칙: {rule.groupName}
+            {rule.exceptions.length > 0 ? ` · 예외 ${rule.exceptions.length}건 자동 적용` : ''}
+          </p>
+        ) : null}
 
         {/* 모듈 칩 — 제거하면 풀로 복귀. 마지막 모듈 제거 시 호출부가 카드를 지운다. */}
         <ul className="flex flex-wrap gap-1.5">
@@ -156,10 +186,9 @@ export function OrderUnitCard({
               {groups.map((g) => (
                 <VendorGroupRow
                   key={g.vendorClass}
-                  unit={unit}
                   group={g}
-                  defaultNote={defaultNoteOf(unit, g.vendorClass, groups)}
-                  vendorPool={vendorPool}
+                  defaults={defaults.get(g.vendorClass) ?? { dueDate: '', noteMessage: '' }}
+                  unified={unified}
                   onVendorPatch={onVendorPatch}
                 />
               ))}
@@ -172,26 +201,22 @@ export function OrderUnitCard({
 }
 
 interface VendorGroupRowProps {
-  unit: OrderUnit;
   group: VendorGroup;
-  /** 비고 기본 문구(파생) — 오버라이드가 없을 때 표시되고 페이로드에도 접힌다. */
-  defaultNote: string;
-  /** 실거래처 검색 풀(BOM 파생) — 의사 거래처 지정 콤보박스 재료. */
-  vendorPool: readonly ComboOption[];
+  /** 리졸버가 접은 확정값(개별 수정 > 패턴 예외 > 내장 기본) — 표시값이 곧 전달값이다. */
+  defaults: VendorDefaults;
+  /** 상단 통합 거래처 지정 — 교체 가능 분류 판정의 기준. */
+  unified: UnifiedVendors;
   onVendorPatch: (vendorClass: string, patch: VendorEdit) => void;
 }
 
-function VendorGroupRow({
-  unit,
-  group: g,
-  defaultNote,
-  vendorPool,
-  onVendorPatch,
-}: VendorGroupRowProps) {
+function VendorGroupRow({ group: g, defaults, unified, onVendorPatch }: VendorGroupRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const edit = unit.vendorEdits[g.vendorClass];
-  // 유효 거래처 = 오버라이드 ?? 기본값(가공품 → 해룡, 판금품 → 알파테크) — 파생만, 저장 안 함.
-  const vendor = g.isPseudo ? effectiveVendorOf(unit, g.vendorClass) : undefined;
+  // 교체 가능한 분류(가공품·판금품·주식회사 오텍)만 콤보박스를 그린다 — 선택지는 그 분류의
+  // 고정 목록뿐이고, 유효 거래처는 리졸버 산출값이다(파생만, 저장 안 함).
+  const swappable = isSwappableVendorClass(g.vendorClass, unified);
+  const vendor = swappable ? defaults.vendor : undefined;
+  const options = swappable ? (vendorCategoryOf(g.vendorClass)?.options ?? []) : [];
+  const applied = defaults.appliedRule;
   return (
     <>
       <tr className="border-border/50 border-t align-middle">
@@ -212,8 +237,8 @@ function VendorGroupRow({
           </button>
         </Td>
         <Td>
-          {g.isPseudo ? (
-            // 의사 거래처 — '가공품 → (거래처 지정)'. 지정 전에는 warning 배지로 남은 일을 표시.
+          {swappable ? (
+            // 교체 가능 분류 — '가공품 → (거래처 지정)'. 지정 전에는 warning 배지로 남은 일을 표시.
             <span className="flex items-center gap-1.5">
               <span className="text-foreground-secondary shrink-0 whitespace-nowrap">
                 {g.vendorClass} <span aria-hidden>→</span>
@@ -222,13 +247,14 @@ function VendorGroupRow({
                 <CatalogCombobox
                   value={vendor ?? { code: '', name: '' }}
                   placeholder="거래처 지정"
-                  favorites={[...VENDOR_FAVORITES]}
-                  search={(q) => Promise.resolve(searchVendors(vendorPool, q))}
+                  favorites={[...options]}
+                  search={(q) => Promise.resolve(searchVendors(options, q))}
                   onSelect={(opt) =>
                     onVendorPatch(g.vendorClass, { vendor: { code: opt.code, name: opt.name } })
                   }
                   onClear={() => onVendorPatch(g.vendorClass, { vendor: undefined })}
                 />
+                {applied?.vendor ? <ExceptionCaption>거래처 고정</ExceptionCaption> : null}
               </span>
               {!vendor ? <StatusPill label="미지정" variant="warn" /> : null}
             </span>
@@ -241,25 +267,27 @@ function VendorGroupRow({
           {formatInteger(g.amount)}
         </Td>
         <Td>
-          {/* 기본값 = vendorDueOf 파생(가공품 = 발주단위 납기, 그 외 = 1주 전 영업일 —
-              공휴일 보정). 그룹에서 고르면 오버라이드로만 저장된다. */}
+          {/* 기본값 = 예외 납기(있으면) 또는 vendorDueOf 파생(가공품 = 발주단위 납기, 그 외 =
+              1주 전 영업일 — 공휴일 보정). 그룹에서 고르면 오버라이드로만 저장된다. */}
           <DatePicker
-            value={edit?.dueDate || vendorDueOf(unit.dueDate, g.vendorClass)}
+            value={defaults.dueDate}
             onChange={(v) => onVendorPatch(g.vendorClass, { dueDate: v })}
             ariaLabel={`${g.vendorClass} 납기예정일`}
             className="h-9 text-[12px]"
           />
+          {applied?.due ? <ExceptionCaption>{applied.due}</ExceptionCaption> : null}
         </Td>
         <Td>
-          {/* 기본값 = 가공품 거래처 직배송 문구(가공품 외 그룹) — 수정·삭제하면 오버라이드. */}
+          {/* 기본값 = 예외 비고 또는 가공품 거래처 직배송 문구 — 수정·삭제하면 오버라이드. */}
           <Input
-            value={edit?.note ?? defaultNote}
+            value={defaults.noteMessage}
             onChange={(e) => onVendorPatch(g.vendorClass, { note: e.target.value })}
             aria-label={`${g.vendorClass} 비고`}
             placeholder="예: 직배송"
             maxLength={200}
             className="h-9 text-[12px]"
           />
+          {applied?.note ? <ExceptionCaption>패턴 예외 문구</ExceptionCaption> : null}
         </Td>
       </tr>
       {expanded ? (
@@ -270,5 +298,12 @@ function VendorGroupRow({
         </tr>
       ) : null}
     </>
+  );
+}
+
+/** 예외 적용 근거 캡션 — 개별 수정 없이 패턴 예외가 값을 준 셀에만 붙는다. */
+function ExceptionCaption({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-foreground-tertiary mt-0.5 block text-[10px]">예외: {children}</span>
   );
 }

@@ -930,9 +930,8 @@ AGENT_FIXTURES.extend(
     [
         _placeholder_fixture("item-bulk-register", "품목일괄등록", "purchase"),
         # 구매발주 = Phase A 실동작 승격(2026-08-13 — 읽기 그래프 + 계획서 HITL, 저장 없음).
-        # 구매발주 데모 = 정적 BOM 픽스처로 화면 흐름을 확정한 계획서 시뮬레이션(2026-08-13 분리).
+        # 구매발주 데모(purchase-order-demo)는 2026-08-21 제거 — seed 가 DB 행도 prune 한다.
         _PURCHASE_ORDER_FIXTURE,
-        _placeholder_fixture("purchase-order-demo", "구매발주 데모", "purchase"),
         _EAP_CANCEL_FIXTURE,
         _cleanup_fixture("trip-domestic-cleanup", "출장(국내/자차)", "출장(국내·자차)"),
         _cleanup_fixture("trip-overseas-cleanup", "출장(해외/정산서)", "출장(해외·정산서)"),

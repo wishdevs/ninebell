@@ -262,6 +262,18 @@ def test_validate_plan_rejects_unresolved_pseudo_vendor():
     assert ok is False and "가공품" in reason and "실거래처" in reason
 
 
+def test_validate_plan_rejects_unresolved_otech_vendor():
+    # '주식회사 오텍'은 실거래처명 분류지만 통합 지정으로 교체 가능(2026-08-21) —
+    # 지정이 해제된 채(vendor 없음) 제출되면 서버가 거른다. 그 외 실거래처 그룹은 종전대로 허용.
+    p = _plan()
+    p["units"][0]["vendorGroups"].append(
+        {"vendorClass": "주식회사 오텍", "vendor": None, "parts": 2, "amount": 1000,
+         "dueDate": "2026-08-25", "note": ""},
+    )
+    ok, reason = planner.validate_plan(p)
+    assert ok is False and "주식회사 오텍" in reason and "실거래처" in reason
+
+
 def test_validate_plan_rejects_non_dict():
     ok, reason = planner.validate_plan(["not-a-dict"])
     assert ok is False

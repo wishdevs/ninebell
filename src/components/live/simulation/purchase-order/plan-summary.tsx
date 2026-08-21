@@ -1,14 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import {
-  RiArrowDownSLine,
-  RiArrowLeftLine,
-  RiArrowRightSLine,
-  RiCheckboxCircleLine,
-  RiFileList3Line,
-  RiPencilLine,
-} from '@remixicon/react';
+import { useMemo } from 'react';
+import { RiArrowLeftLine, RiCheckboxCircleLine, RiFileList3Line } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { Spinner } from '@/components/ui/spinner';
@@ -368,72 +361,6 @@ export function PlanReviewView({
             )}
           </Button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ── 확정 뷰 — 배너 + 발주단위 요약 + 실행 페이로드 미리보기 ──────────────────
-
-interface ConfirmedViewProps {
-  /** 확정된 제출 페이로드 — 요약도 이 값에서 그린다(검토 화면과 같은 문자열 보장). */
-  payload: PlanSubmit;
-  totals: PlanTotals;
-  onEdit: () => void;
-}
-
-export function ConfirmedView({ totals, payload, onEdit }: ConfirmedViewProps) {
-  const [openPayload, setOpenPayload] = useState(false);
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="border-success/30 bg-success/10 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3">
-        <RiCheckboxCircleLine size={18} aria-hidden className="text-success mt-0.5 shrink-0" />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <p className="text-success text-[length:var(--text-body-sm)] font-semibold">
-            발주 계획이 확정되었습니다 — 발주단위 {totals.units}건 · 총{' '}
-            {formatInteger(totals.amount)}원
-          </p>
-          <p className="text-foreground-secondary text-[length:var(--text-body-sm)] leading-relaxed">
-            백엔드 연동 예정 — 확정된 계획은 에이전트 실행 파라미터로 전달됩니다. 지금은 저장·실행
-            없이 계획서만 확정합니다.
-          </p>
-        </div>
-        <Button size="sm" variant="secondary" className="shrink-0" onClick={onEdit}>
-          <RiPencilLine size={14} aria-hidden />
-          계획 수정
-        </Button>
-      </div>
-
-      {/* 발주단위 한 줄 요약 — 페이로드를 펼치지 않아도 결과를 훑을 수 있게. */}
-      <ul className="flex flex-col gap-1">
-        {payload.units.map((u) => (
-          <li key={u.seq} className="text-foreground-secondary text-[length:var(--text-body-sm)]">
-            <b className="text-foreground">발주 {u.seq}</b> — {u.purchaseReason} · 납기 {u.dueDate}{' '}
-            · 모듈 {u.modules.length}개
-          </li>
-        ))}
-      </ul>
-
-      {/* 실행 페이로드 미리보기(접이식) — 백엔드 연동 시 이 JSON 이 그래프 params 가 된다. */}
-      <div className="border-border rounded-[var(--radius-md)] border">
-        <button
-          type="button"
-          aria-expanded={openPayload}
-          onClick={() => setOpenPayload((v) => !v)}
-          className="text-foreground-secondary hover:text-foreground flex w-full items-center gap-1.5 px-3 py-2 text-left text-[length:var(--text-body-sm)] font-medium"
-        >
-          {openPayload ? (
-            <RiArrowDownSLine size={15} aria-hidden />
-          ) : (
-            <RiArrowRightSLine size={15} aria-hidden />
-          )}
-          에이전트 실행 페이로드 미리보기
-        </button>
-        {openPayload ? (
-          <pre className="border-border bg-muted/30 text-foreground-secondary max-h-80 overflow-auto border-t p-3 font-mono text-[11px] leading-relaxed">
-            {JSON.stringify(payload, null, 2)}
-          </pre>
-        ) : null}
       </div>
     </div>
   );

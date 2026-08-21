@@ -28,6 +28,7 @@ import {
 } from '@/lib/live/use-hitl-notification';
 import { PRE_RUN_FORMS } from '@/components/live/pre-run';
 import { FULL_WIDTH_SIMULATION_AGENTS, SIMULATION_PANELS } from '@/components/live/simulation';
+import { orderPatternsFromSettings } from '@/lib/purchase/order-patterns';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -95,6 +96,9 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   const [step, setStep] = useState(initial);
   // 디버그가 꺼져 있으면 픽스처 그대로(원래 currentAction 유지), 켜져 있으면 단계 파생.
   const view = useMemo(() => (SHOW_DEBUG ? deriveAgentAtStep(agent, step) : agent), [agent, step]);
+  // 발주 패턴 — 계획서 개입(kind=planner)이 발주단위를 미리 편성하는 재료. 관리자가 저장한
+  // agents.settings 오버라이드가 없으면 파서가 기본 27행으로 폴백한다.
+  const orderPatterns = useMemo(() => orderPatternsFromSettings(agent.settings), [agent.settings]);
 
   // 라이브 세션 — 실행 컨트롤(시작/종료)로 enabled 를 토글한다. 카드에 머무는 동안만
   // 세션(헤드리스 브라우저 슬롯)을 점유하고, 언마운트/종료 시 useLiveRun 이 abort 로 반납한다.
@@ -381,7 +385,12 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
             />
           ) : null}
           {isLive ? (
-            <LiveSidePanel run={run} planSteps={agent.steps} handoffNote={agent.handoffNote} />
+            <LiveSidePanel
+              run={run}
+              planSteps={agent.steps}
+              handoffNote={agent.handoffNote}
+              orderPatterns={orderPatterns}
+            />
           ) : SimulationPanel ? (
             <SimulationPanel agent={agent} />
           ) : PreRunForm ? (

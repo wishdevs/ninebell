@@ -1,11 +1,10 @@
 /**
- * 구매발주 계획서 — 모델(타입·파생 헬퍼). 데모(정적 픽스처)와 라이브 개입(kind=planner,
- * hitl.plannerBom)이 **같은 조각**을 쓰도록 BOM 을 인자로 받는다 — 정적 전역 의존 없음.
+ * 구매발주 계획서 — 모델(타입·파생 헬퍼). BOM 을 인자로 받는다 — 정적 전역 의존 없음
+ * (구 데모의 정적 픽스처 주입 구조에서 온 설계, 데모는 2026-08-21 제거).
  *
- * BOM shape 는 백/프론트 공유 계약(lib/live/types 의 PlannerBom = 데모 픽스처
- * purchase-order-bom.json 과 동일)이다. 호출부는 createPlanBom() 으로 파생 컨텍스트
- * (모듈 평탄화·맵)를 만들어 헬퍼에 넘긴다 — 데모 루트는 정적 JSON 을, LivePlannerCard 는
- * hitl.plannerBom 을 주입한다.
+ * BOM shape 는 백/프론트 공유 계약(lib/live/types 의 PlannerBom)이다. 호출부는
+ * createPlanBom() 으로 파생 컨텍스트(모듈 평탄화·맵)를 만들어 헬퍼에 넘긴다 —
+ * LivePlannerCard 가 hitl.plannerBom 을 주입한다.
  *
  * 상태의 단일 소스는 units 배열이다 — 모듈→발주단위 매핑·거래처 그룹·합계는 전부 여기서
  * 파생한다(중복 배정은 파생 맵으로 강제). 파생 헬퍼는 순수 함수다 — 단 newOrderUnit 은
@@ -19,6 +18,14 @@ import type {
   PlannerBomPart,
   PlanSubmit,
 } from '@/lib/live/types';
+import {
+  PROCESSED_DUE_BASE,
+  type BaseDates,
+  type DueRule,
+  type ExceptionDueRule,
+  type PatternException,
+} from '@/lib/purchase/order-patterns';
+import { vendorCategoryOf } from './catalog';
 import { subtractLeadDays } from './dates';
 
 // ── BOM 타입(와이어 계약 별칭 — 단일 정의는 lib/live/types) ─────────────────
@@ -71,21 +78,29 @@ export function isPseudoVendor(vendorClass: string): boolean {
 }
 
 /**
- * 의사 거래처 그룹의 기본 거래처 — 가공품 → 해룡, 판금품 → 알파테크.
- * 파생 기본값이다 — state(vendorEdits)에 복제 저장하지 않고 렌더·페이로드에서 접는다.
- * 코드는 catalog.ts VENDOR_FAVORITES 와 같은 V-xxxx 체계다.
+ * 통합 거래처 지정 — 계획서 상단에서 분류마다 한 번 고른 거래처(vendorClass → 거래처).
+ * 발주단위·거래처그룹 단위 오버라이드(vendorEdits)가 없을 때 접히는 기본값이다.
+ * 키 집합이 곧 **교체 가능한 분류**다(catalog.ts VENDOR_CATEGORIES 가 정의) — 값이
+ * undefined 여도 키는 남으므로, 통합 지정을 지우면 미지정으로 판정된다.
  */
-const DEFAULT_VENDOR_BY_CLASS: Readonly<Record<string, { code: string; name: string }>> = {
-  [PROCESSED_CLASS]: { code: 'V-1003', name: '해룡' },
-  판금품: { code: 'V-1002', name: '알파테크' },
-};
+export type UnifiedVendors = Readonly<Record<string, { code: string; name: string } | undefined>>;
 
-/** 그룹의 유효 거래처 = 오버라이드 ?? 기본값. 기본값 없는 의사 그룹만 undefined(미지정). */
+/**
+ * 교체 가능한 거래처 분류인가 — 통합 지정 대상(가공품·판금품·주식회사 오텍)이면 그룹 행에
+ * 콤보박스를 그리고, 확정 게이트가 유효 거래처를 요구하며, 페이로드에 유효 거래처명이 나간다.
+ * 그 외 실거래처 분류는 종전대로 평문 표시 + 분류명 echo 다.
+ */
+export function isSwappableVendorClass(vendorClass: string, unified: UnifiedVendors): boolean {
+  return vendorClass in unified;
+}
+
+/** 그룹의 유효 거래처 = 그룹 오버라이드 ?? 통합 지정. 둘 다 없으면 undefined(미지정). */
 export function effectiveVendorOf(
   unit: OrderUnit,
   vendorClass: string,
+  unified: UnifiedVendors,
 ): { code: string; name: string } | undefined {
-  return unit.vendorEdits[vendorClass]?.vendor ?? DEFAULT_VENDOR_BY_CLASS[vendorClass];
+  return unit.vendorEdits[vendorClass]?.vendor ?? unified[vendorClass];
 }
 
 // ── 모듈 단위 파생 ───────────────────────────────────────────────────────────
@@ -136,6 +151,21 @@ export interface VendorEdit {
   note?: string;
 }
 
+/**
+ * 발주단위가 물고 있는 패턴 그룹 규칙 **스냅샷**(그룹 id 참조가 아니라 값 복사).
+ * 파생 함수가 (unit, baseDates, unified) 만으로 닫히고, 수동 생성 단위(스냅샷 없음)는
+ * 내장 기본 경로에 정확히 남는다.
+ */
+export interface UnitPatternRule {
+  groupId: string;
+  groupName: string;
+  bundle: string;
+  /** 단위 납기 규칙 — 통합 기준일이 바뀔 때 dueDate 를 다시 시드하는 근거. */
+  due: DueRule;
+  /** 거래처 그룹 예외 — 납기·거래처·비고 기본값을 덮는다(vendorDefaultsOf 가 해석). */
+  exceptions: readonly PatternException[];
+}
+
 export interface OrderUnit {
   id: string;
   /** '발주 N' 표기 시퀀스. */
@@ -147,6 +177,10 @@ export interface OrderUnit {
   dueDate: string;
   /** vendorClass → 오버라이드. 모듈 제거로 그룹이 사라지면 파생에서 자연히 무시된다. */
   vendorEdits: Readonly<Record<string, VendorEdit>>;
+  /** 패턴 그룹 규칙 스냅샷 — 수동으로 묶은 발주단위에는 없다. */
+  patternRule?: UnitPatternRule;
+  /** 납기를 사람이 직접 고쳤는가 — true 면 통합 기준일을 다시 바꿔도 덮지 않는다. */
+  dueTouched?: boolean;
 }
 
 let unitIdSeq = 0;
@@ -275,7 +309,25 @@ export function vendorDueOf(unitDue: string, vendorClass: string): string {
 }
 
 /**
- * 그룹 기본 **비고 메시지** — '가공품 거래처(해룡) 직배송'. 괄호 안은 그 발주단위 가공품
+ * 패턴 납기 규칙 → 날짜('yyyy-mm-dd'). base 가 3기준일이면 상단 입력값, '가공품납기'면 인자
+ * procDue(같은 발주단위 가공품 그룹의 확정 납기)를 출발점으로 삼고, offsetWeeks 회만큼
+ * subtractLeadDays(1주 = 7일 − 평일 공휴일, 주말·공휴일 후퇴)를 합성한다.
+ *
+ * 출발점이 비어 있으면(기준일 미입력·단위에 가공품 그룹 없음) 빈 문자열 — 호출부가 다음
+ * 우선순위(내장 기본값)로 폴백한다.
+ */
+export function resolveDueRule(
+  rule: DueRule | ExceptionDueRule,
+  baseDates: BaseDates,
+  procDue?: string,
+): string {
+  let date = rule.base === PROCESSED_DUE_BASE ? (procDue ?? '') : (baseDates[rule.base] ?? '');
+  for (let i = rule.offsetWeeks; i > 0 && date; i -= 1) date = subtractLeadDays(date);
+  return date;
+}
+
+/**
+ * 그룹 기본 **비고 메시지** — '가공품 거래처(해룡엔지니어링) 직배송'. 괄호 안은 그 발주단위 가공품
  * 그룹의 유효 거래처명 동적 표기. 사유: 가공품 외 거래처가 제작품을 가공품 제작처로
  * 직배송하고, 거기서 조립해 모듈 단위로 받는다.
  *
@@ -289,36 +341,197 @@ export function defaultNoteOf(
   unit: OrderUnit,
   vendorClass: string,
   groups: readonly VendorGroup[],
+  unified: UnifiedVendors,
+  /** 가공품 그룹의 유효 거래처명 — 예외로 고정된 거래처(BUFFER 의 한국메카트로닉스 등)까지
+   *  반영하려면 리졸버가 해석한 이름을 넘긴다. 미전달이면 오버라이드/통합 지정 기준. */
+  processedVendorName = effectiveVendorOf(unit, PROCESSED_CLASS, unified)?.name,
 ): string {
   if (vendorClass === PROCESSED_CLASS) return '';
   // 발주단위에 가공품 그룹이 없으면 직배송할 대상이 없다 — 아무것도 쓰지 않는다
   // (사용자 확정 2026-08-14: 종전엔 거래처명 없이 '가공품 거래처 직배송'을 남겨,
   //  가공품이 한 건도 없는 발주에도 무의미한 문구가 붙었다).
   if (!groups.some((g) => g.vendorClass === PROCESSED_CLASS)) return '';
-  const name = effectiveVendorOf(unit, PROCESSED_CLASS)?.name;
-  return name ? `가공품 거래처(${name}) 직배송` : '';
+  return processedVendorName ? `가공품 거래처(${processedVendorName}) 직배송` : '';
+}
+
+// ── 예외 규칙 리졸버(파생 단일 권위) ────────────────────────────────────────
+
+/** 거래처 그룹 1개의 확정 파생값 — 오버라이드 > 예외 규칙 > 내장 기본을 이미 접은 결과다. */
+export interface VendorDefaults {
+  /** 유효 거래처 — 미지정이면 undefined(확정 게이트가 막는다). */
+  vendor?: { code: string; name: string };
+  dueDate: string;
+  /** 비고 **메시지**(finalNoteOf 의 [메시지] 부분) — 최종 문자열이 아니다. */
+  noteMessage: string;
+  /** 예외 규칙이 값을 준 필드 — 카드 마이크로 캡션 표시용(오버라이드가 이겼으면 비어 있다). */
+  appliedRule?: { due?: string; vendor?: boolean; note?: boolean };
+}
+
+/** 거래처명 비교 정규화 — 공백 제거 + 소문자화('(주)와이엔에스테크닉스' vs '와이엔에스'). */
+function normVendorName(name: string): string {
+  return name.replace(/\s+/g, '').toLowerCase();
+}
+
+/**
+ * 예외 대상 판정 — 분류 정확 일치 / 유효 거래처명 **부분 일치(포함)** / 그 분류만 제외한 전부.
+ * vendor 는 부분 일치다 — 패턴 표의 표기('와이엔에스')가 ERP 정식명('(주)와이엔에스테크닉스')의
+ * 축약이라 정확 일치로는 발화하지 않는다(실측 2026-08-21). 값이 유효 거래처명에 포함되면 매칭.
+ */
+function scopeMatches(
+  exception: PatternException,
+  vendorClass: string,
+  vendorName: string,
+): boolean {
+  const value = exception.scope.value.trim();
+  switch (exception.scope.kind) {
+    case 'vendorClass':
+      return vendorClass === value;
+    case 'vendor':
+      return value.length > 0 && normVendorName(vendorName).includes(normVendorName(value));
+    case 'exceptClass':
+      return vendorClass !== value;
+  }
+}
+
+/** 필드별 first-wins — 매칭 예외를 배열 순서로 훑어 그 필드를 **가진** 첫 예외가 이긴다. */
+function firstException<T>(
+  exceptions: readonly PatternException[],
+  vendorClass: string,
+  vendorName: string,
+  pick: (exception: PatternException) => T | undefined,
+): T | undefined {
+  for (const exception of exceptions) {
+    if (!scopeMatches(exception, vendorClass, vendorName)) continue;
+    const value = pick(exception);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/** 예외가 고정한 거래처명 → 카탈로그 코드. 목록에 없는 이름이면 코드 없이 이름만 쓴다. */
+function pinnedVendorOf(vendorClass: string, name: string): { code: string; name: string } {
+  const option = vendorCategoryOf(vendorClass)?.options.find((o) => o.name === name);
+  return { code: option?.code ?? '', name };
+}
+
+/** 납기 예외 캡션 — 'FRAME −3주'(0주면 기준일 이름만). */
+function dueRuleLabel(rule: ExceptionDueRule): string {
+  return rule.offsetWeeks > 0 ? `${rule.base} −${rule.offsetWeeks}주` : rule.base;
+}
+
+/**
+ * 발주단위 1건의 거래처 그룹별 확정값 — **저장하지 않고** 렌더·페이로드 시점에 즉석 파생한다.
+ * 따라서 통합 기준일·통합 거래처를 바꾸면 자동으로 따라오고, 개별 수정(vendorEdits)은
+ * 구조적으로 보존된다.
+ *
+ * 우선순위는 필드마다 독립이다: **vendorEdits(개별 수정) > 예외 규칙(배열 순서 first-wins)
+ * > 내장 기본**(통합 지정 / vendorDueOf / defaultNoteOf).
+ *
+ * 해석 순서 — ① 거래처(납기·비고의 'vendor' scope 판정이 유효 거래처명을 쓰므로 먼저 확정,
+ * 이 단계의 scope 는 vendorClass/exceptClass 만 본다) → ② 가공품 그룹 납기 1패스('가공품납기'
+ * 기준 예외는 자기 그룹에서 해석 불가라 스킵) → ③ 나머지 그룹 납기 2패스(procDue 전달) →
+ * ④ 비고. 이 2패스 구조가 '가공품납기' 기준의 순환을 원천 차단한다.
+ */
+export function vendorDefaultsOf(
+  unit: OrderUnit,
+  groups: readonly VendorGroup[],
+  baseDates: BaseDates,
+  unified: UnifiedVendors,
+): ReadonlyMap<string, VendorDefaults> {
+  const exceptions = unit.patternRule?.exceptions ?? [];
+
+  // ① 거래처 — 오버라이드 ?? 예외 고정 ?? 통합 지정.
+  const vendors = new Map<string, { vendor?: { code: string; name: string }; pinned: boolean }>();
+  for (const g of groups) {
+    const override = unit.vendorEdits[g.vendorClass]?.vendor;
+    // 'vendor' scope 에는 거래처 고정을 둘 수 없다(자기참조 — 검증기가 거부).
+    const pinned = override
+      ? undefined
+      : firstException(exceptions, g.vendorClass, '', (x) =>
+          x.scope.kind === 'vendor' ? undefined : x.vendor,
+        );
+    vendors.set(g.vendorClass, {
+      vendor: override ?? (pinned ? pinnedVendorOf(g.vendorClass, pinned) : unified[g.vendorClass]),
+      pinned: pinned != null,
+    });
+  }
+
+  /** scope 판정용 유효 거래처명 — 실거래처 그룹은 분류명 자체가 거래처명이다. */
+  const nameOf = (vendorClass: string): string =>
+    isSwappableVendorClass(vendorClass, unified)
+      ? (vendors.get(vendorClass)?.vendor?.name ?? '')
+      : vendorClass;
+
+  /** procDue=undefined 는 가공품 그룹 자신을 해석하는 1패스 — '가공품납기' 예외를 건너뛴다. */
+  const dueOf = (vendorClass: string, procDue: string | undefined) => {
+    const override = unit.vendorEdits[vendorClass]?.dueDate;
+    if (override) return { dueDate: override };
+    const rule = firstException(exceptions, vendorClass, nameOf(vendorClass), (x) =>
+      x.due && !(procDue === undefined && x.due.base === PROCESSED_DUE_BASE) ? x.due : undefined,
+    );
+    const resolved = rule ? resolveDueRule(rule, baseDates, procDue) : '';
+    // 기준일 미입력 등으로 해석값이 비면 내장 기본으로 폴백한다(빈 납기를 만들지 않는다).
+    if (rule && resolved) return { dueDate: resolved, applied: dueRuleLabel(rule) };
+    return { dueDate: vendorDueOf(unit.dueDate, vendorClass) };
+  };
+
+  // ② 가공품 그룹 납기 1패스 — 이 값이 '가공품납기' 기준 예외의 출발점(procDue)이다.
+  const hasProcessed = groups.some((g) => g.vendorClass === PROCESSED_CLASS);
+  const processedDue = hasProcessed ? dueOf(PROCESSED_CLASS, undefined) : undefined;
+  const processedName = hasProcessed ? nameOf(PROCESSED_CLASS) : undefined;
+
+  const out = new Map<string, VendorDefaults>();
+  for (const g of groups) {
+    // ③ 납기 2패스 — 가공품 그룹은 1패스 결과를 그대로 재사용한다(재해석 없음).
+    const due =
+      g.vendorClass === PROCESSED_CLASS && processedDue
+        ? processedDue
+        : dueOf(g.vendorClass, processedDue?.dueDate ?? '');
+    // ④ 비고 — '' 저장도 오버라이드(문구를 지운 상태)라 ?? 로 가른다.
+    const noteOverride = unit.vendorEdits[g.vendorClass]?.note;
+    const noteException =
+      noteOverride === undefined
+        ? firstException(exceptions, g.vendorClass, nameOf(g.vendorClass), (x) => x.note)
+        : undefined;
+    const noteMessage =
+      noteOverride ??
+      noteException ??
+      defaultNoteOf(unit, g.vendorClass, groups, unified, processedName);
+
+    const vendor = vendors.get(g.vendorClass);
+    const applied = {
+      ...(due.applied ? { due: due.applied } : null),
+      ...(vendor?.pinned ? { vendor: true } : null),
+      ...(noteException !== undefined ? { note: true } : null),
+    };
+    out.set(g.vendorClass, {
+      vendor: vendor?.vendor,
+      dueDate: due.dueDate,
+      noteMessage,
+      ...(Object.keys(applied).length > 0 ? { appliedRule: applied } : null),
+    });
+  }
+  return out;
 }
 
 /**
  * 최종 비고 = **최종 구매사유 + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
  * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 대괄호로 묶여 붙거나 안 붙는다.
- *   예) 'CX85-137 · 12CH PROCESS BUFFER [가공품 거래처(해룡) 직배송]'
+ *   예) 'CX85-137 · 12CH PROCESS BUFFER [가공품 거래처(해룡엔지니어링) 직배송]'
  *
  * 앞부분은 **구매사유 필드에 들어가는 것과 같은 완성 문자열**(finalPurchaseReasonOf)이다 —
- * 두 필드가 어긋나지 않게 한 함수를 공유한다. 메시지는 오버라이드(사용자 입력) 우선, 없으면
- * defaultNoteOf 파생. 빈 값은 빠지므로 가공품 그룹(메시지 없음)과 메시지를 지운 그룹은
- * 구매사유만 남는다(대괄호도 함께 사라진다 — 빈 '[]' 를 남기지 않는다).
+ * 두 필드가 어긋나지 않게 한 함수를 공유한다. 메시지는 리졸버가 이미 접은 값
+ * (vendorDefaultsOf 의 noteMessage — 오버라이드 > 예외 note > defaultNoteOf)을 받는다.
+ * 빈 값은 빠지므로 가공품 그룹(메시지 없음)과 메시지를 지운 그룹은 구매사유만 남는다
+ * (대괄호도 함께 사라진다 — 빈 '[]' 를 남기지 않는다).
  * 최종 계획서 표기와 제출 페이로드가 이 함수 하나를 공유한다(표기 = 전달값).
  */
 export function finalNoteOf(
   project: { code: string; name: string },
   unit: OrderUnit,
-  vendorClass: string,
-  groups: readonly VendorGroup[],
+  noteMessage: string,
 ): string {
-  const message = (
-    unit.vendorEdits[vendorClass]?.note ?? defaultNoteOf(unit, vendorClass, groups)
-  ).trim();
+  const message = noteMessage.trim();
   return [finalPurchaseReasonOf(project, unit), message && `[${message}]`]
     .filter(Boolean)
     .join(' ');
@@ -355,11 +568,16 @@ export function selectionTotals(
 export interface PlanTotals extends CountAmount {
   units: number;
   vendorGroups: number;
-  /** 실거래처 미지정 의사 그룹 수. */
+  /** 거래처 미지정 그룹 수(교체 가능한 분류 기준). */
   unassignedVendors: number;
 }
 
-export function planTotalsOf(bom: PlanBom, units: readonly OrderUnit[]): PlanTotals {
+export function planTotalsOf(
+  bom: PlanBom,
+  units: readonly OrderUnit[],
+  unified: UnifiedVendors,
+  baseDates: BaseDates,
+): PlanTotals {
   let vendorGroups = 0;
   let unassignedVendors = 0;
   let parts = 0;
@@ -367,9 +585,11 @@ export function planTotalsOf(bom: PlanBom, units: readonly OrderUnit[]): PlanTot
   for (const u of units) {
     const groups = vendorGroupsOf(modulesOf(bom, u));
     vendorGroups += groups.length;
-    // 미지정 판정은 기본값 적용 후(effective) 기준 — 기본 거래처가 있으면 지정으로 본다.
+    // 미지정 판정은 리졸버 산출값 기준 — 통합 지정이나 예외 고정이 살아 있으면 지정으로 본다
+    // (확정 게이트 planGateOf 와 같은 판정이어야 하단 요약의 '미지정 n' 이 어긋나지 않는다).
+    const defaults = vendorDefaultsOf(u, groups, baseDates, unified);
     unassignedVendors += groups.filter(
-      (g) => g.isPseudo && !effectiveVendorOf(u, g.vendorClass),
+      (g) => isSwappableVendorClass(g.vendorClass, unified) && !defaults.get(g.vendorClass)?.vendor,
     ).length;
     const t = unitTotals(bom, u);
     parts += t.parts;
@@ -387,22 +607,32 @@ export interface PlanGate {
 }
 
 /**
- * 계획 확정 조건 — 발주단위 1개 이상 + 모든 발주단위에 구매사유·납기 입력 + 의사 거래처
- * 전부 지정(기본값 적용 후 기준 — 가공품·판금품은 기본 거래처가 있어 통과).
+ * 계획 확정 조건 — 발주단위 1개 이상 + 모든 발주단위에 구매사유·납기 입력 + 교체 가능한
+ * 거래처 분류 전부 지정(기본값 적용 후 기준 — 통합 지정이 살아 있으면 통과).
  * 미배정 모듈은 허용(확정을 막지 않는다 — 남은 모듈은 다음 발주로 돌린다).
  */
-export function planGateOf(bom: PlanBom, units: readonly OrderUnit[]): PlanGate {
+export function planGateOf(
+  bom: PlanBom,
+  units: readonly OrderUnit[],
+  unified: UnifiedVendors,
+  baseDates: BaseDates,
+): PlanGate {
   const hints: string[] = [];
   if (units.length === 0) hints.push('발주단위를 1개 이상 만드세요.');
   const noReason = units.filter((u) => !u.purchaseReason.trim()).map((u) => u.seq);
   if (noReason.length > 0) hints.push(`구매사유 미입력 — 발주 ${noReason.join('·')}`);
   const noDue = units.filter((u) => !u.dueDate).map((u) => u.seq);
   if (noDue.length > 0) hints.push(`납기예정일 미입력 — 발주 ${noDue.join('·')}`);
-  const unassigned = units.flatMap((u) =>
-    vendorGroupsOf(modulesOf(bom, u))
-      .filter((g) => g.isPseudo && !effectiveVendorOf(u, g.vendorClass))
-      .map((g) => `발주 ${u.seq} ${g.vendorClass}`),
-  );
+  const unassigned = units.flatMap((u) => {
+    const groups = vendorGroupsOf(modulesOf(bom, u));
+    const defaults = vendorDefaultsOf(u, groups, baseDates, unified);
+    return groups
+      .filter(
+        (g) =>
+          isSwappableVendorClass(g.vendorClass, unified) && !defaults.get(g.vendorClass)?.vendor,
+      )
+      .map((g) => `발주 ${u.seq} ${g.vendorClass}`);
+  });
   if (unassigned.length > 0) hints.push(`거래처 미지정 — ${unassigned.join(', ')}`);
   return { ready: hints.length === 0, hints };
 }
@@ -410,10 +640,10 @@ export function planGateOf(bom: PlanBom, units: readonly OrderUnit[]): PlanGate 
 // ── 실행 페이로드(확정 제출) ─────────────────────────────────────────────────
 
 /**
- * 에이전트 실행 파라미터(PlanSubmit) — 데모는 확정 미리보기 pre 로, 라이브는
- * POST /runs/hitl 의 plan 으로 제출한다. project 는 사용자가 선택한 값이며, 거래처
- * 그룹의 vendor/dueDate 는 오버라이드가 없으면 파생 기본값(effectiveVendorOf·
- * vendorDueOf)으로 접어 넣는다. wbs 는 BOM 값을 그대로 쓴다.
+ * 에이전트 실행 파라미터(PlanSubmit) — 라이브는 POST /runs/hitl 의 plan 으로 제출한다.
+ * project 는 사용자가 선택한 값이며, 거래처 그룹의 vendor/dueDate/note 는 리졸버
+ * (vendorDefaultsOf — 오버라이드 > 패턴 예외 > 내장 기본)가 접은 확정값이다.
+ * wbs 는 BOM 값을 그대로 쓴다.
  *
  * ⚠ note 는 **최종 비고**(finalNoteOf = 구매사유 + 비고 메시지)다 — 입력란이 받은
  *   메시지가 아니라 ERP 에 들어갈 완성 문자열이며, 최종 계획서 표기와 같은 값이다.
@@ -422,12 +652,15 @@ export function buildPlanPayload(
   bom: PlanBom,
   project: { code: string; name: string },
   units: readonly OrderUnit[],
+  unified: UnifiedVendors,
+  baseDates: BaseDates,
 ): PlanSubmit {
   return {
     project: { code: project.code, name: project.name },
     wbs: bom.project.wbs,
     units: units.map((u) => {
       const groups = vendorGroupsOf(modulesOf(bom, u));
+      const defaults = vendorDefaultsOf(u, groups, baseDates, unified);
       return {
         seq: u.seq,
         purchaseReason: finalPurchaseReasonOf(project, u),
@@ -438,16 +671,16 @@ export function buildPlanPayload(
           spec: m.spec,
         })),
         vendorGroups: groups.map((g) => {
-          const edit = u.vendorEdits[g.vendorClass];
+          const d = defaults.get(g.vendorClass);
           return {
             vendorClass: g.vendorClass,
-            vendor: g.isPseudo
-              ? (effectiveVendorOf(u, g.vendorClass)?.name ?? null)
+            vendor: isSwappableVendorClass(g.vendorClass, unified)
+              ? (d?.vendor?.name ?? null)
               : g.vendorClass,
             parts: g.parts.length,
             amount: g.amount,
-            dueDate: edit?.dueDate || vendorDueOf(u.dueDate, g.vendorClass),
-            note: finalNoteOf(project, u, g.vendorClass, groups),
+            dueDate: d?.dueDate ?? '',
+            note: finalNoteOf(project, u, d?.noteMessage ?? ''),
           };
         }),
       };

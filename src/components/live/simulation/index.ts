@@ -12,7 +12,6 @@
 
 import type { ComponentType } from 'react';
 import type { Agent } from '@/lib/data/agents';
-import { PurchaseOrderSimulation } from './purchase-order/purchase-order-simulation';
 
 export interface SimulationPanelProps {
   agent: Agent;
@@ -20,8 +19,8 @@ export interface SimulationPanelProps {
 
 export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProps>> = {
   // tax-invoice 는 2026-08-19 pre-run/PRE_RUN_FORMS('tax-invoice')로 승격 — 여기서 제거.
-  // 데모 전용 — 실 연동 구매발주(purchase-order)는 SCM-구매 실측 후 pre-run 으로 승격 예정.
-  'purchase-order-demo': PurchaseOrderSimulation,
+  // purchase-order-demo 는 2026-08-21 데모 종료로 제거(공용 조각은 purchase-order/ 에 잔존,
+  // LivePlannerCard 가 사용). 메커니즘은 유지 — 새 화면 흐름 확정용 패널은 여기 등록한다.
 };
 
 /**
@@ -29,4 +28,4 @@ export const SIMULATION_PANELS: Record<string, ComponentType<SimulationPanelProp
  * 우측 열로는 좁다. 여기 등록된 agentId 는 agent-detail-client 가 layoutLevel 을
  * 'full'(그리드 개입과 동일 — 라이브 대기 스테이지 숨김)로 올린다. 나머지는 종전 split.
  */
-export const FULL_WIDTH_SIMULATION_AGENTS: ReadonlySet<string> = new Set(['purchase-order-demo']);
+export const FULL_WIDTH_SIMULATION_AGENTS: ReadonlySet<string> = new Set<string>();

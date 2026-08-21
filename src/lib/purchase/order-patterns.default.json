@@ -1,0 +1,200 @@
+{
+  "groups": [
+    {
+      "id": "g1",
+      "bundle": "EFEM",
+      "name": "FRAME",
+      "due": { "base": "FRAME", "offsetWeeks": 0 },
+      "reason": "PJT DESC EFEM FRAME",
+      "modules": [{ "id": "g1m1", "spec": "EFEM-Frame Assy", "name": "외주조립-F" }],
+      "exceptions": [
+        {
+          "id": "g1x1",
+          "scope": { "kind": "exceptClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 1 },
+          "note": "직배송 판금품"
+        },
+        {
+          "id": "g1x2",
+          "scope": { "kind": "vendorClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 0 }
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "bundle": "EFEM",
+      "name": "L Axis",
+      "due": { "base": "FRAME", "offsetWeeks": 1 },
+      "reason": "PJT DESC EFEM L AXIS",
+      "modules": [{ "id": "g2m1", "spec": "EFEM-L Axis Assy", "name": "외주조립-L" }],
+      "exceptions": [
+        {
+          "id": "g2x1",
+          "scope": { "kind": "exceptClass", "value": "가공품" },
+          "due": { "base": "FRAME", "offsetWeeks": 2 },
+          "note": "직배송 가공품"
+        },
+        {
+          "id": "g2x2",
+          "scope": { "kind": "vendorClass", "value": "가공품" },
+          "note": "직배송 판금품"
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "bundle": "EFEM",
+      "name": "1공장",
+      "due": { "base": "1공장", "offsetWeeks": 0 },
+      "reason": "PJT DESC EFEM 1공장",
+      "modules": [
+        { "id": "g3m1", "spec": "EFEM-Electric Pannel Assy", "name": "외주조립-ELECTRIC PANNEL" },
+        { "id": "g3m2", "spec": "EFEM-완제품 조립", "name": "제조1팀" },
+        { "id": "g3m3", "spec": "EFEM-Frame 배선", "name": "전장-제조1팀" }
+      ],
+      "exceptions": [
+        {
+          "id": "g3x1",
+          "scope": { "kind": "vendor", "value": "와이엔에스" },
+          "due": { "base": "FRAME", "offsetWeeks": 3 }
+        },
+        {
+          "id": "g3x2",
+          "scope": { "kind": "vendorClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 0 }
+        }
+      ]
+    },
+    {
+      "id": "g4",
+      "bundle": "EFEM",
+      "name": "3공장",
+      "due": { "base": "3공장", "offsetWeeks": 0 },
+      "reason": "PJT DESC EFEM 3공장",
+      "modules": [
+        { "id": "g4m1", "spec": "EFEM-Interlock Assy", "name": "제조2팀" },
+        { "id": "g4m2", "spec": "EFEM-R Axis Assy", "name": "제조2팀" },
+        { "id": "g4m3", "spec": "EFEM-Regulator Box Assy", "name": "외주조립-명판" },
+        { "id": "g4m4", "spec": "EFEM-Robot 후공정인계", "name": "제조2팀" },
+        { "id": "g4m5", "spec": "EFEM-Switch Box Assy", "name": "외주조립-명판" },
+        { "id": "g4m6", "spec": "EFEM-T Axis Assy", "name": "제조2팀" },
+        { "id": "g4m7", "spec": "EFEM-Z Axis Assy", "name": "제조2팀" },
+        { "id": "g4m8", "spec": "EFEM-Robot 배선", "name": "전장-제조2팀" }
+      ],
+      "exceptions": []
+    },
+    {
+      "id": "g5",
+      "bundle": "PROCESS",
+      "name": "FRAME",
+      "due": { "base": "FRAME", "offsetWeeks": 0 },
+      "reason": "PJT DESC PROCESS FRAME",
+      "modules": [{ "id": "g5m1", "spec": "Process-Frame Assy", "name": "외주조립-F" }],
+      "exceptions": [
+        {
+          "id": "g5x1",
+          "scope": { "kind": "exceptClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 1 },
+          "note": "직배송 판금품"
+        },
+        {
+          "id": "g5x2",
+          "scope": { "kind": "vendorClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 0 }
+        }
+      ]
+    },
+    {
+      "id": "g6",
+      "bundle": "PROCESS",
+      "name": "L Axis",
+      "due": { "base": "FRAME", "offsetWeeks": 1 },
+      "reason": "PJT DESC PROCESS L AXIS",
+      "modules": [{ "id": "g6m1", "spec": "Process-L Axis Assy", "name": "외주조립-L" }],
+      "exceptions": [
+        {
+          "id": "g6x1",
+          "scope": { "kind": "exceptClass", "value": "가공품" },
+          "due": { "base": "FRAME", "offsetWeeks": 2 },
+          "note": "직배송 가공품"
+        },
+        {
+          "id": "g6x2",
+          "scope": { "kind": "vendorClass", "value": "가공품" },
+          "note": "직배송 판금품"
+        }
+      ]
+    },
+    {
+      "id": "g7",
+      "bundle": "PROCESS",
+      "name": "1공장",
+      "due": { "base": "1공장", "offsetWeeks": 0 },
+      "reason": "PJT DESC PROCESS 1공장",
+      "modules": [
+        { "id": "g7m1", "spec": "Process-Electric Pannel Assy", "name": "외주조립-ELECTRIC PANNEL" },
+        { "id": "g7m2", "spec": "Process-완제품 조립", "name": "제조1팀" },
+        { "id": "g7m3", "spec": "Process-Frame 배선", "name": "전장-제조1팀" }
+      ],
+      "exceptions": [
+        {
+          "id": "g7x1",
+          "scope": { "kind": "vendor", "value": "와이엔에스" },
+          "due": { "base": "FRAME", "offsetWeeks": 3 }
+        },
+        {
+          "id": "g7x2",
+          "scope": { "kind": "vendorClass", "value": "판금품" },
+          "due": { "base": "FRAME", "offsetWeeks": 0 }
+        }
+      ]
+    },
+    {
+      "id": "g8",
+      "bundle": "PROCESS",
+      "name": "3공장",
+      "due": { "base": "3공장", "offsetWeeks": 0 },
+      "reason": "PJT DESC PROCESS 3공장",
+      "modules": [
+        { "id": "g8m1", "spec": "Process-Flat Cable Assy", "name": "외주조립-FLAT" },
+        { "id": "g8m2", "spec": "Process-Interlock Assy", "name": "제조2팀" },
+        { "id": "g8m3", "spec": "Process-R Axis Assy", "name": "제조2팀" },
+        { "id": "g8m4", "spec": "Process-Robot 후공정인계", "name": "제조2팀" },
+        { "id": "g8m5", "spec": "Process-Switch & Regulator Box Assy", "name": "외주조립-명판" },
+        { "id": "g8m6", "spec": "Process-T Axis Assy", "name": "제조2팀" },
+        { "id": "g8m7", "spec": "Process-Z Axis Assy", "name": "제조2팀" },
+        { "id": "g8m8", "spec": "Process-Robot 배선", "name": "전장-제조2팀" }
+      ],
+      "exceptions": [
+        {
+          "id": "g8x1",
+          "scope": { "kind": "vendor", "value": "유트랙스" },
+          "due": { "base": "3공장", "offsetWeeks": 1 },
+          "note": "하네스 업체로 직납"
+        }
+      ]
+    },
+    {
+      "id": "g9",
+      "bundle": "PROCESS",
+      "name": "BUFFER MODULE",
+      "due": { "base": "1공장", "offsetWeeks": 0 },
+      "reason": "PJT DESC BUFFER MODULE",
+      "modules": [{ "id": "g9m1", "spec": "Process-Buffer Assy", "name": "외주조립-BUFFER" }],
+      "exceptions": [
+        {
+          "id": "g9x1",
+          "scope": { "kind": "vendorClass", "value": "가공품" },
+          "vendor": "한국메카트로닉스"
+        },
+        {
+          "id": "g9x2",
+          "scope": { "kind": "exceptClass", "value": "가공품" },
+          "due": { "base": "가공품납기", "offsetWeeks": 1 },
+          "note": "직배송 한국메카"
+        }
+      ]
+    }
+  ]
+}

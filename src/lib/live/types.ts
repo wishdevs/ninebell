@@ -154,7 +154,7 @@ export interface HitlBudgetUnits {
 
 /**
  * 발주 계획서 BOM 리프(부품, 트리그리드 getLevel()==4).
- * 데모 픽스처(src/lib/data/purchase-order-bom.json)와 **동일 shape** — 백/프론트 공유 계약.
+ * 백엔드 계획서 HITL(plannerBom)이 내려주는 shape — 백/프론트 공유 계약.
  */
 export interface PlannerBomPart {
   itemCode: string;

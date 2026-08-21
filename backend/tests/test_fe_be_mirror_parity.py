@@ -1,18 +1,20 @@
-"""FE 미러 ↔ BE 원본 패리티 — 프론트가 백엔드 업무규칙을 리터럴로 미러한 3곳의 드리프트 감시.
+"""FE 미러 ↔ BE 원본 패리티 — 프론트가 백엔드 업무규칙을 리터럴로 미러한 4곳의 드리프트 감시.
 
 미러는 미리보기/개입 UX 용이라 계산 권위는 항상 백엔드지만, 값이 갈라지면 사용자가
 화면에서 본 것과 실제 저장이 달라진다(실사례: b91ccfc 가 백엔드 불공 계정에
-차량유지비-관리·기부금을 추가했는데 FE 미러는 갱신 누락). TSX 소스에서 정규식으로
-리터럴을 추출해 백엔드 원본과 기계적으로 대조한다(test_card_note_sanitize 의
-마이그레이션↔코드 패리티 선례와 동일한 접근).
+차량유지비-관리·기부금을 추가했는데 FE 미러는 갱신 누락). FE 소스에서 리터럴을 기계적으로
+떼어내 백엔드 원본과 대조한다(test_card_note_sanitize 의 마이그레이션↔코드 패리티 선례와
+동일한 접근) — ①②③ 은 TSX/TS 정규식 추출, ④ 는 기본값이 JSON 파일이라 json.load 직독이다.
 
   ① LiveGridCard.tsx 불공제 계정 목록      ↔ app/agents/card_collect/vat.py
   ② fuel-calc.ts DEFAULT_FUEL_CLASSES     ↔ app/services/agent_settings.py
   ③ gyeongjo-pre-run-form.tsx supplyAmount ↔ app/agents/gyeongjo_grant/params.py
+  ④ order-patterns.default.json 기본 9그룹 ↔ app/services/agent_settings.py
 """
 
 from __future__ import annotations
 
+import json
 import re
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -21,13 +23,23 @@ import pytest
 
 from app.agents.card_collect.vat import _NONDEDUCTIBLE_ACCTS, _NONDEDUCTIBLE_CONTAINS
 from app.agents.gyeongjo_grant.params import supply_amount
-from app.services.agent_settings import DEFAULT_FUEL_CLASSES
+from app.services.agent_settings import (
+    DEFAULT_FUEL_CLASSES,
+    DEFAULT_ORDER_PATTERNS,
+    MAX_GROUP_EXCEPTIONS,
+    MAX_GROUP_MODULES,
+    MAX_OFFSET_WEEKS,
+    MAX_PATTERN_GROUPS,
+    ORDER_PATTERNS_KEY,
+)
 
 # backend/tests/ → 저장소 루트 → FE 소스. 파일 이동 시 여기만 고치면 된다.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LIVE_GRID_CARD = _REPO_ROOT / "src" / "components" / "live" / "LiveGridCard.tsx"
 _FUEL_CALC = _REPO_ROOT / "src" / "lib" / "trip" / "fuel-calc.ts"
 _GYEONGJO_FORM = _REPO_ROOT / "src" / "components" / "live" / "pre-run" / "gyeongjo-pre-run-form.tsx"
+_ORDER_PATTERNS_TS = _REPO_ROOT / "src" / "lib" / "purchase" / "order-patterns.ts"
+_ORDER_PATTERNS_JSON = _REPO_ROOT / "src" / "lib" / "purchase" / "order-patterns.default.json"
 
 
 def _read(path: Path) -> str:
@@ -127,3 +139,84 @@ def test_gyeongjo_supply_amount_rounding_parity(base):
     assert be == ref
     # 근속 1년 이상은 양쪽 다 정액 그대로(FE 삼항의 else 분기 = 항등).
     assert supply_amount(base, False) == base
+
+
+# ── ④ 발주 패턴 기본 9그룹(order-patterns.default.json ↔ agent_settings.py) ───
+# v2 부터 기본값의 **단일 소스는 JSON 파일**이다 — FE 는 그 파일을 typed import 하고, BE 는
+# 배포 이미지에 src/ 가 없어 같은 값을 파이썬 리터럴로 들고 있다. 그래서 여기서는 TS 리터럴을
+# 파싱할 필요가 없다(v1 의 괄호 매칭 파서는 중첩 구조를 감당하지 못해 통째로 폐기했다):
+# json.load 로 읽어 백엔드 리터럴과 **재귀 완전 동등** 비교한다.
+
+
+def _tree_diffs(fe: object, be: object, path: str) -> list[str]:
+    """두 구조의 불일치 지점을 경로와 함께 모은다 — 9그룹 통짜 diff 는 읽을 수 없다."""
+    if isinstance(fe, dict) and isinstance(be, dict):
+        out: list[str] = []
+        for key in sorted(set(fe) | set(be), key=str):
+            if key not in fe:
+                out.append(f"{path}.{key}: FE 없음 / BE={be[key]!r}")
+            elif key not in be:
+                out.append(f"{path}.{key}: FE={fe[key]!r} / BE 없음")
+            else:
+                out += _tree_diffs(fe[key], be[key], f"{path}.{key}")
+        return out
+    if isinstance(fe, list) and isinstance(be, list):
+        out = []
+        if len(fe) != len(be):
+            out.append(f"{path}: 길이 FE={len(fe)} / BE={len(be)}")
+        for i, (fe_item, be_item) in enumerate(zip(fe, be)):
+            out += _tree_diffs(fe_item, be_item, f"{path}[{i}]")
+        return out
+    return [] if fe == be else [f"{path}: FE={fe!r} / BE={be!r}"]
+
+
+def test_default_order_patterns_json_parity():
+    """order-patterns.default.json 9그룹이 백엔드 DEFAULT_ORDER_PATTERNS 와 완전히 같아야 한다.
+
+    관리자가 패턴을 한 번도 저장하지 않은 상태에서는 이 기본값이 곧 계획서의 발주단위 편성
+    결과이므로, 갈라지면 화면에서 편성된 발주단위와 백엔드가 아는 패턴이 달라진다.
+    """
+    fe = json.loads(_read(_ORDER_PATTERNS_JSON))
+    assert isinstance(fe, dict) and isinstance(fe.get("groups"), list), (
+        "order-patterns.default.json 이 {\"groups\": [...]} 형태가 아닙니다"
+    )
+    fe_ids = [g.get("id") for g in fe["groups"]]
+    be_ids = [g["id"] for g in DEFAULT_ORDER_PATTERNS["groups"]]
+    assert fe_ids == be_ids, (
+        f"기본 발주그룹의 id·순서 드리프트 — FE: {fe_ids} / BE: {be_ids}"
+    )
+    # 그룹별로 훑어 어느 그룹의 어느 경로가 어긋났는지 바로 드러나게 한다.
+    diffs: list[str] = []
+    for fe_group, be_group in zip(fe["groups"], DEFAULT_ORDER_PATTERNS["groups"]):
+        diffs += _tree_diffs(fe_group, be_group, f"groups[{be_group['id']}]")
+    assert not diffs, (
+        "기본 발주그룹 FE/BE 드리프트 — 한쪽만 고치면 계획서 편성과 백엔드 기본값이 갈라집니다.\n  "
+        + "\n  ".join(diffs)
+    )
+    # groups 밖의 키(향후 확장)까지 포함한 최종 동등성.
+    assert fe == DEFAULT_ORDER_PATTERNS
+
+
+def _ts_const(src: str, name: str) -> str | int:
+    """order-patterns.ts 의 `export const NAME = 'str' | 123;` 리터럴 값을 뽑는다."""
+    m = re.search(rf"export const {name} = (?:'([^']*)'|(\d+));", src)
+    assert m, f"order-patterns.ts 에서 {name} 선언을 찾지 못했습니다(형태 변경 시 정규식 갱신)"
+    return m.group(1) if m.group(1) is not None else int(m.group(2))
+
+
+def test_order_patterns_constants_parity():
+    """settings 키와 한도 4종이 갈라지면 관리자가 저장한 패턴을 백엔드가 거부하거나 잘라먹는다."""
+    src = _read(_ORDER_PATTERNS_TS)
+    expected: dict[str, str | int] = {
+        "ORDER_PATTERNS_KEY": ORDER_PATTERNS_KEY,
+        "MAX_PATTERN_GROUPS": MAX_PATTERN_GROUPS,
+        "MAX_GROUP_MODULES": MAX_GROUP_MODULES,
+        "MAX_GROUP_EXCEPTIONS": MAX_GROUP_EXCEPTIONS,
+        "MAX_OFFSET_WEEKS": MAX_OFFSET_WEEKS,
+    }
+    drift = {
+        name: (_ts_const(src, name), be)
+        for name, be in expected.items()
+        if _ts_const(src, name) != be
+    }
+    assert not drift, f"발주 패턴 상수 드리프트 — {{이름: (FE, BE)}} = {drift}"

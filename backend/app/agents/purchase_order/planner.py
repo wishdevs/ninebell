@@ -1,7 +1,7 @@
 """구매발주 계획서(planner) 순수 로직 — plannerBom 조립 + 계획 제출 검증(브라우저 무관).
 
-plannerBom 은 프론트 데모 픽스처(src/lib/data/purchase-order-bom.json)와 **동일 shape** 다
-(공유 계약) — 프론트 LivePlannerCard 가 데모 모델을 그대로 먹는다:
+plannerBom 은 프론트 lib/live/types 의 PlannerBom 과 **동일 shape** 다(공유 계약) —
+프론트 LivePlannerCard 가 그대로 먹는다:
   {"project": {"code","name","wbs"},
    "machines": [{"itemCode","name","spec","unit","modules": [{"itemCode","name","spec","unit",
      "bomQty","parts": [{"itemCode","name","spec","unit","bomQty","remainQty","unitPrice",
@@ -19,8 +19,13 @@ from __future__ import annotations
 from typing import Any
 
 # 의사 거래처(실거래처 미정 분류) — 프론트 model.ts PSEUDO_VENDOR_CLASSES 미러(가공품 → 판금품
-# 순서 포함). 계획 제출 검증에서 "미지정 의사 거래처 없음" 판정의 단일 기준.
+# 순서 포함).
 PSEUDO_VENDOR_CLASSES: tuple[str, ...] = ("가공품", "판금품")
+
+# 계획 제출 검증에서 실거래처(vendor) 지정을 요구하는 분류 — 프론트 catalog.ts
+# VENDOR_CATEGORIES(교체 가능 분류) 미러. 의사 2종 + '주식회사 오텍'(실거래처명이지만
+# 통합 지정으로 교체 가능, 2026-08-21 개편). 통합 지정이 해제된 채 제출되면 여기서 거른다.
+VENDOR_REQUIRED_CLASSES: tuple[str, ...] = (*PSEUDO_VENDOR_CLASSES, "주식회사 오텍")
 
 # plannerBom 키 → 트리그리드 fieldName 후보(첫 비어있지 않은 값 채택).
 # ✅ 확정(프로브/화면 플랫 그리드 실측): ITEM_CD·ITEM_NM·ITEM_SPEC_DC·RMND_QT·PUR_FG·WBS_NM.
@@ -196,7 +201,7 @@ def validate_plan(plan: Any) -> tuple[bool, str]:
     """계획 제출 payload 경량 검증(서버측) — (ok, 위반 사유).
 
     규칙(HITL 통합 설계 확정분): ① units ≥ 1, ② 각 unit 에 purchaseReason·dueDate,
-    ③ 미지정 의사 거래처 없음(가공품·판금품 그룹은 실거래처 vendor 필수).
+    ③ 교체 가능 분류(가공품·판금품·주식회사 오텍) 그룹은 실거래처 vendor 필수.
     구조 상한(units≤50 등)은 runs.py Pydantic(PlanIn)이 경계에서 이미 강제한다.
     """
     if not isinstance(plan, dict):
@@ -212,7 +217,7 @@ def validate_plan(plan: Any) -> tuple[bool, str]:
             return False, f"발주단위 {seq}에 납기예정일이 없습니다."
         for g in unit.get("vendorGroups") or []:
             v_class = str(g.get("vendorClass") or "")
-            if v_class in PSEUDO_VENDOR_CLASSES and not str(g.get("vendor") or "").strip():
+            if v_class in VENDOR_REQUIRED_CLASSES and not str(g.get("vendor") or "").strip():
                 return False, (
                     f"발주단위 {seq}의 '{v_class}' 그룹에 실거래처가 지정되지 않았습니다."
                 )

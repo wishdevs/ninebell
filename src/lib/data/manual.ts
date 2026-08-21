@@ -72,7 +72,6 @@ export const AGENT_MANUAL_SECTIONS: ManualSectionDef[] = [
     items: [
       { id: 'item-bulk-register', name: '품목일괄등록' },
       { id: 'purchase-order', name: '구매발주' },
-      { id: 'purchase-order-demo', name: '구매발주 데모' },
     ],
   },
   {

@@ -20,6 +20,7 @@ export const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
     { label: '프로젝트 관리', href: '/manage/projects' },
     { label: '거래처 관리', href: '/manage/partners' },
   ],
+  purchase: [{ label: '발주 패턴', href: '/manage/order-patterns' }],
 };
 
 /**
