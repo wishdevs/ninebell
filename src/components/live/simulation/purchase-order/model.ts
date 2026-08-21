@@ -235,13 +235,16 @@ export function defaultPurchaseReasonOf(bom: PlanBom, moduleCodes: readonly stri
     .join('·');
 }
 
-/** 구매사유·비고에 붙는 프로젝트 접두 — '코드 · 프로젝트명'. */
+/**
+ * 구매사유·비고에 붙는 프로젝트 접두 — **프로젝트명만**(코드 제외, 사용자 확정 2026-08-21
+ * — 'PJT DESC'는 프로젝트명 치환자다). 이름이 비면 코드로 폴백.
+ */
 function projectPrefixOf(project: { code: string; name: string }): string {
-  return [project.code.trim(), project.name.trim()].filter(Boolean).join(' · ');
+  return project.name.trim() || project.code.trim();
 }
 
 /**
- * 최종 구매사유 = **[프로젝트 코드 · 명] + [입력한 모듈명]**(사용자 규칙 2026-08-14).
+ * 최종 구매사유 = **[프로젝트명] + [입력한 모듈명]**(2026-08-14 규칙, 2026-08-21 코드 제외).
  * 입력란은 모듈명만 받고, ERP 로 나가는 완성 문자열은 여기서 만든다 — 프로젝트를 바꾸면
  * 접두가 자동으로 따라온다. 최종 계획서 표기와 제출 페이로드가 이 함수를 공유한다.
  */
@@ -311,7 +314,7 @@ export function vendorDueOf(unitDue: string, vendorClass: string): string {
 /**
  * 패턴 납기 규칙 → 날짜('yyyy-mm-dd'). base 가 3기준일이면 상단 입력값, '가공품납기'면 인자
  * procDue(같은 발주단위 가공품 그룹의 확정 납기)를 출발점으로 삼고, offsetWeeks 회만큼
- * subtractLeadDays(1주 = 7일 − 평일 공휴일, 주말·공휴일 후퇴)를 합성한다.
+ * subtractLeadDays(1주 = 영업일 5일 — 공휴일·주말을 건너뛰며 보존)를 합성한다.
  *
  * 출발점이 비어 있으면(기준일 미입력·단위에 가공품 그룹 없음) 빈 문자열 — 호출부가 다음
  * 우선순위(내장 기본값)로 폴백한다.

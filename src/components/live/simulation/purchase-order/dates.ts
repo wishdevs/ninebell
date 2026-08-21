@@ -36,8 +36,11 @@ const HOLIDAYS: ReadonlySet<string> = new Set([
 
 const DAY_MS = 86_400_000;
 
-/** 가공품 외 거래처 선행 리드타임(일) — 발주단위 납기의 1주일 전. */
-const LEAD_DAYS = 7;
+/**
+ * '1주 전'의 정의 = **영업일 5일 전**(사용자 확정 2026-08-21). 공휴일이 끼면 그만큼 —
+ * 이동이 주말을 가로지르면 주말까지 건너뛰며 — 더 앞으로 가서 영업일 5일을 보존한다.
+ */
+const LEAD_BUSINESS_DAYS = 5;
 
 /** 'yyyy-mm-dd' → UTC ms. 형식 불일치는 null. */
 function parseUtc(iso: string): number | null {
@@ -63,37 +66,38 @@ function isHoliday(ms: number): boolean {
   return HOLIDAYS.has(toIso(ms));
 }
 
-/** 구간 [from, to) 의 평일(월~금) 공휴일 수. */
-function weekdayHolidaysBetween(fromMs: number, toMs: number): number {
-  let n = 0;
-  for (let t = fromMs; t < toMs; t += DAY_MS) if (isWeekday(t) && isHoliday(t)) n += 1;
-  return n;
+/** 영업일 여부 — 월~금이면서 공휴일이 아님. */
+function isBusinessDay(ms: number): boolean {
+  return isWeekday(ms) && !isHoliday(ms);
 }
 
 /**
- * 발주단위 납기(unitDue)의 1주일 전 영업일 — 가공품 외 그룹(판금품·실거래처)의 기본 납기.
+ * date 에서 **영업일 n일 전** — 하루씩 거슬러 영업일만 세므로 주말·공휴일이 몇 번을
+ * 가로막든 정확히 n영업일의 리드타임이 보존되고, 결과 자체도 항상 영업일이다.
+ */
+export function subtractBusinessDays(date: string, n: number): string {
+  const start = parseUtc(date);
+  if (start == null) return '';
+  let d = start;
+  for (let remain = n; remain > 0;) {
+    d -= DAY_MS;
+    if (isBusinessDay(d)) remain -= 1;
+  }
+  return toIso(d);
+}
+
+/**
+ * 발주단위 납기(unitDue)의 '1주일 전' — 가공품 외 그룹(판금품·실거래처)의 기본 납기이자
+ * 패턴 'N주 전' 규칙의 1회분. **1주 = 영업일 5일**(사용자 확정 2026-08-21) — 종전의
+ * '달력 7일 − 평일 공휴일 보정' 방식은 이동이 주말을 가로지르면 영업일이 모자랐다.
  *
  * 사유: 가공품 외 거래처가 먼저 제작해 가공품 제작처로 보내고, 거기서 함께 조립해
  * 모듈 단위로 납품받기 위한 선행 리드타임이다.
  *
- * 규칙 — ① 후보 D = unitDue − 7일. ② 구간 [D, unitDue) 의 평일 공휴일 n일만큼 D 를
- * 더 앞당기고, 구간이 넓어져 새로 편입된 평일 공휴일이 있으면 고정점까지 반복.
- * ③ 최종 D 가 토·일 또는 공휴일이면 직전 영업일로 이동.
- *
- * 검산 — unitDue 2026-10-12(월): 후보 10-05(월·대체공휴일), [10-05,10-12) 평일 공휴일
- * 10-05·10-09 로 2일 앞당겨 10-03(토), 신규 편입 없음(고정점), 토요일이라 직전 영업일
- * → 2026-10-02(금). 공휴일 없는 주: 2026-11-16 → 2026-11-09. 설연휴 낀 주: 2026-02-23
- * → 후보 02-16, 연휴(02-16~18) 3일 앞당겨 → 2026-02-13(금).
+ * 검산 — 공휴일 없는 주: 2026-11-16(월) → 2026-11-09(월). 개천절·한글날 낀 주:
+ * 2026-10-12(월) → 10-08·07·06·02·01 의 5영업일 → 2026-10-01(목). 설연휴(02-16~18) 낀 주:
+ * 2026-02-23(월) → 20·19·13·12·11 → 2026-02-11(수).
  */
 export function subtractLeadDays(unitDue: string): string {
-  const due = parseUtc(unitDue);
-  if (due == null) return '';
-  let d = due - LEAD_DAYS * DAY_MS;
-  for (;;) {
-    const next = due - (LEAD_DAYS + weekdayHolidaysBetween(d, due)) * DAY_MS;
-    if (next === d) break; // 고정점 — 구간을 더 넓혀도 평일 공휴일 수가 그대로.
-    d = next;
-  }
-  while (!isWeekday(d) || isHoliday(d)) d -= DAY_MS;
-  return toIso(d);
+  return subtractBusinessDays(unitDue, LEAD_BUSINESS_DAYS);
 }
