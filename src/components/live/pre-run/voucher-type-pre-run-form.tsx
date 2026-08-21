@@ -243,8 +243,9 @@ export function VoucherTypePreRunForm({
 
       {/* 필드 배치 — 1열 세로 나열: 회계일 시작 → 종료 → 전표유형 → 메뉴 필터.
         전 필드가 셀렉트/입력 한 줄 컨트롤이라 2단 없이 위→아래 읽기 흐름이 가장 단순하다
-        (사용자 확정 2026-08-21). */}
-      <div className="grid gap-5">
+        (사용자 확정 2026-08-21). 컬럼 너비는 결의서 계열(학자금 등)과 같은 sm:max-w-md 로
+        제한한다 — 전폭 입력은 가독성이 떨어진다(사용자 지적 2026-08-21). */}
+      <div className="grid gap-5 sm:max-w-md">
         <FormField
           id="voucher-period-from"
           label="회계일 시작"
