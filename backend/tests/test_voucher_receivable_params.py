@@ -68,8 +68,9 @@ def test_docu_types_dedup_keeps_first_order():
 
 
 def test_docu_types_unknown_label_rejected():
+    # ⚠ '일반'(SYSDEF_CD 11)은 62종 확장으로 **유효 라벨**이 됐다 — 카탈로그에 없는 값으로 검증.
     with pytest.raises(ValueError):
-        parse_voucher_params({"voucher": {"docu_types": ["일반"]}})
+        parse_voucher_params({"voucher": {"docu_types": ["없는전표유형"]}})
 
 
 def test_docu_types_empty_list_rejected():

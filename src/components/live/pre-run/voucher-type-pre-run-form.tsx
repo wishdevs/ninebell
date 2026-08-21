@@ -1,24 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  RiAddLine,
+  RiArrowDownSLine,
   RiCheckLine,
   RiCloseLine,
   RiInformationLine,
   RiPlayLine,
+  RiSearchLine,
 } from '@remixicon/react';
-import { toast } from 'sonner';
+import { ComboPanel, isDesktopViewport, useOutsideClose } from '@/components/live/combo-popover';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import { FormField } from '@/components/ui/form-field';
-import { InlineConfirm } from '@/components/ui/inline-confirm';
-import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
-import { patchAgentSettings } from '@/lib/api/agents';
-import { errorMessage } from '@/lib/api/client';
 import { useDebugMode } from '@/lib/debug-mode';
 import { cn } from '@/lib/utils';
+import { menuItemsFromSettings, type VoucherMenuItem } from '@/lib/voucher/menu-items';
 import type { PreRunFormProps } from './index';
 
 /**
@@ -34,9 +32,80 @@ import type { PreRunFormProps } from './index';
  * (미선택 = 키 자체를 보내지 않음 = 필터 없이 전체 메뉴).
  */
 
-// 전표유형(SYSDEF_NM) 후보 — 백엔드 set_docu_types 가 이 라벨로 피커를 체크한다.
-const ALL_DOCU_TYPES = ['국내매출', '해외매출', '내수구매'] as const;
-type DocuType = (typeof ALL_DOCU_TYPES)[number];
+// 전표유형(SYSDEF_CD/SYSDEF_NM) 전체 카탈로그 — ERP 피커 실측 62종
+// (backend/e2e/artifacts/voucher_receivable_docu_type_diag.json). 백엔드 상수
+// `DOCU_TYPE_CATALOG`(app/agents/voucher_receivable/steps.py)와 **패리티 테스트로 잠겨 있다**.
+// 백엔드 set_docu_types 는 라벨(SYSDEF_NM)로 피커를 체크하므로 라벨이 곧 계약값이고,
+// 코드는 검색·표시용이다(같은 라벨이 없어 라벨만으로도 유일).
+const DOCU_TYPE_CATALOG: readonly { code: string; label: string }[] = [
+  { code: '11', label: '일반' },
+  { code: '12', label: '결산대체' },
+  { code: '13', label: '결산역분개' },
+  { code: '21', label: '국내매출' },
+  { code: '22', label: '국내수금' },
+  { code: '23', label: '해외매출' },
+  { code: '24', label: '해외수금' },
+  { code: '25', label: '선수금' },
+  { code: '26', label: '선수금 반제' },
+  { code: '27', label: '해외선수금' },
+  { code: '28', label: '해외선수금 반제' },
+  { code: '31', label: '내수구매' },
+  { code: '32', label: '외자구매' },
+  { code: '14A', label: '결산손익역분개' },
+  { code: '33', label: '선급금' },
+  { code: '15A', label: '결산원가역분개' },
+  { code: '34', label: '선급금반제' },
+  { code: '41', label: '입고전기' },
+  { code: '42', label: '출고전기' },
+  { code: '43', label: '이동전기' },
+  { code: '19', label: '일반전표역분개' },
+  { code: '44', label: '이전전기' },
+  { code: '51', label: '생산출고' },
+  { code: '52', label: '생산입고' },
+  { code: '53', label: '연산품입고' },
+  { code: '54', label: '부산물입고' },
+  { code: '55', label: '연산품출고(취소)' },
+  { code: '56', label: '부산물출고(취소)' },
+  { code: '61', label: '수출제비용' },
+  { code: '62', label: '수입부대비용' },
+  { code: '63', label: '미착정산' },
+  { code: '29', label: '결산대체(자산)' },
+  { code: '71', label: '급여' },
+  { code: '72', label: '퇴직금' },
+  { code: '73', label: '사업/기타소득' },
+  { code: '74', label: '복리후생' },
+  { code: '75', label: '교육' },
+  { code: '14', label: '결산손익대체' },
+  { code: '15', label: '결산원가대체' },
+  { code: '35', label: '내수구매비용' },
+  { code: '81', label: 'PS정산' },
+  { code: '82', label: 'PM정산' },
+  { code: '91', label: '리스임차' },
+  { code: '16', label: '결산외화평가' },
+  { code: '17', label: '결산역분개외화평가' },
+  { code: '18', label: '건설중인자산대체' },
+  { code: '76', label: '출장' },
+  { code: '77', label: '퇴직금추계액' },
+  { code: '94', label: '진행매출' },
+  { code: '94A', label: '진행매출역분개' },
+  { code: '95', label: '결산원가' },
+  { code: '96', label: '급여안분' },
+  { code: '97', label: '자산이동' },
+  { code: '98', label: '리스임대' },
+  { code: '99', label: '리스임대수납' },
+  { code: '100', label: '자산처분' },
+  { code: '101', label: '충당금결산' },
+  { code: '102', label: '재고평가' },
+  { code: '103', label: '원가정산' },
+  { code: '104', label: '전자상거래 국내매출' },
+  { code: '105', label: '전자상거래 해외매출' },
+  { code: '106', label: 'IU(MIG)' },
+] as const;
+
+type DocuType = string;
+const ALL_DOCU_TYPES: readonly DocuType[] = DOCU_TYPE_CATALOG.map((t) => t.label);
+// 폼 기본 선택 — 병합 전 두 에이전트(외상매출금·외상매입금)와 같은 조합(백엔드 기본값과 동일).
+const DEFAULT_DOCU_TYPES: readonly DocuType[] = ['국내매출', '해외매출', '내수구매'];
 
 // 종전 에이전트와 같은 조합을 한 번에 선택하는 프리셋 — 현재 선택을 통째로 교체한다.
 const PRESETS: readonly { label: string; types: readonly DocuType[] }[] = [
@@ -44,34 +113,12 @@ const PRESETS: readonly { label: string; types: readonly DocuType[] }[] = [
   { label: '외상매입금', types: ['내수구매'] },
 ];
 
-/** 메뉴 필터 한 항목 — 에이전트 settings.menu_items 원소(관리자가 공유 관리). */
-interface VoucherMenuItem {
-  id: string;
-  label: string;
-  defaultSelected: boolean;
-}
-
-// settings 부재/파손 시 폴백 — 백엔드 기본 목록과 동일한 3항목.
-const DEFAULT_MENU_ITEMS: readonly VoucherMenuItem[] = [
-  { id: 'menu-sales-register', label: '매출등록', defaultSelected: true },
-  { id: 'menu-sales-cancel', label: '매출취소', defaultSelected: true },
-  { id: 'menu-export-cost', label: '수출비용입력[나인벨]', defaultSelected: false },
-];
-
-/** settings.menu_items 를 방어적으로 파싱한다 — 부재·비배열·항목 파손은 폴백/스킵. */
-function parseMenuItems(settings: Record<string, unknown> | undefined): VoucherMenuItem[] {
-  const raw = settings?.menu_items;
-  if (!Array.isArray(raw)) return [...DEFAULT_MENU_ITEMS];
-  const items: VoucherMenuItem[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') continue;
-    const { id, label, defaultSelected } = entry as Record<string, unknown>;
-    if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) continue;
-    if (items.some((it) => it.id === id)) continue;
-    items.push({ id, label, defaultSelected: defaultSelected === true });
-  }
-  return items.length > 0 ? items : [...DEFAULT_MENU_ITEMS];
-}
+// 셀렉트 항목 변환 — 토글 키 = 라벨(백엔드 계약값), 코드는 보조 표기·코드 검색용.
+const DOCU_COMBO_ITEMS: readonly MultiComboItem[] = DOCU_TYPE_CATALOG.map((t) => ({
+  key: t.label,
+  label: t.label,
+  code: t.code,
+}));
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -113,11 +160,12 @@ function seedRange(seed: Record<string, unknown>): { from: string; to: string } 
   };
 }
 
-/** 마지막 제출 params → 전표유형 복원. 없으면 빈 선택(사용자가 직접 고른다). */
+/** 마지막 제출 params → 전표유형 복원. 시드가 없으면 기본 3종(병합 전 동작)으로 시작한다. */
 function seedDocuTypes(seed: Record<string, unknown>): DocuType[] {
   const raw = seed.docu_types;
-  if (!Array.isArray(raw)) return [];
-  return ALL_DOCU_TYPES.filter((t) => raw.includes(t));
+  if (!Array.isArray(raw)) return [...DEFAULT_DOCU_TYPES];
+  const restored = ALL_DOCU_TYPES.filter((t) => raw.includes(t));
+  return restored.length > 0 ? restored : [...DEFAULT_DOCU_TYPES];
 }
 
 /**
@@ -149,16 +197,12 @@ export function VoucherTypePreRunForm({
   const [to, setTo] = useState(range.to);
   const [docuTypes, setDocuTypes] = useState<DocuType[]>(() => seedDocuTypes(seed));
 
-  // 메뉴 필터 — 항목 목록은 관리자 공유 데이터(settings.menu_items), 체크 상태는 이 실행 한정.
-  const [menuItems, setMenuItems] = useState<VoucherMenuItem[]>(() =>
-    parseMenuItems(agent.settings),
-  );
+  // 메뉴 필터 — 항목 목록은 관리자가 에이전트 관리에서 관리하는 공유 데이터(settings.menu_items)라
+  // 여기서는 읽기 전용이고, 체크 상태만 이 실행 한정으로 고른다.
+  const [menuItems] = useState<VoucherMenuItem[]>(() => menuItemsFromSettings(agent.settings));
   const [selectedMenuIds, setSelectedMenuIds] = useState<Set<string>>(() =>
-    seedMenuIds(seed, parseMenuItems(agent.settings)),
+    seedMenuIds(seed, menuItemsFromSettings(agent.settings)),
   );
-  const [newMenuLabel, setNewMenuLabel] = useState('');
-  const [menuSaving, setMenuSaving] = useState(false);
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   const rangeInvalid = !!from && !!to && from > to;
   const canSubmit = !disabled && !!from && !!to && !rangeInvalid && docuTypes.length > 0;
@@ -176,54 +220,9 @@ export function VoucherTypePreRunForm({
     });
   };
 
-  /** menu_items 저장(admin 전용 PATCH) → 서버 응답으로 목록 동기화 + 체크 상태 정리. */
-  const persistMenuItems = async (nextList: VoucherMenuItem[]) => {
-    setMenuSaving(true);
-    try {
-      const updated = await patchAgentSettings(agent.id, {
-        menu_items: nextList.map((it) => ({ ...it })),
-      });
-      const fromServer = Array.isArray(updated.settings?.menu_items)
-        ? parseMenuItems(updated.settings)
-        : nextList;
-      setMenuItems(fromServer);
-      setSelectedMenuIds(
-        (prev) => new Set(fromServer.filter((it) => prev.has(it.id)).map((it) => it.id)),
-      );
-      return true;
-    } catch (err) {
-      toast.error(errorMessage(err, '메뉴 항목을 저장하지 못했습니다.'));
-      return false;
-    } finally {
-      setMenuSaving(false);
-    }
-  };
-
-  const addMenuItem = async () => {
-    const label = newMenuLabel.trim();
-    if (!label || menuSaving) return;
-    if (menuItems.some((it) => it.label === label)) {
-      toast.error('이미 같은 이름의 메뉴 항목이 있습니다.');
-      return;
-    }
-    const item: VoucherMenuItem = {
-      id: `menu-${Date.now().toString(36)}`,
-      label,
-      defaultSelected: false,
-    };
-    if (await persistMenuItems([...menuItems, item])) setNewMenuLabel('');
-  };
-
-  const deleteMenuItem = async (id: string) => {
-    if (menuSaving || menuItems.length <= 1) return;
-    if (await persistMenuItems(menuItems.filter((it) => it.id !== id))) {
-      setConfirmingDeleteId(null);
-    }
-  };
-
   const submit = () => {
     if (!canSubmit) return;
-    const selectedTypes = ALL_DOCU_TYPES.filter((t) => docuTypes.includes(t));
+    const selectedTypes = ALL_DOCU_TYPES.filter((t) => docuTypes.includes(t)); // 카탈로그 순서 고정.
     const selectedMenus = menuItems
       .filter((it) => selectedMenuIds.has(it.id))
       .map((it) => it.label);
@@ -267,7 +266,10 @@ export function VoucherTypePreRunForm({
         </p>
       </div>
 
-      <div className="grid gap-5 sm:max-w-md">
+      {/* 필드 배치 — 1열 세로 나열: 회계일 시작 → 종료 → 전표유형 → 메뉴 필터.
+        전 필드가 셀렉트/입력 한 줄 컨트롤이라 2단 없이 위→아래 읽기 흐름이 가장 단순하다
+        (사용자 확정 2026-08-21). */}
+      <div className="grid gap-5">
         <FormField
           id="voucher-period-from"
           label="회계일 시작"
@@ -286,155 +288,74 @@ export function VoucherTypePreRunForm({
           <DatePicker ariaLabel="회계일 종료일" value={to} disabled={disabled} onChange={setTo} />
         </FormField>
 
-        <FormField
-          id="voucher-docu-types"
-          label="전표유형"
-          required
-          hint="1개 이상 선택하세요. 프리셋은 종전 외상매출금·외상매입금과 같은 조합으로 선택을 교체합니다."
-        >
-          <div className="grid gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-foreground-tertiary text-xs">프리셋</span>
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => setDocuTypes([...preset.types])}
-                  className="border-border text-foreground-secondary hover:bg-muted/60 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 max-md:min-h-11"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {ALL_DOCU_TYPES.map((t) => {
-                const active = docuTypes.includes(t);
-                return (
+        <FormField id="voucher-docu-types" label="전표유형" required>
+          <div className="grid gap-1.5">
+            {/* 헤더 행 — 좌: 선택 수, 우: 프리셋. */}
+            <div className="flex min-h-6 flex-wrap items-center justify-between gap-2">
+              <span className="text-foreground-tertiary text-xs tabular-nums">
+                {docuTypes.length}종 선택
+              </span>
+              <div className="flex items-center gap-0.5">
+                <span className="text-foreground-tertiary mr-1 text-xs">프리셋</span>
+                {PRESETS.map((preset) => (
                   <button
-                    key={t}
+                    key={preset.label}
                     type="button"
-                    aria-pressed={active}
                     disabled={disabled}
-                    onClick={() => toggleDocuType(t)}
-                    className={cn(
-                      'rounded-[var(--radius-md)] border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 max-md:min-h-11',
-                      active
-                        ? 'border-accent bg-accent/10 text-foreground'
-                        : 'border-border text-foreground-secondary hover:bg-muted/60',
-                    )}
+                    title={`${preset.types.join('·')} 조합으로 교체`}
+                    onClick={() => setDocuTypes([...preset.types])}
+                    className="text-accent hover:bg-accent/10 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50 max-md:min-h-9 max-md:px-2"
                   >
-                    {t}
+                    {preset.label}
                   </button>
-                );
-              })}
+                ))}
+              </div>
             </div>
+
+            <MultiSelectCombo
+              ariaLabel="전표유형 선택"
+              disabled={disabled}
+              items={DOCU_COMBO_ITEMS}
+              selectedKeys={docuTypes}
+              onToggle={toggleDocuType}
+              placeholder="전표유형 선택"
+              searchPlaceholder="검색 — 이름 또는 코드(예: 매출, 31, 결산)"
+              unit="종"
+            />
           </div>
         </FormField>
 
-        <FormField
-          id="voucher-menu-filters"
-          label="메뉴 필터"
-          hint={
-            selectedMenuIds.size === 0
-              ? '선택 없음 = 필터 없음(전체 메뉴). 체크한 메뉴의 전표만 상신 대상이 됩니다.'
-              : '체크한 메뉴의 전표만 상신 대상이 됩니다. 항목 추가·삭제는 모든 사용자에게 공유됩니다(관리자 전용).'
-          }
-        >
+        <FormField id="voucher-menu-filters" label="메뉴 필터">
           <div className="grid gap-1.5">
-            {menuItems.map((it) => {
-              const checked = selectedMenuIds.has(it.id);
-              return (
-                <div key={it.id} className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={checked}
-                    disabled={disabled}
-                    onClick={() => toggleMenu(it.id)}
-                    className={cn(
-                      'flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-md)] border px-3 py-2 text-left transition-colors disabled:opacity-50 max-md:min-h-11',
-                      checked
-                        ? 'border-accent/50 bg-accent/5'
-                        : 'border-border bg-surface hover:border-border-strong hover:bg-muted/40',
-                    )}
-                  >
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'flex size-[18px] shrink-0 items-center justify-center rounded-[6px] border transition-colors',
-                        checked
-                          ? 'border-accent bg-accent text-white'
-                          : 'border-border-strong bg-surface',
-                      )}
-                    >
-                      {checked ? <RiCheckLine size={13} /> : null}
-                    </span>
-                    <span
-                      className={cn(
-                        'truncate text-[length:var(--text-body-sm)] font-medium',
-                        checked ? 'text-foreground' : 'text-foreground-secondary',
-                      )}
-                    >
-                      {it.label}
-                    </span>
-                  </button>
-                  {confirmingDeleteId === it.id ? (
-                    <InlineConfirm
-                      question="삭제할까요?"
-                      confirmLabel="삭제"
-                      disabled={menuSaving}
-                      onConfirm={() => void deleteMenuItem(it.id)}
-                      onCancel={() => setConfirmingDeleteId(null)}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label={`${it.label} 항목 삭제`}
-                      disabled={disabled || menuSaving || menuItems.length <= 1}
-                      onClick={() => setConfirmingDeleteId(it.id)}
-                      className="text-foreground-tertiary hover:text-danger hover:bg-danger/10 rounded-[var(--radius-sm)] p-1.5 transition-colors disabled:opacity-40 max-md:min-h-11 max-md:min-w-11"
-                    >
-                      <RiCloseLine size={15} aria-hidden />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-            <div className="flex items-center gap-2">
-              <Input
-                value={newMenuLabel}
-                disabled={disabled || menuSaving}
-                placeholder="추가할 메뉴 이름"
-                className="h-8 max-w-56 text-xs max-md:h-11"
-                onChange={(e) => setNewMenuLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void addMenuItem();
-                  }
-                }}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="max-md:h-11"
-                disabled={disabled || menuSaving || !newMenuLabel.trim()}
-                onClick={() => void addMenuItem()}
-              >
-                <RiAddLine size={15} aria-hidden />
-                추가
-              </Button>
+            {/* 헤더 행 — 전표유형 헤더와 같은 높이·톤. */}
+            <div className="flex min-h-6 items-center">
+              <span className="text-foreground-tertiary text-xs tabular-nums">
+                {selectedMenuIds.size === 0
+                  ? '선택 없음 — 전체 메뉴 대상'
+                  : `${selectedMenuIds.size}개 선택`}
+              </span>
             </div>
+
+            <MultiSelectCombo
+              ariaLabel="메뉴 필터 선택"
+              disabled={disabled}
+              items={menuItems.map((it) => ({ key: it.id, label: it.label }))}
+              selectedKeys={[...selectedMenuIds]}
+              onToggle={toggleMenu}
+              placeholder="전체 메뉴 (선택 없음)"
+              searchPlaceholder="메뉴 검색"
+              unit="개"
+              footerHint="체크한 메뉴의 전표만 상신 대상 · 항목 관리는 에이전트 관리에서"
+            />
           </div>
         </FormField>
       </div>
 
-      {/* 실행 바 — md 미만은 페이지 스크롤 기준 sticky 하단 바(폼이 길어 실행 버튼 상시 노출). */}
+      {/* 실행 바 — 데스크톱은 분리선 위 우측 정렬, md 미만은 페이지 스크롤 기준 sticky 하단 바. */}
       <div
         className={cn(
           'flex flex-col gap-2 md:flex-row md:items-center md:justify-end md:gap-3',
+          'md:border-border/60 md:border-t md:pt-4',
           'max-md:sticky max-md:bottom-0 max-md:z-10 max-md:-mx-6',
           'max-md:border-border/60 max-md:bg-surface/95 max-md:border-t max-md:px-6 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:backdrop-blur',
         )}
@@ -458,5 +379,201 @@ export function VoucherTypePreRunForm({
         </Button>
       </div>
     </SectionCard>
+  );
+}
+
+// ── 다중선택 셀렉트(검색형) ──────────────────────────────────────────
+
+interface MultiComboItem {
+  /** 토글 키(전표유형=라벨(계약값), 메뉴=항목 id). */
+  key: string;
+  label: string;
+  /** 보조 표기 + 코드 접두 검색용(전표유형만). */
+  code?: string;
+}
+
+/**
+ * 폼 스케일 다중선택 셀렉트 — 트리거(선택 요약)를 누르면 검색 + 체크 목록 패널이 열린다.
+ * 패널 셸(md 미만 바텀시트 / md+ 팝오버)·바깥 닫기는 combo-popover 공용을 쓰고, 체크
+ * 토글이라 항목을 눌러도 닫지 않는다(닫기 = 바깥 클릭·Esc·모바일 완료 버튼).
+ */
+function MultiSelectCombo({
+  ariaLabel,
+  items,
+  selectedKeys,
+  onToggle,
+  disabled,
+  placeholder,
+  searchPlaceholder,
+  unit,
+  footerHint,
+}: {
+  ariaLabel: string;
+  items: readonly MultiComboItem[];
+  selectedKeys: readonly string[];
+  onToggle: (key: string) => void;
+  disabled?: boolean;
+  /** 선택 0개일 때 트리거 문구. */
+  placeholder: string;
+  searchPlaceholder: string;
+  /** 개수 단위('종'/'개') — 패널 푸터 카운터에 쓴다. */
+  unit: string;
+  footerHint?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const close = () => {
+    setOpen(false);
+    setQuery('');
+  };
+  useOutsideClose(open, wrapRef, close);
+
+  // 라벨 부분일치 + 코드 접두 일치(사용자가 '31' 같은 코드로도 찾는다).
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? items.filter(
+        (it) =>
+          it.label.toLowerCase().includes(q) || (it.code?.toLowerCase().startsWith(q) ?? false),
+      )
+    : items;
+
+  const selectedSet = new Set(selectedKeys);
+  const summary = items
+    .filter((it) => selectedSet.has(it.key))
+    .map((it) => it.label)
+    .join(' · ');
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => (open ? close() : setOpen(true))}
+        className={cn(
+          // DatePicker 트리거와 같은 폼 스케일(h-10·px-3·text-sm) — 폼 컨트롤 라인 통일.
+          'border-border bg-surface flex h-10 w-full items-center justify-between gap-2 rounded-sm border px-3 text-left text-sm outline-none',
+          'focus-visible:border-accent disabled:opacity-50',
+          open && 'border-accent',
+        )}
+      >
+        <span
+          className={cn('min-w-0 truncate', summary ? 'text-foreground' : 'text-muted-foreground')}
+        >
+          {summary || placeholder}
+        </span>
+        <RiArrowDownSLine
+          size={16}
+          aria-hidden
+          className={cn(
+            'text-foreground-tertiary shrink-0 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+
+      {open ? (
+        <ComboPanel onClose={close} className="md:w-full">
+          <div className="border-border bg-surface focus-within:border-accent flex h-9 shrink-0 items-center gap-2 rounded-[var(--radius-sm)] border px-2">
+            <RiSearchLine size={14} aria-hidden className="text-foreground-tertiary shrink-0" />
+            <input
+              autoFocus={isDesktopViewport()}
+              value={query}
+              placeholder={searchPlaceholder}
+              aria-label={`${ariaLabel} 검색`}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  close();
+                }
+              }}
+              className="text-foreground placeholder:text-muted-foreground h-full w-full bg-transparent text-sm outline-none"
+            />
+            {query ? (
+              <button
+                type="button"
+                aria-label="검색어 지우기"
+                onClick={() => setQuery('')}
+                className="text-foreground-tertiary hover:text-foreground flex size-5 shrink-0 items-center justify-center rounded-full transition-colors"
+              >
+                <RiCloseLine size={13} aria-hidden />
+              </button>
+            ) : null}
+          </div>
+
+          <div
+            role="group"
+            aria-label={ariaLabel}
+            className="mt-2 grid min-h-0 flex-1 gap-0.5 overflow-y-auto overscroll-contain md:max-h-60 md:flex-none"
+          >
+            {visible.length === 0 ? (
+              <p className="text-foreground-tertiary px-2 py-3 text-xs">
+                {`'${query}' 와 일치하는 항목이 없습니다.`}
+              </p>
+            ) : (
+              visible.map((it) => {
+                const active = selectedSet.has(it.key);
+                return (
+                  <button
+                    key={it.key}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={active}
+                    disabled={disabled}
+                    onClick={() => onToggle(it.key)}
+                    className={cn(
+                      'flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition-colors disabled:opacity-50 max-md:min-h-11',
+                      active
+                        ? 'bg-accent/10 text-foreground font-medium'
+                        : 'text-foreground-secondary hover:bg-muted/60',
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors',
+                        active
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-border-strong bg-surface',
+                      )}
+                    >
+                      {active ? <RiCheckLine size={11} /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{it.label}</span>
+                    {it.code ? (
+                      <span className="text-foreground-tertiary shrink-0 font-mono text-[11px] tabular-nums">
+                        {it.code}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          <div className="border-border/60 text-foreground-tertiary mt-1 shrink-0 border-t px-1 pt-1.5 text-[11px] leading-relaxed">
+            <span className="tabular-nums">
+              {q
+                ? `${items.length}${unit} 중 ${visible.length}${unit} 표시`
+                : `전체 ${items.length}${unit}`}
+            </span>
+            {footerHint ? <> · {footerHint}</> : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={close}
+            className="border-border bg-surface text-foreground mt-2 h-11 w-full shrink-0 rounded-[var(--radius-sm)] border text-sm font-medium md:hidden"
+          >
+            완료
+          </button>
+        </ComboPanel>
+      ) : null}
+    </div>
   );
 }

@@ -86,7 +86,8 @@ async def test_validate_docu_types_and_menu_filters_passthrough():
 
 async def test_validate_unknown_docu_type_errors():
     node = make_validate_params_node()
-    out = await node({"events": _q(), "params": {"voucher": {"docu_types": ["일반"]}}})
+    # ⚠ '일반'은 62종 확장으로 유효 라벨이 됐다 — 카탈로그 밖 값으로 검증한다.
+    out = await node({"events": _q(), "params": {"voucher": {"docu_types": ["없는전표유형"]}}})
     assert "전표유형" in out["error"]
     assert_keys_declared(VoucherReceivableState, out)
 

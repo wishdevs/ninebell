@@ -24,7 +24,7 @@
 
 | 에이전트 | 상태 | 위치 | 비고 |
 |---|---|---|---|
-| 유형별 전표조회 승인 (`voucher-by-type`) | 🟢 운영 | `app/agents/voucher_receivable/` | 구 외상매출금/외상매입금 **병합**(2026-08-20, alembic 0036). 전표유형(국내매출/해외매출/내수구매)은 실행 전 폼의 다중 선택(`params.voucher.docu_types`), 메뉴(MENU_NM) 필터는 `params.voucher.menu_filters`(마스터 목록 = 관리자 설정 `menu_items`) — count_details 가 계획 단계에서 제외 적용. 배치 결재(하위 200 기준)·실상신(allow_submit) |
+| 유형별 전표조회 승인 (`voucher-by-type`) | 🟢 운영 | `app/agents/voucher_receivable/` | 구 외상매출금/외상매입금 **병합**(2026-08-20, alembic 0036). 전표유형(국내매출/해외매출/내수구매)은 실행 전 폼의 다중 선택(`params.voucher.docu_types`), 메뉴(MENU_NM) 필터는 `params.voucher.menu_filters`(마스터 목록 = 관리자 설정 `menu_items`) — count_details 가 계획 단계에서 제외 적용. 배치 결재(하위 200 기준)·실상신(allow_submit). 이트라이브↔이트라이브2 **결재라인 교차 지정**(D5-1, 2026-08-21 — 공유 백본이라 카드 포함 반영) |
 | 미지급금 법인카드 (`voucher-card`) | 🟢 운영 | `app/agents/voucher_card/` | 병합과 무관하게 **별도 유지** — 전표유형 일반(11) + 결의서조회승인 결재번호 수집·참조문서 훅(건별 순회) |
 
 ## 참고

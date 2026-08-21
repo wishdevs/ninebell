@@ -66,9 +66,17 @@ def test_graph_is_recompilable():
     assert build_voucher_by_type_graph() is not None
 
 
-def test_docu_type_choices_are_the_merge_superset():
-    # 병합 계약: 폼 선택지 = 구 매출(국내/해외) + 구 매입(내수구매). ERP 는 SYSDEF_NM 라벨 매칭.
-    assert DOCU_TYPE_CHOICES == ("국내매출", "해외매출", "내수구매")
+def test_docu_type_choices_cover_full_erp_catalog():
+    # 폼 선택지는 ERP 전체 62종(2026-08-20 확장) — 라벨(SYSDEF_NM)이 계약값이다.
+    assert len(DOCU_TYPE_CHOICES) == 62
+    assert {"국내매출", "해외매출", "내수구매", "일반", "급여"} <= set(DOCU_TYPE_CHOICES)
+
+
+def test_docu_type_defaults_keep_merge_behaviour():
+    # 폼 미지정 시 기본값은 병합 전 조합 그대로 — 구 매출(국내/해외) + 구 매입(내수구매).
+    from app.agents.voucher_receivable.steps import DOCU_TYPE_DEFAULTS
+
+    assert DOCU_TYPE_DEFAULTS == ("국내매출", "해외매출", "내수구매")
 
 
 # ── registry ──────────────────────────────────────────────────────────────────

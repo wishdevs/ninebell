@@ -4,7 +4,7 @@
 사용자 입력은 네 가지다:
   max_rows                  한 실행에서 처리할 행 수.
   period_from / period_to   회계일 조회기간(실행 전 폼 입력, 기본값 = 당월 1일~말일).
-  docu_types                전표유형 다중 선택(2026-08-20 매출/매입 병합 — 미지정 시 전체 3종).
+  docu_types                전표유형 다중 선택(ERP 전체 62종 중 — 미지정 시 기본 3종).
   menu_filters              메뉴(MENU_NM) 필터 라벨 목록(미지정/빈 목록 = 필터 없음).
 
 사용자 결정 2026-07-21: **기본 전체 진행**(조회된 전 건을 순회). `max_rows` 를 명시(양수)하면
@@ -31,7 +31,7 @@ class VoucherReceivableParams(VoucherPeriodParams):
 
     max_rows      한 실행에서 순회할 최대 행 수. **None(기본) = 전체**(조회된 전 건).
                   양수를 주면 그 수만큼만(부분 처리·테스트용). 0 이하는 거부.
-    docu_types    전표유형 라벨 목록(DOCU_TYPE_CHOICES 부분집합, 중복 제거·순서 유지).
+    docu_types    전표유형 라벨 목록(DOCU_TYPE_CHOICES 62종의 부분집합, 중복 제거·순서 유지).
                   None(기본) = 그래프 빌드 기본값(전체 3종). 빈 목록은 거부.
     menu_filters  메뉴(MENU_NM) 라벨 목록 — 이 중 하나와 일치하는 행만 결재 대상.
                   None/빈 목록 = 필터 없음(전 행 대상). 항목 공백 제거·중복 제거·최대 20개.
@@ -53,8 +53,11 @@ class VoucherReceivableParams(VoucherPeriodParams):
         for item in v:
             label = str(item or "").strip()
             if label not in DOCU_TYPE_CHOICES:
+                # 허용값이 62종이라 전량 나열은 메시지를 못 읽게 만든다 — 앞 몇 개 + 총수만.
+                head = "·".join(DOCU_TYPE_CHOICES[:6])
                 raise ValueError(
-                    f"지원하지 않는 전표유형입니다: {item!r} (허용: {'·'.join(DOCU_TYPE_CHOICES)})"
+                    f"지원하지 않는 전표유형입니다: {item!r} "
+                    f"(허용 {len(DOCU_TYPE_CHOICES)}종 — {head} 등)"
                 )
             if label not in seen:
                 seen.add(label)

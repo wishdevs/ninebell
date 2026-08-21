@@ -17,7 +17,7 @@ import { usePermissions } from '@/hooks/use-permissions';
 import { ROLES, roleAtLeast } from '@/lib/auth/permissions';
 import { ApiError, api, errorMessage, toApiError } from '@/lib/api/client';
 import type { Agent } from '@/lib/data/agents';
-import { AgentSettingsCard } from './agent-settings-card';
+import { AgentSettingsCard, isConfigurable } from './agent-settings-card';
 import { ManageGroupCard } from './manage-group-card';
 
 type Phase = 'loading' | 'ready' | 'error';
@@ -76,8 +76,8 @@ export function AgentSettingsClient() {
     if (isAdmin) void load();
   }, [isAdmin, load]);
 
-  // 스키마가 있는(설정 가능한) 에이전트만 노출 대상이다.
-  const configurable = agents.filter((agent) => (agent.settingsSchema?.length ?? 0) > 0);
+  // 설정 가능한(스칼라 스키마 또는 동적 목록 설정을 가진) 에이전트만 노출 대상이다.
+  const configurable = agents.filter(isConfigurable);
   const { groups, standalone } = bucketByGroup(configurable);
 
   return (

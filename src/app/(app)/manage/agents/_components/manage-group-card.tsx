@@ -5,7 +5,7 @@ import type { Agent } from '@/lib/data/agents';
 
 /**
  * 에이전트 관리(설정) 그룹 폴더 카드 — 클릭 시 /manage/agents/groups/[id]로 드릴인해
- * 그 그룹의 **설정 가능한**(settingsSchema 보유) 에이전트만 설정 폼으로 나열한다.
+ * 그 그룹의 **설정 가능한**(isConfigurable) 에이전트만 설정 폼으로 나열한다.
  * 카탈로그 GroupCard 와 달리 count·목록은 설정 가능한 에이전트로 한정한다(드릴인과 개수 일치).
  */
 export function ManageGroupCard({

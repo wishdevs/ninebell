@@ -12,11 +12,17 @@ import { patchAgentSettings } from '@/lib/api/agents';
 import type { Agent, AgentSettingDef } from '@/lib/data/agents';
 import { FUEL_CLASSES_KEY, fuelClassesFromSettings } from '@/lib/trip/fuel-calc';
 import {
+  MENU_ITEMS_KEY,
+  menuItemsFromSettings,
+  type VoucherMenuItem,
+} from '@/lib/voucher/menu-items';
+import {
   FuelClassesEditor,
   type FuelClassDraft,
   isClassDraftValid,
   toClassDraft,
 } from './fuel-classes-editor';
+import { MenuItemsEditor, isMenuItemValid } from './menu-items-editor';
 
 /** 스키마 항목의 현재 유효값(스칼라) — 저장값(settings)이 없거나 스칼라가 아니면 스키마 기본값. */
 export function effectiveValue(agent: Agent, def: AgentSettingDef): number | string | boolean {
@@ -29,6 +35,17 @@ export function toDraft(agent: Agent): Record<string, string> {
   return Object.fromEntries(
     (agent.settingsSchema ?? []).map((def) => [def.key, String(effectiveValue(agent, def))]),
   );
+}
+
+/**
+ * 관리 화면에 설정 카드를 노출할 에이전트인가.
+ *
+ * 스칼라 스키마 항목이 있거나, 스키마가 비어도 동적 목록 설정만 갖는 경우를 포함한다 —
+ * voucher-by-type 은 스칼라 설정이 없어 settingsSchema 가 `[]` 라서 길이 검사만으로는
+ * 관리 화면에서 통째로 사라진다(메뉴 항목 관리가 그 유일한 설정이다).
+ */
+export function isConfigurable(agent: Agent): boolean {
+  return (agent.settingsSchema?.length ?? 0) > 0 || MENU_ITEMS_KEY in (agent.settings ?? {});
 }
 
 interface AgentSettingsCardProps {
@@ -61,7 +78,18 @@ export function AgentSettingsCard({ agent, onSaved }: AgentSettingsCardProps) {
     (def) => (draft[def.key] ?? '').trim() !== String(effectiveValue(agent, def)),
   );
   const classesDirty = hasFuelClasses && classesSig(classes) !== initialClassesSig;
-  const dirty = scalarDirty || classesDirty;
+
+  // 메뉴 필터 항목(동적 목록)을 갖는 에이전트(유형별 전표조회 승인)면 전용 에디터를 함께 노출한다.
+  const hasMenuItems = MENU_ITEMS_KEY in (agent.settings ?? {});
+  const [menuItems, setMenuItems] = useState<VoucherMenuItem[]>(() =>
+    menuItemsFromSettings(agent.settings),
+  );
+  const menuSig = (rows: VoucherMenuItem[]) =>
+    JSON.stringify(rows.map((r) => [r.label.trim(), r.defaultSelected]));
+  const initialMenuSig = menuSig(menuItemsFromSettings(agent.settings));
+  const menuDirty = hasMenuItems && menuSig(menuItems) !== initialMenuSig;
+
+  const dirty = scalarDirty || classesDirty || menuDirty;
 
   function handleChange(key: string, value: string): void {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -112,12 +140,32 @@ export function AgentSettingsCard({ agent, onSaved }: AgentSettingsCardProps) {
       }));
     }
 
+    // 메뉴 필터 항목(동적 목록) 검증 — 최소 1행 + 각 행 이름 필수 + 이름 중복 금지
+    // (이름이 곧 ERP 대조 값이라 중복은 의미가 없다). 위반 시 저장 중단.
+    if (hasMenuItems) {
+      const labels = menuItems.map((m) => m.label.trim());
+      if (menuItems.length === 0 || !menuItems.every(isMenuItemValid)) {
+        toast.error('메뉴 항목의 이름을 확인하세요. 최소 1개가 필요합니다.');
+        return;
+      }
+      if (new Set(labels).size !== labels.length) {
+        toast.error('메뉴 항목 이름이 중복됩니다.');
+        return;
+      }
+      payload[MENU_ITEMS_KEY] = menuItems.map((m) => ({
+        id: m.id,
+        label: m.label.trim(),
+        defaultSelected: m.defaultSelected,
+      }));
+    }
+
     setSaving(true);
     try {
       const updated = await patchAgentSettings(agent.id, payload);
       onSaved(updated);
       setDraft(toDraft(updated));
       setClasses(toClassDraft(fuelClassesFromSettings(updated.settings)));
+      setMenuItems(menuItemsFromSettings(updated.settings));
       toast.success('저장했습니다');
     } catch (err) {
       // 400 이면 서버 detail(한글 검증 메시지)이 그대로 노출된다.
@@ -161,6 +209,16 @@ export function AgentSettingsCard({ agent, onSaved }: AgentSettingsCardProps) {
           hint="유류비 계산에 쓰는 차량종류 목록입니다. 필요한 만큼 추가/삭제하세요(예: 1,800cc 미만·전기차)."
         >
           <FuelClassesEditor value={classes} disabled={saving} onChange={setClasses} />
+        </FormField>
+      ) : null}
+
+      {hasMenuItems ? (
+        <FormField
+          id={`agent-setting-${agent.id}-menu-items`}
+          label="메뉴 필터 항목"
+          hint="실행 전 폼의 '메뉴 필터'에 노출할 항목입니다. 이름은 ERP 그리드의 '메뉴' 표시명과 그대로 대조되므로 정확히 입력하세요. 기본 선택을 켜면 실행 전 폼에서 미리 체크된 상태로 시작합니다."
+        >
+          <MenuItemsEditor value={menuItems} disabled={saving} onChange={setMenuItems} />
         </FormField>
       ) : null}
 

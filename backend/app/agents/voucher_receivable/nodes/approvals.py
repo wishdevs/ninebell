@@ -337,7 +337,33 @@ def make_loop_approvals_node(on_popup=None, *, allow_submit: bool = False):
                         elif isinstance(outcome, str):
                             refdoc_results.append((key_label, outcome))
                     if refdoc_fatal is None:
-                        if submit_on:
+                        if allow_submit:
+                            # D5-1(2026-08-21): 이트라이브↔이트라이브2 교차 결재라인 지정 —
+                            # 비영속이라 결제창마다 상신 직전에 수행. 실패 시 상신하지 않고
+                            # 하드 중단(오지정 상신 금지). 그 외 계정은 no-op(skipped).
+                            # 디버그(가상 상신)에서도 **지정까지는 수행**한다(사용자 확정
+                            # 2026-08-21) — 상신 없이 닫으면 소멸(실측)이라 흔적이 없고,
+                            # 라이브 화면으로 모달 동작을 리허설할 수 있다.
+                            line = await steps.ensure_cross_approval_line(
+                                child, state.get("userid")
+                            )
+                            if not line.get("ok"):
+                                submit_fatal = (
+                                    f"결재라인 지정 실패 — 전표 {key_label}: "
+                                    f"{line.get('reason') or '사유 미상'}"
+                                )
+                            elif not line.get("skipped"):
+                                await emit_log(
+                                    events,
+                                    f"결재라인 지정 ✅ — {line.get('target')} 추가(전표 {key_label})."
+                                    + (
+                                        ""
+                                        if submit_on
+                                        else " 디버그 — 상신 없이 닫히므로 저장되지 않습니다."
+                                    ),
+                                    "ok",
+                                )
+                        if submit_fatal is None and submit_on:
                             # 게이트 개방(2026-08-07) — 상신 실클릭. 실패는 하드 중단(아래).
                             sub = await steps.click_child_submit(child)
                             if not sub.get("ok"):

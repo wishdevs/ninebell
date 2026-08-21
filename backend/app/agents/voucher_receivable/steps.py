@@ -18,6 +18,7 @@ from typing import Any
 from nbkit.browser.actions import js_click, mouse_click
 from nbkit.omnisol import js_lib, latency, selectors, verify
 from nbkit.omnisol.modals import dismiss_notice_popup
+from nbkit.patterns import approval_line_flow
 
 from app.agents.common import ERR_REASON_MAX
 
@@ -35,9 +36,78 @@ DOCU_TYPES_RECEIVABLE = ("국내매출", "해외매출")  # 외상매출금(vouc
 # 외상매입금(voucher-payable) 전표유형 — 내수구매(SYSDEF_CD=31). 사용자 확정 2026-07-21
 #   ("내구수매"는 오타였고 피커 실존값은 "내수구매"임을 프로브로 확인).
 DOCU_TYPES_PAYABLE = ("내수구매",)
-# 유형별 전표조회 승인(voucher-by-type) — 실행 전 폼이 이 중에서 다중 선택한다(2026-08-20 병합).
-# ERP 피커는 SYSDEF_NM 한글 라벨로 매칭하므로 라벨이 곧 계약값이다(set_docu_types 참조).
-DOCU_TYPE_CHOICES = ("국내매출", "해외매출", "내수구매")
+# 유형별 전표조회 승인(voucher-by-type) — 실행 전 폼이 **전체 62종에서** 다중 선택한다
+# (사용자 지시 2026-08-20 "리스트에 있는 유형 다 보여주고 선택하게").
+# 전량 실측 = e2e/artifacts/voucher_receivable_docu_type_diag.json (SYSDEF_CD/SYSDEF_NM 62행).
+# ERP 피커는 SYSDEF_NM 한글 라벨로 매칭하므로 **라벨이 곧 계약값**이다(set_docu_types 참조).
+# 코드(SYSDEF_CD)는 화면 표기·프론트 대조용이며 자동화 경로에서는 쓰지 않는다.
+DOCU_TYPE_CATALOG: tuple[tuple[str, str], ...] = (
+    ("11", "일반"),
+    ("12", "결산대체"),
+    ("13", "결산역분개"),
+    ("21", "국내매출"),
+    ("22", "국내수금"),
+    ("23", "해외매출"),
+    ("24", "해외수금"),
+    ("25", "선수금"),
+    ("26", "선수금 반제"),
+    ("27", "해외선수금"),
+    ("28", "해외선수금 반제"),
+    ("31", "내수구매"),
+    ("32", "외자구매"),
+    ("14A", "결산손익역분개"),
+    ("33", "선급금"),
+    ("15A", "결산원가역분개"),
+    ("34", "선급금반제"),
+    ("41", "입고전기"),
+    ("42", "출고전기"),
+    ("43", "이동전기"),
+    ("19", "일반전표역분개"),
+    ("44", "이전전기"),
+    ("51", "생산출고"),
+    ("52", "생산입고"),
+    ("53", "연산품입고"),
+    ("54", "부산물입고"),
+    ("55", "연산품출고(취소)"),
+    ("56", "부산물출고(취소)"),
+    ("61", "수출제비용"),
+    ("62", "수입부대비용"),
+    ("63", "미착정산"),
+    ("29", "결산대체(자산)"),
+    ("71", "급여"),
+    ("72", "퇴직금"),
+    ("73", "사업/기타소득"),
+    ("74", "복리후생"),
+    ("75", "교육"),
+    ("14", "결산손익대체"),
+    ("15", "결산원가대체"),
+    ("35", "내수구매비용"),
+    ("81", "PS정산"),
+    ("82", "PM정산"),
+    ("91", "리스임차"),
+    ("16", "결산외화평가"),
+    ("17", "결산역분개외화평가"),
+    ("18", "건설중인자산대체"),
+    ("76", "출장"),
+    ("77", "퇴직금추계액"),
+    ("94", "진행매출"),
+    ("94A", "진행매출역분개"),
+    ("95", "결산원가"),
+    ("96", "급여안분"),
+    ("97", "자산이동"),
+    ("98", "리스임대"),
+    ("99", "리스임대수납"),
+    ("100", "자산처분"),
+    ("101", "충당금결산"),
+    ("102", "재고평가"),
+    ("103", "원가정산"),
+    ("104", "전자상거래 국내매출"),
+    ("105", "전자상거래 해외매출"),
+    ("106", "IU(MIG)"),
+)
+DOCU_TYPE_CHOICES = tuple(label for _code, label in DOCU_TYPE_CATALOG)  # 허용 라벨(62종)
+# 폼 미지정 시 빌드 기본값 — 병합 전 동작(외상매출금 2종 + 외상매입금 1종)을 보존한다.
+DOCU_TYPE_DEFAULTS = ("국내매출", "해외매출", "내수구매")
 DOCU_TYPE_TARGETS = DOCU_TYPES_RECEIVABLE  # set_docu_types 기본값(하위호환)
 DOCU_ST_SELECT = "#s_docu_st_cd"  # native kendo dropdownlist
 DOCU_ST_TARGET = "미결"
@@ -1091,3 +1161,28 @@ async def click_child_submit(
             pass
         await verify.DEFAULT_SLEEP(interval_ms / 1000)  # 시간축 규율 — 관찰 대기는 실시간.
     return {"ok": False, "reason": "상신 클릭 후 결제창이 닫히지 않았습니다(적용 미확인)."}
+
+
+# ── D5-1 결재라인 교차 지정(사용자 지시 2026-08-21) ─────────────────────────────
+# 이트라이브/이트라이브2 계정은 상신 전에 상대 계정을 결재라인에 추가해야 한다(운영 규칙).
+# 지정은 **비영속**(상신 없이 닫으면 소멸 — 실측 approval_line_probe_4b + cleanup)이라
+# 결제창을 열 때마다, 상신 직전에 매번 수행한다. 그 외 계정은 no-op.
+APPROVAL_LINE_CROSS = {"이트라이브": "이트라이브2", "이트라이브2": "이트라이브"}
+# 결재라인 지정 모달 인원표(캔버스 RealGrid) 0-based 행 인덱스 — 인사/기획팀 5행 실측 순서
+# (빈행/남희곤/황정하/이트라이브/이트라이브2, 2026-08-21). ⚠ 인원 변동 시 밀릴 수 있으나
+# designate_approval_line 의 검증 게이트(전표 헤더 이름 리프 증가)가 오지정을 상신 전에 잡는다.
+APPROVAL_LINE_MEMBER_ROW = {"이트라이브": 3, "이트라이브2": 4}
+
+
+async def ensure_cross_approval_line(child: Any, userid: str | None) -> dict:
+    """로그인 계정이 이트라이브/이트라이브2면 상대 계정을 결재라인에 추가(상신 직전 전용).
+
+    반환 {ok, skipped?, target?, reason?} — skipped=True 는 대상 계정이 아니라 지정 자체를
+    하지 않은 경우(기존 흐름 그대로). ok=False 면 호출자는 상신하지 말고 런을 중단한다
+    (오지정 상태로 상신되는 조용한 실패 금지).
+    """
+    target = APPROVAL_LINE_CROSS.get(str(userid or "").strip())
+    if target is None:
+        return {"ok": True, "skipped": True}
+    row = APPROVAL_LINE_MEMBER_ROW[target]
+    return await approval_line_flow.designate_approval_line(child, target, row)

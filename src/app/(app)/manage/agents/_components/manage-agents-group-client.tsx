@@ -13,13 +13,13 @@ import { usePermissions } from '@/hooks/use-permissions';
 import { ROLES, roleAtLeast } from '@/lib/auth/permissions';
 import { ApiError, api, errorMessage, toApiError } from '@/lib/api/client';
 import type { Agent } from '@/lib/data/agents';
-import { AgentSettingsCard } from './agent-settings-card';
+import { AgentSettingsCard, isConfigurable } from './agent-settings-card';
 
 type Phase = 'loading' | 'ready' | 'error';
 
 /**
  * 에이전트 관리 그룹 드릴인 — /manage/agents/groups/[groupId]. `GET /agents`에서 이 그룹의
- * **설정 가능한**(settingsSchema 보유) 에이전트만 걸러 설정 폼으로 나열한다. 관리자 전용.
+ * **설정 가능한**(isConfigurable) 에이전트만 걸러 설정 폼으로 나열한다. 관리자 전용.
  */
 export function ManageAgentsGroupClient({ groupId }: { groupId: string }) {
   const { role } = usePermissions();
@@ -45,9 +45,7 @@ export function ManageAgentsGroupClient({ groupId }: { groupId: string }) {
     if (isAdmin) void load();
   }, [isAdmin, load]);
 
-  const inGroup = agents.filter(
-    (a) => a.group?.id === groupId && (a.settingsSchema?.length ?? 0) > 0,
-  );
+  const inGroup = agents.filter((a) => a.group?.id === groupId && isConfigurable(a));
   const group = inGroup[0]?.group ?? null;
 
   return (

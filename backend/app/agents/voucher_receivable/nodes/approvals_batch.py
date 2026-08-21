@@ -249,7 +249,31 @@ def make_batch_approvals_node(*, allow_submit: bool = False):
                     )
 
                 if not mismatch:
-                    if submit_on:
+                    if allow_submit:
+                        # D5-1(2026-08-21): 이트라이브↔이트라이브2 교차 결재라인 지정 —
+                        # 비영속이라 묶음 결제창마다 상신 직전에 수행. 실패 시 상신하지 않고
+                        # 하드 중단(오지정 상신 금지). 그 외 계정은 no-op(skipped).
+                        # 디버그(가상 상신)에서도 **지정까지는 수행**한다(사용자 확정
+                        # 2026-08-21) — 상신 없이 닫으면 소멸(실측)이라 흔적이 없다.
+                        line = await steps.ensure_cross_approval_line(child, state.get("userid"))
+                        if not line.get("ok"):
+                            submit_fatal = (
+                                f"결재라인 지정 실패 — 묶음 {gi + 1}({len(keys)}건): "
+                                f"{line.get('reason') or '사유 미상'}"
+                            )
+                        elif not line.get("skipped"):
+                            await emit_log(
+                                events,
+                                f"결재라인 지정 ✅ — {line.get('target')} 추가"
+                                f"(묶음 {gi + 1}, {len(keys)}건)."
+                                + (
+                                    ""
+                                    if submit_on
+                                    else " 디버그 — 상신 없이 닫히므로 저장되지 않습니다."
+                                ),
+                                "ok",
+                            )
+                    if submit_fatal is None and submit_on:
                         # 게이트 개방(2026-08-07) — 묶음 1회 상신 클릭 = 그룹 N건 상신.
                         sub = await steps.click_child_submit(child)
                         if not sub.get("ok"):
