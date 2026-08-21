@@ -68,12 +68,16 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/changelog', label: '변경사항', icon: 'changelog', debugOnly: true },
     ],
   },
-  // 예산단위·프로젝트 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
-  // 에이전트 목록의 그룹 섹션에서 연다(agents-client.tsx GROUP_TOOLS). URL(/manage/*)은 유지.
+  // 예산단위·거래처 관리는 '결의서 작성' 그룹의 공유 기준정보라, 사이드바 최상위가 아니라
+  // 에이전트 목록의 그룹 섹션에서 연다(group-nav.tsx GROUP_TOOLS). URL(/manage/*)은 유지.
+  // 프로젝트 관리만 2026-08-21 사이드바 최상위로 승격했다(사용자 결정) — 그룹 도구에서는 뺐다.
   {
     label: '운영',
     items: [
       { href: '/members', label: '멤버', icon: 'members', permission: 'users:read' },
+      // 자주쓰는 프로젝트·기본지정은 개인 즐겨찾기라 게이트 없음(로그인 전원) — 화면(/manage/projects,
+      // CodeCatalogManager)에도 관리자 게이트가 없어 그대로 미러한다.
+      { href: '/manage/projects', label: '프로젝트 관리', icon: 'projects' },
       // 에이전트별 세부설정(스키마 기반 폼) 관리(관리자+). 에이전트별 접근(사용 가능 조직) 설정은
       // 이 아래 /manage/agents/access 서브라우트로 옮겨졌다(사이드바에는 별도 항목 없음).
       { href: '/manage/agents', label: '에이전트 관리', icon: 'agents', minRole: 'admin' },

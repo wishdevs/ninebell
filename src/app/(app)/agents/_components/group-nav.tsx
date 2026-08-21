@@ -1,5 +1,11 @@
 import Link from 'next/link';
-import { RiArrowRightSLine, RiDatabase2Line, RiFolder3Line } from '@remixicon/react';
+import {
+  RiArrowRightSLine,
+  RiDatabase2Line,
+  RiEqualizer2Line,
+  RiFolder3Line,
+  type RemixiconComponentType,
+} from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { MetaChip } from '@/components/ui/meta-chip';
 import type { Agent } from '@/lib/data/agents';
@@ -7,37 +13,53 @@ import type { Agent } from '@/lib/data/agents';
 export interface GroupTool {
   label: string;
   href: string;
+  /** 버튼 아이콘 — 미지정이면 기준정보(데이터) 아이콘. 에이전트 세부설정 진입만 다른 아이콘을 준다. */
+  icon?: RemixiconComponentType;
 }
 
 /**
- * 그룹별 기준정보(공유 관리 데이터) 진입점 — 그룹 상세에서 연다.
- * '결의서입력'의 예산단위·프로젝트·거래처는 소속 에이전트가 공유하는 프리필 소스라 특정
- * 에이전트가 아니라 그룹에 속한다. 새 그룹은 여기 한 줄로 자기 기준정보를 선언한다.
+ * 그룹별 도구 진입점 — 그룹 상세에서 연다. 두 종류를 한 줄에 섞는다.
+ *  - 기준정보(공유 관리 데이터): '결의서입력'의 예산단위·거래처처럼 소속 에이전트가 공유하는
+ *    프리필 소스라 특정 에이전트가 아니라 그룹에 속한다.
+ *  - 에이전트 세부설정: 설정 가능한 에이전트 1개짜리 화면(/manage/agents/[id])으로, 사이드바
+ *    '에이전트 관리' 집계 뷰를 거치지 않고 '일하는 자리'에서 바로 연다(사용자 결정 2026-08-21).
+ * 새 그룹은 여기 한 줄로 자기 도구를 선언한다.
  */
 export const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
   resolution: [
     { label: '예산단위 관리', href: '/manage/budget-units' },
-    { label: '프로젝트 관리', href: '/manage/projects' },
     { label: '거래처 관리', href: '/manage/partners' },
+    { label: '법인카드 설정', href: '/manage/agents/corporate-card', icon: RiEqualizer2Line },
+    { label: '출장(국내/자차) 설정', href: '/manage/agents/trip-domestic', icon: RiEqualizer2Line },
+  ],
+  voucher: [
+    {
+      label: '유형별 전표조회 승인 설정',
+      href: '/manage/agents/voucher-by-type',
+      icon: RiEqualizer2Line,
+    },
   ],
   purchase: [{ label: '발주 패턴', href: '/manage/order-patterns' }],
 };
 
 /**
- * 그룹 기준정보 진입 버튼 — 그룹 상세 헤더 우측. 관리 화면(/manage/*)으로 이동하되
+ * 그룹 도구 진입 버튼 — 그룹 상세 헤더 우측. 관리 화면(/manage/*)으로 이동하되
  * 사이드바가 아니라 '일하는 자리(그룹)'에서 열도록 한다.
  */
 export function GroupTools({ tools }: { tools: readonly GroupTool[] }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-      {tools.map((tool) => (
-        <Button key={tool.href} asChild variant="secondary" size="sm">
-          <Link href={tool.href}>
-            <RiDatabase2Line size={14} aria-hidden />
-            {tool.label}
-          </Link>
-        </Button>
-      ))}
+      {tools.map((tool) => {
+        const Icon = tool.icon ?? RiDatabase2Line;
+        return (
+          <Button key={tool.href} asChild variant="secondary" size="sm">
+            <Link href={tool.href}>
+              <Icon size={14} aria-hidden />
+              {tool.label}
+            </Link>
+          </Button>
+        );
+      })}
     </div>
   );
 }
