@@ -1439,3 +1439,30 @@ async def test_save_node_surfaces_rejection_reason(monkeypatch):
     out = await node({"events": asyncio.Queue(), "page": _P(), "filled": 1, "plan": {}})
     assert "거부됨" in out["error"]
     assert "공급가액(거래금액)이 입력되지 않았습니다" in out["error"]  # 반려 사유 그대로 노출.
+
+
+# ── 증빙 적용 직후 창 분류(실런 f2270bb3: 03 리스트 팝업을 미지 다이얼로그로 오인 중단) ──
+def test_classify_post_apply_invoice_popup_is_not_dialog():
+    # 03: 적용 직후 유일한 k-window = 계산서 리스트 팝업(본문 미렌더 → text 비어 title 폴백)
+    modals = [{"title": "전자세금계산서/전자계산서", "text": "", "buttons": []}]
+    assert steps.classify_post_apply_modals(modals) == ("popup", [])
+
+
+def test_classify_post_apply_gate_dialog_detected():
+    modals = [{"title": "", "text": "전자발행된 증빙으로 입력하시겠습니까?", "buttons": ["예", "아니요"]}]
+    kind, texts = steps.classify_post_apply_modals(modals)
+    assert kind == "dialog" and steps.GATE_DIALOG_HINT in texts[0]
+
+
+def test_classify_post_apply_unknown_window_is_dialog():
+    modals = [
+        {"title": "전자세금계산서/전자계산서", "text": "", "buttons": []},
+        {"title": "알림", "text": "예산이 초과되었습니다", "buttons": ["확인"]},
+    ]
+    kind, texts = steps.classify_post_apply_modals(modals)
+    assert kind == "dialog" and texts == ["예산이 초과되었습니다"]
+
+
+def test_classify_post_apply_none():
+    assert steps.classify_post_apply_modals([]) == ("none", [])
+    assert steps.classify_post_apply_modals(None) == ("none", [])

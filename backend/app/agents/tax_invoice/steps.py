@@ -91,6 +91,26 @@ def evdn_dialog_answer(issue: str) -> str:
     return "아니요" if issue == "pre" else "예"
 
 
+def classify_post_apply_modals(modals: list[dict] | None) -> tuple[str, list[str]]:
+    """증빙 '적용' 직후 보이는 k-window 들을 분류한다.
+
+    - "dialog": 게이트 다이얼로그(`전자발행된 증빙…`) 또는 정체불명 창 → 텍스트 목록 반환
+    - "popup": 계산서 리스트 팝업(`전자세금계산서/전자계산서`)만 열림 — 03/04 등 무다이얼로그
+      코드의 정상 경로다(PROCESS.md D5: 적용이 리스트 모달을 연다). 다이얼로그로 오인하지 않는다
+    - "none": 아무 창도 없음
+    """
+    texts = [str(m.get("text") or m.get("title") or "") for m in (modals or [])]
+    others = [
+        t for m, t in zip(modals or [], texts)
+        if not any(h in str(m.get("title") or "") for h in INVOICE_POPUP_HINTS)
+    ]
+    if others:
+        return "dialog", others
+    if texts:
+        return "popup", []
+    return "none", []
+
+
 def pick_row_by_text(rows: list[dict], text: str) -> tuple[int | None, dict | None]:
     """팝업 그리드 행에서 필드명과 무관하게 문자열 값 중 text 를 포함하는 첫 행(쓰기 프로브 이식).
 
@@ -268,18 +288,22 @@ async def select_evidence(page: Any, code: str, answer: str) -> dict:
     await mouse_click(page, box["x"], box["y"])
     # 적용 직후 다이얼로그 — 헤드리스 렌더 지연으로 고정 1회 스냅샷은 놓친다(프로브 실측) →
     # 최대 4.5s **실시간** 관찰창(시간축 규율). 없으면 무다이얼로그 코드(03/04 등)로 보고 진행.
-    modals: list = []
+    # ⚠ 03 등은 적용이 곧바로 계산서 리스트 팝업(k-window)을 연다 — 그 창은 다이얼로그가 아니라
+    # 무다이얼로그 경로의 정상 결과이므로 분류해서 통과시킨다(실런 f2270bb3 오인 중단 재발 방지).
+    kind = "none"
+    dialog_texts: list[str] = []
     waited = 0
     modal_cap_ms = latency.budget_ms(4_500)
     while waited < modal_cap_ms:
         await verify.DEFAULT_SLEEP(0.3)
         waited += 300
-        modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
-        if modals:
+        kind, dialog_texts = classify_post_apply_modals(
+            await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
+        )
+        if kind != "none":
             break
-    dialog_texts = [m.get("text") or m.get("title") or "" for m in (modals or [])]
     answered: str | None = None
-    if modals:
+    if kind == "dialog":
         # ⚠ 모르는 다이얼로그에는 임의로 응답하지 않는다 — 비가역 조작일 수 있다.
         if not any(GATE_DIALOG_HINT in str(t) for t in dialog_texts):
             return {
