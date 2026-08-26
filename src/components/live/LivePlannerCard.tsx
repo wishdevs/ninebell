@@ -131,10 +131,15 @@ function PlannerBody({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* 개입 배너 — 무엇을 해달라는 개입인지(hitl.title/prompt). LiveGridCard 가 정상 경로에서
+          GridHeader 를 항상 그리는 것과 같은 문법(종전엔 !bom 폴백에만 있어 정상 화면에 개입
+          지시가 없었다 — 디자인 진단 2026-08-26). */}
+      <PlannerHeader title={hitl.title} prompt={hitl.prompt} />
+
       {/* 재개입 공지 — 서버 검증이 계획을 거부한 사유(hitl.notice, LiveGridCard 와 동일 계약). */}
       {hitl.notice ? <PlannerNotice notice={hitl.notice} /> : null}
 
-      <PlanHeader bom={bom} project={project} showFlowSteps={false} />
+      <PlanHeader bom={bom} project={project} />
 
       {/* 패턴 미매칭 안내 — 조용한 무반응으로 보이지 않게 사유까지 밝힌다(v1 버그 대응). */}
       {plan.patternUnmatched.length > 0 ? (
@@ -156,12 +161,13 @@ function PlannerBody({
         onToggle={plan.toggle}
         onToggleAll={plan.toggleAll}
         onGroup={plan.groupSelected}
-        unitCount={plan.totals.units}
+        units={plan.units}
+        onAddToUnit={plan.addSelectedToUnit}
       />
 
-      <section className="flex flex-col gap-4">
+      {/* 단락 간 여백으로 구획 구분(모듈 풀과 동일) — 번호 배지 대신(2026-08-26). */}
+      <section className="mt-4 flex flex-col gap-4">
         <SimSectionHeader
-          step={3}
           title="발주단위 — 구매사유·납기·거래처 지정"
           prompt="패턴으로 미리 묶인 발주단위입니다. 구매사유·납기예정일을 확인하고, 가공품·판금품·주식회사 오텍 그룹의 거래처는 필요할 때만 개별로 덮어씁니다(그룹별 납기·비고도 마찬가지)."
         />
@@ -209,7 +215,8 @@ const UNMATCHED_LABEL_LIMIT = 5;
 
 /**
  * 패턴 미매칭 안내 — 패턴에 걸리지 않아 발주단위로 묶이지 않은 모듈을 알린다.
- * 확정을 막는 조건이 아니라(미배정 모듈은 허용) 원인과 해결 경로만 알리는 info 톤이다.
+ * 확정을 막는 조건이 아니라(미배정 모듈은 허용) 원인과 해결 경로만 알리는 **중립 안내 톤**이다
+ * (warning/danger 급이 아니고, info 색은 accent 와 근접해 발주 경계의 색 독점을 흐린다).
  */
 function PatternUnmatchedNotice({
   bom,

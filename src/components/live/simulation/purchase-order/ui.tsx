@@ -18,29 +18,13 @@ import type { BomPart } from './model';
 
 /**
  * 섹션 제목 + 안내 한 줄 — pre-run 폼의 제목/설명 문법과 같은 중립 헤더.
- * step 을 주면 번호 배지가 붙는다 — 계획서 3구획(통합 지정 → 모듈 풀 → 발주단위)의
- * 진행 순서를 시각으로 구분한다(사용자 지적 2026-08-26: 구획 경계가 안 보인다).
+ * 구획 구분은 번호가 아니라 **단락 간 여백**으로 한다(2026-08-26 — 번호 배지를 넣었다가
+ * 같은 날 사용자 피드백으로 해제, 호출부가 mt- 유틸로 간격을 벌린다).
  */
-export function SimSectionHeader({
-  title,
-  prompt,
-  step,
-}: {
-  title: string;
-  prompt?: ReactNode;
-  step?: number;
-}) {
+export function SimSectionHeader({ title, prompt }: { title: string; prompt?: ReactNode }) {
   return (
     <div className="min-w-0 shrink-0">
-      <p className="text-foreground flex items-center gap-2 text-[length:var(--text-body-lg)] leading-snug font-semibold">
-        {step != null ? (
-          <span
-            aria-hidden
-            className="bg-accent/10 text-accent flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums"
-          >
-            {step}
-          </span>
-        ) : null}
+      <p className="text-foreground text-[length:var(--text-body-lg)] leading-snug font-semibold">
         {title}
       </p>
       {prompt ? (
@@ -140,40 +124,6 @@ export function MiniChip({
     >
       {children}
     </span>
-  );
-}
-
-// ── 요약 수치 타일 ───────────────────────────────────────────────────────────
-
-export function StatTile({
-  label,
-  value,
-  tone = 'neutral',
-  sub,
-}: {
-  label: string;
-  value: string;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
-  sub?: string;
-}) {
-  return (
-    <div className="border-border-subtle bg-muted/40 flex min-w-0 flex-col gap-0.5 rounded-[var(--radius-md)] border px-3 py-2">
-      <span className="text-foreground-tertiary text-[11px] font-semibold tracking-wide">
-        {label}
-      </span>
-      <span
-        className={cn(
-          'truncate text-[17px] font-semibold tabular-nums',
-          tone === 'success' && 'text-success',
-          tone === 'warning' && 'text-warning',
-          tone === 'danger' && 'text-danger',
-          tone === 'neutral' && 'text-foreground',
-        )}
-      >
-        {value}
-      </span>
-      {sub ? <span className="text-foreground-tertiary text-[11px]">{sub}</span> : null}
-    </div>
   );
 }
 

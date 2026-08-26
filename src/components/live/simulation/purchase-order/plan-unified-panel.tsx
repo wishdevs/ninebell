@@ -38,7 +38,6 @@ export function PlanUnifiedPanel({
   return (
     <section className="flex flex-col gap-3">
       <SimSectionHeader
-        step={1}
         title="통합 지정 — 납기 기준일·거래처"
         prompt="여기서 한 번 정하면 아래 발주단위에 기본값으로 깔립니다. 발주단위에서 직접 고친 값은 여기를 다시 바꿔도 유지됩니다."
       />

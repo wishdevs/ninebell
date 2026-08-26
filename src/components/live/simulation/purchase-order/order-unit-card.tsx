@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { CatalogCombobox } from '@/components/live/pre-run/catalog-combobox';
 import { formatInteger } from '@/lib/data/format';
+import { cn } from '@/lib/utils';
 import type { BaseDates } from '@/lib/purchase/order-patterns';
 import { searchVendors, type VendorCategory } from './catalog';
 import {
@@ -83,12 +84,13 @@ export function OrderUnitCard({
   const rule = unit.patternRule;
 
   return (
-    // ⚠ 카드 경계(사용자 리포트 2026-08-14): 종전엔 얇은 테두리 하나뿐이라 발주1·발주2 가
-    // 이어져 보였다. 헤더를 별도 밴드(bg-muted/50 + 하단 구분선)로 띄우고 카드에 그림자를
-    // 줘 '한 발주 = 한 덩어리'가 눈에 먼저 들어오게 한다.
-    <section className="border-border bg-surface overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-card)]">
-      {/* 헤더 밴드 — 발주 N + 모듈 요약 + 합계 + 삭제. */}
-      <div className="bg-muted/50 border-border/70 flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
+    // 발주 경계는 **색 채널**이 긋는다(디자인 진단 2026-08-26) — 이 화면은 회색 하나가
+    // 표 헤더·칩·패널 여러 역할을 겸해, 회색 밴드는 아무리 짙어도 '또 하나의 표 헤더'로
+    // 읽혔다. 발주 경계만 유일하게 accent 틴트(밴드+좌측 레일)를 갖고 내부 구조는 회색에
+    // 남긴다. 홀짝 줄무늬는 색 채널 도입 후 과잉이라 제거(사용자 확정 — 같은 날 3안 비교).
+    <section className="border-accent/40 rounded-r-[var(--radius-md)] border-l-2 pb-3">
+      {/* 타이틀 밴드 — 발주 N 배지와 같은 accent 계열 틴트. 화면에서 색 밴드는 발주 경계뿐. */}
+      <div className="bg-accent/10 flex flex-wrap items-center gap-2 rounded-r-[var(--radius-md)] px-4 py-2.5">
         <StatusPill label={`발주 ${unit.seq}`} variant="info" />
         <span className="text-foreground text-[length:var(--text-body)] font-semibold">
           {unitModuleSummary(bom, unit)}
@@ -106,8 +108,8 @@ export function OrderUnitCard({
         </div>
       </div>
 
-      {/* 본문 — 헤더 밴드와 같은 좌우 여백을 유지한다(밴드가 카드 폭을 꽉 채우므로 여기서 준다). */}
-      <div className="flex flex-col gap-3 p-4">
+      {/* 본문 — 타이틀 행과 같은 좌우 패딩으로 정렬, 아래로만 흐른다. */}
+      <div className="flex flex-col gap-3 px-4 pt-3">
         {/* 인플레이스 1행 폼 — 구매사유·납기예정일(둘 다 필수, 납기는 거래처 그룹 기본값). */}
         <div className="flex flex-wrap items-end gap-3">
           <div className="grid min-w-[220px] flex-1 gap-1.5">
@@ -171,7 +173,8 @@ export function OrderUnitCard({
         {/* 거래처 그룹 — 구매발주일괄입력 단계의 거래처별 편집(실거래처·납기·비고)을 미리 정한다. */}
         <div className="border-border overflow-x-auto rounded-[var(--radius-md)] border">
           <table className="w-full min-w-[880px] border-collapse text-[11px]">
-            <thead className="bg-muted/70 text-foreground-tertiary">
+            {/* 내부 표 헤더는 발주 밴드보다 한 단 옅게 — 계층 역전 방지(진단 2026-08-26). */}
+            <thead className="bg-muted/50 text-foreground-tertiary">
               <tr>
                 <Th className="w-8" />
                 <Th>거래처</Th>

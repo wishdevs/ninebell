@@ -1,147 +1,51 @@
 'use client';
 
-import { useMemo } from 'react';
 import { RiArrowLeftLine, RiCheckboxCircleLine, RiFileList3Line } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
-import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { Spinner } from '@/components/ui/spinner';
 import { StatusPill } from '@/components/ui/status-pill';
-import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
-import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
 import type { PlanSubmit } from '@/lib/live/types';
-import { projectFavoritesOf, searchProjects } from './catalog';
 import type { PlanBom, PlanGate, PlanTotals } from './model';
 import { Td, Th } from './ui';
 
 /**
- * A(헤더 컨텍스트·자동 단계)와 D(하단 요약·확정)를 한 파일에 둔다 — 둘 다 계획 상태를
+ * A(헤더 컨텍스트)와 D(하단 요약·확정)를 한 파일에 둔다 — 둘 다 계획 상태를
  * 둘러싼 요약 표면이라 재료가 같다.
  *
  * ⚠ 종전 헤더의 요약 스탯 5개(모듈·부품·총 요청금액·발주단위·미배정)는 2026-08-14 사용자
  *   요청으로 **모듈 풀 하단 선택 바**(module-pool-table)로 옮겼다 — 선택 요약 옆에서 같은
  *   글자 크기로 읽는 편이 시선 이동이 짧다.
+ * ⚠ 데모 전용이던 프로젝트 picker·①~④ 자동 단계 스트립·고정 설정 칩은 2026-08-26 삭제 —
+ *   데모(2026-08-21 제거) 이후 showFlowSteps=false 로만 불려 전부 죽은 경로였다(git 이력 보존).
  */
 
-// ── A. 헤더 — 프로젝트 컨텍스트 + 자동 실행 단계 ─────────────────────────────
-
-/**
- * 옴니솔 구매발주 4단계 — ①③ 은 에이전트가 자동 고정으로 처리하고, ②④ 의 입력을
- * 이 계획서가 대체한다. planner=true 단계를 accent 로 구분한다.
- */
-const FLOW_STEPS: readonly { label: string; planner: boolean }[] = [
-  { label: 'BOM 조회·이동요청 일괄 저장', planner: false },
-  { label: '발주단위별 구매요청 저장', planner: true },
-  { label: '구매요청처리 셀프결재', planner: false },
-  { label: '구매발주일괄입력 거래처·납기·비고 적용', planner: true },
-];
-
-const STEP_MARKS = ['①', '②', '③', '④'] as const;
-
-/** 고정 설정 칩 — 에이전트가 자동으로 채우는 값이라 계획서에선 읽기 전용이다. */
-const FIXED_CHIPS: readonly string[] = [
-  '구매그룹/구매조직 나인벨',
-  '이동출고 공용자재 → 이동입고 프로젝트',
-];
+// ── A. 헤더 — 프로젝트 컨텍스트 ─────────────────────────────────────────────
 
 interface PlanHeaderProps {
-  /** 주입된 BOM 컨텍스트(데모 픽스처 또는 hitl.plannerBom) — 칩·전체 합계의 원천. */
+  /** 주입된 BOM 컨텍스트(hitl.plannerBom) — 칩(WBS·장비)의 원천. */
   bom: PlanBom;
-  /** 선택된 프로젝트 — null 이면 미선택(호출부가 본문 대신 empty-state 를 그린다). */
-  project: { code: string; name: string } | null;
-  /**
-   * 프로젝트 선택 UI(데모 전용) — 있으면 콤보박스+초기화 확인 바를 그린다. 라이브 개입은
-   * 개입 1(search)이 프로젝트를 이미 확정했으므로 미전달 — 프로젝트명을 표시만 한다.
-   */
-  picker?: {
-    onSelect: (opt: ComboOption) => void;
-    onClear: () => void;
-    /** 프로젝트 변경/해제 확인 바 — 작성 중 발주단위가 있을 때만 값이 온다(초기화 경고). */
-    resetConfirm: { question: string; onConfirm: () => void; onCancel: () => void } | null;
-  };
-  /**
-   * 자동 실행 단계 스트립·고정 설정 칩 표시(기본 true — 데모). 라이브 개입에선 워크플로우
-   * 탭·실행 파라미터가 같은 정보를 대신하므로 끈다.
-   */
-  showFlowSteps?: boolean;
+  /** 확정 프로젝트 — 개입 1(실행 전 폼)이 이미 확정했으므로 표시 전용이다. */
+  project: { code: string; name: string };
 }
 
-export function PlanHeader({ bom, project, picker, showFlowSteps = true }: PlanHeaderProps) {
-  const projectFavorites = useMemo(() => projectFavoritesOf(bom), [bom]);
+export function PlanHeader({ bom, project }: PlanHeaderProps) {
   const machine = bom.machines[0];
   return (
-    <div className="flex flex-col gap-3">
-      {/* 프로젝트 선택(데모) 또는 확정 프로젝트 표시(라이브) + 컨텍스트 칩. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        {picker ? (
-          <span className="w-72 max-w-full min-w-0">
-            <CatalogCombobox
-              value={project ?? { code: '', name: '' }}
-              placeholder="프로젝트 선택"
-              favorites={projectFavorites}
-              search={(q) => Promise.resolve(searchProjects(projectFavorites, q))}
-              onSelect={picker.onSelect}
-              onClear={picker.onClear}
-            />
-          </span>
-        ) : project ? (
-          <span className="text-foreground text-[length:var(--text-body)] font-semibold">
-            {project.name}
-          </span>
-        ) : null}
-        {picker?.resetConfirm ? (
-          <InlineConfirm
-            question={picker.resetConfirm.question}
-            confirmLabel="초기화"
-            onConfirm={picker.resetConfirm.onConfirm}
-            onCancel={picker.resetConfirm.onCancel}
-          />
-        ) : project ? (
-          <>
-            <ContextChip>{project.code}</ContextChip>
-            {/* WBS 는 주입 BOM 이 프로젝트 1건 단위라 BOM 값을 그대로 보인다. */}
-            <ContextChip>WBS {bom.project.wbs}</ContextChip>
-            {machine ? (
-              <ContextChip>
-                장비 {machine.name}
-                {bom.machines.length > 1 ? ` 외 ${bom.machines.length - 1}` : ''}
-              </ContextChip>
-            ) : null}
-            {showFlowSteps ? FIXED_CHIPS.map((c) => <ContextChip key={c}>{c}</ContextChip>) : null}
-          </>
-        ) : null}
-      </div>
-
-      {project ? (
-        <>
-          {/* 자동 실행 단계 스트립(읽기 전용) — '이 계획서' 단계만 accent. */}
-          {showFlowSteps ? (
-            <ol className="flex flex-wrap items-center gap-1.5 text-[11px]">
-              {FLOW_STEPS.map((s, i) => (
-                <li key={s.label} className="flex items-center gap-1.5">
-                  {i > 0 ? (
-                    <span aria-hidden className="text-foreground-tertiary">
-                      →
-                    </span>
-                  ) : null}
-                  <span
-                    className={cn(
-                      'rounded-full px-2 py-0.5 whitespace-nowrap',
-                      s.planner
-                        ? 'bg-accent/10 text-accent font-semibold'
-                        : 'bg-muted/60 text-foreground-secondary',
-                    )}
-                  >
-                    {STEP_MARKS[i]} {s.label}
-                    <span className={s.planner ? undefined : 'text-foreground-tertiary'}>
-                      {s.planner ? ' · 이 계획서' : ' · 자동'}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </>
+    // 프로젝트명이 이 계획서의 '문서 제목'이다(body-lg 승격, 디자인 진단 2026-08-26) —
+    // 개입 지시는 위 warning 배너가, 문서 정체성은 이 줄이 맡는 계층 분담.
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span className="text-foreground text-[length:var(--text-body-lg)] font-semibold">
+        {project.name}
+      </span>
+      <ContextChip>{project.code}</ContextChip>
+      {/* WBS 는 주입 BOM 이 프로젝트 1건 단위라 BOM 값을 그대로 보인다. */}
+      <ContextChip>WBS {bom.project.wbs}</ContextChip>
+      {machine ? (
+        <ContextChip>
+          장비 {machine.name}
+          {bom.machines.length > 1 ? ` 외 ${bom.machines.length - 1}` : ''}
+        </ContextChip>
       ) : null}
     </div>
   );
@@ -250,8 +154,9 @@ export function PlanReviewView({
 }: PlanReviewViewProps) {
   return (
     <div className="flex flex-col gap-4">
-      <div className="border-accent/30 bg-accent/5 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3">
-        <RiFileList3Line size={17} aria-hidden className="text-accent mt-0.5 shrink-0" />
+      {/* 배너 문법 통일(2026-08-26) — 다른 배너 4종과 같은 px-3 py-2.5 + 아이콘 16. */}
+      <div className="border-accent/30 bg-accent/5 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
+        <RiFileList3Line size={16} aria-hidden className="text-accent mt-0.5 shrink-0" />
         <div className="min-w-0">
           <p className="text-foreground text-[length:var(--text-body-sm)] font-semibold">
             전체 계획서 검토 — {payload.project.name}
@@ -266,10 +171,10 @@ export function PlanReviewView({
       {payload.units.map((u) => (
         <section
           key={u.seq}
-          className="border-border bg-surface overflow-hidden rounded-[var(--radius-md)] border shadow-[var(--shadow-card)]"
+          className="border-accent/40 rounded-r-[var(--radius-md)] border-l-2 pb-3"
         >
-          {/* 발주단위 카드와 같은 밴드 문법 — 검토에서도 '한 발주 = 한 덩어리'로 읽힌다. */}
-          <div className="bg-muted/50 border-border/70 flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
+          {/* 발주단위 카드와 같은 문법(2026-08-26) — accent 밴드+레일이 발주 경계다. */}
+          <div className="bg-accent/10 flex flex-wrap items-center gap-2 rounded-r-[var(--radius-md)] px-4 py-2.5">
             <StatusPill label={`발주 ${u.seq}`} variant="info" />
             <span className="text-foreground text-[length:var(--text-body)] font-semibold">
               {u.purchaseReason}
@@ -278,7 +183,7 @@ export function PlanReviewView({
               납기예정일 {u.dueDate}
             </span>
           </div>
-          <div className="flex flex-col gap-3 p-4">
+          <div className="flex flex-col gap-3 px-4 pt-3">
             <ul className="flex flex-wrap gap-1.5">
               {u.modules.map((m) => (
                 <li
@@ -294,7 +199,8 @@ export function PlanReviewView({
             </ul>
             <div className="border-border overflow-x-auto rounded-[var(--radius-md)] border">
               <table className="w-full min-w-[640px] border-collapse text-[11px]">
-                <thead className="bg-muted/70 text-foreground-tertiary">
+                {/* accent 밴드 아래 내부 표 — 밴드보다 한 단 옅게(order-unit-card 와 동일). */}
+                <thead className="bg-muted/50 text-foreground-tertiary">
                   <tr>
                     <Th>거래처</Th>
                     <Th className="text-right">부품 수</Th>
