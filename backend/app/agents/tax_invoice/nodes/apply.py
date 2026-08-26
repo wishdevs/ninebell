@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 
+from app.agents.common import doc_steps
 from app.live.events import emit_log, emit_step
 from nbkit.omnisol import js_lib
 from nbkit.patterns import emit_shot
@@ -32,6 +33,21 @@ def _ms(t0: float) -> int:
 async def _detail_rowcount(page) -> int:
     n = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
     return n if isinstance(n, int) else -1
+
+
+def latest_invoice_date(selection: list[dict]) -> str | None:
+    """선택 계산서 중 **가장 늦은 계산서일** → 'YYYY-MM-DD'. 없으면 None.
+
+    D9: 발행 후 회계일 = 선택 행의 마지막(가장 늦은) 계산서일. 복수 선택이면 최댓값이다.
+    ERP 가 돌려주는 계산서일은 KST 자정을 UTC 로 표기한 문자열이라(`'…T15:00:00+00:00'`)
+    `steps._iso_date` 로 환산한 뒤 비교해야 하루 밀리지 않는다.
+    """
+    dates = [
+        iso
+        for s in selection
+        if (iso := steps._iso_date(str((s.get("grid_row") or {}).get("invoiceDate") or "")))
+    ]
+    return max(dates) if dates else None
 
 
 def match_invoice_index(rows: list[dict], want: dict) -> int | None:
@@ -107,12 +123,28 @@ def make_apply_invoices_node():
             if not ap.get("ok"):
                 return await fail(f"{label} 적용", ap.get("reason"))
             after_rows = await _detail_rowcount(page)
-            if before_rows >= 0 and after_rows >= 0 and after_rows <= before_rows:
-                # ❓ 1계산서=1행 가정의 검증 지점 — 행이 안 늘면 다음 행 채움이 엉뚱한 행을 친다.
+            # 실측(2026-08-24 체크 프로브): 첫 적용은 F3 빈 행을 **채우고**(행수 불변) 이후
+            # 적용이 1행씩 추가한다 — 기대 행수 = 지금까지 적용한 계산서 수. 어긋나면 다음
+            # 행 채움이 엉뚱한 행을 치므로 하드 실패.
+            expected_rows = order + 1
+            if after_rows >= 0 and after_rows != expected_rows:
                 return await fail(
                     f"{label} 적용 확인",
-                    f"적용 후 상세 행이 늘지 않았습니다(행수 {before_rows}→{after_rows}).",
+                    f"적용 후 상세 행수가 기대와 다릅니다(행수 {before_rows}→{after_rows}, "
+                    f"기대 {expected_rows}).",
                 )
+            # 적용 행 정체 확인 — 마지막 행 거래처가 선택 계산서와 일치해야 한다(체크 행이
+            # 아닌 다른 행이 적용되는 오작동 방어). 셀을 못 읽으면 판정 보류(실패 아님).
+            want_partner = str((item.get("grid_row") or {}).get("partnerName") or "").strip()
+            cell = await steps._read_detail_cell(page, "PARTNER_NM")()
+            if want_partner and isinstance(cell, dict) and cell.get("ok"):
+                got_partner = str(cell.get("value") or "").strip()
+                if got_partner and got_partner != want_partner:
+                    return await fail(
+                        f"{label} 적용 확인",
+                        f"적용된 행의 거래처가 선택과 다릅니다(선택 '{want_partner}' / "
+                        f"반영 '{got_partner}').",
+                    )
             await emit_log(events, f"{label} 적용 — 상세 행 {after_rows}행.", "ok")
 
             # 방금 생긴 행(마지막 행)에 본문 채움 — 채움 스텝은 전부 마지막 행 기준이다.
@@ -138,12 +170,45 @@ def make_apply_invoices_node():
             fd = await steps.fill_fund_item(page)
             if not fd.get("ok"):
                 return await fail(f"{label} 자금과목", fd.get("reason"))
+            # 자금예정일 — 계정이 요구할 때만 채운다(04 계정은 필수, 03/06/07 계정은 아님).
+            # 값은 이 계산서의 계산서일 = ERP 가 채운 회계일과 같은 날이다(D9).
+            due = await steps.fill_fund_due_date(
+                page, (item.get("grid_row") or {}).get("invoiceDate") or ""
+            )
+            if not due.get("ok"):
+                return await fail(f"{label} 자금예정일", due.get("reason"))
+            # 결제조건 — 같은 계정별 필수 편차(04/13 계정만 요구). 기본 '당월 결제'(D8).
+            st = await steps.fill_settlement_terms(page)
+            if not st.get("ok"):
+                return await fail(f"{label} 결제조건", st.get("reason"))
+            due_txt = f" · 자금예정일 {due['value']}" if due.get("value") else ""
+            due_txt += f" · 결제조건 {st['name']}" if st.get("name") else ""
             await emit_log(
                 events,
                 f"{label} 본문 반영 — 적요 '{item['note']}' · 예산단위 {item['budget_unit_name']} · "
-                f"자금과목 {fd.get('name') or fd.get('code')}.",
+                f"자금과목 {fd.get('name') or fd.get('code')}{due_txt}.",
                 "ok",
             )
+
+        # 회계일 = 선택 계산서 중 가장 늦은 계산서일(D9). 계산서 적용만으로는 ERP 기본값(오늘)이
+        # 남는다 — 2026-08-25 헤디드 실측(03·04·11 모두 ACTG_DT 가 실행일이었다). 마스터 필드라
+        # 행별이 아니라 전 행 반영이 끝난 뒤 한 번만 세팅한다.
+        actg = latest_invoice_date(selection)
+        if actg:
+            ad = await doc_steps.set_acct_date(page, actg.replace("-", ""), actg)
+            if not ad.get("ok"):
+                return await fail("회계일", ad.get("reason"))
+            await note_warn("회계일", ad)
+            await emit_log(events, f"회계일 = {actg}(선택 계산서 중 가장 늦은 계산서일).", "ok")
+        else:
+            # 조용히 넘기지 않는다 — 회계일이 실행일로 남으면 귀속월이 틀어질 수 있다.
+            await emit_log(
+                events,
+                "⚠ 선택 계산서에서 계산서일을 읽지 못해 회계일을 ERP 기본값(오늘)으로 둡니다 "
+                "— 저장 후 회계일을 확인해 주세요.",
+                "warn",
+            )
+            warns.append("회계일")
 
         if warns:
             await emit_log(

@@ -183,13 +183,14 @@ async def test_cleanup_requires_userid(monkeypatch):
     assert calls["rq"] == 0 and calls["delete"] == 0  # 판정 불가면 조회조차 하지 않는다.
 
 
-# ── 조립/등록 (결의서 전체 확대 2026-08-10 — 5종) ──────────────────────────────
+# ── 조립/등록 (결의서 전체 확대 2026-08-10 — 5종 → 2026-08-25 세금계산서 추가 6종) ──
 _CLEANUP_IDS = (
     "trip-domestic-cleanup",
     "trip-overseas-cleanup",
     "card-collect-cleanup",
     "gyeongjo-grant-cleanup",
     "hakjagum-grant-cleanup",
+    "tax-invoice-cleanup",
 )
 
 

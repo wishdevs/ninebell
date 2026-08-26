@@ -8,8 +8,13 @@ Case A 검증 순서. 발행 후(행 적용 완료): 거래처·공급가액·�
 ⚠ 자금과목(FUND_CD)은 **계정의 관리항목 구성에 따라 필수**다 — 미입력이면 "계정의 관리항목
 [자금과목] 항목이 입력되지 않았습니다"로 저장이 반려된다(2026-08-19 headed 세션 확정, 분할
 F7 반려의 진짜 원인). 구성별 편차를 미리 판별할 수단이 없어 **항상 기본값 '일반경비'로 채운다**.
-결제방법·자금예정일·결제조건은 저장 비필수(결제방법은 자동 기본값 '6' 외상)라 채우지 않는다.
-'당월결제' 기본값은 환경 카탈로그에 없어 사용자 확인 대기(PROCESS.md 검증 체인 4).
+
+⚠ **자금예정일도 같은 부류다**(2026-08-25 실측 — 종전 "저장 비필수" 단정은 틀렸다): 증빙 04
+(발행 후·비과세) 계정은 미입력 시 "계정의 관리항목[자금예정일] …" 로 반려되고, 03/06/07 계정은
+없어도 저장된다. 자금과목과 달리 **요구 여부를 화면이 알려 주므로**(라벨 td 의 `required`
+클래스) 항상 쓰지 않고 요구하는 계정에서만 회계일로 채운다 — 안 요구하는 계정에 임의 날짜를
+넣으면 자금계획이 사실과 달라진다. 결제방법·결제조건은 여전히 비필수(결제방법 자동 기본값 '6'
+외상)라 채우지 않는다. '당월결제' 기본값은 환경 카탈로그에 없어 사용자 확인 대기(검증 체인 4).
 """
 
 from __future__ import annotations
@@ -108,6 +113,19 @@ def make_fill_rows_node():
         if not fd.get("ok"):
             return await fail("자금과목", fd.get("reason"))
         await emit_log(events, f"자금과목 = {fd.get('name') or fd.get('code')}.", "info")
+        # 9) 자금예정일 — 같은 부류의 계정별 관리항목. 요구하지 않는 계정에선 no-op 이라
+        #    현재 통과 중인 22/23/24 경로의 저장 내용은 그대로다.
+        due = await steps.fill_fund_due_date(page, plan.get("actg_date_compact") or "")
+        if not due.get("ok"):
+            return await fail("자금예정일", due.get("reason"))
+        if due.get("value"):
+            await emit_log(events, f"자금예정일 = {due['value']}.", "info")
+        # 10) 결제조건 — 역시 계정별 필수 편차. 요구 안 하는 계정에선 no-op.
+        st = await steps.fill_settlement_terms(page)
+        if not st.get("ok"):
+            return await fail("결제조건", st.get("reason"))
+        if st.get("name"):
+            await emit_log(events, f"결제조건 = {st['name']}.", "info")
 
         amount_txt = (
             f" · 공급가액 {plan['supply_amount']:,}원" if plan.get("supply_amount") is not None else ""

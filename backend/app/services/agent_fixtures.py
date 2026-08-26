@@ -711,7 +711,7 @@ _TAX_INVOICE_FIXTURE: dict = {
     "hidden": False,
     "name": "세금계산서",
     "description": "발행 전/후·과세성격·비용분할에 맞는 증빙유형으로 세금계산서 결의서를 작성해 저장(F7)까지 자동 진행합니다. 발행 후에는 전자발행 계산서 목록에서 반영할 행을 직접 선택합니다.",
-    "handoff_note": "저장된 결의서는 아직 상신 전입니다 — 상신은 ERP 에서 직접 진행해 주세요. ⚠ 발행 후(전자발행 계산서 행 선택) 경로는 테스트 환경에 전자발행 데이터가 없어 실데이터 검증 미완입니다 — 첫 실사용은 결과를 꼭 확인해 주세요.",
+    "handoff_note": "저장된 결의서는 아직 상신 전입니다 — 상신은 ERP 에서 직접 진행해 주세요. ⚠ 비용분할(11·13)은 마지막 배부행 적요가 문서 적요로 저장될 수 있습니다(금액 배분은 정상) — 저장 후 적요만 확인해 주세요.",
     "drive": "browser",
     "interaction": "autonomous",
     "target_system": "더존 옴니솔",
@@ -938,6 +938,7 @@ AGENT_FIXTURES.extend(
         _cleanup_fixture("card-collect-cleanup", "법인카드", "카드"),
         _cleanup_fixture("gyeongjo-grant-cleanup", "경조금", "경조금신청서"),
         _cleanup_fixture("hakjagum-grant-cleanup", "학자금", "학자금신청서"),
+        _cleanup_fixture("tax-invoice-cleanup", "세금계산서", "세금계산서"),
     ]
 )
 

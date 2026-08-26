@@ -140,10 +140,14 @@ def make_save_doc_node():
         await emit_shot(events.put, page)
         await emit_step(events, "save_doc", "done", _ms(t0))
         plan = state.get("plan") or {}
+        # 분할 행수는 **실제로 쓴 계획**에서 센다 — 발행 후는 개입(state.split_plan)에서 오고
+        # plan.split_rows 는 폼 경로 전용이라, 종전처럼 plan 만 보면 개입 분할이 '0행'으로
+        # 잘못 보고됐다(2026-08-25 증빙 11 실측 — 실제로는 2행이 반영됐다).
+        split_rows = state.get("split_plan") or plan.get("split_rows") or []
         return {
             "result": (
                 f"처리 완료 — 세금계산서 결의서 저장(증빙 {plan.get('evidence_code')}"
-                f"{' · 분할 ' + str(len(plan.get('split_rows') or [])) + '행' if plan.get('split') else ''}). "
+                f"{' · 분할 ' + str(len(split_rows)) + '행' if plan.get('split') else ''}). "
                 "상신은 ERP 에서 직접 진행하세요."
             )
         }

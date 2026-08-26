@@ -15,6 +15,7 @@ in-page JS 는 :mod:`.js`(프로브 승격분) + `nbkit.omnisol.js_lib`.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from nbkit.browser.actions import mouse_click
@@ -76,6 +77,9 @@ DIST_PJT_FIELD = "PJT_NM"
 BUDGET_FIELDS = ["BG_CD", "BG_NM", "BIZPLAN_NM", "BGACCT_NM"]
 FUND_ITEM_LABEL = "자금과목"  # 관리항목 패널 행 라벨(위젯은 캔버스 셀이 아니라 tb1 DOM 패널).
 DEFAULT_FUND_NAME = "일반경비"  # D8 기본값(FUND_CD 5310) — 계정 관리항목이 요구하면 필수.
+FUND_DUE_DATE_LABEL = "자금예정일"  # 관리항목 패널 날짜 행(코드피커 아님 — Kendo datepicker).
+SETTLEMENT_TERMS_LABEL = "결제조건"  # 관리항목 패널 코드피커 행(TERPAY_CD).
+DEFAULT_SETTLEMENT_TERMS = "당월 결제"  # D8 사용자 확정 '당월결제' = TERPAY_CD C000(2026-08-25 실측).
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -137,11 +141,21 @@ def pick_budget_by_name(options: list[dict], name: str) -> tuple[dict | None, st
     return matches[0], None
 
 
-def balance_row_index(rows: list[dict]) -> int | None:
-    """차액반영이 만든 잔액행 — 적요는 비고 금액은 찬 행(쓰기 프로브 판정식 이식)."""
-    for i, r in enumerate(rows):
-        note_empty = not str(r.get(DIST_NOTE_FIELD) or "").strip()
-        if note_empty and r.get(DIST_AMOUNT_FIELD) not in (None, ""):
+def balance_row_index(rows: list[dict], before_count: int) -> int | None:
+    """차액반영이 만든 잔액행 — **차액반영 직전 행수 이후에 새로 생긴, 금액이 찬 행**.
+
+    ⚠ 종전 규칙('적요 빈 칸 + 금액 참')은 **틀렸다**(2026-08-25 `split_balance_row_probe` 실측):
+      - 차액반영은 선택한 더미 행을 채우지 않고 **새 행을 뒤에 append** 한다.
+      - 그 새 행의 적요는 비어 있지 않고 **문서(원본행) 적요가 복사**돼 온다.
+        실측 스냅샷: `[0] 분할1/600000` · `[1] 분할2/None` · `[2] 문서적요/600000`
+    그래서 옛 규칙은 항상 None 을 돌려줬고, 사용자가 입력한 마지막 분할행 적요가 조용히
+    누락된 채 저장됐다(RN202608050004 배부 2행의 적요가 문서 적요였다).
+
+    `before_count` = 차액반영 직전 그리드 행수(= 명시행 수 + 더미행 1). 그 인덱스부터
+    금액이 찬 첫 행이 잔액행이다 — 적요 문자열에 의존하지 않아 문서 적요가 무엇이든 안전하다.
+    """
+    for i in range(max(0, before_count), len(rows)):
+        if rows[i].get(DIST_AMOUNT_FIELD) not in (None, ""):
             return i
     return None
 
@@ -374,6 +388,13 @@ async def fill_budget_by_name(page: Any, budget_unit_name: str) -> dict:
     await mouse_click(page, apply_box["x"], apply_box["y"])
     # 적용 직후 예산 안내 모달("확인") — 닫아야 팝업 개수 판정·다음 조작이 산다(프로브 관례).
     await _answer_modals(page, ("확인",))
+    # 예산잔액이 모자란 계정은 적용 직후 '예산현황' 창을 띄운다. 남겨 두면 아래 팝업 개수
+    # 판정이 이것을 피커로 세어 "피커가 닫히지 않았습니다"로 **오판**하고(2026-08-25 증빙 05
+    # 실측 — 06/07 은 같은 행·같은 계정으로 통과해 예산 소진에 따른 간헐 발생), 잔존 창은
+    # F7 도 삼켜 팬텀 저장이 된다. 종전엔 분할 확정 경로에만 걸려 있던 닫기를 여기에도 건다.
+    bs = await close_budget_status_popup(page)
+    if not bs.get("ok"):
+        return await _fail_close(page, f"예산단위 적용 후 '예산현황' 창 정리 실패 — {bs.get('reason')}")
     want = row.get("BG_NM")
     chk = await verify.confirm(
         _read_detail_cell(page, "BG_NM"),
@@ -620,25 +641,54 @@ async def open_invoice_list(page: Any, period_from: str, period_to: str) -> dict
 
 
 async def apply_invoice_rows(page: Any, indexes: list[int]) -> dict:
-    """전자세금계산서 팝업에서 indexes 행을 선택하고 '적용' → 팝업 닫힘 확인.
+    """전자세금계산서 팝업에서 indexes 행을 **체크**하고 정확일치 '적용' → 팝업 닫힘 확인.
 
-    ⚠ 복수 선택은 실물 미검증(❓ PROCESS.md D5) — 순차 선택으로 시도하고, 닫힘 실패는 하드
-    실패로 끊는다(잔존 팝업은 F7 을 삼켜 팬텀 저장을 유발).
+    실측(2026-08-24 체크 프로브 — `e2e/tax_invoice_popup_check_probe.py`):
+      - 이 팝업의 '적용'은 **체크박스 열**만 읽는다 — 종전 PICKER_SELECT_JS(setCurrent+
+        setSelection 하이라이트)는 무시되어 "선택한 내역이 없습니다"로 거부됐다. 체크는
+        grid.checkItem → getCheckedRows 재독(세팅→독립확인)으로 넣는다.
+      - 종전 PICKER_APPLY_BTN_JS(부분일치 첫 버튼)는 버튼열 ['품목정보','조회','일괄적용',
+        '적용','닫기'] 에서 **'일괄적용'을 집었다** — INVOICE_QUERY_BTN_TEXTS 주석이 경고한
+        함정과 동일. 창 스코프 **정확일치** '적용'으로만 클릭한다.
+    닫힘 실패는 하드 실패로 끊고(잔존 팝업은 F7 을 삼켜 팬텀 저장), ERP 모달 문구를 사유에
+    실어 표면화한다.
     """
-    for i in indexes:
-        sel = await page.evaluate(js_lib.PICKER_SELECT_JS, i)
-        if not sel.get("ok"):
-            return await _fail_close(page, f"계산서 {i + 1}행 선택 실패: {sel}")
-        await page.wait_for_timeout(300)
-    apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
-    if not apply_box:
-        return await _fail_close(page, "계산서 팝업 '적용' 버튼을 찾지 못했습니다.")
+    chk = await page.evaluate(js.INVOICE_CHECK_ROWS_JS, indexes)
+    if not chk.get("ok"):
+        return await _fail_close(page, f"계산서 행 체크 실패: {chk.get('reason')}")
+    checked = chk.get("checked") or []
+    got = sorted(v for v in checked if isinstance(v, int))
+    if got != sorted(indexes):
+        return await _fail_close(
+            page, f"계산서 행 체크 불일치 — 요청 {sorted(indexes)} / 재독 {checked}."
+        )
     before = await _popup_count(page)
-    await mouse_click(page, apply_box["x"], apply_box["y"])
+    clicked = await page.evaluate(
+        js.CLICK_WINDOW_BUTTON_JS,
+        {"titleHints": list(INVOICE_POPUP_HINTS), "textHint": None, "label": "적용"},
+    )
+    if not clicked.get("ok"):
+        return await _fail_close(
+            page, f"계산서 팝업 '적용' 버튼을 찾지 못했습니다(버튼: {clicked.get('buttons')})."
+        )
     await _answer_modals(page, ("예", "확인"))
     closed = await verify.confirm_popup_count(page, less_than=before, timing=verify.HEAVY)
     if not closed:
-        return {"ok": False, "reason": f"계산서 적용 후 팝업이 닫히지 않았습니다 — {closed.reason}"}
+        try:
+            modals = await page.evaluate(js_lib.MODALS_SNAPSHOT_JS)
+        except Exception:  # noqa: BLE001 — 진단 실패가 원래 실패 판정을 가리면 안 된다.
+            modals = None
+        notes = [
+            str((m or {}).get("text") or (m or {}).get("title") or "")[:120]
+            for m in (modals or [])
+            if not any(h in str((m or {}).get("title") or "") for h in INVOICE_POPUP_HINTS)
+        ]
+        notes = [t for t in notes if t]
+        tail = f" · ERP 응답: {' / '.join(notes)}" if notes else ""
+        return {
+            "ok": False,
+            "reason": f"계산서 적용 후 팝업이 닫히지 않았습니다 — {closed.reason}{tail}",
+        }
     return {"ok": True, "applied": len(indexes)}
 
 
@@ -915,54 +965,160 @@ async def close_budget_status_popup(page: Any, *, max_rounds: int = 3) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # 자금과목(FUND_CD) — 관리항목 패널(PROCESS.md 검증 체인 4)
 # ══════════════════════════════════════════════════════════════════════════════
-async def fill_fund_item(page: Any, fund_name: str = DEFAULT_FUND_NAME) -> dict:
-    """관리항목 '자금과목' 행 돋보기 → 자금과목(기표) 팝업 → 텍스트 매칭 행 → 적용 → 패널 재독.
+async def _fill_mgmt_codepicker(page: Any, label: str, name: str) -> dict:
+    """관리항목 코드피커 행 공통 조작 — 돋보기 → 팝업 → 텍스트 매칭 행 → 적용 → 닫힘 확인.
 
-    계정의 관리항목 구성에 따라 **필수**다("계정의 관리항목[자금과목] 항목이 입력되지
-    않았습니다" 반려 — 2026-08-19 headed 세션). 구성별 편차를 판별할 방법이 없으므로 항상
-    채우는 것이 기본. 위젯은 캔버스 셀이 아니라 tb1 DOM 패널이고(FUND_CD 는 대응 NM 컬럼이
-    없는 hidden 백킹필드), 팝업 필드명이 미상이라 행은 텍스트 매칭으로 고른다.
+    자금과목·결제조건이 같은 위젯(tb1 DOM 패널의 `.dews-codepicker-button`)이라 한 몸을 쓴다.
+    팝업 필드명이 화면마다 달라 행은 `pick_row_by_text` 로 고른다(부분일치).
+    값 재독(세팅→독립확인)은 호출부가 라벨에 맞는 상태 JS 로 한다.
     """
-    if not await page.evaluate(_ROW_SCROLL_JS, FUND_ITEM_LABEL):
+    if not await page.evaluate(_ROW_SCROLL_JS, label):
         return {
             "ok": False,
-            "reason": "관리항목 패널에 '자금과목' 행이 없습니다(예산계정 미선택 또는 항목 구성 상이).",
+            "reason": f"관리항목 패널에 '{label}' 행이 없습니다(예산계정 미선택 또는 항목 구성 상이).",
         }
     await page.wait_for_timeout(200)
-    box = await page.evaluate(_ROW_BUTTON_JS, FUND_ITEM_LABEL)
+    box = await page.evaluate(_ROW_BUTTON_JS, label)
     if not box:
-        return {"ok": False, "reason": "자금과목 행의 코드피커 버튼을 찾지 못했습니다."}
+        return {"ok": False, "reason": f"'{label}' 행의 코드피커 버튼을 찾지 못했습니다."}
     before = await _popup_count(page)
     await mouse_click(page, box["x"], box["y"])
     opened = await verify.confirm_popup_count(page, more_than=before, timing=verify.ASYNC)
     if not opened:
-        return {"ok": False, "reason": f"자금과목(기표) 팝업이 열리지 않았습니다 — {opened.reason}"}
-    await _picker_search(page, fund_name)
-    dump = await _dump_popup_grid(page, 30)
+        return {"ok": False, "reason": f"'{label}' 팝업이 열리지 않았습니다 — {opened.reason}"}
+    await _picker_search(page, name)
+    dump = await _dump_popup_grid(page, 100)
     rows = (dump.get("grid") or {}).get("rows") or []
-    pick_i, _row = pick_row_by_text(rows, fund_name)
+    pick_i, _row = pick_row_by_text(rows, name)
     if pick_i is None:
         if len(rows) == 1:  # 검색이 단건으로 좁혀진 경우 폴백.
             pick_i = 0
         else:
-            return await _fail_close(page, f"자금과목 '{fund_name}' 매칭 행 없음(후보 {len(rows)}건)")
+            return await _fail_close(page, f"'{label}' 값 '{name}' 매칭 행 없음(후보 {len(rows)}건)")
     sel = await page.evaluate(js_lib.PICKER_SELECT_JS, pick_i)
     if not sel.get("ok"):
-        return await _fail_close(page, f"자금과목 행 선택 실패: {sel}")
+        return await _fail_close(page, f"'{label}' 행 선택 실패: {sel}")
     await page.wait_for_timeout(400)
     apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
     if not apply_box:
-        return await _fail_close(page, "자금과목 '적용' 버튼을 찾지 못했습니다.")
+        return await _fail_close(page, f"'{label}' '적용' 버튼을 찾지 못했습니다.")
     before2 = await _popup_count(page)
     await mouse_click(page, apply_box["x"], apply_box["y"])
     await _answer_modals(page, ("확인",))  # 적용 후 안내 모달 — 닫힘 판정 전에 처리(프로브 관례).
     closed = await verify.confirm_popup_count(page, less_than=before2, timing=verify.ASYNC)
     if not closed:
-        return {"ok": False, "reason": f"자금과목 적용 후 팝업이 닫히지 않았습니다 — {closed.reason}"}
-    # 세팅→독립확인: 패널 행을 재독해 값이 실제로 붙었는지 본다(빈 값이면 저장 반려로 이어진다).
-    await page.evaluate(_ROW_SCROLL_JS, FUND_ITEM_LABEL)
+        return {"ok": False, "reason": f"'{label}' 적용 후 팝업이 닫히지 않았습니다 — {closed.reason}"}
+    await page.evaluate(_ROW_SCROLL_JS, label)
     await page.wait_for_timeout(200)
+    return {"ok": True}
+
+
+async def fill_fund_item(page: Any, fund_name: str = DEFAULT_FUND_NAME) -> dict:
+    """관리항목 '자금과목' — 계정 관리항목이 요구하면 필수라 **항상** 채운다(요구 여부 판별 불가).
+
+    미입력이면 "계정의 관리항목[자금과목] 항목이 입력되지 않았습니다" 반려(2026-08-19 headed).
+    FUND_CD 는 대응 NM 컬럼이 없는 hidden 백킹필드라 값 확인은 패널 재독으로 한다.
+    """
+    picked = await _fill_mgmt_codepicker(page, FUND_ITEM_LABEL, fund_name)
+    if not picked.get("ok"):
+        return picked
+    # 세팅→독립확인: 패널 행을 재독해 값이 실제로 붙었는지 본다(빈 값이면 저장 반려로 이어진다).
     readback = await page.evaluate(_ROW_VALUES_JS, FUND_ITEM_LABEL) or {}
     if not (readback.get("found") and (readback.get("code") or readback.get("name"))):
         return {"ok": False, "reason": f"자금과목 적용 후 패널 값이 비어 있습니다 — {readback}"}
     return {"ok": True, "code": readback.get("code"), "name": readback.get("name")}
+
+
+async def fill_settlement_terms(page: Any, name: str = DEFAULT_SETTLEMENT_TERMS) -> dict:
+    """관리항목 '결제조건'(TERPAY_CD) — **계정이 요구할 때만** 코드피커로 채운다.
+
+    자금예정일과 같은 계정별 필수 편차다: 증빙 04·13(발행 후·비과세)은 미입력 시 "계정의
+    관리항목[결제조건] 항목이 입력되지 않았습니다"로 F7 이 반려되고, 03/06/07/11 계정은 없어도
+    저장된다(2026-08-25 실측). 그래서 라벨 td 의 `required` + 값 없음일 때만 쓴다.
+
+    기본값 '당월 결제'(C000) 는 D8 사용자 확정 '당월결제' 그대로다 — 종전 PROCESS.md 의
+    "환경 카탈로그에 없음" 메모는 오류였다(실측 16종 중 실재, `tax_invoice_settlement_terms_probe`).
+    """
+    state = await page.evaluate(js.MGMT_CODE_ROW_STATE_JS, SETTLEMENT_TERMS_LABEL) or {}
+    if not state.get("found"):
+        return {"ok": True, "skipped": "행 없음(이 계정의 관리항목이 아님)"}
+    if not state.get("required"):
+        return {"ok": True, "skipped": "필수 아님 — 임의 결제조건을 넣지 않는다"}
+    if state.get("code") or state.get("text"):
+        return {"ok": True, "skipped": "이미 채워짐", "code": state.get("code")}
+    if not state.get("hasCodepicker"):
+        return {"ok": False, "reason": f"'{SETTLEMENT_TERMS_LABEL}' 행에 코드피커가 없습니다 — {state}"}
+    picked = await _fill_mgmt_codepicker(page, SETTLEMENT_TERMS_LABEL, name)
+    if not picked.get("ok"):
+        return picked
+    again = await page.evaluate(js.MGMT_CODE_ROW_STATE_JS, SETTLEMENT_TERMS_LABEL) or {}
+    if not (again.get("code") or again.get("text")):
+        return {
+            "ok": False,
+            "reason": f"'{SETTLEMENT_TERMS_LABEL}' 적용 후에도 값이 비어 있습니다 — {again}",
+        }
+    return {"ok": True, "code": again.get("code"), "name": again.get("text")}
+
+
+def _iso_date(value: str) -> str | None:
+    """날짜 문자열 → 'YYYY-MM-DD'(한국 날짜 기준). 파싱 불가는 None(호출부가 판단).
+
+    ⚠ ERP 그리드는 날짜를 **KST 자정을 UTC 로 표기**해 돌려준다 — 계산서일 2026-08-14 가
+    '2026-08-13 15:00:00+00:00' 로 온다(2026-08-25 실측). 앞 10자만 자르면 **하루 밀린다**.
+    tz 가 붙어 있으면 KST(+09:00)로 환산한 뒤 날짜를 뽑는다.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) == 8 and text.isdigit():
+        return f"{text[0:4]}-{text[4:6]}-{text[6:8]}"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone(timedelta(hours=9)))
+    return parsed.date().isoformat()
+
+
+async def fill_fund_due_date(page: Any, date_value: str) -> dict:
+    """관리항목 '자금예정일' — **계정이 요구할 때만** 채운다(Kendo datepicker).
+
+    자금과목과 같은 계정별 관리항목 편차다: 증빙 04(발행 후·비과세)는 미입력이면 "계정의
+    관리항목[자금예정일] 항목이 입력되지 않았습니다"로 F7 이 반려되지만, 03/06/07 계정은
+    이 항목 없이도 저장된다(2026-08-25 실측).
+
+    그래서 **항상 쓰지 않는다** — 라벨 td 의 `required` 클래스로 ERP 가 요구하는 계정에서만,
+    그리고 값이 비어 있을 때만 쓴다. 요구하지 않는 계정에 임의 날짜를 넣으면 자금계획이
+    사실과 달라지기 때문이다. 값은 호출부가 준다(회계일 = 발행 후는 계산서일, 발행 전은 폼 입력).
+
+    반환 {ok, skipped?, reason?, value?} — 행이 없거나 필수가 아니면 skipped 로 ok.
+    """
+    state = await page.evaluate(js.MGMT_DATE_ROW_STATE_JS, FUND_DUE_DATE_LABEL) or {}
+    if not state.get("found"):
+        return {"ok": True, "skipped": "행 없음(이 계정의 관리항목이 아님)"}
+    if not state.get("required"):
+        return {"ok": True, "skipped": "필수 아님 — 임의 값으로 자금계획을 바꾸지 않는다"}
+    if state.get("value"):
+        return {"ok": True, "skipped": "이미 채워짐", "value": state.get("value")}
+    if not state.get("hasDatePicker"):
+        return {"ok": False, "reason": f"'{FUND_DUE_DATE_LABEL}' 행에 날짜 위젯이 없습니다 — {state}"}
+    iso = _iso_date(date_value)
+    if not iso:
+        return {
+            "ok": False,
+            "reason": (
+                f"'{FUND_DUE_DATE_LABEL}' 은 이 계정에서 필수인데 넣을 날짜가 없습니다"
+                f"(받은 값 {date_value!r})."
+            ),
+        }
+    await page.evaluate(_ROW_SCROLL_JS, FUND_DUE_DATE_LABEL)
+    await page.wait_for_timeout(200)
+    setr = await page.evaluate(js.MGMT_DATE_ROW_SET_JS, {"label": FUND_DUE_DATE_LABEL, "date": iso})
+    if not setr.get("ok"):
+        return {"ok": False, "reason": f"'{FUND_DUE_DATE_LABEL}' 세팅 실패 — {setr.get('reason')}"}
+    # 세팅→독립확인 — 위젯이 값을 삼키는 경우가 있어 재독으로만 성공을 인정한다.
+    again = await page.evaluate(js.MGMT_DATE_ROW_STATE_JS, FUND_DUE_DATE_LABEL) or {}
+    if not str(again.get("value") or "").strip():
+        return {"ok": False, "reason": f"'{FUND_DUE_DATE_LABEL}' 세팅 후에도 값이 비어 있습니다 — {again}"}
+    return {"ok": True, "value": again.get("value"), "via": setr.get("via")}

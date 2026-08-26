@@ -442,8 +442,41 @@ def test_balance_and_orphan_row_helpers():
         {"NOTE_DC": "분할행2", "SPPRC_AMT2": None},  # 미리 만든 빈 행(고아).
         {"NOTE_DC": None, "SPPRC_AMT2": 42_000},  # 차액반영이 만든 잔액행.
     ]
-    assert steps.balance_row_index(rows) == 2
+    assert steps.balance_row_index(rows, 2) == 2
     assert steps.orphan_row_indexes(rows) == [1]
+
+
+def test_balance_row_index_finds_row_whose_note_erp_prefilled():
+    """실측(2026-08-25 split_balance_row_probe): 차액반영 행의 적요는 비어 있지 않고
+    **문서 적요가 복사**돼 온다 — 적요로 찾던 종전 규칙은 항상 None 이었다."""
+    rows = [
+        {"NOTE_DC": "분할1", "SPPRC_AMT2": 600_000},
+        {"NOTE_DC": "분할2", "SPPRC_AMT2": None},  # 우리가 만든 더미(금액 없음).
+        {"NOTE_DC": "문서적요", "SPPRC_AMT2": 600_000},  # ERP 가 만든 잔액행.
+    ]
+    assert steps.balance_row_index(rows, 2) == 2
+    # 적요 기반이었다면 못 찾았을 상황임을 함께 못박는다.
+    assert all(str(r.get("NOTE_DC") or "").strip() for r in rows if r.get("SPPRC_AMT2"))
+
+
+def test_balance_row_index_none_when_no_new_row_created():
+    """차액반영이 행을 안 만들었으면 None — 엉뚱한 행 적요를 덮어쓰지 않는다."""
+    rows = [
+        {"NOTE_DC": "분할1", "SPPRC_AMT2": 600_000},
+        {"NOTE_DC": "분할2", "SPPRC_AMT2": None},
+    ]
+    assert steps.balance_row_index(rows, 2) is None
+
+
+def test_balance_row_index_ignores_rows_before_the_cut():
+    """직전 행수 이전의 금액 있는 행(우리가 넣은 명시행)은 잔액행이 아니다."""
+    rows = [
+        {"NOTE_DC": "분할1", "SPPRC_AMT2": 600_000},
+        {"NOTE_DC": "분할2", "SPPRC_AMT2": None},
+        {"NOTE_DC": "문서적요", "SPPRC_AMT2": 600_000},
+    ]
+    assert steps.balance_row_index(rows, 0) == 0  # cut 이 0 이면 첫 금액행을 집는다(경계 확인)
+    assert steps.balance_row_index(rows, 2) == 2  # 올바른 cut 이면 잔액행
 
 
 # ── open_invoice_list — 게이트 닫힘 검증 + 팝업 창 스코프 조회 실행 ────────────────
@@ -739,6 +772,108 @@ async def test_close_budget_status_popup_ignores_other_popups():
     assert page.clicks == []
 
 
+# ── fill_budget_by_name — 적용 직후 '예산현황' 창 정리(2026-08-25 증빙 05 실측) ────
+def _patch_budget_apply(monkeypatch, order: list[str], *, budget_status: dict):
+    """fill_budget_by_name 의 협력자를 전부 스텁 — 예산현황 정리 호출 순서만 본다.
+
+    실물 실패 모드: 예산잔액이 모자란 계정은 '적용' 직후 예산현황 창을 띄우고, 그 창이 남으면
+    팝업 개수 판정이 **피커 미닫힘으로 오판**한다. 그래서 닫기는 닫힘 판정 *앞*이어야 한다.
+    """
+
+    async def _picker_open(page, field, label):
+        order.append("open")
+        return {"ok": True}
+
+    async def _pick(page, name, fields, chooser):
+        order.append("pick")
+        return {"i": 0, "BG_CD": "2006|500|511003600", "BG_NM": name}, None
+
+    async def _answer(page, labels):
+        order.append("modals")
+        return []
+
+    async def _close_status(page, **kw):
+        order.append("budget_status")
+        return budget_status
+
+    async def _count(page):
+        return 1
+
+    def _cell(page, field):
+        async def _read():
+            return {"ok": True, "raw": {"BG_NM": "인사기획팀"}}
+
+        return _read
+
+    async def _fail(page, reason):
+        order.append("fail_close")
+        return {"ok": False, "reason": reason}
+
+    class _Ok:
+        mismatch = False
+        reason = None
+
+        def __bool__(self) -> bool:
+            return True
+
+    async def _confirm(*a, **k):
+        order.append("confirm_cell")
+        return _Ok()
+
+    async def _confirm_count(page, **kw):
+        order.append("confirm_popup_count")
+        return _Ok()
+
+    monkeypatch.setattr(steps, "_open_detail_cell_picker", _picker_open)
+    monkeypatch.setattr(steps, "_search_and_pick", _pick)
+    monkeypatch.setattr(steps, "_answer_modals", _answer)
+    monkeypatch.setattr(steps, "close_budget_status_popup", _close_status)
+    monkeypatch.setattr(steps, "_popup_count", _count)
+    monkeypatch.setattr(steps, "_read_detail_cell", _cell)
+    monkeypatch.setattr(steps, "_fail_close", _fail)
+    monkeypatch.setattr(steps, "mouse_click", lambda *a, **k: _noop())
+    monkeypatch.setattr(steps.verify, "confirm", _confirm)
+    monkeypatch.setattr(steps.verify, "confirm_popup_count", _confirm_count)
+
+    class _Page:
+        async def evaluate(self, js_src, arg=None):
+            if js_src == js_lib.PICKER_SELECT_JS:
+                return {"ok": True}
+            if js_src == js_lib.PICKER_APPLY_BTN_JS:
+                return {"x": 1, "y": 1}
+            return None
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+    return _Page()
+
+
+async def _noop():
+    return None
+
+
+async def test_fill_budget_by_name_closes_budget_status_before_close_check(monkeypatch):
+    # 예산현황 정리는 팝업 개수(닫힘) 판정보다 **앞**이어야 한다 — 뒤면 오판이 그대로 남는다.
+    order: list[str] = []
+    page = _patch_budget_apply(monkeypatch, order, budget_status={"ok": True, "closed": 1})
+    out = await steps.fill_budget_by_name(page, "인사기획팀")
+    assert out["ok"] is True
+    assert order.index("budget_status") < order.index("confirm_popup_count")
+
+
+async def test_fill_budget_by_name_fails_when_budget_status_stuck(monkeypatch):
+    # 예산현황 창을 못 닫으면 조용히 넘기지 않는다 — 잔존 창은 F7 을 삼켜 팬텀 저장이 된다.
+    order: list[str] = []
+    page = _patch_budget_apply(
+        monkeypatch, order, budget_status={"ok": False, "reason": "확인 버튼 없음"}
+    )
+    out = await steps.fill_budget_by_name(page, "인사기획팀")
+    assert out["ok"] is False
+    assert "예산현황" in out["reason"] and "확인 버튼 없음" in out["reason"]
+    assert "confirm_popup_count" not in order
+
+
 # ── fill_fund_item — 관리항목 '자금과목' 채움(브라우저 스텝, page 스텁) ──────────
 class _FundPage:
     """자금과목 채움 시뮬 — 관리항목 패널 3종 JS + 팝업 개수(돋보기(10,10)=열림/적용(20,20)=닫힘)."""
@@ -855,9 +990,12 @@ def test_fixture_promoted_lockstep():
     assert fx is not None
     assert fx["workflow_id"] == "tax-invoice"
     assert fx["flow_graph"] is not None
-    # 상신 수동 + 발행 후 실데이터 검증 미완 명시(handoff_note 계약).
+    # handoff_note 계약: 상신은 수동 + 남은 주의사항 고지.
+    # ⚠ 2026-08-25 갱신 — 종전엔 "발행 후 실데이터 검증 미완"을 고지했으나 10종 전부 제품 경로
+    # 완주 검증이 끝나 사실이 아니게 됐다. 지금 남은 주의는 분할 잔액행 적요뿐이다.
     assert "상신" in fx["handoff_note"] and "직접" in fx["handoff_note"]
-    assert "검증 미완" in fx["handoff_note"]
+    assert "적요" in fx["handoff_note"] and "분할" in fx["handoff_note"]
+    assert "검증 미완" not in fx["handoff_note"]
     # steps 의 key 순서 = build_tax_invoice_graph 노드 등록 순서(그래프와 lockstep).
     step_keys = [s["key"] for s in fx["steps"]]
     assert step_keys == [
@@ -993,6 +1131,9 @@ def _patch_fill_ok(monkeypatch, calls: list[str]):
     monkeypatch.setattr(fill_mod.steps, "fill_exempt_reason", _rec("exempt"))
     monkeypatch.setattr(fill_mod.doc_steps, "set_acct_date", _rec("acct_date"))
     monkeypatch.setattr(fill_mod.steps, "fill_fund_item", _rec("fund", {"name": "일반경비"}))
+    # 발행 전 경로도 자금예정일을 거친다 — 요구 안 하는 계정에선 skipped 로 no-op 이다.
+    monkeypatch.setattr(fill_mod.steps, "fill_fund_due_date", _rec("fund_due", {"skipped": "필수 아님"}))
+    monkeypatch.setattr(fill_mod.steps, "fill_settlement_terms", _rec("terms", {"skipped": "필수 아님"}))
 
 
 async def test_fill_node_pre_order(monkeypatch):
@@ -1002,7 +1143,9 @@ async def test_fill_node_pre_order(monkeypatch):
     plan = parse_tax_invoice_params(_ti(actg_date="2026-08-14"))
     out = await node(_state(plan))
     assert out.get("filled") == 1
-    assert calls == ["partner", "note", "budget", "amount", "project", "acct_date", "fund"]
+    assert calls == [
+        "partner", "note", "budget", "amount", "project", "acct_date", "fund", "fund_due", "terms",
+    ]
     assert_keys_declared(TaxInvoiceState, out)
 
 
@@ -1220,8 +1363,8 @@ async def test_pick_invoices_node_reports_empty_period(monkeypatch):
     assert "전자발행 계산서가 없습니다" in out["error"] and "조회 2회" in out["error"]
 
 
-# ── apply_invoices — 적용 + 행별 채움(1건 확정 / 복수 순차 ❓) ─────────────────────
-def _patch_apply(monkeypatch, calls: list[str], rowcounts: list[int]):
+# ── apply_invoices — 적용 + 행별 채움(첫 적용=F3 빈 행 채움, 이후 1행씩 추가 — 2026-08-24 실측) ──
+def _patch_apply(monkeypatch, calls: list[str], rowcounts: list[int], partner_cell: str = ""):
     def _rec(name, extra=None):
         async def _f(*a, **k):
             calls.append(name)
@@ -1238,13 +1381,30 @@ def _patch_apply(monkeypatch, calls: list[str], rowcounts: list[int]):
             except StopIteration:
                 return rowcounts[-1]
 
+    def _cell(page, field):
+        async def _read():
+            return {"ok": True, "value": partner_cell}
+
+        return _read
+
+    monkeypatch.setattr(apply_mod.steps, "_read_detail_cell", _cell)
     monkeypatch.setattr(apply_mod.steps, "apply_invoice_rows", _rec("apply"))
     monkeypatch.setattr(apply_mod.steps, "set_row_note", _rec("note"))
     monkeypatch.setattr(apply_mod.steps, "fill_budget_by_name", _rec("budget"))
     monkeypatch.setattr(apply_mod.steps, "fill_project", _rec("project"))
     monkeypatch.setattr(apply_mod.steps, "fill_exempt_reason", _rec("exempt"))
     monkeypatch.setattr(apply_mod.steps, "fill_fund_item", _rec("fund", {"name": "일반경비"}))
+    # 자금예정일 — 계정이 요구할 때만 값이 붙는다(요구 안 하면 skipped 로 ok).
+    monkeypatch.setattr(
+        apply_mod.steps, "fill_fund_due_date", _rec("fund_due", {"value": "2026-08-04"})
+    )
+    # 결제조건 — 계정이 요구할 때만 값이 붙는다(요구 안 하면 skipped 로 ok).
+    monkeypatch.setattr(
+        apply_mod.steps, "fill_settlement_terms", _rec("terms", {"name": "당월 결제"})
+    )
     monkeypatch.setattr(apply_mod.steps, "open_invoice_list", _rec("reopen", {"rows": _POPUP_ROWS}))
+    # 회계일 — 마스터 필드라 전 행 반영이 끝난 뒤 **한 번만** 세팅된다.
+    monkeypatch.setattr(apply_mod.doc_steps, "set_acct_date", _rec("acct_date"))
     return _P()
 
 
@@ -1252,53 +1412,71 @@ def _sel(no: int, **over) -> dict:
     base = {
         "no": no, "index": no - 1, "budget_unit_name": "임원실", "budget_unit_code": "1000",
         "project_wbs": "800", "project_name": "공통", "note": f"적요{no}",
-        "grid_row": {"ntsAprvlNo": _POPUP_ROWS[no - 1].get("NTS_APRVL_NO"), "partnerName": ""},
+        "grid_row": {
+            "ntsAprvlNo": _POPUP_ROWS[no - 1].get("NTS_APRVL_NO"),
+            "partnerName": "",
+            # 회계일(D9) 원천 — 행마다 다른 날짜를 줘 '가장 늦은 날' 선택이 검증되게 한다.
+            "invoiceDate": f"2026-08-0{no}",
+        },
     }
     base.update(over)
     return base
 
 
 async def test_apply_invoices_node_single_row_sequence(monkeypatch):
-    calls: list[str] = []
-    page = _patch_apply(monkeypatch, calls, [0, 1])
-    node = apply_mod.make_apply_invoices_node()
-    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1)]})
-    assert out.get("filled") == 1
-    assert calls == ["apply", "note", "budget", "project", "fund"]
-    assert_keys_declared(TaxInvoiceState, out)
-
-
-async def test_apply_invoices_node_multi_rows_are_sequential(monkeypatch):
-    # ❓ 복수 적용 구조 미실측 — 1건씩 적용하고 2건째는 재조회+승인번호 재매칭으로 잡는다.
-    calls: list[str] = []
-    page = _patch_apply(monkeypatch, calls, [0, 1, 1, 2])
-    node = apply_mod.make_apply_invoices_node()
-    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1), _sel(2)]})
-    assert out.get("filled") == 1
-    assert calls == [
-        "apply", "note", "budget", "project", "fund",
-        "reopen", "apply", "note", "budget", "project", "fund",
-    ]
-
-
-async def test_apply_invoices_node_fails_when_detail_row_not_created(monkeypatch):
-    # 적용 후 상세 행이 안 늘면 다음 채움이 엉뚱한 행을 친다 — 그 자리에서 끊는다.
+    # 첫 적용은 F3 빈 행을 채운다(행수 1→1 — 2026-08-24 체크 프로브 실측).
     calls: list[str] = []
     page = _patch_apply(monkeypatch, calls, [1, 1])
     node = apply_mod.make_apply_invoices_node()
     out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1)]})
-    assert "상세 행이 늘지 않았습니다" in out["error"]
+    assert out.get("filled") == 1
+    assert calls == ["apply", "note", "budget", "project", "fund", "fund_due", "terms", "acct_date"]
+    assert_keys_declared(TaxInvoiceState, out)
+
+
+async def test_apply_invoices_node_multi_rows_are_sequential(monkeypatch):
+    # 1건씩 적용하고 2건째는 재조회+승인번호 재매칭 — 기대 행수는 적용 누계(1, 2, …).
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 1, 1, 2])
+    node = apply_mod.make_apply_invoices_node()
+    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1), _sel(2)]})
+    assert out.get("filled") == 1
+    assert calls == [
+        "apply", "note", "budget", "project", "fund", "fund_due", "terms",
+        "reopen", "apply", "note", "budget", "project", "fund", "fund_due", "terms",
+        "acct_date",  # 마스터 필드 — 행 루프가 다 끝난 뒤 한 번만.
+    ]
+
+
+async def test_apply_invoices_node_fails_on_unexpected_rowcount(monkeypatch):
+    # 적용 후 행수가 기대(적용 누계)와 다르면 다음 채움이 엉뚱한 행을 친다 — 그 자리에서 끊는다.
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 2])
+    node = apply_mod.make_apply_invoices_node()
+    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1)]})
+    assert "기대와 다릅니다" in out["error"]
+    assert "note" not in calls
+
+
+async def test_apply_invoices_node_fails_on_partner_mismatch(monkeypatch):
+    # 적용된 행의 거래처가 선택 계산서와 다르면(체크 행≠적용 행 오작동) 하드 실패.
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 1], partner_cell="다른거래처(주)")
+    node = apply_mod.make_apply_invoices_node()
+    sel = _sel(1, grid_row={"ntsAprvlNo": "", "partnerName": "코웨이(주)"})
+    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [sel]})
+    assert "거래처가 선택과 다릅니다" in out["error"]
     assert "note" not in calls
 
 
 async def test_apply_invoices_node_exempt_reason_row(monkeypatch):
     calls: list[str] = []
-    page = _patch_apply(monkeypatch, calls, [0, 1])
+    page = _patch_apply(monkeypatch, calls, [1, 1])
     node = apply_mod.make_apply_invoices_node()
     plan = _post_plan(tax="exempt")
     out = await node({**_state(plan), "page": page, "invoice_selection": [_sel(1)]})
     assert out.get("filled") == 1
-    assert calls == ["apply", "note", "budget", "project", "exempt", "fund"]
+    assert calls == ["apply", "note", "budget", "project", "exempt", "fund", "fund_due", "terms", "acct_date"]
 
 
 async def test_apply_invoices_node_skips_for_pre():
@@ -1466,3 +1644,341 @@ def test_classify_post_apply_unknown_window_is_dialog():
 def test_classify_post_apply_none():
     assert steps.classify_post_apply_modals([]) == ("none", [])
     assert steps.classify_post_apply_modals(None) == ("none", [])
+
+
+# ── fill_fund_due_date — 관리항목 '자금예정일'(계정별 필수, Kendo datepicker) ─────
+# 실측 2026-08-25: 증빙 04 계정은 미입력 시 F7 반려, 03/06/07 계정은 행이 필수가 아니다.
+class _DueDatePage:
+    """자금예정일 행 상태를 흉내내는 page 스텁 — 세팅하면 value 가 채워진다(재독 검증용)."""
+
+    def __init__(self, *, found: bool = True, required: bool = True,
+                 has_picker: bool = True, value: str = "", set_ok: bool = True,
+                 set_applies: bool = True) -> None:
+        self._state = {"found": found, "required": required,
+                       "hasDatePicker": has_picker, "value": value}
+        self._set_ok = set_ok
+        self._set_applies = set_applies
+        self.set_calls: list = []
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == ti_js.MGMT_DATE_ROW_STATE_JS:
+            return dict(self._state)
+        if js_src == ti_js.MGMT_DATE_ROW_SET_JS:
+            self.set_calls.append(arg)
+            if not self._set_ok:
+                return {"ok": False, "reason": "no-datepicker"}
+            if self._set_applies:
+                self._state["value"] = arg["date"]
+            return {"ok": True, "via": "kendo", "value": arg["date"]}
+        if js_src == steps._ROW_SCROLL_JS:
+            return True
+        return None
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+async def test_fill_fund_due_date_sets_when_account_requires_it():
+    page = _DueDatePage(required=True, value="")
+    out = await steps.fill_fund_due_date(page, "20260804")
+    assert out["ok"] is True and out["value"] == "2026-08-04"
+    assert page.set_calls == [{"label": "자금예정일", "date": "2026-08-04"}]
+
+
+async def test_fill_fund_due_date_accepts_dashed_date():
+    page = _DueDatePage()
+    out = await steps.fill_fund_due_date(page, "2026-08-04")
+    assert out["ok"] is True and page.set_calls[0]["date"] == "2026-08-04"
+
+
+async def test_fill_fund_due_date_skips_when_not_required():
+    # 요구하지 않는 계정(03/06/07)에 임의 날짜를 넣으면 자금계획이 사실과 달라진다 — 쓰지 않는다.
+    page = _DueDatePage(required=False)
+    out = await steps.fill_fund_due_date(page, "20260804")
+    assert out["ok"] is True and "필수 아님" in out["skipped"]
+    assert page.set_calls == []
+
+
+async def test_fill_fund_due_date_skips_when_row_absent():
+    page = _DueDatePage(found=False)
+    out = await steps.fill_fund_due_date(page, "20260804")
+    assert out["ok"] is True and "행 없음" in out["skipped"]
+    assert page.set_calls == []
+
+
+async def test_fill_fund_due_date_leaves_existing_value():
+    page = _DueDatePage(value="2026-01-01")
+    out = await steps.fill_fund_due_date(page, "20260804")
+    assert out["ok"] is True and out["skipped"] == "이미 채워짐"
+    assert page.set_calls == []
+
+
+async def test_fill_fund_due_date_fails_when_required_but_no_date_given():
+    # 필수인데 넣을 날짜가 없으면 조용히 넘기지 않는다 — 그대로 두면 F7 이 반려된다.
+    page = _DueDatePage(required=True)
+    out = await steps.fill_fund_due_date(page, "")
+    assert out["ok"] is False and "필수인데 넣을 날짜가 없습니다" in out["reason"]
+
+
+async def test_fill_fund_due_date_fails_when_value_not_reflected():
+    # 세팅→독립확인 — 위젯이 값을 삼키면 성공으로 인정하지 않는다.
+    page = _DueDatePage(set_applies=False)
+    out = await steps.fill_fund_due_date(page, "20260804")
+    assert out["ok"] is False and "값이 비어 있습니다" in out["reason"]
+
+
+async def test_fill_fund_due_date_converts_erp_utc_timestamp_to_kst_date():
+    """ERP 는 KST 자정을 UTC 로 표기해 준다 — 앞 10자만 자르면 하루 밀린다(2026-08-25 실측)."""
+    page = _DueDatePage()
+    out = await steps.fill_fund_due_date(page, "2026-08-13 15:00:00+00:00")
+    assert out["ok"] is True
+    assert page.set_calls[0]["date"] == "2026-08-14"
+
+
+async def test_fill_fund_due_date_rejects_unparseable_value():
+    page = _DueDatePage()
+    out = await steps.fill_fund_due_date(page, "언젠가")
+    assert out["ok"] is False and "넣을 날짜가 없습니다" in out["reason"]
+
+
+# ── fill_settlement_terms — 관리항목 '결제조건'(TERPAY_CD, 계정별 필수) ───────────
+class _TermsPage:
+    """결제조건 행 상태 스텁 — _fill_mgmt_codepicker 는 monkeypatch 로 갈아끼운다."""
+
+    def __init__(self, *, found: bool = True, required: bool = True,
+                 has_picker: bool = True, code: str = "", text: str = "") -> None:
+        self._state = {"found": found, "required": required,
+                       "hasCodepicker": has_picker, "code": code, "text": text}
+        self.applied = False
+
+    def apply(self) -> None:
+        self._state["code"] = "C000"
+        self._state["text"] = "당월 결제"
+
+    async def evaluate(self, js_src, arg=None):
+        if js_src == ti_js.MGMT_CODE_ROW_STATE_JS:
+            return dict(self._state)
+        return None
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def _patch_terms_picker(monkeypatch, page: "_TermsPage", *, ok: bool = True, applies: bool = True):
+    async def _picker(p, label, name):
+        page.applied = True
+        if ok and applies:
+            page.apply()
+        return {"ok": True} if ok else {"ok": False, "reason": "팝업이 열리지 않았습니다"}
+
+    monkeypatch.setattr(steps, "_fill_mgmt_codepicker", _picker)
+
+
+async def test_fill_settlement_terms_sets_default_when_required(monkeypatch):
+    page = _TermsPage()
+    _patch_terms_picker(monkeypatch, page)
+    out = await steps.fill_settlement_terms(page)
+    assert out["ok"] is True and out["code"] == "C000" and out["name"] == "당월 결제"
+
+
+async def test_fill_settlement_terms_skips_when_not_required(monkeypatch):
+    # 03/06/07/11 계정은 요구하지 않는다 — 임의 결제조건을 넣지 않는다.
+    page = _TermsPage(required=False)
+    _patch_terms_picker(monkeypatch, page)
+    out = await steps.fill_settlement_terms(page)
+    assert out["ok"] is True and "필수 아님" in out["skipped"]
+    assert page.applied is False
+
+
+async def test_fill_settlement_terms_skips_when_already_set(monkeypatch):
+    page = _TermsPage(code="C333", text="자동이체")
+    _patch_terms_picker(monkeypatch, page)
+    out = await steps.fill_settlement_terms(page)
+    assert out["ok"] is True and out["skipped"] == "이미 채워짐" and out["code"] == "C333"
+    assert page.applied is False
+
+
+async def test_fill_settlement_terms_fails_when_value_not_reflected(monkeypatch):
+    # 세팅→독립확인 — 적용했는데 값이 안 붙으면 성공으로 인정하지 않는다.
+    page = _TermsPage()
+    _patch_terms_picker(monkeypatch, page, applies=False)
+    out = await steps.fill_settlement_terms(page)
+    assert out["ok"] is False and "값이 비어 있습니다" in out["reason"]
+
+
+# ── 분할 후 배부행 관리항목 — 분할은 새 detail 행을 만들어 원본행 값이 없다 ────────
+async def test_split_node_fills_mgmt_items_on_every_detail_row(monkeypatch):
+    """13(비과세·분할) F7 반려의 원인 — 배부비용행에도 결제조건·자금예정일이 필요하다.
+
+    2026-08-25 실측: apply_invoices 는 원본행에만 채우는데 분할이 행을 새로 만든다.
+    과세(11) 계정은 요구하지 않아 통과했고 비과세(13) 만 반려됐다.
+    """
+    calls: list[str] = []
+
+    def _rec(name, extra=None):
+        async def _f(*a, **k):
+            calls.append(name)
+            return {"ok": True, **(extra or {})}
+
+        return _f
+
+    grid = [{"NOTE_DC": "행1", "SPPRC_AMT2": 42_000}, {"NOTE_DC": "행2", "SPPRC_AMT2": 42_000}]
+
+    async def fake_dump(page):
+        return grid
+
+    for name in ("open_split_popup", "add_split_row", "set_split_note", "set_split_amount",
+                 "select_split_row", "delete_split_row", "fill_split_picker", "confirm_split_apply"):
+        monkeypatch.setattr(split_mod.steps, name, _rec(name))
+    monkeypatch.setattr(split_mod.steps, "apply_balance", _rec("apply_balance", {"rows": grid}))
+    monkeypatch.setattr(split_mod.steps, "dump_split_rows", fake_dump)
+    monkeypatch.setattr(split_mod.steps, "close_budget_status_popup", _rec("budget_status", {"closed": 0}))
+    monkeypatch.setattr(split_mod.steps, "fill_settlement_terms", _rec("terms"))
+    monkeypatch.setattr(split_mod.steps, "fill_fund_due_date", _rec("fund_due"))
+
+    selected: list[int] = []
+
+    async def _sel(page, idx):
+        selected.append(idx)
+        return True
+
+    monkeypatch.setattr(split_mod, "select_detail_row", _sel)
+    monkeypatch.setattr(split_mod, "_detail_rowcount", lambda page: _acount(3))
+
+    plan = _post_plan(split=True, split_rows=None)
+    split_plan = [
+        {"note": "행1", "amount": 42_000, "cost_center": "A", "project_wbs": "800"},
+        {"note": "행2", "amount": None, "cost_center": "B", "project_wbs": "800"},
+    ]
+    node = split_mod.make_split_costs_node()
+    out = await node({
+        **_state(plan),
+        "split_plan": split_plan,
+        "invoice_selection": [{"grid_row": {"invoiceDate": "2026-08-04"}}],
+    })
+    assert out.get("split_done") is True
+    assert selected == [0, 1, 2]  # 배부행 포함 전 행을 돈다.
+    assert calls.count("terms") == 3 and calls.count("fund_due") == 3
+
+
+async def _acount(n: int) -> int:
+    return n
+
+
+async def test_split_node_fails_when_detail_row_select_fails(monkeypatch):
+    """행 선택이 실패하면 엉뚱한 행에 관리항목을 쓰지 않고 끊는다."""
+    calls: list[str] = []
+
+    def _rec(name, extra=None):
+        async def _f(*a, **k):
+            calls.append(name)
+            return {"ok": True, **(extra or {})}
+
+        return _f
+
+    grid = [{"NOTE_DC": "행1", "SPPRC_AMT2": 42_000}, {"NOTE_DC": "행2", "SPPRC_AMT2": 42_000}]
+
+    async def fake_dump(page):
+        return grid
+
+    for name in ("open_split_popup", "add_split_row", "set_split_note", "set_split_amount",
+                 "select_split_row", "delete_split_row", "fill_split_picker", "confirm_split_apply"):
+        monkeypatch.setattr(split_mod.steps, name, _rec(name))
+    monkeypatch.setattr(split_mod.steps, "apply_balance", _rec("apply_balance", {"rows": grid}))
+    monkeypatch.setattr(split_mod.steps, "dump_split_rows", fake_dump)
+    monkeypatch.setattr(split_mod.steps, "close_budget_status_popup", _rec("budget_status", {"closed": 0}))
+    monkeypatch.setattr(split_mod.steps, "fill_settlement_terms", _rec("terms"))
+    monkeypatch.setattr(split_mod.steps, "fill_fund_due_date", _rec("fund_due"))
+
+    async def _sel_fail(page, idx):
+        return False
+
+    monkeypatch.setattr(split_mod, "select_detail_row", _sel_fail)
+    monkeypatch.setattr(split_mod, "_detail_rowcount", lambda page: _acount(2))
+
+    node = split_mod.make_split_costs_node()
+    out = await node({
+        **_state(_post_plan(split=True, split_rows=None)),
+        "split_plan": [
+            {"note": "행1", "amount": 42_000, "cost_center": "A", "project_wbs": "800"},
+            {"note": "행2", "amount": None, "cost_center": "B", "project_wbs": "800"},
+        ],
+    })
+    assert "배부행 선택" in out.get("error", "")
+    assert calls.count("terms") == 0
+
+
+# ── D9 회계일 — 발행 후는 선택 계산서 중 **가장 늦은** 계산서일 ────────────────────
+def test_latest_invoice_date_picks_max_not_first():
+    """복수 선택이면 최댓값이다 — 목록 순서(첫 행)가 아니다."""
+    sel = [
+        {"grid_row": {"invoiceDate": "2026-08-04"}},
+        {"grid_row": {"invoiceDate": "2026-08-19"}},
+        {"grid_row": {"invoiceDate": "2026-08-11"}},
+    ]
+    assert apply_mod.latest_invoice_date(sel) == "2026-08-19"
+
+
+def test_latest_invoice_date_converts_erp_utc_timestamp():
+    """ERP 는 KST 자정을 UTC 로 준다 — 앞 10자만 자르면 하루 밀린다."""
+    sel = [{"grid_row": {"invoiceDate": "2026-08-13 15:00:00+00:00"}}]
+    assert apply_mod.latest_invoice_date(sel) == "2026-08-14"
+
+
+def test_latest_invoice_date_none_when_unreadable():
+    assert apply_mod.latest_invoice_date([{"grid_row": {}}]) is None
+    assert apply_mod.latest_invoice_date([]) is None
+
+
+async def test_apply_invoices_node_sets_acct_date_to_latest(monkeypatch):
+    """세팅값이 '가장 늦은 계산서일' 인지 — compact/dashed 두 인자를 그대로 검증한다."""
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 1, 1, 2])
+    seen: list[tuple] = []
+
+    async def _set(p, compact, dashed):
+        seen.append((compact, dashed))
+        return {"ok": True}
+
+    monkeypatch.setattr(apply_mod.doc_steps, "set_acct_date", _set)
+    node = apply_mod.make_apply_invoices_node()
+    # _sel(n) 의 계산서일은 2026-08-0n — 2건 선택이면 늦은 쪽(08-02)이어야 한다.
+    out = await node({
+        **_state(_post_plan()), "page": page, "invoice_selection": [_sel(1), _sel(2)],
+    })
+    assert out.get("filled") == 1
+    assert seen == [("20260802", "2026-08-02")]
+
+
+async def test_apply_invoices_node_warns_when_invoice_date_missing(monkeypatch):
+    """계산서일을 못 읽으면 조용히 넘기지 않는다 — 회계일이 실행일로 남으면 귀속월이 틀어진다."""
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 1])
+    called: list[str] = []
+
+    async def _set(p, compact, dashed):
+        called.append(compact)
+        return {"ok": True}
+
+    monkeypatch.setattr(apply_mod.doc_steps, "set_acct_date", _set)
+    node = apply_mod.make_apply_invoices_node()
+    out = await node({
+        **_state(_post_plan()), "page": page,
+        "invoice_selection": [_sel(1, grid_row={"partnerName": ""})],
+    })
+    assert called == []  # 임의 날짜를 넣지 않는다.
+    assert "회계일" in (out.get("fill_warnings") or [])
+
+
+async def test_apply_invoices_node_fails_when_acct_date_rejected(monkeypatch):
+    """회계일 세팅이 거부되면(마감월 등) 하드 실패 — 잘못된 귀속월로 저장하지 않는다."""
+    calls: list[str] = []
+    page = _patch_apply(monkeypatch, calls, [1, 1])
+
+    async def _set(p, compact, dashed):
+        return {"ok": False, "reason": "마감된 회계월입니다"}
+
+    monkeypatch.setattr(apply_mod.doc_steps, "set_acct_date", _set)
+    node = apply_mod.make_apply_invoices_node()
+    out = await node({**_state(_post_plan()), "page": page, "invoice_selection": [_sel(1)]})
+    assert "회계일" in out.get("error", "") and "마감된 회계월" in out["error"]

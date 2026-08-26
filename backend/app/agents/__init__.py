@@ -18,7 +18,7 @@ from .expense_card import build_expense_card_chat_graph
 from .gyeongjo_grant.graph import GYEONGJO_GUBUN_LABEL, build_gyeongjo_grant_graph
 from .hakjagum_grant.graph import HAKJAGUM_GUBUN_LABEL, build_hakjagum_grant_graph
 from .purchase_order.graph import build_purchase_order_graph
-from .tax_invoice.graph import build_tax_invoice_graph
+from .tax_invoice.graph import TAX_INVOICE_GUBUN_LABEL, build_tax_invoice_graph
 from .trip_domestic.graph import TRIP_GUBUN_LABEL, build_trip_domestic_graph
 from .trip_overseas.graph import TRIP_GUBUN_LABEL as TRIP_OVERSEAS_GUBUN_LABEL
 from .trip_overseas.graph import build_trip_overseas_graph
@@ -54,6 +54,9 @@ for _cid, _label, _fg in (
     ("card-collect-cleanup", "카드", "52"),  # card_collect/graph.py:77 리터럴과 동일.
     ("gyeongjo-grant-cleanup", GYEONGJO_GUBUN_LABEL, "55"),
     ("hakjagum-grant-cleanup", HAKJAGUM_GUBUN_LABEL, "56"),
+    # 세금계산서 51 — e2e phase2(erp_verify_and_delete)가 이 FG 로 하루치 전표를 실제로
+    # 조회·삭제해 검증한 값이다(2026-08-25 RN202608250001~ / RN20260805…).
+    ("tax-invoice-cleanup", TAX_INVOICE_GUBUN_LABEL, "51"),
 ):
     _cleanup_graph = build_doc_cleanup_graph(_label, _fg)
     register_workflow(_cid, (lambda g: (lambda: g))(_cleanup_graph), delay_scale=0.4)

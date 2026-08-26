@@ -144,6 +144,36 @@ CLICK_WINDOW_BUTTON_JS = """({ titleHints, textHint, label }) => {
   return { ok: true, title: titles[idx], label, buttons: labels };
 }"""
 
+# 전자세금계산서 팝업 행 **체크** — '적용'은 체크박스 열(check bar)만 읽는다(2026-08-24 체크
+# 프로브 실측). setCurrent/setSelection 하이라이트는 무시되어 "선택한 내역이 없습니다"가 뜬다.
+# grid.checkItem(i, true) 로 체크하고 getCheckedRows 재독값을 함께 돌려준다(세팅→독립확인 재료).
+# 그리드는 제목 스코프 + 행수 최대(steps.best_invoice_grid 와 같은 규칙)로 고른다.
+INVOICE_CHECK_ROWS_JS = """(indexes) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const wins = [...document.querySelectorAll('.k-window')].filter(w => w.offsetParent !== null);
+  const titles = wins.map(w => c((w.querySelector('.k-window-title')||{}).innerText));
+  let idx = -1;
+  for (let i = wins.length - 1; i >= 0; i--) {
+    if (/전자세금계산서|전자계산서/.test(titles[i])) { idx = i; break; }
+  }
+  if (idx < 0) return { ok:false, reason:'no-popup', titles };
+  let best = null, bestN = -1;
+  for (const el of [...wins[idx].querySelectorAll('.dews-ui-grid')]) {
+    try { const g = window.jQuery(el).data('dewsControl')._grid;
+      const n = g.getDataSource().getRowCount();
+      if (n > bestN) { best = g; bestN = n; }
+    } catch (e) {}
+  }
+  if (!best) return { ok:false, reason:'no-grid' };
+  try {
+    for (const i of indexes) {
+      if (i < 0 || i >= bestN) return { ok:false, reason:'row-out-of-range(' + i + '/' + bestN + ')' };
+      best.checkItem(i, true);
+    }
+    return { ok:true, checked: JSON.parse(JSON.stringify(best.getCheckedRows())), rows: bestN };
+  } catch (e) { return { ok:false, reason:String(e).slice(0, 120) }; }
+}"""
+
 # 전자세금계산서 팝업 조회기간 세팅 — decoy 없는 DOM input(native setter + input/change 발화,
 # split_probe 실측 검증). 날짜는 'YYYY-MM-DD'.
 SET_INVOICE_PERIOD_JS = """({ from, to }) => {
@@ -203,3 +233,70 @@ PROGRESS_VISIBLE_JS = """() => [...document.querySelectorAll('*')].some(e => e.o
 NEUTRAL_HEADER_BOX_JS = """() => { const h = [...document.querySelectorAll('*')].find(e => e.offsetParent!==null
   && (e.innerText||'').trim()==='결의서입력'); if(!h) return null;
   const r = h.getBoundingClientRect(); return {x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2)}; }"""
+
+
+# ── 관리항목(tb1) '자금예정일' — 계정에 따라 **필수**인 날짜 항목 ───────────────────
+# 실측(2026-08-25 `tax_invoice_fund_due_date_probe`, 증빙 04 계정):
+#   <tr id="B22"><td class="required">자금예정일</td>
+#     <td><input class="dews-ui-textbox readonly" data-target="DUMMY" readonly></td>
+#     <td><span class="k-datepicker"><input class="dews-ui-datepicker" data-role="datepicker"
+#         data-target="MNGD_NM"></span></td></tr>
+# 자금과목과 달리 **코드피커 버튼이 없다**(hasCodepickerButton=false) — 그래서 _ROW_BUTTON_JS
+# 경로로는 잡히지 않는다. 필수 여부는 라벨 td 의 `required` 클래스가 알려 준다(자금과목도 동일).
+MGMT_DATE_ROW_STATE_JS = """(label) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const td = [...document.querySelectorAll('td')].find(e => e.offsetParent!==null && c(e.innerText)===label);
+  if (!td) return { found:false };
+  const tr = td.closest('tr');
+  const input = tr && tr.querySelector('input.dews-ui-datepicker, input[data-role="datepicker"]');
+  return {
+    found: true,
+    required: td.classList.contains('required'),
+    hasDatePicker: !!input,
+    value: input ? c(input.value) : null,
+  };
+}"""
+
+# 값 세팅 — Kendo datepicker 위젯 API 우선(모델까지 갱신), 없으면 native setter + 이벤트 발화.
+# 반환값의 value 는 참고용이고, 판정은 호출부가 MGMT_DATE_ROW_STATE_JS 로 **재독**해서 한다.
+MGMT_DATE_ROW_SET_JS = """({ label, date }) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const td = [...document.querySelectorAll('td')].find(e => e.offsetParent!==null && c(e.innerText)===label);
+  if (!td) return { ok:false, reason:'no-row' };
+  const tr = td.closest('tr');
+  const input = tr && tr.querySelector('input.dews-ui-datepicker, input[data-role="datepicker"]');
+  if (!input) return { ok:false, reason:'no-datepicker' };
+  const p = String(date).split('-').map(Number);
+  if (p.length !== 3 || p.some(isNaN)) return { ok:false, reason:'bad-date:' + date };
+  try {
+    const w = window.jQuery ? window.jQuery(input).data('kendoDatePicker') : null;
+    if (w) { w.value(new Date(p[0], p[1] - 1, p[2])); w.trigger('change'); }
+    else {
+      const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      d.set.call(input, date);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  } catch (e) { return { ok:false, reason:String(e).slice(0,120) }; }
+  return { ok:true, via: (window.jQuery && window.jQuery(input).data('kendoDatePicker')) ? 'kendo' : 'native',
+           value: c(input.value) };
+}"""
+
+
+# 관리항목 **코드피커** 행 상태(자금과목·결제조건 등) — 필수 여부와 현재 값만 읽는다.
+# 값은 코드 input(.dews-codepicker-code)과 표시 input(#undefined_text) 둘 다 본다.
+MGMT_CODE_ROW_STATE_JS = """(label) => {
+  const c = s => String(s==null?'':s).replace(/\\s+/g,' ').trim();
+  const td = [...document.querySelectorAll('td')].find(e => e.offsetParent!==null && c(e.innerText)===label);
+  if (!td) return { found:false };
+  const tr = td.closest('tr');
+  const code = tr.querySelector('input.dews-codepicker-code');
+  const text = tr.querySelector('input.dews-codepicker-text');
+  return {
+    found: true,
+    required: td.classList.contains('required'),
+    hasCodepicker: !!tr.querySelector('.dews-codepicker-button'),
+    code: code ? c(code.value) : null,
+    text: text ? c(text.value) : null,
+  };
+}"""

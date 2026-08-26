@@ -16,10 +16,17 @@ from __future__ import annotations
 
 import time
 
+from app.agents.card_collect.mgmt_items import _select_detail_row as select_detail_row
 from app.live.events import emit_log, emit_step
+from nbkit.omnisol import js_lib
 from nbkit.patterns import emit_shot
 
 from .. import steps
+
+
+async def _detail_rowcount(page) -> int:
+    n = await page.evaluate(js_lib.DETAIL_ROWCOUNT_JS)
+    return n if isinstance(n, int) else -1
 
 
 def _ms(t0: float) -> int:
@@ -99,11 +106,23 @@ def make_split_costs_node():
             if not r.get("ok"):
                 return await fail("차액반영", r.get("reason"))
             grid_rows = r.get("rows") or []
-            bal_idx = steps.balance_row_index(grid_rows)
+            # 차액반영은 **새 행을 뒤에 만든다** — 직전 행수(명시행 + 더미 1) 이후가 잔액행이다.
+            # 적요로 찾으면 안 된다: ERP 가 그 행에 **문서 적요를 복사**해 넣는다(실측).
+            bal_idx = steps.balance_row_index(grid_rows, dummy_idx + 1)
             if bal_idx is not None:  # 잔액행 적요는 정리 **전**에 채운다(순서 민감 — 실측).
                 r = await steps.set_split_note(page, bal_idx, last["note"])
                 if not r.get("ok"):
                     return await fail("잔액행 적요", r.get("reason"))
+            else:
+                # 조용히 넘기지 않는다 — 못 찾으면 사용자가 입력한 마지막 행 적요가 반영되지
+                # 않은 채 저장된다(2026-08-25 RN202608250010 에서 실제로 그랬다).
+                await emit_log(
+                    events,
+                    f"⚠ 잔액행을 특정하지 못해 마지막 분할행 적요 '{last['note']}' 를 넣지 못했습니다 "
+                    f"(차액반영 후 {len(grid_rows)}행, 기대 인덱스 ≥{dummy_idx + 1}) "
+                    "— 금액 배분은 정상이며, 저장 후 ERP 에서 적요만 확인해 주세요.",
+                    "warn",
+                )
             grid_rows = await steps.dump_split_rows(page)
             # 잉여(금액 공백) 행 정리 — 뒤에서부터 삭제(인덱스 흔들림 방지).
             for oi in sorted(steps.orphan_row_indexes(grid_rows), reverse=True):
@@ -146,6 +165,25 @@ def make_split_costs_node():
             return await fail("예산현황 창 정리", bs.get("reason"))
         if bs.get("closed"):
             await emit_log(events, f"'예산현황' 창 {bs['closed']}장을 닫았습니다.", "info")
+
+        # 6) 배부비용행의 계정 관리항목 — 분할이 **새 detail 행을 만들기 때문에**, apply_invoices
+        #    가 원본행에만 채운 결제조건·자금예정일이 새 행에는 없다. 비과세 계정(13)은 그래서
+        #    "계정의 관리항목[결제조건] …" 으로 F7 이 반려됐다(2026-08-25 실측 — 과세 11 은 그
+        #    계정이 요구하지 않아 통과했다). 행마다 선택해 **요구하는 것만** 채운다(둘 다 gated).
+        due_date = ""
+        for sel in state.get("invoice_selection") or []:
+            due_date = (sel.get("grid_row") or {}).get("invoiceDate") or ""
+            break
+        n_rows = await _detail_rowcount(page)
+        for i in range(max(0, n_rows)):
+            if not await select_detail_row(page, i):
+                return await fail(f"배부행 선택(행 {i + 1})", "상세 행을 선택하지 못했습니다.")
+            st = await steps.fill_settlement_terms(page)
+            if not st.get("ok"):
+                return await fail(f"배부행 결제조건(행 {i + 1})", st.get("reason"))
+            dd = await steps.fill_fund_due_date(page, due_date)
+            if not dd.get("ok"):
+                return await fail(f"배부행 자금예정일(행 {i + 1})", dd.get("reason"))
         await emit_shot(events.put, page)
         await emit_step(events, "split_costs", "done", _ms(t0))
         return {"split_done": True}

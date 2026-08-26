@@ -68,7 +68,8 @@ function todayLocal(): string {
 
 interface Seed {
   answers: QuestionAnswers;
-  partner: string;
+  /** 거래처 — ERP 등록명과 **정확히 일치**해야 저장되므로 자유 입력이 아니라 카탈로그 선택이다. */
+  partner: { code: string; name: string };
   supplyAmount: string;
   budgetUnit: { code: string; name: string };
   project: { code: string; name: string };
@@ -81,7 +82,7 @@ interface Seed {
 function seedFromParams(initial: Record<string, unknown> | undefined): Seed {
   const empty: Seed = {
     answers: defaultAnswers(),
-    partner: '',
+    partner: { code: '', name: '' },
     supplyAmount: '',
     budgetUnit: { code: '', name: '' },
     project: { code: '', name: '' },
@@ -105,12 +106,14 @@ function seedFromParams(initial: Record<string, unknown> | undefined): Seed {
     invoiceTo: issue === 'after' ? asIsoDate(p.period_to) || fallbackRange.invoiceTo : '',
   };
 
+  const partnerName = asString(p.partner_name);
   const budgetName = asString(p.budget_unit_name);
   const projectWbs = asString(p.project_wbs);
 
   return {
     answers,
-    partner: asString(p.partner_name),
+    // 복원은 이름만 남는다(카탈로그 code 미보존) — 예산단위와 같은 관례로 code 에 이름을 넣는다.
+    partner: partnerName ? { code: partnerName, name: partnerName } : empty.partner,
     supplyAmount: typeof p.supply_amount === 'number' ? String(p.supply_amount) : '',
     // 복원은 이름만 남는다(카탈로그 code 미보존) — code 에 같은 값을 넣어 표시를 살린다.
     budgetUnit: budgetName ? { code: budgetName, name: budgetName } : empty.budgetUnit,
@@ -136,13 +139,29 @@ export function TaxInvoicePreRunForm({ agent, disabled, initialParams, onStart }
   const isAfter = answers.issue === 'after';
   const isSplit = isAfter && answers.split === 'split';
 
-  // ── 카탈로그(예산단위·프로젝트) — 자주쓰는 1회 로드 + ERP 검색 ────────────
+  // ── 카탈로그(거래처·예산단위·프로젝트) — 자주쓰는 1회 로드 + ERP 검색 ──────
+  const [partnerFavs, setPartnerFavs] = useState<ComboOption[]>([]);
   const [budgetFavs, setBudgetFavs] = useState<ComboOption[]>([]);
   const [projectFavs, setProjectFavs] = useState<ComboOption[]>([]);
 
   useEffect(() => {
     let alive = true;
     void (async () => {
+      try {
+        const favs = await fetchFavorites('partner');
+        if (alive) {
+          setPartnerFavs(
+            favs.map((f) => ({
+              code: f.code,
+              name: f.name,
+              sub: f.extra?.bizNo ?? undefined,
+              isDefault: f.isDefault,
+            })),
+          );
+        }
+      } catch {
+        /* 자주쓰는 거래처 없음 — 검색만 사용 */
+      }
       try {
         const favs = await fetchFavorites('budget_unit');
         if (alive) {
@@ -180,6 +199,18 @@ export function TaxInvoicePreRunForm({ agent, disabled, initialParams, onStart }
     };
   }, []);
 
+  const searchPartners = useCallback(async (q: string): Promise<ComboOption[]> => {
+    // 거래처 카탈로그는 q 없이는 목록을 주지 않는다(me_codes.py) — 빈 검색어는 왕복하지 않는다.
+    if (!q.trim()) return [];
+    const page = await fetchCatalog({ kind: 'partner', q, limit: SEARCH_LIMIT });
+    return page.items.map((c) => ({
+      code: c.code,
+      name: c.name,
+      // 동명이인 거래처 구분 — 사업자번호를 보조 표기로 노출한다.
+      sub: c.extra?.bizNo ?? undefined,
+    }));
+  }, []);
+
   const searchBudget = useCallback(async (q: string): Promise<ComboOption[]> => {
     const page = await fetchCatalog({ kind: 'budget_unit', q, dept: 'all', limit: SEARCH_LIMIT });
     return page.items.map((c) => ({
@@ -205,7 +236,7 @@ export function TaxInvoicePreRunForm({ agent, disabled, initialParams, onStart }
   // 입력항목은 **발행 전 경로에만** 있다 — 발행 후는 행마다 값이 달라 개입 그리드가 받는다.
   const beforeOk =
     !isBefore ||
-    (!!partner.trim() &&
+    (!!partner.name.trim() &&
       parsedSupply !== null &&
       parsedSupply !== 0 &&
       !!acctDate &&
@@ -238,7 +269,7 @@ export function TaxInvoicePreRunForm({ agent, disabled, initialParams, onStart }
         split: isSplit,
         period_from: isAfter ? answers.invoiceFrom : null,
         period_to: isAfter ? answers.invoiceTo : null,
-        partner_name: isBefore ? partner.trim() : null,
+        partner_name: isBefore ? partner.name.trim() : null,
         supply_amount: isBefore ? parsedSupply : null,
         // 발행 후 항목은 행별로 달라 개입 그리드가 받는다(HITL rows) — 폼에서는 비운다.
         budget_unit_name: isBefore ? budgetUnit.name : null,
@@ -291,14 +322,16 @@ export function TaxInvoicePreRunForm({ agent, disabled, initialParams, onStart }
               id="tax-invoice-partner"
               label="거래처명"
               required
-              hint="ERP 등록 이름과 정확히 일치해야 합니다 — '(주)' 포함 여부까지 그대로."
+              hint="ERP 등록 거래처에서 고릅니다 — 이름·코드·사업자번호로 검색하세요."
             >
-              <Input
-                id="tax-invoice-partner"
+              <CatalogCombobox
                 value={partner}
+                placeholder="거래처 검색"
+                favorites={partnerFavs}
                 disabled={disabled}
-                placeholder="예: 코웨이(주)"
-                onChange={(e) => setPartner(e.target.value)}
+                search={searchPartners}
+                onSelect={(o) => setPartner({ code: o.code, name: o.name })}
+                onClear={() => setPartner({ code: '', name: '' })}
               />
             </FormField>
 
