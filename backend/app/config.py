@@ -46,9 +46,14 @@ class Settings(BaseSettings):
     erp_base: str = "https://erp.ninebell.co.kr"
     # 로그인 검증(단발·짧음)과 워크플로우 실행(브라우저 전 구간·HITL 대기로 길다)의 동시성을
     # 분리한다. 단일 세마포어 공유 시 장기 실행이 세마포어를 점유해 짧은 로그인이 최대 hitl_timeout
-    # 만큼 블로킹됐다(역커플링). 실행은 헤드리스 브라우저 슬롯이라 더 낮게 잡는다.
+    # 만큼 블로킹됐다(역커플링).
+    # 2026-08-26 실행 상한 2→30(사용자 지시 — 다계정 동시 사용 대비). ⚠ 브라우저 1개 ≈
+    # 0.6~1.0GB(infra/aws/variables.tf 실측 주석)라 30이 실제로 차면 18~30GB — 현 Fargate
+    # 태스크(4vCPU/16GB)에서는 OOM→재시작 루프 위험. 동접이 실제로 늘면 태스크 사양 상향이
+    # 선행돼야 한다. 로그인 세마포어(3)는 유지 — 동시 기동 시 로그인 구간의 CPU 스파이크를
+    # 자연 스로틀하는 역할이라 함께 올리지 않는다(대기일 뿐 실패 아님).
     max_concurrent_erp_logins: int = 3
-    max_concurrent_erp_runs: int = 2
+    max_concurrent_erp_runs: int = 30
 
     # 헤드리스 Chromium 실행 인자(공백 구분). env CHROMIUM_ARGS. 로컬 dev 는 빈값(기본 동작).
     # ⚠ 컨테이너/Fargate 는 /dev/shm 조절 불가 → "--disable-dev-shm-usage --no-sandbox" 필수.
