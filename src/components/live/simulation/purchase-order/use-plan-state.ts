@@ -51,6 +51,10 @@ export interface PlanState {
   toggleAll: (codes: readonly string[], on: boolean) => void;
   /** 선택 모듈 → 발주단위 카드 생성(BOM 순서 유지) + 생성 즉시 선택 해제. */
   groupSelected: () => void;
+  /** 선택 모듈을 **기존** 발주단위에 추가(BOM 순서 병합) + 선택 해제 — 패턴 미매칭 모듈을
+   *  새 발주로만 묶을 수 있던 갭 해소(사용자 요청 2026-08-26). 구매사유는 건드리지 않는다
+   *  (생성 시 1회 시드 규칙과 동일 — 이후 모듈 증감이 문구를 덮지 않는다). */
+  addSelectedToUnit: (unitId: string) => void;
   patchUnit: (id: string, patch: Partial<Pick<OrderUnit, 'purchaseReason' | 'dueDate'>>) => void;
   patchVendor: (id: string, vendorClass: string, patch: VendorEdit) => void;
   /** 모듈을 풀로 복귀 — 마지막 모듈 제거면 카드 자체를 지운다. */
@@ -132,6 +136,22 @@ export function usePlanState(
     setSelected(new Set<string>());
   };
 
+  const addSelectedToUnit = (id: string) => {
+    if (selected.size === 0) return;
+    setUnits((prev) =>
+      prev.map((u) => {
+        if (u.id !== id) return u;
+        // BOM 순서로 병합 — 기존 코드와 선택 코드의 합집합을 bom.modules 순서로 다시 깐다.
+        const member = new Set([...u.moduleCodes, ...selected]);
+        return {
+          ...u,
+          moduleCodes: bom.modules.filter((m) => member.has(m.itemCode)).map((m) => m.itemCode),
+        };
+      }),
+    );
+    setSelected(new Set<string>());
+  };
+
   const patchUnit = (id: string, patch: Partial<Pick<OrderUnit, 'purchaseReason' | 'dueDate'>>) =>
     setUnits((prev) =>
       prev.map((u) =>
@@ -199,6 +219,7 @@ export function usePlanState(
     toggle,
     toggleAll,
     groupSelected,
+    addSelectedToUnit,
     patchUnit,
     patchVendor,
     removeModule,

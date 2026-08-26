@@ -3,10 +3,25 @@
 import { useMemo, useState } from 'react';
 import { RiArrowDownSLine, RiArrowRightSLine, RiStackLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select-dropdown';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
 import { formatInteger } from '@/lib/data/format';
-import { moduleAmount, selectionTotals, vendorMixOf, type BomModule, type PlanBom } from './model';
+import {
+  moduleAmount,
+  selectionTotals,
+  unitModuleSummary,
+  vendorMixOf,
+  type BomModule,
+  type OrderUnit,
+  type PlanBom,
+} from './model';
 import { MiniChip, PartsTable, RowCheckbox, SimSectionHeader, Td, Th } from './ui';
 
 interface ModulePoolTableProps {
@@ -19,8 +34,10 @@ interface ModulePoolTableProps {
   onToggleAll: (codes: readonly string[], next: boolean) => void;
   /** 선택된 모듈들을 발주단위로 묶는다(호출부가 선택 해제까지 처리). */
   onGroup: () => void;
-  /** 만들어진 발주단위 수 — 하단 요약(발주단위 스탯)용. */
-  unitCount: number;
+  /** 현재 발주단위 목록 — '기존 발주에 추가' 대상 선택지 + 하단 요약. */
+  units: readonly OrderUnit[];
+  /** 선택된 모듈들을 기존 발주단위에 추가한다(호출부가 선택 해제까지 처리). */
+  onAddToUnit: (unitId: string) => void;
 }
 
 /**
@@ -37,8 +54,10 @@ export function ModulePoolTable({
   onToggle,
   onToggleAll,
   onGroup,
-  unitCount,
+  units,
+  onAddToUnit,
 }: ModulePoolTableProps) {
+  const unitCount = units.length;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set<string>());
 
   const toggleExpand = (code: string) =>
@@ -71,9 +90,9 @@ export function ModulePoolTable({
   const unassigned = bom.modules.length - assigned.size;
 
   return (
-    <section className="flex flex-col gap-3">
+    // 단락 간 여백(mt-4 + 부모 gap-4 = 2rem)이 구획 구분자다 — 번호 배지 대신(2026-08-26).
+    <section className="mt-4 flex flex-col gap-3">
       <SimSectionHeader
-        step={2}
         title="모듈 풀 — 발주단위로 묶을 모듈 선택"
         prompt="함께 저장할 3레벨 모듈을 체크해 발주단위로 묶으세요. 한 발주단위가 구매요청 저장 1회 = 발주번호 1건이 됩니다."
       />
@@ -161,10 +180,30 @@ export function ModulePoolTable({
             </span>
           </span>
         </p>
-        <Button size="sm" onClick={onGroup} disabled={sel.modules === 0}>
-          <RiStackLine size={14} aria-hidden />
-          발주단위로 묶기
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* 기존 발주에 추가 — 패턴 미매칭 모듈을 새 발주로만 묶을 수 있던 갭 해소(2026-08-26).
+              Select 를 액션 트리거로 쓴다 — value 를 '' 로 고정해 고르는 즉시 추가되고
+              플레이스홀더로 되돌아온다(선택 상태를 남기지 않는 원샷 액션). */}
+          <Select value="" onValueChange={onAddToUnit} disabled={sel.modules === 0 || unitCount === 0}>
+            <SelectTrigger
+              aria-label="선택한 모듈을 기존 발주단위에 추가"
+              className="h-8 px-3 text-[length:var(--text-body-sm)]"
+            >
+              <SelectValue placeholder="기존 발주에 추가" />
+            </SelectTrigger>
+            <SelectContent>
+              {units.map((u) => (
+                <SelectItem key={u.id} value={u.id}>
+                  발주 {u.seq} — {u.purchaseReason.trim() || unitModuleSummary(bom, u) || '이름 없음'}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" onClick={onGroup} disabled={sel.modules === 0}>
+            <RiStackLine size={14} aria-hidden />
+            새 발주단위로 묶기
+          </Button>
+        </div>
       </div>
     </section>
   );
