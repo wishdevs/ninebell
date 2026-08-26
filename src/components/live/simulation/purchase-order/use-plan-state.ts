@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { BaseDateKey, BaseDates, PatternGroup } from '@/lib/purchase/order-patterns';
-import { defaultUnifiedVendors } from './catalog';
+import { defaultUnifiedVendors, type VendorCategory } from './catalog';
 import {
   assignedSeqMap,
   defaultPurchaseReasonOf,
@@ -81,13 +81,17 @@ export function usePlanState(
   bom: PlanBom,
   project: { code: string; name: string } | null,
   patterns: readonly PatternGroup[],
+  vendorCategories: readonly VendorCategory[],
 ): PlanState {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
   // 시드는 1회 — units 는 이후 편집되지만, 미매칭 안내는 시드 시점 그대로 고정한다.
   const [seed] = useState(() => matchPatternUnits(bom, patterns));
   const [units, setUnits] = useState<readonly OrderUnit[]>(seed.units);
   const [baseDates, setBaseDates] = useState<BaseDates>({});
-  const [unifiedVendors, setUnifiedVendors] = useState<UnifiedVendors>(defaultUnifiedVendors);
+  // 통합 지정 초기값도 시드 1회 — 후보 목록 갱신이 작성 중 상태를 덮지 않는다.
+  const [unifiedVendors, setUnifiedVendors] = useState<UnifiedVendors>(() =>
+    defaultUnifiedVendors(vendorCategories),
+  );
 
   const assigned = useMemo(() => assignedSeqMap(units), [units]);
   // 거래처 그룹 파생값이 기준일을 타므로(예외 납기) 합계·게이트도 baseDates 에 의존한다.

@@ -10,6 +10,7 @@
   ② fuel-calc.ts DEFAULT_FUEL_CLASSES     ↔ app/services/agent_settings.py
   ③ gyeongjo-pre-run-form.tsx supplyAmount ↔ app/agents/gyeongjo_grant/params.py
   ④ order-patterns.default.json 기본 9그룹 ↔ app/services/agent_settings.py
+  ⑤ vendor-options.default.json 거래처 후보 ↔ app/services/agent_settings.py
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from app.agents.gyeongjo_grant.params import supply_amount
 from app.services.agent_settings import (
     DEFAULT_FUEL_CLASSES,
     DEFAULT_ORDER_PATTERNS,
+    DEFAULT_VENDOR_OPTIONS,
     MAX_GROUP_EXCEPTIONS,
     MAX_GROUP_MODULES,
     MAX_OFFSET_WEEKS,
@@ -40,6 +42,7 @@ _FUEL_CALC = _REPO_ROOT / "src" / "lib" / "trip" / "fuel-calc.ts"
 _GYEONGJO_FORM = _REPO_ROOT / "src" / "components" / "live" / "pre-run" / "gyeongjo-pre-run-form.tsx"
 _ORDER_PATTERNS_TS = _REPO_ROOT / "src" / "lib" / "purchase" / "order-patterns.ts"
 _ORDER_PATTERNS_JSON = _REPO_ROOT / "src" / "lib" / "purchase" / "order-patterns.default.json"
+_VENDOR_OPTIONS_JSON = _REPO_ROOT / "src" / "lib" / "purchase" / "vendor-options.default.json"
 
 
 def _read(path: Path) -> str:
@@ -220,3 +223,13 @@ def test_order_patterns_constants_parity():
         if _ts_const(src, name) != be
     }
     assert not drift, f"발주 패턴 상수 드리프트 — {{이름: (FE, BE)}} = {drift}"
+
+
+# ── ⑤ 통합 지정 거래처 후보 기본값(vendor-options.default.json ↔ agent_settings.py) ──
+def test_vendor_options_defaults_mirror_parity():
+    """FE 기본 거래처 후보 JSON 이 백엔드 DEFAULT_VENDOR_OPTIONS 와 재귀 동일해야 한다."""
+    fe = json.loads(_read(_VENDOR_OPTIONS_JSON))
+    assert fe == DEFAULT_VENDOR_OPTIONS, (
+        "거래처 후보 기본값 FE/BE 드리프트 — 계획서 콤보박스와 저장 폴백이 갈라집니다.\n"
+        f"  FE(vendor-options.default.json): {fe}\n  BE(agent_settings.py): {DEFAULT_VENDOR_OPTIONS}"
+    )

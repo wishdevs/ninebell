@@ -693,6 +693,113 @@ def order_patterns_for(stored: dict | None) -> dict:
     return {"groups": groups} if groups else copy.deepcopy(DEFAULT_ORDER_PATTERNS)
 
 
+# ── 통합 지정 거래처 후보(구매발주) ──────────────────────────────────────────
+# 계획서 '통합 지정'과 발주단위 거래처 그룹 콤보박스의 **분류별 후보 목록** — 관리자가
+# 추가/삭제한다(menu_items 와 동일 패턴, 2026-08-26 사용자 요청). 종전에는 프론트
+# catalog.ts 에 하드코딩돼 있었다(자리표시 코드 V-11xx — ERP 로 나가는 값은 이름뿐이라
+# 코드는 저장하지 않는다). 분류 키는 BOM 품목거래처명과 같은 고정 3종이다.
+VENDOR_OPTIONS_KEY = "vendor_options"
+VENDOR_CLASSES: tuple[str, ...] = ("가공품", "판금품", "주식회사 오텍")
+MAX_VENDOR_OPTIONS_PER_CLASS = 30
+MAX_VENDOR_NAME_LEN = 60
+
+# ⚠ 프론트 미러: src/lib/purchase/vendor-options.ts 의 DEFAULT_VENDOR_OPTIONS 와 값이
+#   같아야 한다(order_patterns 의 기본 9그룹과 같은 이중 리터럴 관례).
+DEFAULT_VENDOR_OPTIONS: dict = {
+    "가공품": [
+        {"name": "우신테크"},
+        {"name": "제이테크"},
+        {"name": "한국메카트로닉스"},
+        {"name": "해룡엔지니어링", "isDefault": True},
+    ],
+    "판금품": [
+        {"name": "알파테크", "isDefault": True},
+        {"name": "부성엘티에스"},
+        {"name": "브이피시스템"},
+        {"name": "이레코리아"},
+    ],
+    "주식회사 오텍": [
+        {"name": "주식회사 오텍", "isDefault": True},
+        {"name": "피르스트"},
+        {"name": "훈원테크"},
+    ],
+}
+
+
+def _validate_vendor_class_rows(vendor_class: str, value: object) -> list[dict]:
+    """한 분류의 후보 목록 검증 → 정규화 [{name, isDefault}] . 위반 시 ValueError(한국어).
+
+    최소 1행·최대 MAX, 이름 중복 금지, 기본 거래처는 정확히 1개(누락 시 첫 행으로 보정).
+    """
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"'{vendor_class}' 거래처를 최소 1개 이상 등록하세요.")
+    if len(value) > MAX_VENDOR_OPTIONS_PER_CLASS:
+        raise ValueError(
+            f"'{vendor_class}' 거래처는 최대 {MAX_VENDOR_OPTIONS_PER_CLASS}개까지 등록할 수 있습니다."
+        )
+    out: list[dict] = []
+    seen: set[str] = set()
+    default_count = 0
+    for i, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ValueError(f"'{vendor_class}' {i + 1}번째 거래처의 형식을 확인하세요.")
+        name = str(row.get("name") or "").strip()
+        if not name or len(name) > MAX_VENDOR_NAME_LEN:
+            raise ValueError(
+                f"'{vendor_class}' {i + 1}번째 거래처 이름을 확인하세요(1~{MAX_VENDOR_NAME_LEN}자)."
+            )
+        is_default = row.get("isDefault", False)
+        if not isinstance(is_default, bool):
+            raise ValueError(f"'{vendor_class}' {i + 1}번째 거래처의 기본 표시는 불리언이어야 합니다.")
+        if name in seen:
+            raise ValueError(f"'{vendor_class}' 거래처 이름이 중복됩니다: {name}")
+        seen.add(name)
+        if is_default:
+            default_count += 1
+        out.append({"name": name, "isDefault": is_default})
+    if default_count > 1:
+        raise ValueError(f"'{vendor_class}' 기본 거래처는 1개만 지정할 수 있습니다.")
+    if default_count == 0:
+        out[0] = {**out[0], "isDefault": True}
+    return out
+
+
+def _validate_vendor_options(value: object) -> dict:
+    """관리자 입력 vendor_options 검증 → 정규화 {분류: [{name,isDefault}]}. 위반 시 ValueError.
+
+    분류 키는 고정 3종 전부 필수 — 일부만 보내면 나머지 분류가 비어 계획서가 무너진다.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("거래처 후보 형식을 확인하세요.")
+    unknown = [k for k in value if k not in VENDOR_CLASSES]
+    if unknown:
+        raise ValueError(f"알 수 없는 거래처 분류입니다: {', '.join(unknown)}")
+    out: dict = {}
+    for vendor_class in VENDOR_CLASSES:
+        out[vendor_class] = _validate_vendor_class_rows(vendor_class, value.get(vendor_class))
+    return out
+
+
+def vendor_options_for(stored: dict | None) -> dict:
+    """저장된 거래처 후보 또는 기본값. 실효 설정·직렬화 공용.
+
+    **분류 단위 관대** 파서 — 한 분류가 깨져도 나머지는 살리고, 깨진 분류만 기본값으로
+    폴백한다(order_patterns 의 그룹 단위 관대와 같은 방침).
+    """
+    raw = (stored or {}).get(VENDOR_OPTIONS_KEY)
+    raw = raw if isinstance(raw, dict) else {}
+    out: dict = {}
+    for vendor_class in VENDOR_CLASSES:
+        try:
+            out[vendor_class] = _validate_vendor_class_rows(vendor_class, raw.get(vendor_class))
+        except ValueError:
+            # 기본값도 검증기를 통과시켜 isDefault 누락을 정규화한다(리터럴은 default 만 표기).
+            out[vendor_class] = _validate_vendor_class_rows(
+                vendor_class, DEFAULT_VENDOR_OPTIONS[vendor_class]
+            )
+    return out
+
+
 # 에이전트 id → 설정 항목 정의 목록. 스키마가 없는 에이전트는 설정 기능 자체가 없다.
 AGENT_SETTINGS_SCHEMA: dict[str, list[SettingDef]] = {
     "corporate-card": [
@@ -745,6 +852,10 @@ _AGENTS_WITH_MENU_ITEMS: frozenset[str] = frozenset({"voucher-by-type"})
 # order_patterns 목록 입력을 허용한다. ⚠ **에이전트 id** 기준(workflow id 아님).
 _AGENTS_WITH_ORDER_PATTERNS: frozenset[str] = frozenset({"purchase-order"})
 
+# 통합 지정 거래처 후보(동적 목록) 설정을 갖는 에이전트 — 실효 설정에 vendor_options 를
+# 포함하고 PATCH 에서 vendor_options 입력을 허용한다. ⚠ **에이전트 id** 기준.
+_AGENTS_WITH_VENDOR_OPTIONS: frozenset[str] = frozenset({"purchase-order"})
+
 
 def settings_schema_dicts(agent_id: str) -> list[dict] | None:
     """직렬화용 스키마(camelCase 키: key/label/type/default/min/max/unit/description).
@@ -779,6 +890,8 @@ def effective_settings(agent_id: str, stored: dict | None) -> dict:
         ]
     if agent_id in _AGENTS_WITH_ORDER_PATTERNS:
         out[ORDER_PATTERNS_KEY] = order_patterns_for(stored)
+    if agent_id in _AGENTS_WITH_VENDOR_OPTIONS:
+        out[VENDOR_OPTIONS_KEY] = vendor_options_for(stored)
     return out
 
 
@@ -791,7 +904,14 @@ def validate_settings(agent_id: str, incoming: dict) -> dict:
     has_fuel_classes = agent_id in _AGENTS_WITH_FUEL_CLASSES
     has_menu_items = agent_id in _AGENTS_WITH_MENU_ITEMS
     has_order_patterns = agent_id in _AGENTS_WITH_ORDER_PATTERNS
-    if not defs and not has_fuel_classes and not has_menu_items and not has_order_patterns:
+    has_vendor_options = agent_id in _AGENTS_WITH_VENDOR_OPTIONS
+    if (
+        not defs
+        and not has_fuel_classes
+        and not has_menu_items
+        and not has_order_patterns
+        and not has_vendor_options
+    ):
         raise ValueError("이 에이전트는 설정 항목이 없습니다.")
     validated: dict = {}
     for key, value in incoming.items():
@@ -806,6 +926,10 @@ def validate_settings(agent_id: str, incoming: dict) -> dict:
         # 발주 패턴(동적 목록) — purchase-order 의 발주 패턴 마스터 목록(동일 패턴).
         if has_order_patterns and key == ORDER_PATTERNS_KEY:
             validated[key] = _validate_order_patterns(value)
+            continue
+        # 통합 지정 거래처 후보(동적 목록) — purchase-order 계획서 콤보박스 마스터(동일 패턴).
+        if has_vendor_options and key == VENDOR_OPTIONS_KEY:
+            validated[key] = _validate_vendor_options(value)
             continue
         d = defs.get(key)
         if d is None:

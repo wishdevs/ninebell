@@ -208,7 +208,9 @@ def test_effective_settings_order_patterns_defaults():
     from app.services.agent_settings import DEFAULT_ORDER_PATTERNS
 
     eff = effective_settings("purchase-order", None)
-    assert eff == {"order_patterns": DEFAULT_ORDER_PATTERNS}
+    # vendor_options(2026-08-26 신설)가 함께 실리므로 order_patterns 만 골라 비교한다.
+    assert eff["order_patterns"] == DEFAULT_ORDER_PATTERNS
+    assert set(eff) == {"order_patterns", "vendor_options"}
     groups = eff["order_patterns"]["groups"]
     assert len(groups) == 9
     # BUFFER MODULE 은 PROCESS 에만 존재한다(2026-08-21 사용자 확정) — EFEM 은 4그룹.
@@ -502,6 +504,103 @@ def test_validate_settings_unknown_key_rejected_for_pattern_agent():
 
     with pytest.raises(ValueError):
         validate_settings("purchase-order", {"acct_cutoff_day": 4})
+
+
+# ── 통합 지정 거래처 후보(vendor_options) ────────────────────────────────────
+
+
+def _vendor_rows(*names: str, default: str | None = None) -> list[dict]:
+    return [{"name": n, **({"isDefault": True} if n == default else {})} for n in names]
+
+
+def test_effective_settings_vendor_options_defaults():
+    """저장값이 없으면 기본 3분류(가공품 4·판금품 4·오텍 3)가 실효값에 포함된다."""
+    out = effective_settings("purchase-order", {})
+    vo = out["vendor_options"]
+    assert set(vo) == {"가공품", "판금품", "주식회사 오텍"}
+    assert [r["name"] for r in vo["가공품"]][-1] == "해룡엔지니어링"
+    assert sum(1 for r in vo["판금품"] if r["isDefault"]) == 1
+
+
+def test_effective_settings_vendor_options_stored_overrides():
+    stored = {
+        "vendor_options": {
+            "가공품": _vendor_rows("새가공", default="새가공"),
+            "판금품": _vendor_rows("새판금", default="새판금"),
+            "주식회사 오텍": _vendor_rows("새오텍", default="새오텍"),
+        }
+    }
+    vo = effective_settings("purchase-order", stored)["vendor_options"]
+    assert vo["가공품"] == [{"name": "새가공", "isDefault": True}]
+
+
+def test_vendor_options_lenient_falls_back_per_class():
+    """한 분류만 깨져도 그 분류만 기본값 폴백 — 나머지 저장분은 살린다."""
+    from app.services.agent_settings import vendor_options_for
+
+    stored = {
+        "vendor_options": {
+            "가공품": [],  # 파손(빈 목록)
+            "판금품": _vendor_rows("살아남은판금", default="살아남은판금"),
+        }
+    }
+    vo = vendor_options_for(stored)
+    assert [r["name"] for r in vo["판금품"]] == ["살아남은판금"]
+    assert [r["name"] for r in vo["가공품"]][-1] == "해룡엔지니어링"  # 기본값 폴백
+    assert len(vo["주식회사 오텍"]) == 3  # 미저장 분류도 기본값
+
+
+def test_validate_vendor_options_normalizes_missing_default():
+    """기본 거래처 미지정이면 첫 행이 기본이 된다."""
+    from app.services.agent_settings import validate_settings
+
+    out = validate_settings(
+        "purchase-order",
+        {
+            "vendor_options": {
+                "가공품": _vendor_rows("가공A", "가공B"),
+                "판금품": _vendor_rows("판금A", default="판금A"),
+                "주식회사 오텍": _vendor_rows("오텍A"),
+            }
+        },
+    )
+    assert out["vendor_options"]["가공품"][0] == {"name": "가공A", "isDefault": True}
+    assert out["vendor_options"]["가공품"][1] == {"name": "가공B", "isDefault": False}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"가공품": _vendor_rows("A", default="A")},  # 분류 누락(판금품·오텍)
+        {
+            "가공품": _vendor_rows("A", default="A"),
+            "판금품": _vendor_rows("B", default="B"),
+            "주식회사 오텍": _vendor_rows("C", default="C"),
+            "미지분류": _vendor_rows("D"),
+        },  # 알 수 없는 분류
+        {
+            "가공품": _vendor_rows("A", "A"),  # 이름 중복
+            "판금품": _vendor_rows("B", default="B"),
+            "주식회사 오텍": _vendor_rows("C", default="C"),
+        },
+        {
+            "가공품": [{"name": "A", "isDefault": True}, {"name": "B", "isDefault": True}],  # 기본 2개
+            "판금품": _vendor_rows("B", default="B"),
+            "주식회사 오텍": _vendor_rows("C", default="C"),
+        },
+        {
+            "가공품": [{"name": ""}],  # 빈 이름
+            "판금품": _vendor_rows("B", default="B"),
+            "주식회사 오텍": _vendor_rows("C", default="C"),
+        },
+        "문자열",  # dict 아님
+    ],
+)
+def test_validate_vendor_options_rejects_bad_input(bad):
+    from app.services.agent_settings import validate_settings
+
+    with pytest.raises(ValueError):
+        validate_settings("purchase-order", {"vendor_options": bad})
 
 
 # ⑦ GET 직렬화.

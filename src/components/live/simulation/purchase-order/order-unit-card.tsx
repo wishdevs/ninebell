@@ -15,7 +15,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { CatalogCombobox } from '@/components/live/pre-run/catalog-combobox';
 import { formatInteger } from '@/lib/data/format';
 import type { BaseDates } from '@/lib/purchase/order-patterns';
-import { searchVendors, vendorCategoryOf } from './catalog';
+import { searchVendors, type VendorCategory } from './catalog';
 import {
   isSwappableVendorClass,
   modulesOf,
@@ -41,6 +41,8 @@ interface OrderUnitCardProps {
   unified: UnifiedVendors;
   /** 상단 통합 기준일 — 그룹 예외 납기('FRAME −3주' 등)를 해석하는 출발점. */
   baseDates: BaseDates;
+  /** 분류별 거래처 후보(vendor_options 설정 파생) — 그룹 행 콤보박스 선택지. */
+  vendorCategories: readonly VendorCategory[];
   /** 구매사유·납기 등 단순 필드 패치(불변 업데이트는 호출부 소유). */
   onPatch: (patch: Partial<Pick<OrderUnit, 'purchaseReason' | 'dueDate'>>) => void;
   /** 거래처 그룹 오버라이드 패치 — vendorEdits[vendorClass] 에 병합된다. */
@@ -65,6 +67,7 @@ export function OrderUnitCard({
   unit,
   unified,
   baseDates,
+  vendorCategories,
   onPatch,
   onVendorPatch,
   onRemoveModule,
@@ -120,17 +123,11 @@ export function OrderUnitCard({
               className="h-9 text-[12px]"
             />
           </div>
-          <div className="grid w-40 gap-1.5">
-            <Label htmlFor={`${unit.id}-due`}>
+          {/* ⚠ 라벨에 규칙 캡션을 넣지 않는다(사용자 리포트 2026-08-26) — w-40 안에서 라벨이
+              줄바꿈되며 items-end 정렬이 통째로 틀어졌다. 기준 정보는 아래 '그룹 규칙' 줄에. */}
+          <div className="grid w-52 gap-1.5">
+            <Label htmlFor={`${unit.id}-due`} className="whitespace-nowrap">
               납기예정일 <span className="text-danger">*</span>
-              {/* 패턴 납기 규칙 — 어느 통합 기준일에서 세팅됐는지 그 자리에서 알려준다. */}
-              {rule ? (
-                <span className="text-foreground-tertiary ml-1 font-normal">
-                  기준: {rule.due.base}
-                  {rule.due.offsetWeeks > 0 ? ` −${rule.due.offsetWeeks}주` : ''} · {rule.groupName}
-                  {unit.dueTouched ? ' · 직접 수정함' : ''}
-                </span>
-              ) : null}
             </Label>
             <DatePicker
               value={unit.dueDate}
@@ -141,10 +138,12 @@ export function OrderUnitCard({
           </div>
         </div>
 
-        {/* 적용된 그룹 규칙 한 줄 — 예외는 아래 표의 셀에 실반영되고, 근거는 셀 캡션이 단다. */}
+        {/* 적용된 그룹 규칙 한 줄 — 납기 기준(라벨에서 이사)과 예외 적용 여부를 함께 밝힌다. */}
         {rule ? (
           <p className="text-foreground-tertiary text-[11px]">
-            그룹 규칙: {rule.groupName}
+            그룹 규칙: {rule.groupName} · 납기 기준 {rule.due.base}
+            {rule.due.offsetWeeks > 0 ? ` −${rule.due.offsetWeeks}주` : ''}
+            {unit.dueTouched ? ' (직접 수정함)' : ''}
             {rule.exceptions.length > 0 ? ` · 예외 ${rule.exceptions.length}건 자동 적용` : ''}
           </p>
         ) : null}
@@ -189,6 +188,7 @@ export function OrderUnitCard({
                   group={g}
                   defaults={defaults.get(g.vendorClass) ?? { dueDate: '', noteMessage: '' }}
                   unified={unified}
+                  vendorCategories={vendorCategories}
                   onVendorPatch={onVendorPatch}
                 />
               ))}
@@ -206,16 +206,25 @@ interface VendorGroupRowProps {
   defaults: VendorDefaults;
   /** 상단 통합 거래처 지정 — 교체 가능 분류 판정의 기준. */
   unified: UnifiedVendors;
+  vendorCategories: readonly VendorCategory[];
   onVendorPatch: (vendorClass: string, patch: VendorEdit) => void;
 }
 
-function VendorGroupRow({ group: g, defaults, unified, onVendorPatch }: VendorGroupRowProps) {
+function VendorGroupRow({
+  group: g,
+  defaults,
+  unified,
+  vendorCategories,
+  onVendorPatch,
+}: VendorGroupRowProps) {
   const [expanded, setExpanded] = useState(false);
-  // 교체 가능한 분류(가공품·판금품·주식회사 오텍)만 콤보박스를 그린다 — 선택지는 그 분류의
-  // 고정 목록뿐이고, 유효 거래처는 리졸버 산출값이다(파생만, 저장 안 함).
+  // 교체 가능한 분류(가공품·판금품·주식회사 오텍)만 콤보박스를 그린다 — 선택지는 관리자
+  // 후보 목록(vendor_options)이고, 유효 거래처는 리졸버 산출값이다(파생만, 저장 안 함).
   const swappable = isSwappableVendorClass(g.vendorClass, unified);
   const vendor = swappable ? defaults.vendor : undefined;
-  const options = swappable ? (vendorCategoryOf(g.vendorClass)?.options ?? []) : [];
+  const options = swappable
+    ? (vendorCategories.find((c) => c.vendorClass === g.vendorClass)?.options ?? [])
+    : [];
   const applied = defaults.appliedRule;
   return (
     <>

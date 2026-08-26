@@ -6,6 +6,7 @@ import { EmptyNote } from '@/components/ui/empty-note';
 import { EmptyState } from '@/components/ui/empty-state';
 import type { LiveHitl, PlanSubmit } from '@/lib/live/types';
 import type { PatternGroup } from '@/lib/purchase/order-patterns';
+import type { VendorCategory } from './simulation/purchase-order/catalog';
 import {
   buildPlanPayload,
   createPlanBom,
@@ -24,6 +25,8 @@ interface LivePlannerCardProps {
   hitl: LiveHitl;
   /** 발주 패턴 그룹(agents.settings.order_patterns) — 열릴 때 발주단위를 미리 편성한다. */
   patterns: readonly PatternGroup[];
+  /** 분류별 거래처 후보(agents.settings.vendor_options) — 통합 지정·그룹 행 콤보박스 선택지. */
+  vendorCategories: readonly VendorCategory[];
   /** 계획 확정 제출 — 부모가 sendPlan(hitl.id, plan) 로 바인딩(낙관적 clearHitl 로 카드가 접힌다). */
   onSubmit: (plan: PlanSubmit) => Promise<boolean>;
   busy?: boolean;
@@ -39,7 +42,13 @@ interface LivePlannerCardProps {
  * 내부스크롤 금지(2026-08-13 규칙) — 전체는 페이지 스크롤로 흐르고, 자체 스크롤은
  * 목록성 영역(모듈 풀 max-h)만 갖는다. 패널 높이 해제는 live-side-panel 이 담당.
  */
-export function LivePlannerCard({ hitl, patterns, onSubmit, busy = false }: LivePlannerCardProps) {
+export function LivePlannerCard({
+  hitl,
+  patterns,
+  vendorCategories,
+  onSubmit,
+  busy = false,
+}: LivePlannerCardProps) {
   const plannerBom = hitl.plannerBom;
   const bom = useMemo(() => (plannerBom ? createPlanBom(plannerBom) : null), [plannerBom]);
 
@@ -60,6 +69,7 @@ export function LivePlannerCard({ hitl, patterns, onSubmit, busy = false }: Live
       bom={bom}
       hitl={hitl}
       patterns={patterns}
+      vendorCategories={vendorCategories}
       onSubmit={onSubmit}
       busy={busy}
     />
@@ -70,17 +80,19 @@ function PlannerBody({
   bom,
   hitl,
   patterns,
+  vendorCategories,
   onSubmit,
   busy,
 }: {
   bom: PlanBom;
   hitl: LiveHitl;
   patterns: readonly PatternGroup[];
+  vendorCategories: readonly VendorCategory[];
   onSubmit: (plan: PlanSubmit) => Promise<boolean>;
   busy: boolean;
 }) {
   const project = bom.project;
-  const plan = usePlanState(bom, project, patterns);
+  const plan = usePlanState(bom, project, patterns, vendorCategories);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 확정 2단계(사용자 요청 2026-08-14) — [전체 계획서 검토]가 이 뷰를 열고, 검토 화면의
@@ -134,6 +146,7 @@ function PlannerBody({
         onBaseDateChange={plan.setBaseDate}
         unifiedVendors={plan.unifiedVendors}
         onUnifiedVendorChange={plan.setUnifiedVendor}
+        vendorCategories={vendorCategories}
       />
 
       <ModulePoolTable
@@ -148,6 +161,7 @@ function PlannerBody({
 
       <section className="flex flex-col gap-4">
         <SimSectionHeader
+          step={3}
           title="발주단위 — 구매사유·납기·거래처 지정"
           prompt="패턴으로 미리 묶인 발주단위입니다. 구매사유·납기예정일을 확인하고, 가공품·판금품·주식회사 오텍 그룹의 거래처는 필요할 때만 개별로 덮어씁니다(그룹별 납기·비고도 마찬가지)."
         />
@@ -166,6 +180,7 @@ function PlannerBody({
               unit={u}
               unified={plan.unifiedVendors}
               baseDates={plan.baseDates}
+              vendorCategories={vendorCategories}
               onPatch={(patch) => plan.patchUnit(u.id, patch)}
               onVendorPatch={(vendorClass, patch) => plan.patchVendor(u.id, vendorClass, patch)}
               onRemoveModule={(code) => plan.removeModule(u.id, code)}

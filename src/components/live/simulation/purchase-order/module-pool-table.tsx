@@ -73,6 +73,7 @@ export function ModulePoolTable({
   return (
     <section className="flex flex-col gap-3">
       <SimSectionHeader
+        step={2}
         title="모듈 풀 — 발주단위로 묶을 모듈 선택"
         prompt="함께 저장할 3레벨 모듈을 체크해 발주단위로 묶으세요. 한 발주단위가 구매요청 저장 1회 = 발주번호 1건이 됩니다."
       />

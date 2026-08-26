@@ -173,7 +173,15 @@ export function OrderPatternsClient() {
         </p>
       ) : null}
 
-      <div className="border-border-subtle flex justify-end gap-2 border-t pt-5">
+      {/* 실행 바 — 그룹이 많으면 카드가 아주 길어져 하단 버튼이 안 보이므로 카드 안에서 sticky.
+          `-mx-6 -mb-6` 로 카드 패딩(comfortable = p-6)을 먹어 좌우·아래로 꽉 채우고, 안쪽 패딩을
+          다시 준다. 부모 `.animate-page-enter` 는 fill-mode backwards 라 종료 후 transform 이
+          남지 않아 sticky 를 깨지 않는다(globals.css 주석 참조). */}
+      <div className="border-border-subtle bg-surface/95 sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-wrap items-center justify-end gap-2 rounded-b-[var(--radius-lg)] border-t px-6 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
+        {/* 변경 여부를 바 안에서 알린다 — 버튼만 있으면 눌러도 되는 상태인지 알기 어렵다. */}
+        <p className="text-foreground-tertiary mr-auto text-xs">
+          {dirty ? '저장하지 않은 변경이 있습니다.' : '변경 없음'}
+        </p>
         <Button
           type="button"
           variant="secondary"

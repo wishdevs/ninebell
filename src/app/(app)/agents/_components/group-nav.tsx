@@ -45,6 +45,7 @@ export const GROUP_TOOLS: Record<string, readonly GroupTool[]> = {
   purchase: [
     { label: '프로젝트 관리', href: '/manage/projects?scope=purchase' },
     { label: '발주 패턴', href: '/manage/order-patterns' },
+    { label: '통합 지정 거래처', href: '/manage/vendor-options' },
   ],
 };
 

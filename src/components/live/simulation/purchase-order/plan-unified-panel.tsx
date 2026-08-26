@@ -4,7 +4,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import { CatalogCombobox } from '@/components/live/pre-run/catalog-combobox';
 import { BASE_DATE_KEYS, type BaseDateKey, type BaseDates } from '@/lib/purchase/order-patterns';
-import { VENDOR_CATEGORIES, searchVendors } from './catalog';
+import { searchVendors, type VendorCategory } from './catalog';
 import type { UnifiedVendors } from './model';
 import { SimSectionHeader } from './ui';
 
@@ -16,6 +16,8 @@ interface PlanUnifiedPanelProps {
     vendorClass: string,
     vendor: { code: string; name: string } | undefined,
   ) => void;
+  /** 분류별 거래처 후보(agents.settings.vendor_options 파생) — 관리 > 통합 지정 거래처에서 편집. */
+  vendorCategories: readonly VendorCategory[];
 }
 
 /**
@@ -31,27 +33,29 @@ export function PlanUnifiedPanel({
   onBaseDateChange,
   unifiedVendors,
   onUnifiedVendorChange,
+  vendorCategories,
 }: PlanUnifiedPanelProps) {
   return (
     <section className="flex flex-col gap-3">
       <SimSectionHeader
+        step={1}
         title="통합 지정 — 납기 기준일·거래처"
         prompt="여기서 한 번 정하면 아래 발주단위에 기본값으로 깔립니다. 발주단위에서 직접 고친 값은 여기를 다시 바꿔도 유지됩니다."
       />
 
-      <div className="border-border bg-surface flex flex-col gap-3 rounded-[var(--radius-md)] border p-4">
+      <div className="border-border bg-muted/20 flex flex-col gap-3 rounded-[var(--radius-md)] border p-4">
+        {/* 필드 규격 통일(사용자 지적 2026-08-26) — 날짜·거래처 둘 다 w-52 + 기본 높이(h-10). */}
         <FieldGroup
           title="납기 기준일"
           caption="패턴 발주단위의 납기예정일을 이 날짜로 세팅합니다('FRAME 납품 1주 전' 같은 규칙은 영업일로 환산)."
         >
           {BASE_DATE_KEYS.map((key) => (
-            <div key={key} className="grid w-44 gap-1.5">
+            <div key={key} className="grid w-52 gap-1.5">
               <Label>{key}</Label>
               <DatePicker
                 value={baseDates[key] ?? ''}
                 onChange={(v) => onBaseDateChange(key, v)}
                 ariaLabel={`${key} 납기 기준일`}
-                className="h-9 text-[12px]"
               />
             </div>
           ))}
@@ -59,9 +63,9 @@ export function PlanUnifiedPanel({
 
         <FieldGroup
           title="거래처"
-          caption="분류별 기본 거래처입니다. 발주단위의 거래처 그룹에서 개별로 덮어쓸 수 있습니다."
+          caption="분류별 기본 거래처입니다. 후보 목록은 관리 > 통합 지정 거래처에서 추가/삭제합니다."
         >
-          {VENDOR_CATEGORIES.map((category) => (
+          {vendorCategories.map((category) => (
             <div key={category.vendorClass} className="grid w-52 gap-1.5">
               <Label>{category.vendorClass}</Label>
               <CatalogCombobox

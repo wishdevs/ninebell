@@ -16,11 +16,31 @@ import type { BomPart } from './model';
 
 // ── 섹션 헤더(단계 안내) ─────────────────────────────────────────────────────
 
-/** 섹션 제목 + 안내 한 줄 — pre-run 폼의 제목/설명 문법과 같은 중립 헤더. */
-export function SimSectionHeader({ title, prompt }: { title: string; prompt?: ReactNode }) {
+/**
+ * 섹션 제목 + 안내 한 줄 — pre-run 폼의 제목/설명 문법과 같은 중립 헤더.
+ * step 을 주면 번호 배지가 붙는다 — 계획서 3구획(통합 지정 → 모듈 풀 → 발주단위)의
+ * 진행 순서를 시각으로 구분한다(사용자 지적 2026-08-26: 구획 경계가 안 보인다).
+ */
+export function SimSectionHeader({
+  title,
+  prompt,
+  step,
+}: {
+  title: string;
+  prompt?: ReactNode;
+  step?: number;
+}) {
   return (
     <div className="min-w-0 shrink-0">
-      <p className="text-foreground text-[length:var(--text-body-lg)] leading-snug font-semibold">
+      <p className="text-foreground flex items-center gap-2 text-[length:var(--text-body-lg)] leading-snug font-semibold">
+        {step != null ? (
+          <span
+            aria-hidden
+            className="bg-accent/10 text-accent flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold tabular-nums"
+          >
+            {step}
+          </span>
+        ) : null}
         {title}
       </p>
       {prompt ? (

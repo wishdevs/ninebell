@@ -177,7 +177,9 @@ export function PlanFooter({
 }: PlanFooterProps) {
   const unassigned = bom.modules.length - assignedModules;
   return (
-    <div className="border-border flex flex-col gap-2 border-t pt-3">
+    // 계획서가 길어 확정 버튼이 안 보인다(사용자 지적 2026-08-26) — 개입 탭 패딩(p-4)을 먹어
+    // 하단 sticky 바로 붙인다. planner 모드는 side-panel 이 overflow-hidden 을 풀어 둔다.
+    <div className="border-border bg-surface/95 sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-col gap-2 rounded-b-[var(--radius-lg)] border-t px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-foreground-secondary text-[length:var(--text-body-sm)]">
           발주단위 <b className="text-foreground tabular-nums">{totals.units}</b> · 거래처 그룹{' '}
@@ -335,7 +337,8 @@ export function PlanReviewView({
         </section>
       ))}
 
-      <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+      {/* 검토 화면도 길다 — 작성 화면의 PlanFooter 와 같은 sticky 하단 바. */}
+      <div className="border-border bg-surface/95 sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-wrap items-center justify-between gap-3 rounded-b-[var(--radius-lg)] border-t px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
         <p className="text-foreground-secondary text-[length:var(--text-body-sm)]">
           발주단위 <b className="text-foreground tabular-nums">{totals.units}</b> · 거래처 그룹{' '}
           <b className="text-foreground tabular-nums">{totals.vendorGroups}</b> · 부품{' '}

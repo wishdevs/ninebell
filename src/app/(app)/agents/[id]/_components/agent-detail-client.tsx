@@ -29,6 +29,8 @@ import {
 import { PRE_RUN_FORMS } from '@/components/live/pre-run';
 import { FULL_WIDTH_SIMULATION_AGENTS, SIMULATION_PANELS } from '@/components/live/simulation';
 import { orderPatternsFromSettings } from '@/lib/purchase/order-patterns';
+import { vendorOptionsFromSettings } from '@/lib/purchase/vendor-options';
+import { vendorCategoriesFrom } from '@/components/live/simulation/purchase-order/catalog';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -45,6 +47,7 @@ const CLEANUP_WORKFLOWS: Record<string, string> = {
   'corporate-card': 'card-collect-cleanup',
   'family-event': 'gyeongjo-grant-cleanup',
   scholarship: 'hakjagum-grant-cleanup',
+  'tax-invoice': 'tax-invoice-cleanup',
 };
 
 // 전자결재 상신 취소(hidden) — 실제 상신을 실행하는 회계전표 에이전트에서만, 디버그 모드에서만
@@ -99,6 +102,10 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
   // 발주 패턴 — 계획서 개입(kind=planner)이 발주단위를 미리 편성하는 재료. 관리자가 저장한
   // agents.settings 오버라이드가 없으면 파서가 기본 27행으로 폴백한다.
   const orderPatterns = useMemo(() => orderPatternsFromSettings(agent.settings), [agent.settings]);
+  const vendorCategories = useMemo(
+    () => vendorCategoriesFrom(vendorOptionsFromSettings(agent.settings)),
+    [agent.settings],
+  );
 
   // 라이브 세션 — 실행 컨트롤(시작/종료)로 enabled 를 토글한다. 카드에 머무는 동안만
   // 세션(헤드리스 브라우저 슬롯)을 점유하고, 언마운트/종료 시 useLiveRun 이 abort 로 반납한다.
@@ -390,6 +397,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
               planSteps={agent.steps}
               handoffNote={agent.handoffNote}
               orderPatterns={orderPatterns}
+              vendorCategories={vendorCategories}
             />
           ) : SimulationPanel ? (
             <SimulationPanel agent={agent} />

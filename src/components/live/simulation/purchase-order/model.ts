@@ -25,7 +25,6 @@ import {
   type ExceptionDueRule,
   type PatternException,
 } from '@/lib/purchase/order-patterns';
-import { vendorCategoryOf } from './catalog';
 import { subtractLeadDays } from './dates';
 
 // ── BOM 타입(와이어 계약 별칭 — 단일 정의는 lib/live/types) ─────────────────
@@ -80,7 +79,7 @@ export function isPseudoVendor(vendorClass: string): boolean {
 /**
  * 통합 거래처 지정 — 계획서 상단에서 분류마다 한 번 고른 거래처(vendorClass → 거래처).
  * 발주단위·거래처그룹 단위 오버라이드(vendorEdits)가 없을 때 접히는 기본값이다.
- * 키 집합이 곧 **교체 가능한 분류**다(catalog.ts VENDOR_CATEGORIES 가 정의) — 값이
+ * 키 집합이 곧 **교체 가능한 분류**다(vendor-options 설정의 분류 3종) — 값이
  * undefined 여도 키는 남으므로, 통합 지정을 지우면 미지정으로 판정된다.
  */
 export type UnifiedVendors = Readonly<Record<string, { code: string; name: string } | undefined>>;
@@ -411,10 +410,13 @@ function firstException<T>(
   return undefined;
 }
 
-/** 예외가 고정한 거래처명 → 카탈로그 코드. 목록에 없는 이름이면 코드 없이 이름만 쓴다. */
-function pinnedVendorOf(vendorClass: string, name: string): { code: string; name: string } {
-  const option = vendorCategoryOf(vendorClass)?.options.find((o) => o.name === name);
-  return { code: option?.code ?? '', name };
+/**
+ * 예외가 고정한 거래처명 → 콤보 값. 거래처 후보의 코드가 이름 자체가 됐으므로(설정 이관
+ * 2026-08-26) 카탈로그 조회 없이 이름을 코드로 쓴다 — 목록에 없는 이름도 그대로 유효하다
+ * (ERP 대조 값은 이름뿐).
+ */
+function pinnedVendorOf(_vendorClass: string, name: string): { code: string; name: string } {
+  return { code: name, name };
 }
 
 /** 납기 예외 캡션 — 'FRAME −3주'(0주면 기준일 이름만). */

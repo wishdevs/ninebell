@@ -32,6 +32,50 @@ const SEARCH_LIMIT = 60;
 
 const STALE_CATALOG_HINT = '최근 프로젝트는 카탈로그 동기화 후 표시됩니다.';
 
+// ── 최근 실행 프로젝트(로컬스토리지, 사용자 요청 2026-08-26) ─────────────────
+
+/** 최근 목록 저장 키 — 기기·브라우저 단위(계정 무관, 디버그 모드 플래그와 같은 성격). */
+const RECENT_PROJECTS_KEY = 'nb-po-recent-projects';
+const RECENT_PROJECTS_MAX = 5;
+
+/** 저장분 파싱 — 형식이 깨진 행은 버린다(로컬스토리지는 신뢰 경계 밖). */
+function readRecentProjects(): { code: string; name: string }[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_PROJECTS_KEY);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(
+        (r): r is { code: string; name: string } =>
+          typeof r === 'object' &&
+          r !== null &&
+          typeof (r as { code?: unknown }).code === 'string' &&
+          !!(r as { code: string }).code &&
+          typeof (r as { name?: unknown }).name === 'string',
+      )
+      .slice(0, RECENT_PROJECTS_MAX);
+  } catch {
+    return [];
+  }
+}
+
+/** 실행한 프로젝트를 맨 앞에 추가(중복 제거, 최대 5개) 후 저장. 갱신된 목록을 돌려준다. */
+function pushRecentProject(entry: {
+  code: string;
+  name: string;
+}): { code: string; name: string }[] {
+  const next = [entry, ...readRecentProjects().filter((r) => r.code !== entry.code)].slice(
+    0,
+    RECENT_PROJECTS_MAX,
+  );
+  try {
+    window.localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next));
+  } catch {
+    /* 저장 실패(용량 등)는 무시 — 최근 목록은 편의 기능일 뿐이다 */
+  }
+  return next;
+}
+
 /** 카탈로그 항목/즐겨찾기 공통 입력 shape(둘 다 code·name·extra.pjtNo 를 가진다). */
 interface ProjectRow {
   code: string;
@@ -112,9 +156,15 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
   const [manualNo, setManualNo] = useState(seed.projectNo);
 
   const [favorites, setFavorites] = useState<ComboOption[]>([]);
+  // 최근 실행 프로젝트 — SSR 프리렌더와 어긋나지 않게 마운트 후 로컬스토리지에서 읽는다.
+  const [recents, setRecents] = useState<{ code: string; name: string }[]>([]);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   // 직전 검색이 0건이었는지 — 낡은 스냅샷 안내를 띄우는 신호.
   const [emptySearch, setEmptySearch] = useState(false);
+
+  useEffect(() => {
+    setRecents(readRecentProjects());
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -157,6 +207,9 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
 
   const submit = () => {
     if (!canSubmit) return;
+    if (projectNo) {
+      setRecents(pushRecentProject({ code: projectNo, name: projectName }));
+    }
     onStart({
       purchase_order: { project_no: projectNo, project_name: projectName, keyword },
     });
@@ -199,6 +252,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
             value={project}
             placeholder="프로젝트 선택"
             favorites={favorites}
+            recents={recents.map((r) => ({ code: r.code, name: r.name, codeLabel: r.code }))}
             disabled={disabled || manual}
             search={search}
             onSelect={(o) => {

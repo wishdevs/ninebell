@@ -39,6 +39,7 @@ export function CatalogCombobox({
   value,
   placeholder,
   favorites,
+  recents = [],
   disabled,
   search,
   onSelect,
@@ -47,6 +48,8 @@ export function CatalogCombobox({
   value: { code: string; name: string };
   placeholder: string;
   favorites: ComboOption[];
+  /** 최근 선택 그룹(선택) — '자주쓰는' 위에 나열한다. 채우기·저장은 호출부 소유. */
+  recents?: ComboOption[];
   disabled?: boolean;
   search: (q: string) => Promise<ComboOption[]>;
   onSelect: (opt: ComboOption) => void;
@@ -59,9 +62,14 @@ export function CatalogCombobox({
   const [searchError, setSearchError] = useState(false);
 
   const q = text.trim().toLowerCase();
-  const filteredFavs = q
-    ? favorites.filter((p) => p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q))
-    : favorites;
+  const matches = (p: ComboOption) =>
+    p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+  const filteredRecents = q ? recents.filter(matches) : recents;
+  // 최근에 이미 있는 항목은 자주쓰는에서 감춘다 — 두 그룹에 겹쳐 나오면 목록만 길어진다.
+  const recentCodes = new Set(filteredRecents.map((r) => r.code));
+  const filteredFavs = (q ? favorites.filter(matches) : favorites).filter(
+    (p) => !recentCodes.has(p.code),
+  );
 
   const pick = (opt: ComboOption) => {
     onSelect(opt);
@@ -161,6 +169,17 @@ export function CatalogCombobox({
             >
               선택 해제
             </button>
+          ) : null}
+
+          {filteredRecents.length > 0 ? (
+            <>
+              <p className="text-foreground-tertiary px-2 py-1 text-[length:var(--text-caption)] font-semibold tracking-wider uppercase">
+                최근
+              </p>
+              {filteredRecents.map((o) => (
+                <OptionRow key={`r-${o.code}`} option={o} onClick={() => pick(o)} />
+              ))}
+            </>
           ) : null}
 
           {filteredFavs.length > 0 ? (

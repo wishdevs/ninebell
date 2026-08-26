@@ -9,6 +9,7 @@ import { LiveChoiceCard } from '@/components/live/LiveChoiceCard';
 import { LiveGridCard } from '@/components/live/LiveGridCard';
 import { InvoiceGridCard } from '@/components/live/InvoiceGridCard';
 import { LivePlannerCard } from '@/components/live/LivePlannerCard';
+import type { VendorCategory } from '@/components/live/simulation/purchase-order/catalog';
 import type {
   LiveLogLevel,
   LiveLogLine,
@@ -39,6 +40,8 @@ interface LiveSidePanelProps {
    * 발주단위를 미리 편성하는 재료다. 설정에 없으면 파서가 기본 9그룹으로 폴백한다.
    */
   orderPatterns: readonly PatternGroup[];
+  /** 분류별 거래처 후보(agents.settings.vendor_options 파생) — 계획서 콤보박스 선택지. */
+  vendorCategories: readonly VendorCategory[];
 }
 
 type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
@@ -48,7 +51,13 @@ type TabKey = 'intervention' | 'workflow' | 'log' | 'result';
  * HITL 이 뜨면 개입 탭으로, 종료되면 결과 탭으로 자동 전환한다. 개입은 hitl.kind 로
  * 분기: chat → 대화형 카드(LiveChatCard), 그 외 → 옵션형 카드(LiveChoiceCard).
  */
-export function LiveSidePanel({ run, planSteps, handoffNote, orderPatterns }: LiveSidePanelProps) {
+export function LiveSidePanel({
+  run,
+  planSteps,
+  handoffNote,
+  orderPatterns,
+  vendorCategories,
+}: LiveSidePanelProps) {
   const hasHitl = Boolean(run.hitl);
   const terminal = run.status === 'succeeded' || run.status === 'failed';
   const hasResult = run.result != null || run.error != null || run.transactions != null;
@@ -77,8 +86,10 @@ export function LiveSidePanel({ run, planSteps, handoffNote, orderPatterns }: Li
       className={cn(
         // overflow-hidden 은 lg 전용 — lg 미만(페이지 스크롤 모드)에선 그리드 카드의 sticky
         // 하단 제출 바와 콤보박스 팝오버가 잘리지 않도록 풀어 둔다.
-        'border-border bg-surface flex min-h-[440px] flex-col rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:min-w-0 lg:overflow-hidden',
-        plannerActive ? 'lg:self-start' : 'lg:h-full lg:min-h-0',
+        'border-border bg-surface flex min-h-[440px] flex-col rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)] lg:min-w-0',
+        // planner 는 페이지 스크롤 모드 — overflow-hidden 을 걸면 하단 sticky 바(계획서 검토)가
+        // 뷰포트가 아니라 패널 바닥에 붙어 버린다(2026-08-26).
+        plannerActive ? 'lg:self-start' : 'lg:h-full lg:min-h-0 lg:overflow-hidden',
       )}
     >
       <Tabs
@@ -109,7 +120,10 @@ export function LiveSidePanel({ run, planSteps, handoffNote, orderPatterns }: Li
         </TabsList>
 
         {/* overflow-hidden 도 lg 전용 — 위 section 과 같은 이유(sticky·팝오버). */}
-        <TabsContent value="intervention" className="min-h-0 flex-1 p-4 lg:overflow-hidden">
+        <TabsContent
+          value="intervention"
+          className={cn('min-h-0 flex-1 p-4', plannerActive ? '' : 'lg:overflow-hidden')}
+        >
           {run.hitl ? (
             run.hitl.kind === 'chat' ? (
               <LiveChatCard
@@ -133,6 +147,7 @@ export function LiveSidePanel({ run, planSteps, handoffNote, orderPatterns }: Li
               <LivePlannerCard
                 hitl={run.hitl}
                 patterns={orderPatterns}
+                vendorCategories={vendorCategories}
                 onSubmit={(plan) => run.sendPlan(run.hitl!.id, plan)}
               />
             ) : (
