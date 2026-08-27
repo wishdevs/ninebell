@@ -141,22 +141,9 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": state["error"]}
 
-        # 2차 재선택도 1차와 동일 분기 — 디버그 모드면 전체선택, 일반 모드는 본인 카드만
-        # (매칭 0장이면 1차와 같이 전체선택 폴백 — 2026-08-03 사용자 확정). 1차에서 이미
-        # 같은 판정을 했으므로 여기서 안내를 반복하지 않고 warn 만 남긴다(로그 스팸 방지).
-        p2_params = state.get("params") or {}
-        if p2_params.get("debug") is True:
-            r = await steps.select_all_cards(page)
-        else:
-            r = await steps.select_all_cards(
-                page,
-                owner_name=steps.owner_name_variants(
-                    state.get("userid"),
-                    p2_params.get("user_display_name"),
-                    p2_params.get("user_job_title"),
-                ),
-                own_only=True,
-            )
+        # 2차 재선택도 1차와 동일 — **모든 모드 전체선택**(사용자 확정 2026-08-27,
+        # 본인 카드만 정책 폐지).
+        r = await steps.select_all_cards(page)
         if not r.get("ok"):
             await emit_step(events, "switch_evdn", "failed")
             return {"error": f"2차 카드 전체선택 실패: {r.get('reason')}"}

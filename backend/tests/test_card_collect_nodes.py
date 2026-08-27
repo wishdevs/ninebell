@@ -516,7 +516,7 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     async def _ok_close(page):
         return {"ok": True}
 
-    cards_kwargs: dict = {}  # 2차 재선택도 일반 모드 기본(본인만·own_only=True)인지 검증.
+    cards_kwargs: dict = {}  # 2차 재선택도 모든 모드 전체선택(2026-08-27 정책)인지 검증.
 
     async def _ok_cards(page, owner_name=None, own_only=False):
         cards_kwargs.update(owner_name=owner_name, own_only=own_only)
@@ -565,8 +565,8 @@ async def test_switch_evdn_matches_pending_by_composite_key(monkeypatch):
     assert out["pass2_unmatched"] == 1
     assert [w["label"] for w in out["pass2_work"]] == [2]
     assert out["pass2_work"][0]["idx"] == rows2[1]["i"]
-    # 디버그 아님(params 부재) → 2차 재선택도 본인 카드만(own_only=True) 경로.
-    assert cards_kwargs["own_only"] is True
+    # 2차 재선택도 모든 모드 전체선택(2026-08-27 본인 카드만 정책 폐지).
+    assert cards_kwargs["own_only"] is False and cards_kwargs["owner_name"] is None
 
 
 async def test_switch_evdn_matches_taxable_vat_reclassified_nondeductible(monkeypatch):
@@ -1158,7 +1158,7 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     async def _ok_close(page):
         return {"ok": True}
 
-    cards_kwargs: dict = {}  # 디버그 모드(params.debug=True)면 2차도 전체선택(own_only=False).
+    cards_kwargs: dict = {}  # 모든 모드 전체선택(2026-08-27) — 2차도 owner 미전달.
 
     async def _ok_cards(page, owner_name=None, own_only=False):
         cards_kwargs.update(owner_name=owner_name, own_only=own_only)
@@ -1212,7 +1212,7 @@ async def test_switch_evdn_duplicate_composite_keys_consume_distinct_rows(monkey
     # 2행뿐이므로 앞선 2건이 서로 다른 idx(0,1)를 소비, 3번째는 매칭 실패.
     assert [w["idx"] for w in out["pass2_work"]] == [0, 1]
     assert out["pass2_unmatched"] == 1
-    # 디버그 모드 → 2차도 전체선택 경로(owner 미전달·own_only=False).
+    # 모든 모드 전체선택(2026-08-27) — 2차도 owner 미전달·own_only=False.
     assert cards_kwargs == {"owner_name": None, "own_only": False}
 
 
@@ -1762,69 +1762,9 @@ async def test_select_all_cards_node_surfaces_unverified_warning(monkeypatch):
     assert any(f.get("level") == "warn" and "표시값 확인 불가" in f["log"] for f in logs)
 
 
-# ── 카드 선택 분기(디버그=전체 / 일반=본인만 — 사용자 요구 2026-07-31) ─────────────
-async def test_select_all_cards_node_default_selects_own_only(monkeypatch):
-    """일반 모드(디버그 아님): own_only=True + 이름 변형 전달, 로그에 매칭 카드 수·카드명."""
-    from app.agents.card_collect.nodes.query import make_select_all_cards_node
-
-    captured: dict = {}
-
-    async def _ok(page, owner_name=None, own_only=False):
-        captured.update(owner_name=owner_name, own_only=own_only)
-        return {"ok": True, "n": 5, "checked": 1, "by": "name",
-                "names": ["국민법인카드(석대현)-2826"], "verified": True}
-
-    async def _noop_shot(put, page):
-        return None
-
-    monkeypatch.setattr(steps, "select_all_cards", _ok)
-    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
-    events: asyncio.Queue = asyncio.Queue()
-    state = {"events": events, "page": object(), "userid": "sdh",
-             "params": {"user_display_name": "석대현", "user_job_title": "프로"}}
-    out = await make_select_all_cards_node()(state)
-    assert out == {}
-    assert captured["own_only"] is True
-    assert captured["owner_name"] == ["sdh", "석대현", "석대현 프로"]
-    frames = []
-    while not events.empty():
-        frames.append(events.get_nowait())
-    logs = [f["log"] for f in frames if isinstance(f.get("log"), str)]
-    assert any("본인('sdh') 카드 1장" in m and "국민법인카드(석대현)-2826" in m for m in logs)
-
-
-async def test_select_all_cards_node_announces_all_fallback(monkeypatch):
-    """일반 모드에서 본인 카드 0장 → 전체선택 폴백 시 **안내 메시지가 화면에 노출**돼야 한다.
-
-    사용자 요구(2026-08-03): "본인카드가 없을시 전체선택한다고 안내메시지를 노출합니다".
-    디버그 모드 문구('디버그 모드')와 혼동되지 않아야 하고, 다음 단계에서 사용자가 직접
-    고르라는 안내까지 포함한다.
-    """
-    from app.agents.card_collect.nodes.query import make_select_all_cards_node
-
-    async def _fallback(page, owner_name=None, own_only=False):
-        return {"ok": True, "n": 6, "checked": 6, "by": "all", "verified": True,
-                "warn": "본인 카드 0장(전체 6장·대조 이름 이트라이브2) — 전체 카드로 진행합니다."}
-
-    async def _noop_shot(put, page):
-        return None
-
-    monkeypatch.setattr(steps, "select_all_cards", _fallback)
-    monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
-    events: asyncio.Queue = asyncio.Queue()
-    state = {"events": events, "page": object(), "userid": "이트라이브2", "params": {}}
-    out = await make_select_all_cards_node()(state)
-    assert out == {}  # 실행은 계속된다(하드 실패 아님)
-    frames = []
-    while not events.empty():
-        frames.append(events.get_nowait())
-    notices = [f["log"] for f in frames if isinstance(f.get("log"), str) and f.get("level") == "warn"]
-    assert any("명의 카드가 없어" in m and "전체" in m and "그리드에서 직접" in m for m in notices)
-    assert not any("디버그 모드" in m for f in frames if isinstance((m := f.get("log")), str))
-
-
-async def test_select_all_cards_node_debug_selects_all(monkeypatch):
-    """디버그 모드(params.debug=True): 종전 전체선택 — owner 미전달·own_only=False."""
+# ── 카드 선택 — 모든 모드 전체선택(2026-08-27, 본인 카드만 정책 폐지) ─────────────
+async def test_select_all_cards_node_selects_all_regardless_of_mode(monkeypatch):
+    """일반 모드(params 부재)에서도 owner 미전달·전체선택 — 본인 필터가 없어야 한다."""
     from app.agents.card_collect.nodes.query import make_select_all_cards_node
 
     captured: dict = {}
@@ -1839,7 +1779,8 @@ async def test_select_all_cards_node_debug_selects_all(monkeypatch):
     monkeypatch.setattr(steps, "select_all_cards", _ok)
     monkeypatch.setattr(cc_nodes.query, "emit_shot", _noop_shot)
     events: asyncio.Queue = asyncio.Queue()
-    state = {"events": events, "page": object(), "userid": "sdh", "params": {"debug": True}}
+    state = {"events": events, "page": object(), "userid": "sdh",
+             "params": {"user_display_name": "석대현", "user_job_title": "프로"}}
     out = await make_select_all_cards_node()(state)
     assert out == {}
     assert captured == {"owner_name": None, "own_only": False}
@@ -1847,30 +1788,27 @@ async def test_select_all_cards_node_debug_selects_all(monkeypatch):
     while not events.empty():
         frames.append(events.get_nowait())
     logs = [f["log"] for f in frames if isinstance(f.get("log"), str)]
-    assert any("7장 전체선택" in m and "디버그 모드" in m for m in logs)
+    assert any("7장 전체선택" in m for m in logs)
+    # 폐지된 문구가 되살아나지 않아야 한다 — 본인/디버그 분기 안내는 더 없다.
+    assert not any("본인(" in m or "디버그 모드" in m for m in logs)
 
 
-async def test_select_all_cards_node_zero_match_fails_with_diagnostics(monkeypatch):
-    """일반 모드 본인 카드 0장: 에러로 중단 + 매칭 진단(카드 수·대조 이름) 로그를 남긴다."""
+async def test_select_all_cards_node_failure_stops_with_error(monkeypatch):
+    """선택 실패(ok=False)는 스텝 failed + error 반환으로 중단한다."""
     from app.agents.card_collect.nodes.query import make_select_all_cards_node
 
-    async def _zero(page, owner_name=None, own_only=False):
-        return {"ok": False, "n": 5, "matched": 0,
-                "reason": "본인 카드 0장 — 카드 5장 중 이름(sdh) 일치 없음."}
+    async def _fail(page, owner_name=None, own_only=False):
+        return {"ok": False, "n": 0, "reason": "카드 서브팝업이 뜨지 않았습니다"}
 
-    monkeypatch.setattr(steps, "select_all_cards", _zero)
+    monkeypatch.setattr(steps, "select_all_cards", _fail)
     events: asyncio.Queue = asyncio.Queue()
-    state = {"events": events, "page": object(), "userid": "sdh", "params": {}}
-    out = await make_select_all_cards_node()(state)
-    assert "error" in out and "카드 선택 실패" in out["error"] and "본인 카드 0장" in out["error"]
+    out = await make_select_all_cards_node()(
+        {"events": events, "page": object(), "userid": "sdh", "params": {}}
+    )
+    assert "error" in out and "카드 선택 실패" in out["error"]
     frames = []
     while not events.empty():
         frames.append(events.get_nowait())
-    logs = [f for f in frames if isinstance(f.get("log"), str)]
-    assert any(
-        f.get("level") == "error" and "매칭 0장" in f["log"] and "sdh" in f["log"] for f in logs
-    )
-    # 스텝 상태도 failed 로 방출됐는지.
     assert any(f.get("step") == "select_all_cards" and f.get("status") == "failed" for f in frames)
 
 
