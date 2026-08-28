@@ -1179,3 +1179,22 @@ def test_read_fields_cover_all_candidates():
     for cands in planner.FIELD_CANDIDATES.values():
         for f in cands:
             assert f in planner.READ_FIELDS
+
+
+# ── 계획서 제출 경계(PlanIn) 상한 — 2026-08-28 라이브 422 회귀 ──────────────────────
+# CC04-155 처럼 장비 전체 모듈을 발주단위 하나로 묶으면 modules 가 100 을 넘고, 최종 구매사유
+# (프로젝트명 접두 + 입력 ≤200)·비고(구매사유 + [비고]) 가 200 을 넘어 제출이 422 로 튕겼다.
+def test_plan_in_accepts_large_unit_and_long_reason_note():
+    from app.routers.runs import PlanIn
+
+    reason = "ETRIBE ERP TEST 001 " + "모듈명 " * 60  # > 200자
+    plan = _plan()
+    unit = dict(plan["units"][0])
+    unit["purchaseReason"] = reason
+    unit["modules"] = [{"itemCode": f"SET-{i:03d}", "name": "외주조립", "spec": "S"} for i in range(300)]
+    unit["vendorGroups"] = [{**g, "note": reason + " [직배송]"} for g in unit["vendorGroups"]]
+    plan["units"] = [unit]
+    parsed = PlanIn.model_validate(plan)
+    assert len(parsed.units[0].modules) == 300
+    assert parsed.units[0].purchaseReason == reason
+    assert parsed.units[0].vendorGroups[0].note.endswith("[직배송]")

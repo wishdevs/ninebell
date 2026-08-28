@@ -156,15 +156,18 @@ class PlanVendorGroupIn(BaseModel):
     parts: int = Field(default=0, ge=0)
     amount: float = Field(default=0, ge=0)  # 합계 표시값(파생 계산 없음 — 프론트 산출 그대로)
     dueDate: str = Field(default="", max_length=16)
-    note: str = Field(default="", max_length=200)
+    # 비고 = 최종 구매사유(프로젝트명+입력) + '[비고]' 라 200 을 넘긴다(2026-08-28 라이브 422).
+    note: str = Field(default="", max_length=500)
 
 
 class PlanUnitIn(BaseModel):
     seq: int = Field(ge=1)
-    purchaseReason: str = Field(default="", max_length=200)
+    # 프로젝트명 접두 + 입력(≤200) 이라 200 초과 가능(2026-08-28 라이브 422).
+    purchaseReason: str = Field(default="", max_length=500)
     dueDate: str = Field(default="", max_length=16)
-    modules: list[PlanModuleIn] = Field(default_factory=list, max_length=100)
-    vendorGroups: list[PlanVendorGroupIn] = Field(default_factory=list, max_length=100)
+    # 발주단위 하나에 장비 전체 모듈을 묶으면 100 을 넘긴다(CC04-155 실측, 2026-08-28 라이브 422).
+    modules: list[PlanModuleIn] = Field(default_factory=list, max_length=500)
+    vendorGroups: list[PlanVendorGroupIn] = Field(default_factory=list, max_length=200)
 
 
 class PlanProjectIn(BaseModel):

@@ -224,6 +224,9 @@ export interface PlanUnit {
 }
 
 /** kind=planner 제출 계획(POST /runs/hitl plan) — 데모 buildPlanPayload 반환 shape 그대로. */
+/** 계획서 제출 결과 — 실패면 사용자에게 보여줄 사유(서버 detail 우선). */
+export type PlanSubmitResult = { ok: true } | { ok: false; error: string };
+
 export interface PlanSubmit {
   project: { code: string; name: string };
   wbs: string;
@@ -451,8 +454,11 @@ export interface LiveRunActions {
     rows: GridRowSubmit[],
     splitPlan?: SplitPlanRowSubmit[],
   ) => Promise<boolean>;
-  /** 계획서 개입(kind=planner) — 발주 계획 확정 제출(실행 재개, 낙관적 clearHitl). */
-  sendPlan: (decisionId: string, plan: PlanSubmit) => Promise<boolean>;
+  /**
+   * 계획서 개입(kind=planner) — 발주 계획 확정 제출(실행 재개). 성공해야 카드를 닫는다 —
+   * 실패(422 등)면 카드를 유지해 고쳐서 다시 제출할 수 있고 서버 사유(error)를 돌려준다.
+   */
+  sendPlan: (decisionId: string, plan: PlanSubmit) => Promise<PlanSubmitResult>;
   /** 라이브 뷰 창 수동 전환(부모창/자식창 탭). 자식 창은 열릴 때 자동 활성화된다. */
   selectWindow: (window: LiveWindow) => void;
 }

@@ -26,6 +26,7 @@ import type {
   LiveStepState,
   LiveWindow,
   PlanSubmit,
+  PlanSubmitResult,
   SplitPlanRowSubmit,
   UseLiveRunReturn,
 } from './types';
@@ -221,6 +222,44 @@ async function postHitl(
   } catch {
     return false;
   }
+}
+
+/** postHitl 의 사유 반환판 — 계획서 제출(422 검증 실패 등)은 사용자가 고쳐 재제출해야 한다. */
+async function postHitlDetailed(
+  runId: string | null,
+  decisionId: string,
+  payload: HitlPayload,
+): Promise<PlanSubmitResult> {
+  try {
+    const res = await fetch(`${API_BASE}/runs/hitl`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ runId, decisionId, ...payload }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      detail?: unknown;
+    };
+    if (res.ok && json.ok === true) return { ok: true };
+    return { ok: false, error: describeHitlFailure(res.status, json) };
+  } catch {
+    return { ok: false, error: '서버에 연결하지 못했습니다.' };
+  }
+}
+
+/** 422(pydantic) detail 은 [{loc, msg}] 배열 — 필드 경로와 메시지를 사람이 읽게 편다. */
+function describeHitlFailure(status: number, json: { error?: string; detail?: unknown }): string {
+  if (typeof json.error === 'string' && json.error) return json.error;
+  if (typeof json.detail === 'string' && json.detail) return json.detail;
+  if (Array.isArray(json.detail)) {
+    const lines = (json.detail as { loc?: unknown[]; msg?: string }[])
+      .slice(0, 3)
+      .map((d) => `${(d.loc ?? []).filter((x) => x !== 'body').join('.')}: ${d.msg ?? ''}`);
+    if (lines.length > 0) return `계획서 형식 오류 — ${lines.join(' / ')}`;
+  }
+  return `제출 실패(HTTP ${status})`;
 }
 
 // ── 훅 ───────────────────────────────────────────────────────────────
@@ -463,11 +502,16 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
     [],
   );
 
-  const sendPlan = useCallback((decisionId: string, plan: PlanSubmit): Promise<boolean> => {
-    // 계획서(kind=planner) 확정 제출 — sendRows 와 동일하게 낙관적으로 개입을 닫는다.
-    dispatch({ type: 'clearHitl' });
-    return postHitl(runIdRef.current, decisionId, { plan });
-  }, []);
+  const sendPlan = useCallback(
+    async (decisionId: string, plan: PlanSubmit): Promise<PlanSubmitResult> => {
+      // 계획서(kind=planner) 확정 제출 — 성공해야 개입을 닫는다. 낙관적으로 닫으면 422 같은
+      // 검증 실패 뒤 카드가 사라져 취소밖에 못 한다(2026-08-28 라이브 사고).
+      const result = await postHitlDetailed(runIdRef.current, decisionId, { plan });
+      if (result.ok) dispatch({ type: 'clearHitl' });
+      return result;
+    },
+    [],
+  );
 
   const selectWindow = useCallback((window: LiveWindow): void => {
     dispatch({ type: 'selectWindow', window });

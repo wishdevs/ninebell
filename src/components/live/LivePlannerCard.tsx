@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { RiErrorWarningLine, RiHand, RiInformationLine, RiStackLine } from '@remixicon/react';
 import { EmptyNote } from '@/components/ui/empty-note';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { LiveHitl, PlanSubmit } from '@/lib/live/types';
+import type { LiveHitl, PlanSubmit, PlanSubmitResult } from '@/lib/live/types';
 import type { PatternGroup } from '@/lib/purchase/order-patterns';
 import type { VendorCategory } from './simulation/purchase-order/catalog';
 import {
@@ -28,7 +28,7 @@ interface LivePlannerCardProps {
   /** 분류별 거래처 후보(agents.settings.vendor_options) — 통합 지정·그룹 행 콤보박스 선택지. */
   vendorCategories: readonly VendorCategory[];
   /** 계획 확정 제출 — 부모가 sendPlan(hitl.id, plan) 로 바인딩(낙관적 clearHitl 로 카드가 접힌다). */
-  onSubmit: (plan: PlanSubmit) => Promise<boolean>;
+  onSubmit: (plan: PlanSubmit) => Promise<PlanSubmitResult>;
   busy?: boolean;
 }
 
@@ -88,7 +88,7 @@ function PlannerBody({
   hitl: LiveHitl;
   patterns: readonly PatternGroup[];
   vendorCategories: readonly VendorCategory[];
-  onSubmit: (plan: PlanSubmit) => Promise<boolean>;
+  onSubmit: (plan: PlanSubmit) => Promise<PlanSubmitResult>;
   busy: boolean;
 }) {
   const project = bom.project;
@@ -103,12 +103,13 @@ function PlannerBody({
     if (sending || busy) return;
     setSending(true);
     setError(null);
-    const ok = await onSubmit(
+    const result = await onSubmit(
       buildPlanPayload(bom, project, plan.units, plan.unifiedVendors, plan.baseDates),
     );
-    // 성공 시 낙관적 clearHitl 로 카드가 접히고 스트림(런 로그/결과)이 이어받는다.
-    if (!ok) {
-      setError('계획을 전달하지 못했습니다(흐름이 종료됐을 수 있음).');
+    // 성공 시 clearHitl 로 카드가 접히고 스트림(런 로그/결과)이 이어받는다. 실패면 카드가
+    // 남아 있으므로 서버 사유를 보여 주고 고쳐서 다시 제출하게 한다.
+    if (!result.ok) {
+      setError(`계획을 전달하지 못했습니다 — ${result.error}`);
       setSending(false);
     }
   }
