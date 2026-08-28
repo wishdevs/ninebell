@@ -75,6 +75,16 @@ async def test_check_rows_exact_rejects_overflow_into_next_unit():
     assert bad["ok"] is False and "초과 [6, 7]" in bad["reason"]
 
 
+def test_due_date_digits_normalizes_js_date_to_kst():
+    from datetime import datetime, timezone
+
+    from app.agents.purchase_order.nodes.save_units import _digits
+
+    assert _digits(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc)) == "20260828"
+    assert _digits("2026-08-28") == "20260828"
+    assert _digits("2026-08-28T00:00:00") == "20260828"
+
+
 def test_submit_guard():
     assert steps_write.submit_guard({"ATHZ_ST_NM": "저장", "GWDOCU_NO": ""}) is None
     assert steps_write.submit_guard({"ATHZ_ST_NM": "진행", "GWDOCU_NO": "(주)나인벨-2026-1"})

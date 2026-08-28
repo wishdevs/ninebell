@@ -87,9 +87,16 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
     # 발주 대상 모듈 0건: read_bom 이 '발주할 모듈이 없습니다' 결과를 남기고 즉시 종료 —
     # 빈 계획서(HITL)를 띄워 사용자를 기다리게 하지 않는다(사용자 확정 2026-08-14).
     def _after_read_bom(state: PurchaseOrderState) -> str:
+        # 재실행 경로: params.purchase_order.submit_prqs 가 있으면 계획/저장을 건너뛰고 이미 저장된
+        # 구매요청번호만 셀프결재 상신한다(2026-08-28 — 저장은 됐는데 상신 전 중단된 런 복구용).
+        po = (state.get("params") or {}).get("purchase_order") or {}
+        if po.get("submit_prqs"):
+            return "self_approve"
         return END if state.get("no_modules") else "plan"
 
-    g.add_conditional_edges("read_bom", _after_read_bom, {"plan": "plan", END: END})
+    g.add_conditional_edges(
+        "read_bom", _after_read_bom, {"plan": "plan", "self_approve": "self_approve", END: END}
+    )
 
     # 사용자가 저장을 진행하지 않으면 계획 확정 결과만 남기고 끝낸다(저장 0건).
     def _after_confirm(state: PurchaseOrderState) -> str:

@@ -370,6 +370,16 @@ FIND_NUMBERS_JS = r"""(prefix) => {
   return [...out];
 }"""
 
+# 입력 필드 값에만 있는 번호(접두+숫자) — 상단 '구매요청번호' 잔존 판정용(그리드/본문 텍스트 제외).
+INPUT_NUMBERS_JS = r"""(prefix) => {
+  const re = new RegExp('\\b' + prefix + '\\d{6,}\\b', 'g');
+  const out = new Set();
+  for (const e of document.querySelectorAll('input')) {
+    for (const m of String(e.value || '').match(re) || []) out.add(m);
+  }
+  return [...out];
+}"""
+
 # 성공 스낵바 문구('자료가 정상적으로 저장되었습니다.' — 시연 ✅) 또는 경고 스낵바 수집.
 SNACKBARS_JS = r"""() => {
   const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();

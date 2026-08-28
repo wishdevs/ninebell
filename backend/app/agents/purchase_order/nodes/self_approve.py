@@ -33,9 +33,15 @@ def make_self_approve_node(*, allow_submit: bool = False):
             return {}
         events = state["events"]
         page = state["page"]
+        # read_bom 이 no_modules 로 남긴 '발주할 모듈 없음' result 는 재실행(submit_prqs) 경로에선
+        # 무의미하다 — report 가 최종 result 로 덮어쓴다.
         await emit_step(events, STEP, "running")
         t0 = time.monotonic()
         prqs = [p for p in (state.get("purchase_request_nos") or []) if p.get("number")]
+        # 재실행 경로 — 이미 저장된 PRQ 만 상신(graph._after_read_bom 이 여기로 직행시킨다).
+        po = (state.get("params") or {}).get("purchase_order") or {}
+        if po.get("submit_prqs"):
+            prqs = [{"number": str(x).strip(), "seq": "-"} for x in po["submit_prqs"] if str(x).strip()]
         if not prqs:
             await emit_log(events, "상신할 구매요청번호가 없습니다(저장된 PRQ 0건) — 셀프결재를 건너뜁니다.", "warn")
             await emit_step(events, STEP, "done", _ms(t0))

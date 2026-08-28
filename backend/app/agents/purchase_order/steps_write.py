@@ -319,6 +319,9 @@ async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
         return {"ok": False, "reason": "저장 버튼이 비활성입니다."}
     await page.mouse.click(box["x"], box["y"])
     dlg = await scan_dialog(page, cap_ms=DIALOG_SCAN_CAP_MS)
+    seen: list[str] = []  # 진단 — 관측한 스낵바/다이얼로그 문구(실패 사유에 싣는다)
+    seen.append(f"save-btn:{box}")
+    seen.append(f"first-dialog:{(dlg or {}).get('text', '')[:80]!r}{(dlg or {}).get('buttons')}")
     if dlg and SAVE_DIALOG_TEXT in (dlg.get("text") or ""):
         await click_dialog_button(page, "예")
     elif dlg:
@@ -334,6 +337,8 @@ async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
         for s in await page.evaluate(js.SNACKBARS_JS) or []:
             txt = s.get("text") or ""
             cls = s.get("cls") or ""
+            if txt and f"snack:{txt}" not in seen:
+                seen.append(f"snack:{txt}")
             if SAVE_SUCCESS_TEXT in txt:
                 seen_success = True
             elif ("warning" in cls or "error" in cls) and txt:
@@ -344,12 +349,80 @@ async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
             return {"ok": True, "number": new[-1] if new else None}
         for d in await page.evaluate(js.DIALOGS_JS) or []:
             if d.get("buttons") and len(d["buttons"]) <= 2 and "프로젝트" not in (d.get("title") or ""):
+                seen.append(f"dialog:{(d.get('text') or '')[:120]}{d.get('buttons')}")
                 await click_dialog_button(page, d["buttons"][0])
                 if any(w in (d.get("text") or "") for w in ("실패", "오류", "없습니다", "확인해")):
                     return {"ok": False, "reason": f"저장 후 안내 — {d.get('text')!r}"}
         await verify.DEFAULT_SLEEP(POLL_MS / 1000)
         waited += POLL_MS
-    return {"ok": False, "reason": "저장 후 상한 내에 성공 신호(번호 발급/성공 문구)를 확인하지 못했습니다."}
+    return {
+        "ok": False,
+        "reason": (
+            "저장 후 상한 내에 성공 신호(번호 발급/성공 문구)를 확인하지 못했습니다 — "
+            f"번호 before={sorted(before)} now={sorted(await page.evaluate(js.FIND_NUMBERS_JS, number_prefix) or [])} "
+            f"관측 {seen[:8]}"
+        ),
+    }
+
+
+async def reset_header_for_new_request(page: Any, *, keyword: str, pjt_no: str) -> dict:
+    """저장 직후 상단 '구매요청번호' 에 직전 PRQ 가 남아 화면이 **기존 문서 편집** 상태가 된다 —
+    이 상태에서 저장 버튼은 '변경 없음' 으로 무시된다(다이얼로그조차 없음, 2026-08-28 ETRI-001
+    실측 run5~7: 세션 첫 저장만 성공·두 번째는 무신호 실패). 신규(F3, `button.main-button.add`)로
+    헤더를 초기화한 뒤 프로젝트가 비면 다시 적용하고 고정값을 재확인한다.
+    반환 {"ok", "via": "none"|"add", "reason"?}.
+    """
+    from .steps import PROJECT_FIELD_LABEL, apply_project, ensure_fixed_header
+
+    from app.agents.voucher_receivable import steps as voucher_steps
+
+    if not await page.evaluate(js.INPUT_NUMBERS_JS, PUR_REQ_PREFIX):
+        return {"ok": True, "via": "none"}
+    left: list = []
+    seen: list[str] = []
+    # 결과검증형 재시도(상한 3): 클릭 → 다이얼로그 처리 → 번호가 비워질 때까지 폴링(최대 5s).
+    # 저장 직후 로딩/후처리 중 클릭이 먹히지 않는 사례(2026-08-28 run8 #6) 대비.
+    for attempt in range(3):
+        await voucher_steps.wait_loading_overlay_gone(page)
+        box = await page.evaluate(js.BOX_BY_SELECTOR_JS, selectors.BTN_ADD)
+        if not box:
+            return {"ok": False, "reason": "신규(추가) 버튼을 찾지 못해 구매요청번호를 초기화할 수 없습니다."}
+        await page.mouse.click(box["x"], box["y"])
+        dlg = await scan_dialog(page, cap_ms=1_500)
+        if dlg and dlg.get("buttons"):
+            seen.append(f"dialog:{(dlg.get('text') or '')[:80]}{dlg['buttons']}")
+            await click_dialog_button(page, "예" if "예" in dlg["buttons"] else dlg["buttons"][0])
+        waited = 0
+        while waited < 6_000:
+            # '초기화하시겠습니까?' [예][아니요] 가 클릭 2초 뒤에도 뜬다(2026-08-28 run8 스크린샷) —
+            # 폴링 중에도 계속 감지해 [예] 를 누른다.
+            for d in await page.evaluate(js.DIALOGS_JS) or []:
+                btns = d.get("buttons") or []
+                if btns and len(btns) <= 3 and "프로젝트" not in (d.get("title") or ""):
+                    seen.append(f"dialog:{(d.get('text') or '')[:80]}{btns}")
+                    await click_dialog_button(page, "예" if "예" in btns else btns[0])
+            left = await page.evaluate(js.INPUT_NUMBERS_JS, PUR_REQ_PREFIX)
+            if not left:
+                break
+            await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+            waited += POLL_MS
+        if not left:
+            break
+        await verify.DEFAULT_SLEEP(1.0)
+    if left:
+        return {
+            "ok": False,
+            "reason": f"신규 클릭(3회) 후에도 구매요청번호가 남아 있습니다 — {left} 관측 {seen}",
+        }
+    project = await page.evaluate(js_lib.FIELD_DISPLAY_JS, PROJECT_FIELD_LABEL)
+    if not project:
+        r = await apply_project(page, keyword, pjt_no)
+        if not r.get("ok"):
+            return {"ok": False, "reason": f"신규 후 프로젝트 재적용 실패 — {r.get('reason')}"}
+    h = await ensure_fixed_header(page)
+    if not h.get("ok"):
+        return {"ok": False, "reason": f"신규 후 고정값 확인 실패 — {h.get('reason')}"}
+    return {"ok": True, "via": "add", "project_reapplied": not project}
 
 
 # ── 화면 ② 구매요청처리(PUOPRQ00300) ─────────────────────────────────────────────

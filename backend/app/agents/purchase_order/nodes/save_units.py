@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 from app.agents.purchase_order import steps, steps_write
+from app.agents.purchase_order.params import parse_purchase_order_params
 from app.live.events import emit_log, emit_step
 from nbkit.patterns import emit_shot
 
@@ -22,8 +24,17 @@ def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
+KST = timezone(timedelta(hours=9))
+
+
 def _digits(s: object) -> str:
-    return re.sub(r"\D", "", str(s or ""))
+    """날짜 비교용 정규화 — 그리드 BFDEDT_DT 는 JS Date(UTC, 예 2026-08-27T15:00Z = KST 08-28)로
+    돌아오므로(2026-08-28 실측) datetime 이면 KST 날짜 YYYYMMDD 로, 문자열이면 숫자만 남긴다."""
+    if isinstance(s, datetime):
+        if s.tzinfo is None:
+            s = s.replace(tzinfo=timezone.utc)
+        return s.astimezone(KST).strftime("%Y%m%d")
+    return re.sub(r"\D", "", str(s or ""))[:8]
 
 
 def make_save_units_node():
@@ -37,19 +48,36 @@ def make_save_units_node():
         await emit_step(events, STEP, "running")
         t0 = time.monotonic()
         saved: list[dict] = []
+        # 재실행 보호(e2e/재시도용): 이미 저장된 발주단위 seq 목록은 건너뛴다.
+        po = (state.get("params") or {}).get("purchase_order") or {}
+        skip_seqs = {int(x) for x in (po.get("skip_units") or []) if str(x).isdigit()}
+        po_params = parse_purchase_order_params(state.get("params"))
 
         for n, unit in enumerate(units, 1):
             seq = unit.get("seq") or n
+            if int(seq) in skip_seqs:
+                await emit_log(events, f"발주단위 #{seq} — skip_units 로 건너뜁니다(이미 저장됨).", "warn")
+                continue
             codes = [str(m.get("itemCode") or "").strip() for m in (unit.get("modules") or [])]
             codes = [c for c in codes if c]
             if not codes:
                 await emit_step(events, STEP, "failed")
                 return {"error": f"발주단위 #{seq} 에 모듈 품목코드가 없습니다."}
 
+            # 직전 저장으로 헤더에 PRQ 가 남아 있으면 신규(F3)로 초기화 — 없으면 무동작.
+            rh = await steps_write.reset_header_for_new_request(
+                page, keyword=po_params.keyword or "", pjt_no=po_params.project_no or ""
+            )
+            if not rh.get("ok"):
+                await emit_step(events, STEP, "failed")
+                return {"error": f"발주단위 #{seq} 헤더 초기화 실패 — {rh.get('reason')}", "purchase_request_nos": saved}
+            if rh.get("via") == "add":
+                await emit_log(events, f"발주단위 #{seq} — 신규(F3)로 구매요청번호 초기화{' + 프로젝트 재적용' if rh.get('project_reapplied') else ''}.", "info")
+
             q = await steps_write.query_view(page, move_only=False)
             if not q.get("ok"):
                 await emit_step(events, STEP, "failed")
-                return {"error": f"발주단위 #{seq} 구매요청만 조회 실패 — {q.get('reason')}"}
+                return {"error": f"발주단위 #{seq} 구매요청만 조회 실패 — {q.get('reason')}", "purchase_request_nos": saved}
             read = await steps.read_bom_rows(page, READ_FIELDS)
             rows = read.get("rows") or []
             f = steps_write.find_set_rows(rows, codes)
