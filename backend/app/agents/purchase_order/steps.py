@@ -32,6 +32,11 @@ HITL·실패 문구는 nodes/ 가 담당한다.
      판정으로 한다(ready 시점에 사전검색 응답 미도착(rowCount=0)이었다가 뒤늦게 도착하는
      행을 오수락하지 않도록).
    - 소멸 판정은 연속 VANISH_CONFIRM_POLLS 회로 디바운스(재렌더 일시 invisible 오판 방지).
+   - **프리필 == 검색어 재제출 금지**(2026-08-28 라이브 실측 4/4): 메인폼에 이미 같은
+     프로젝트가 선택돼 있으면 팝업 #keyword 가 그 이름으로 프리필되는데, 같은 검색어를
+     Enter 로 다시 제출하면 ERP 가 ~300ms 뒤 팝업을 스스로 닫는다(리셋 아님·필드 불변).
+     이 팝업에는 '조회' 버튼이 없다(적용·닫기뿐) — 검색은 Enter 뿐. 그래서 프리필이
+     검색어와 같으면 사전검색 결과를 그대로 수락한다(`_settle_presearch`).
 """
 
 from __future__ import annotations
@@ -118,6 +123,27 @@ async def _type_keyword(page: Any, keyword: str) -> bool:
     return False
 
 
+async def _settle_presearch(page: Any, pre_sig: tuple | None) -> list | None:
+    """프리필 자동 사전검색 결과가 정착(연속 2폴 동일 시그니처)하면 rows, 상한 도달 시 None.
+
+    ready 시점에 사전검색 응답 미도착(rowCount=0)일 수 있어 첫 스냅샷만 믿지 않는다.
+    """
+    waited = 0
+    last_sig = pre_sig
+    cap = latency.budget_ms(MIN_SEARCH_SETTLE_MS)
+    while True:
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+        grid = await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS)
+        if grid.get("ok"):
+            sig = _grid_sig(grid)
+            if sig == last_sig and grid.get("rowCount", 0) > 0:
+                return grid.get("rows") or []
+            last_sig = sig
+        if waited >= cap:
+            return (grid.get("rows") or []) if grid.get("ok") else None
+
+
 async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_RETRIES) -> dict:
     """프로젝트 도움창 열기 → 검색 1회 → 결과 읽기. 실패 시 재오픈 재시도(상한 retries).
 
@@ -147,6 +173,19 @@ async def open_and_search_once(page: Any, keyword: str, *, retries: int = POPUP_
         # 제출 전 시그니처 — 팝업은 메인폼 프로젝트값으로 **자동 사전검색**된 결과가 이미 떠
         # 있어 '그리드 읽힘'만으론 내 검색 결과와 구분되지 않는다. 변화가 1차 수락 판정.
         pre_sig = _grid_sig(await page.evaluate(js.READ_POPUP_GRID_JS, MAX_SEARCH_RESULTS))
+
+        # 프리필 == 검색어(메인폼에 이미 그 프로젝트가 선택된 재실행 케이스): 같은 검색어로
+        # Enter 를 다시 제출하면 ERP 가 ~300ms 뒤 팝업을 **스스로 닫는다**(2026-08-28 라이브
+        # 실측 — 리셋 아님, 필드 불변). 재제출 없이 자동 사전검색 결과를 그대로 쓴다(같은
+        # 검색어의 결과이므로 동일). 행 선택→'적용'은 이후 apply_project 가 명시 수행한다.
+        prefilled = str(await page.evaluate(js.KEYWORD_VALUE_JS) or "").strip()
+        if prefilled == keyword:
+            rows = await _settle_presearch(page, pre_sig)
+            if rows is not None:
+                return {"ok": True, "attempt": attempt, "rows": rows, "prefilled": True}
+            logger.debug("open_and_search_once: 프리필 사전검색 미정착(attempt=%d)", attempt)
+            await close_popup(page)
+            continue
 
         if not await _type_keyword(page, keyword):
             logger.debug("open_and_search_once: 검색어 타이핑 실패(attempt=%d)", attempt)

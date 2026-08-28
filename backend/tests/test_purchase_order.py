@@ -556,8 +556,9 @@ class _PopupPage:
     (열림 대기 폴 → 제출 전 시그니처 → 검색 정착 폴 → 재시도까지 하나의 평면 타임라인).
     """
 
-    def __init__(self, popup_states, grids=None):
+    def __init__(self, popup_states, grids=None, prefill=""):
         self._popup_states = list(popup_states)
+        self.prefill = prefill  # 팝업 오픈 시 #keyword 프리필(메인폼 현재 프로젝트명)
         self._grids = list(grids or [_PRESEARCH_GRID, _RESULT_GRID])
         self.clicks = 0
         self.submits = 0
@@ -568,6 +569,8 @@ class _PopupPage:
 
         class _Mouse:
             async def click(self, x, y, click_count=1):
+                if click_count == 1:  # 피커 재클릭 = 재오픈 → #keyword 는 메인폼 프리필로 돌아간다.
+                    page.typed = ""
                 page.clicks += 1
 
         class _Keyboard:
@@ -591,7 +594,7 @@ class _PopupPage:
             self.popup_polls += 1
             return self._take(self._popup_states)
         if script == js_mod.KEYWORD_VALUE_JS:
-            return self.typed          # 실타이핑 반영값 검증 경로
+            return self.typed or self.prefill  # 타이핑 전엔 프리필, 후엔 실타이핑 반영값
         if script == js_mod.KEYWORD_BOX_JS:
             return {"x": 2, "y": 2}
         if script == js_mod.SUBMIT_KEYWORD_JS:
@@ -657,6 +660,41 @@ async def test_search_reopens_after_confirmed_vanish(monkeypatch):
     out = await steps_mod.open_and_search_once(page, "ZJ90-130")
     assert out["ok"] is True and out["attempt"] == 2
     assert page.clicks == 2 and page.submits == 2
+
+
+@pytest.mark.asyncio
+async def test_search_uses_presearch_when_prefill_equals_keyword(monkeypatch):
+    # 2026-08-28 라이브 실측: 프리필과 같은 검색어를 다시 제출하면 ERP 가 팝업을 스스로 닫아
+    # (재시도 상한) 실패했다. 프리필 == 검색어면 타이핑·제출 없이 사전검색 결과를 수락한다.
+    _instant_sleep(monkeypatch)
+    presearch = {"ok": True, "rowCount": 1, "rows": [{"PJT_NO": "ETRI-001", "PJT_NM": "ETRIBE ERP TEST 001"}]}
+    page = _PopupPage([_READY], grids=[presearch], prefill="ETRIBE ERP TEST 001")
+    out = await steps_mod.open_and_search_once(page, "ETRIBE ERP TEST 001")
+    assert out["ok"] is True and out.get("prefilled") is True
+    assert out["rows"][0]["PJT_NO"] == "ETRI-001"
+    assert page.keyword_sets == 0 and page.submits == 0 and page.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_search_prefill_path_waits_for_late_presearch_rows(monkeypatch):
+    # ready 시점에 사전검색 응답 미도착(rowCount=0) → 뒤늦게 도착한 행이 정착하면 수락.
+    _instant_sleep(monkeypatch)
+    empty = {"ok": True, "rowCount": 0, "rows": []}
+    presearch = {"ok": True, "rowCount": 1, "rows": [{"PJT_NO": "ETRI-001", "PJT_NM": "ETRIBE ERP TEST 001"}]}
+    page = _PopupPage([_READY], grids=[empty, empty, presearch, presearch], prefill="ETRIBE ERP TEST 001")
+    out = await steps_mod.open_and_search_once(page, "ETRIBE ERP TEST 001")
+    assert out["ok"] is True and out["rows"][0]["PJT_NO"] == "ETRI-001"
+    assert page.submits == 0
+
+
+@pytest.mark.asyncio
+async def test_search_still_submits_when_prefill_differs(monkeypatch):
+    # 프리필이 다른 프로젝트면 종전 경로(실타이핑 + untrusted 제출) 그대로.
+    _instant_sleep(monkeypatch)
+    page = _PopupPage([_READY], prefill="MISC-ESR3 #2")
+    out = await steps_mod.open_and_search_once(page, "ZJ90-130")
+    assert out["ok"] is True and "prefilled" not in out
+    assert page.keyword_sets == 1 and page.submits == 1
 
 
 @pytest.mark.asyncio
