@@ -422,6 +422,28 @@
 그룹의 마지막 항목. 화면③(`PUOORD02000_X20616`)과 **다른 화면**이다(`00200` vs `02000`).
 사용자는 이 플로우에서 쓰지 않는다고 했으므로 **범위 밖**이지만, 존재 사실은 기록해 둔다.
 
+## 화면 ③ 조작 실측(2026-08-28 헤디드 프로브 run2 — ✅, 저장 0회·잔존 0)
+
+`backend/e2e/purchase_order_screen3_ops_probe.py`(아티팩트 `e2e/artifacts/po_screen3_ops_*`). 대상 = ETRI-001 의
+셀프결재 종결 PRQ2026080694~0702. 사용자 시연 영상(`발주과정 화면.mp4` 7:55~9:19)과 정합.
+D8 의 '✅(시연)' 은 전부 **✅(라이브)** 로 격상, "하단 적용 비가역 여부 ❓" 는 **비가역 아님**으로 정정.
+
+| 항목 | 확정값 |
+|---|---|
+| 그리드 인덱스 | `.dews-ui-grid[0]`=마스터(`PARTNER_NM,TERPAY_NM,RMK_DC,WBS_NM,PJT_NM,PURDOC_NO…`) / `[1]`=디테일(`PURREQ_NO,ITEM_CD,BFDEDT_DT…`) / `[2]` WBS 소그리드 / `[3]` 발주상세(숨김) |
+| 구매발주유형 | `steps_write.pick_code_document(page,"s_po_tp_cd","원재료")` → 코드 1000/표시 원재료. 코드 `1000` 직접 타이핑도 동일(영상) |
+| 팝업 오픈 | `#btn_req` → `.k-window` 제목 **구매요청**, **열리면서 자동 조회**(조회 버튼 없음). 요청유형 `s_purreq_tp` 원재료 프리필, 요청일 `s_purreq_dt_startinput/_endinput` 기본 **당월 1일~말일** |
+| 팝업 필드 id | 구매유형 `s_purdoc_tp`(kendo dropdown)·품목 `s_item_cd`·저장위치 `s_sl_cd`·품목주거래처 `s_principalpartn_cd`·**변경거래처 `s_chg_partner_cd`**·**구매요청번호 `s_purreq_no`**·WBS요소 `s_wbs_no`(multicodepicker, 미사용) |
+| 팝업 버튼 | 행 변경거래처 적용 **`#btn_apply`** / 하단 확정 **`button.confirm.ok`**("적용") / 닫기 `button.confirm.cancel` |
+| PRQ 특정 | `#s_purreq_no` 에 PRQ 입력 + **trusted Enter** → 그 PRQ 라인만(647→84행). 팝업 소멸 없음(프로젝트 도움창과 다름) |
+| 거래처 변경 | 팝업 그리드 `checkRow`(대상 행) → `pick_code_document(page,"s_chg_partner_cd","해룡"/"알파테크")` → `#btn_apply` → 스낵바 **"적용되었습니다."** + 체크 행만 `CHG_PARTNER_NM/CHG_PARTNER_CD`(30209/10061). 품목거래처명 fieldName = **`PRINCIPALPARTN_NM`**(가공품/판금품/실거래처명) |
+| 하단 적용 | 대상 행 체크 → `button.confirm.ok` → 다이얼로그 **"적용하시겠습니까?" [예]** → 팝업 닫힘 → **마스터 1행 = 거래처 1종**, `RMK_DC` 프리필 = 구매사유(D6), `TERPAY_NM` 자동 |
+| 마스터→디테일 | 마스터 행 **실 마우스 클릭**(bbox 헤더 ~30px + 행 ~32px)으로 디테일 재조회(ArrowDown 불필요) |
+| 납기 | 디테일 `checkAll(true)` → `#BFDEDT_DT`=`YYYY-MM-DD` + `#btnApplyDT` → `BFDEDT_DT` JS Date(UTC, KST 자정) 반영 |
+| 비고 | `setCurrent({itemIndex,fieldName:'RMK_DC'})+showEditor()` → 오버레이 `#PUOORD02000_X20616_1000_3200_mstGrid_line`(실 input). 타이핑→Tab→`ds.getValue` 커밋 확인은 ❓(1스텝 잔여) |
+| 폐기 | 딥링크 재진입만으로 초기화, 경고 다이얼로그 없음, 마스터 0행(2회 확인) |
+| ❓ 잔여 | 💾 저장 성공 신호(발주번호 `PURDOC_NO` 발급 추정) — 이 화면은 삭제 아이콘이 없어 되돌리기 수단 미확인 → 저장은 사용자 confirm HITL 뒤 |
+
 ## 스텝 계획 (Phase A 구현분 + Phase B 예정분)
 
 | 순서 | 스텝 | 내용 | 검증 | 비가역 |
