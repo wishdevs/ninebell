@@ -306,7 +306,7 @@ DIALOGS_JS = r"""() => {
   return wins.map(w => ({
     title: c((w.querySelector('.k-window-title')||{}).innerText),
     text: c(w.innerText).slice(0, 200),
-    buttons: [...w.querySelectorAll('button')].filter(b => b.offsetParent !== null).map(b => c(b.innerText)),
+    buttons: [...w.querySelectorAll('button, a.k-button, .k-button, [role=button]')].filter(b => b.offsetParent !== null).map(b => c(b.innerText)),
   }));
 }"""
 
@@ -316,7 +316,7 @@ DIALOG_BTN_BOX_JS = r"""(btnText) => {
   const wins = [...document.querySelectorAll('.k-window, .k-dialog, [role=alertdialog]')]
     .filter(w => w.offsetParent !== null);
   for (const w of wins) {
-    const b = [...w.querySelectorAll('button')].find(x => x.offsetParent !== null && c(x.innerText) === btnText);
+    const b = [...w.querySelectorAll('button, a.k-button, .k-button, [role=button]')].find(x => x.offsetParent !== null && c(x.innerText) === btnText);
     if (b) { const r = b.getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }; }
   }
   return null;

@@ -75,6 +75,18 @@ async def click_dialog_button(page: Any, text: str) -> bool:
         return False
     await page.mouse.click(box["x"], box["y"])
     await verify.DEFAULT_SLEEP(0.5)
+    # ✅ 실측(2026-08-28 probe2): dews msgbox(`#dews-msgbox-confirm`, 결재 확인 '전자결재를
+    # 진행하시겠습니까?')는 좌표 클릭이 먹지 않고 **로케이터 클릭**만 닫는다. 아직 같은 버튼이
+    # 보이면 로케이터로 한 번 더 누른다(초기화/저장 확인창은 좌표 클릭으로 이미 닫혀 no-op).
+    if await page.evaluate(js.DIALOG_BTN_BOX_JS, text):
+        try:
+            await page.get_by_role("button", name=text, exact=True).first.click(timeout=2_000)
+        except Exception:  # noqa: BLE001 — role 매칭 실패 시 텍스트 로케이터.
+            try:
+                await page.get_by_text(text, exact=True).first.click(timeout=2_000)
+            except Exception:  # noqa: BLE001
+                return False
+        await verify.DEFAULT_SLEEP(0.5)
     return True
 
 
@@ -493,13 +505,14 @@ async def open_request_approval(page: Any, *, attempts: int = 2) -> dict:
                     # ✅ 실측(2026-08-28 run10): 아이콘 클릭 → 인페이지 확인 '전자결재를 진행하시겠습니까?'
                     # [예][아니요] → [예] 뒤에 EAP 새 창이 뜬다. 새 창 대기 중에 확인을 처리한다.
                     waited = 0
-                    while waited < 5_000:
+                    while waited < 12_000:
                         dlg = next(
                             (d for d in (await page.evaluate(js.DIALOGS_JS) or []) if "예" in (d.get("buttons") or [])),
                             None,
                         )
                         if dlg:
-                            await click_dialog_button(page, "예")
+                            await click_dialog_button(page, "예")  # 좌표→로케이터 폴백 내장
+                            # 확인 뒤엔 새 창이 뜰 때까지 조용히 기다린다(재클릭 금지 — 이중 상신 방지).
                             break
                         await verify.DEFAULT_SLEEP(POLL_MS / 1000)
                         waited += POLL_MS
