@@ -201,8 +201,10 @@ async def select_master_row(page: Any, idx: int, *, vendor: str | None = None) -
     # 1) 그리드 안(첫 데이터 컬럼 근방) 실클릭으로 포커스 → 2) 현재 행을 읽고 방향키(신뢰 입력)로
     #    idx 까지 이동(2026-08-28 실측: y 를 바꿔 클릭해도 현재 행이 항상 마지막 행 — 좌표 클릭이
     #    선택을 못 바꿈. 방향키는 currentChanged 를 발화해 디테일 재조회까지 일으킨다).
+    # ⚠ 마스터 그리드는 ~5행만 보인다(2026-08-28 ETRI-002 #3: 6행째 위치 클릭이 그리드 밖에 떨어져
+    #   포커스 실패 → 방향키 무반응). 항상 보이는 **첫 행** 위치를 클릭해 포커스를 잡고 방향키로 이동한다.
     x = rect["x"] + 200
-    y = rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX * idx + MASTER_ROW_PX // 2
+    y = rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX // 2
     await page.mouse.click(x, y)
     await verify.DEFAULT_SLEEP(0.8)
     tried: list[tuple[str, int]] = []

@@ -416,7 +416,12 @@ async def reset_header_for_new_request(page: Any, *, keyword: str, pjt_no: str) 
 
     from app.agents.voucher_receivable import steps as voucher_steps
 
-    if not await page.evaluate(js.INPUT_NUMBERS_JS, PUR_REQ_PREFIX):
+    # PRQ(구매요청) 뿐 아니라 **IRQ(이동요청번호)** 잔존도 같은 '기존 문서' 상태다 — 이동요청 저장 직후
+    # 구매요청만 재조회가 163행(이동요청 뷰) 그대로 멈춘 실측(2026-08-28 ETRI-002, IRQ2026081446).
+    stale = [
+        p for p in (PUR_REQ_PREFIX, MOVE_REQ_PREFIX) if await page.evaluate(js.INPUT_NUMBERS_JS, p)
+    ]
+    if not stale:
         return {"ok": True, "via": "none"}
     left: list = []
     seen: list[str] = []
@@ -441,7 +446,7 @@ async def reset_header_for_new_request(page: Any, *, keyword: str, pjt_no: str) 
                 if btns and len(btns) <= 3 and "프로젝트" not in (d.get("title") or ""):
                     seen.append(f"dialog:{(d.get('text') or '')[:80]}{btns}")
                     await click_dialog_button(page, "예" if "예" in btns else btns[0])
-            left = await page.evaluate(js.INPUT_NUMBERS_JS, PUR_REQ_PREFIX)
+            left = [n for p in (PUR_REQ_PREFIX, MOVE_REQ_PREFIX) for n in (await page.evaluate(js.INPUT_NUMBERS_JS, p) or [])]
             if not left:
                 break
             await verify.DEFAULT_SLEEP(POLL_MS / 1000)
