@@ -488,8 +488,21 @@ async def open_request_approval(page: Any, *, attempts: int = 2) -> dict:
             if not rect:
                 break
             try:
-                async with context.expect_page(timeout=8_000) as info:
+                async with context.expect_page(timeout=15_000) as info:
                     await page.mouse.click(rect["x"], rect["y"])
+                    # ✅ 실측(2026-08-28 run10): 아이콘 클릭 → 인페이지 확인 '전자결재를 진행하시겠습니까?'
+                    # [예][아니요] → [예] 뒤에 EAP 새 창이 뜬다. 새 창 대기 중에 확인을 처리한다.
+                    waited = 0
+                    while waited < 5_000:
+                        dlg = next(
+                            (d for d in (await page.evaluate(js.DIALOGS_JS) or []) if "예" in (d.get("buttons") or [])),
+                            None,
+                        )
+                        if dlg:
+                            await click_dialog_button(page, "예")
+                            break
+                        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+                        waited += POLL_MS
             except Exception:  # noqa: BLE001 — 새 창 미출현 → 재시도/다음 후보.
                 dlg = await page.evaluate(js.DIALOGS_JS)
                 if dlg:
