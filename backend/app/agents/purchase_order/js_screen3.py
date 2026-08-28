@@ -160,6 +160,18 @@ MAIN_GRID_RECT_JS = r"""(gridIdx) => {
   return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
 }"""
 
+# grid[idx] 현재 행(itemIndex) — 실클릭이 의도한 행을 잡았는지 독립 확인(2026-08-28 실측: 헤더 높이
+# 추정 오차로 1행 클릭이 5행 선택). 반환 int | -1.
+MAIN_CURRENT_ROW_JS = r"""(gridIdx) => {
+  const el = document.querySelectorAll('.dews-ui-grid')[gridIdx];
+  if (!el) return -1;
+  try {
+    const cur = window.jQuery(el).data('dewsControl')._grid.getCurrent() || {};
+    const i = cur.itemIndex ?? cur.dataRow ?? -1;
+    return typeof i === 'number' ? i : -1;
+  } catch (e) { return -1; }
+}"""
+
 # 마스터 grid[0] 셀 에디터 오픈(setCurrent+showEditor) — RMK_DC 인라인 편집. arg [itemIndex, fieldName].
 MAIN_OPEN_EDITOR_JS = r"""([itemIndex, fieldName]) => {
   const el = document.querySelectorAll('.dews-ui-grid')[0];

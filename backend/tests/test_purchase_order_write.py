@@ -157,3 +157,12 @@ def test_place_orders_targets_from_state_and_order_prqs_param():
     assert targets_from_state(st) == [("PRQ2", plan["units"][1])]
     st2 = {"params": {"purchase_order": {"plan": plan, "order_prqs": ["PRQ1=1", "PRQ9=9"]}}}
     assert targets_from_state(st2) == [("PRQ1", plan["units"][0]), ("PRQ9", {})]
+
+
+def test_screen3_due_before_today():
+    from app.agents.purchase_order.steps_screen3 import due_before_today
+
+    assert due_before_today("2026-08-21", "2026-08-28")
+    assert not due_before_today("2026-08-28", "2026-08-28")
+    assert not due_before_today("2026-09-30", "2026-08-28")
+    assert not due_before_today("", "2026-08-28")

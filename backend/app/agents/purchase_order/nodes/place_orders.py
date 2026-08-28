@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 from app.agents.purchase_order import steps_screen3 as s3
+from app.agents.purchase_order.nodes.save_units import KST
 from app.config import get_settings
 from app.live.events import emit_log, emit_step
 from nbkit.omnisol.menu_schemas import PURCHASE_PO_BATCH
@@ -82,6 +84,7 @@ def make_place_orders_node():
             return {"purchase_orders": []}
 
         base = get_settings().erp_base
+        today = datetime.now(KST).strftime("%Y-%m-%d")
         done: list[dict] = []
         for prq, unit in targets:
             seq = unit.get("seq")
@@ -119,18 +122,23 @@ def make_place_orders_node():
                 g = s3.vendor_group_for(unit, vendor) or {}
                 due = str(g.get("dueDate") or unit.get("dueDate") or "")
                 note = str(g.get("note") or "").strip()
-                sel = await s3.select_master_row(page, i)
+                sel = await s3.select_master_row(page, i, vendor=vendor)
                 if not sel.get("ok"):
                     return await _fail(events, t0, done, f"{prq}: {sel.get('reason')}")
+                if due and s3.due_before_today(due, today):
+                    await emit_log(events, f"{prq}/{vendor}: 계획 납기 {due} 가 발주일({today}) 이전이라 적용하지 않습니다(구매요청 납기 유지).", "warn")
+                    due = ""
                 if due:
                     d = await s3.apply_due_to_detail(page, due)
                     if not d.get("ok"):
                         return await _fail(events, t0, done, f"{prq}/{vendor}: {d.get('reason')}")
+                note_via = "유지"
                 if note and note != str(m.get("RMK_DC") or "").strip():
                     n = await s3.set_master_note(page, i, note)
                     if not n.get("ok"):
                         return await _fail(events, t0, done, f"{prq}/{vendor}: {n.get('reason')}")
-                await emit_log(events, f"{prq}/{vendor}: 납기 {due or '(유지)'} · 비고 {'갱신' if note else '유지'}{' (계획서 그룹 미매칭 — 발주단위 납기 사용)' if not g else ''}.", "info")
+                    note_via = f"갱신({n.get('via')})"
+                await emit_log(events, f"{prq}/{vendor}: 납기 {due or '(유지)'} · 비고 {note_via}{' (계획서 그룹 미매칭 — 발주단위 납기 사용)' if not g else ''}.", "info")
             await emit_shot(events.put, page)
             s = await s3.click_save_orders(page, len(masters))
             if not s.get("ok"):

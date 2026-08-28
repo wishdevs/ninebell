@@ -442,7 +442,11 @@ D8 의 '✅(시연)' 은 전부 **✅(라이브)** 로 격상, "하단 적용 �
 | 납기 | 디테일 `checkAll(true)` → `#BFDEDT_DT`=`YYYY-MM-DD` + `#btnApplyDT` → `BFDEDT_DT` JS Date(UTC, KST 자정) 반영 |
 | 비고 | `setCurrent({itemIndex,fieldName:'RMK_DC'})+showEditor()` → 오버레이 `#PUOORD02000_X20616_1000_3200_mstGrid_line`(실 input). 타이핑→Tab→`ds.getValue` 커밋 확인은 ❓(1스텝 잔여) |
 | 폐기 | 딥링크 재진입만으로 초기화, 경고 다이얼로그 없음, 마스터 0행(2회 확인) |
-| ❓ 잔여 | 💾 저장 성공 신호(발주번호 `PURDOC_NO` 발급 추정) — 이 화면은 삭제 아이콘이 없어 되돌리기 수단 미확인 → 저장은 사용자 confirm HITL 뒤 |
+| ✅ 저장(에이전트 e2e 2026-08-28) | 💾 → 마스터 `PURDOC_NO` 가 **`PUR2026082149` 형태**로 전 행 발급 = 성공 신호(PRQ2026080694 → 거래처 5행 → PUR…2149~2153). 삭제 아이콘 없음(비가역) → 사용자 승인 (a) 로 confirm HITL 뒤 실행 |
+| ✅ 비고 커밋 | 에디터 오픈 후 **로케이터 `fill` + Enter** 만 커밋됨(Ctrl/Meta+A 타이핑+Tab 은 미커밋). `steps_screen3.set_master_note` 폴백 체인(fill→type→setValue) |
+| ✅ 마스터 행 선택 | 좌표 클릭은 y 를 바꿔도 마지막 행이 잡힘 → **클릭 후 방향키로 `getCurrent()` 가 idx 될 때까지 이동**(디테일 재조회 발화) |
+| ✅ 과거 납기 | 발주일 이전 날짜는 [적용]이 조용히 무시됨 → 에이전트는 경고 로그 후 구매요청 납기 유지(`due_before_today`) |
+| ✅ 코드피커 선택 | 검색 직후 첫 행 맹선택 금지(알파테크 검색이 'ACM Research' 선택) → `PICKER_FIND_ROW_JS` 로 검색어 포함 행 선택 |
 
 ## 스텝 계획 (Phase A 구현분 + Phase B 예정분)
 

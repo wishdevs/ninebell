@@ -254,13 +254,24 @@ async def pick_code_document(page: Any, field_id: str, keyword: str) -> dict:
     await page.mouse.click(box["x"], box["y"])
     await page.wait_for_timeout(1_200)
     try:
-        await codepicker._picker_search(page, keyword)
-        await codepicker._wait_picker_rows_stable(page)
-        rows = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
-        if not isinstance(rows, int) or rows < 1:
+        # 검색 → 검색어를 **포함하는 행**을 찾아 선택(첫 행 맹선택 금지 — 2026-08-28 실측: 검색이
+        # 목록을 좁히기 전 첫 행 'ACM Research…' 선택). 못 찾으면 검색 1회 재시도.
+        found = {"index": -1}
+        for attempt in range(2):
+            await codepicker._picker_search(page, keyword)
+            await codepicker._wait_picker_rows_stable(page)
+            await verify.DEFAULT_SLEEP(0.4)
+            found = await page.evaluate(js.PICKER_FIND_ROW_JS, keyword) or {"index": -1}
+            if found.get("index", -1) >= 0:
+                break
+            await verify.DEFAULT_SLEEP(1.0)
+        if found.get("index", -1) < 0:
             await page.keyboard.press("Escape")
-            return {"ok": False, "reason": f"'{keyword}' 검색 결과가 없습니다({field_id})."}
-        await page.evaluate(js_lib.PICKER_SELECT_JS, 0)
+            return {
+                "ok": False,
+                "reason": f"'{keyword}' 를 포함하는 행이 없습니다({field_id}, 행 {found.get('rows')}, 첫행 {found.get('sample')}).",
+            }
+        await page.evaluate(js_lib.PICKER_SELECT_JS, int(found["index"]))
         apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
         if apply_box:
             await page.mouse.click(apply_box["x"], apply_box["y"])

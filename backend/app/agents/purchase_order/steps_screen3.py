@@ -189,22 +189,51 @@ async def master_rows(page: Any) -> list[dict]:
     return r.get("rows") or []
 
 
-async def select_master_row(page: Any, idx: int) -> dict:
-    """마스터 행 실 마우스 클릭(bbox 헤더 30px + 행 32px) → 디테일 재조회(행수>0) 확인."""
+async def select_master_row(page: Any, idx: int, *, vendor: str | None = None) -> dict:
+    """마스터 행 실 마우스 클릭 → `getCurrent()` 가 idx 인지 **독립 확인**(헤더 높이 후보 스캔) →
+    디테일 재조회(행수>0) 확인. vendor 가 있으면 현재 행 PARTNER_NM 도 대조.
+
+    2026-08-28 실측: 고정 헤더 30px 가정으로 1행 클릭이 5행을 선택 — 결과검증형 스캔으로 교체.
+    """
     rect = await page.evaluate(j3.MAIN_GRID_RECT_JS, 0)
     if not rect:
         return {"ok": False, "reason": "마스터 그리드 rect 미발견"}
-    x = rect["x"] + 60
+    # 1) 그리드 안(첫 데이터 컬럼 근방) 실클릭으로 포커스 → 2) 현재 행을 읽고 방향키(신뢰 입력)로
+    #    idx 까지 이동(2026-08-28 실측: y 를 바꿔 클릭해도 현재 행이 항상 마지막 행 — 좌표 클릭이
+    #    선택을 못 바꿈. 방향키는 currentChanged 를 발화해 디테일 재조회까지 일으킨다).
+    x = rect["x"] + 200
     y = rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX * idx + MASTER_ROW_PX // 2
     await page.mouse.click(x, y)
-    waited = 0
-    while waited < 8_000:
-        n = await page.evaluate(j3.MAIN_GRID_COUNT_JS, 1)
-        if isinstance(n, int) and n > 0:
-            return {"ok": True, "detail_rows": n}
-        await verify.DEFAULT_SLEEP(0.4)
-        waited += 400
-    return {"ok": False, "reason": f"마스터 {idx}행 클릭 후 디테일이 채워지지 않았습니다."}
+    await verify.DEFAULT_SLEEP(0.8)
+    tried: list[tuple[str, int]] = []
+    cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
+    tried.append(("click", cur))
+    for _ in range(40):
+        if cur == idx:
+            break
+        if cur < 0:
+            break
+        await page.keyboard.press("ArrowDown" if cur < idx else "ArrowUp")
+        await verify.DEFAULT_SLEEP(0.5)
+        cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
+        tried.append(("key", cur))
+    for _ in range(1):
+        if cur != idx:
+            continue
+        if vendor:
+            vals = await page.evaluate(j3.MAIN_FIELDS_JS, [0, [idx], ["PARTNER_NM"]])
+            got = str((vals.get(str(idx)) or vals.get(idx) or {}).get("PARTNER_NM") or "")
+            if norm(got) != norm(vendor):
+                return {"ok": False, "reason": f"마스터 {idx}행 거래처 불일치 — 기대 {vendor!r} / 실제 {got!r}"}
+        waited = 0
+        while waited < 8_000:
+            n = await page.evaluate(j3.MAIN_GRID_COUNT_JS, 1)
+            if isinstance(n, int) and n > 0:
+                return {"ok": True, "detail_rows": n, "moves": tried}
+            await verify.DEFAULT_SLEEP(0.4)
+            waited += 400
+        return {"ok": False, "reason": f"마스터 {idx}행 선택 후 디테일이 채워지지 않았습니다."}
+    return {"ok": False, "reason": f"마스터 {idx}행을 클릭으로 선택하지 못했습니다(헤더 후보별 현재행 {tried})."}
 
 
 async def apply_due_to_detail(page: Any, due: str) -> dict:
@@ -226,30 +255,79 @@ async def apply_due_to_detail(page: Any, due: str) -> dict:
     want = _digits(due)
     bad = [i for i in range(n) if _digits((vals.get(str(i)) or vals.get(i) or {}).get(DUE_FIELD)) != want]
     if bad:
-        return {"ok": False, "reason": f"납기 {due} 미반영 디테일 행 {len(bad)}/{n}"}
+        snacks = [s.get("text") for s in (await page.evaluate(js.SNACKBARS_JS) or []) if s.get("text")]
+        cur = (vals.get(str(bad[0])) or vals.get(bad[0]) or {}).get(DUE_FIELD)
+        return {"ok": False, "reason": f"납기 {due} 미반영 디테일 행 {len(bad)}/{n}(현재 {cur!r}, 스낵바 {snacks[:2]})"}
     return {"ok": True, "rows": n}
 
 
-async def set_master_note(page: Any, idx: int, text: str) -> dict:
-    """마스터 RMK_DC 인라인 편집 — 에디터 오픈 → 전체선택 후 타이핑 → Tab → ds 값 독립 확인."""
-    o = await page.evaluate(j3.MAIN_OPEN_EDITOR_JS, [idx, "RMK_DC"])
-    if not o.get("ok"):
-        return {"ok": False, "reason": f"비고 에디터 오픈 실패 — {o}"}
-    await verify.DEFAULT_SLEEP(0.6)
-    inp = await page.evaluate(j3.MAIN_EDITOR_INPUT_JS)
-    if not inp:
-        return {"ok": False, "reason": "비고 인라인 에디터 input 을 찾지 못했습니다."}
-    await page.mouse.click(inp["x"], inp["y"])
-    await page.keyboard.press("Control+A")
-    await page.keyboard.press("Meta+A")
-    await page.keyboard.type(text, delay=15)
-    await page.keyboard.press("Tab")
-    await verify.DEFAULT_SLEEP(0.6)
+def due_before_today(due: str, today: str) -> bool:
+    """계획 납기가 발주일(오늘) 이전이면 True — ERP 가 조용히 무시하므로(2026-08-28 실측 08-21) 적용을 건너뛴다."""
+    d, t = re.sub(r"\D", "", due or "")[:8], re.sub(r"\D", "", today or "")[:8]
+    return bool(d) and bool(t) and d < t
+
+
+async def _read_note(page: Any, idx: int) -> str:
     vals = await page.evaluate(j3.MAIN_FIELDS_JS, [0, [idx], ["RMK_DC"]])
-    got = str((vals.get(str(idx)) or vals.get(idx) or {}).get("RMK_DC") or "")
-    if got.strip() != text.strip():
-        return {"ok": False, "reason": f"비고 커밋 확인 실패 — 기대 {text!r} / 실제 {got!r}"}
-    return {"ok": True}
+    return str((vals.get(str(idx)) or vals.get(idx) or {}).get("RMK_DC") or "").strip()
+
+
+async def set_master_note(page: Any, idx: int, text: str) -> dict:
+    """마스터 RMK_DC 인라인 편집 — 방식 폴백 체인, 각 단계 `ds.getValue` 독립 확인.
+
+    ① 에디터 오픈 → 오버레이 input 로케이터 fill + Enter  ② 오픈 → 트리플클릭 전체선택 → 타이핑 + Enter
+    ③ 그리드 setValue(마지막 수단 — 2026-08-28 실측: Ctrl/Meta+A 후 타이핑+Tab 은 커밋되지 않았다).
+    """
+    tried: list[str] = []
+
+    async def _open() -> dict | None:
+        o = await page.evaluate(j3.MAIN_OPEN_EDITOR_JS, [idx, "RMK_DC"])
+        if not o.get("ok"):
+            return None
+        await verify.DEFAULT_SLEEP(0.6)
+        return await page.evaluate(j3.MAIN_EDITOR_INPUT_JS)
+
+    # ① 로케이터 fill
+    inp = await _open()
+    if inp:
+        try:
+            await page.locator(f"#{inp['id']}").fill(text, timeout=3_000)
+            await page.keyboard.press("Enter")
+            await verify.DEFAULT_SLEEP(0.6)
+            if await _read_note(page, idx) == text.strip():
+                return {"ok": True, "via": "fill"}
+            tried.append(f"fill→{await _read_note(page, idx)!r}")
+        except Exception as exc:  # noqa: BLE001
+            tried.append(f"fill EXC {str(exc)[:60]}")
+        await page.keyboard.press("Escape")
+    else:
+        tried.append("editor-open-failed")
+
+    # ② 트리플클릭 + 타이핑
+    inp = await _open()
+    if inp:
+        await page.mouse.click(inp["x"], inp["y"], click_count=3)
+        await page.keyboard.type(text, delay=10)
+        await page.keyboard.press("Enter")
+        await verify.DEFAULT_SLEEP(0.6)
+        if await _read_note(page, idx) == text.strip():
+            return {"ok": True, "via": "type"}
+        tried.append(f"type→{await _read_note(page, idx)!r}")
+        await page.keyboard.press("Escape")
+
+    # ③ 그리드 setValue
+    r = await page.evaluate(
+        """([i, f, v]) => { try {
+             const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+             g.setValue(i, f, v); return { ok: true };
+           } catch (e) { return { ok: false, err: String(e).slice(0, 100) }; } }""",
+        [idx, "RMK_DC", text],
+    )
+    await verify.DEFAULT_SLEEP(0.4)
+    if r.get("ok") and await _read_note(page, idx) == text.strip():
+        return {"ok": True, "via": "setValue"}
+    tried.append(f"setValue {r}")
+    return {"ok": False, "reason": f"비고 커밋 실패 — 기대 {text!r}, 시도 {tried}"}
 
 
 async def click_save_orders(page: Any, expect_rows: int) -> dict:

@@ -341,6 +341,30 @@ PICKER_OPEN_BOX_JS = r"""(id) => {
   return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
 }"""
 
+# 코드피커 팝업(최근 열린 비-법인카드 k-window) 그리드에서 **검색어를 포함하는 첫 행** 인덱스.
+# 검색이 목록을 좁히기 전에 첫 행을 집는 레이스 방지(2026-08-28 화면③ 실측: '알파테크' 검색 후
+# 첫 행이 'ACM Research…'). 모든 컬럼 값(문자열)을 대상으로 부분일치. 반환 {rows, index(-1=없음), sample}.
+PICKER_FIND_ROW_JS = r"""(keyword) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const p = [...document.querySelectorAll('.k-window')].filter(w=>w.offsetParent!==null)
+    .filter(w=>!/법인카드/.test(c((w.querySelector('.k-window-title')||{}).innerText))).slice(-1)[0];
+  if (!p) return { rows: -1, index: -1, reason: 'no-pop' };
+  try {
+    const g = window.jQuery(p.querySelector('.dews-ui-grid')).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const rows = n > 0 ? ds.getJsonRows(0, n - 1) : [];
+    const k = c(keyword).replace(/\s+/g, '');
+    let index = -1, sample = null;
+    for (let i = 0; i < rows.length; i++) {
+      const vals = Object.values(rows[i]).filter(v => typeof v === 'string').map(v => c(v).replace(/\s+/g, ''));
+      if (i === 0) sample = vals.slice(0, 4);
+      if (vals.some(v => v.includes(k))) { index = i; break; }
+    }
+    return { rows: n, index, sample };
+  } catch (e) { return { rows: -1, index: -1, err: String(e).slice(0, 100) }; }
+}"""
+
 # 입력 값 읽기(코드피커는 `<id>_text` 표시 우선). 반환 string | null.
 INPUT_VALUE_JS = r"""(id) => {
   const e = document.getElementById(id + '_text') || document.getElementById(id);
