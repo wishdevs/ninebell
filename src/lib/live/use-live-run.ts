@@ -69,7 +69,7 @@ type Action =
   | { type: 'markError'; id: string }
   | { type: 'connected'; value: boolean }
   | { type: 'failure'; message: string }
-  | { type: 'clearHitl' }
+  | { type: 'clearHitl'; id?: string }
   | { type: 'selectWindow'; window: LiveWindow }
   | { type: 'detach' };
 
@@ -185,6 +185,10 @@ function reducer(state: LiveRunState, action: Action): LiveRunState {
       // 재방출해 다시 열리므로 안전하다. 종료 상태는 sticky.
       if (state.hitl == null || state.status === 'succeeded' || state.status === 'failed')
         return state;
+      // ⚠ 레이스(2026-08-28 구매발주 실측): 제출 응답이 돌아오기 전에 백엔드가 **다음 개입**
+      // (계획 수령 9ms 뒤 confirm_write)을 SSE 로 보내면, 무조건 clear 가 새 카드를 지워 화면이
+      // 멈춘 것처럼 보인다. 제출한 그 개입(id)일 때만 닫는다.
+      if (action.id && state.hitl.id !== action.id) return state;
       return { ...state, hitl: null, status: 'running' };
     case 'selectWindow':
       // 사용자가 부모창/자식창 탭을 수동 선택 — 활성 창과 파생 screenshot 을 함께 갱신한다.
@@ -496,7 +500,7 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
       splitPlan?: SplitPlanRowSubmit[],
     ): Promise<boolean> => {
       // 제출 즉시 개입 패널 축소·화면 원복(낙관적). 무효 제출이면 백엔드가 그리드를 재방출한다.
-      dispatch({ type: 'clearHitl' });
+      dispatch({ type: 'clearHitl', id: decisionId });
       return postHitl(runIdRef.current, decisionId, splitPlan ? { rows, splitPlan } : { rows });
     },
     [],
@@ -507,7 +511,7 @@ export function useLiveRun(agentId: string, options: UseLiveRunOptions = {}): Us
       // 계획서(kind=planner) 확정 제출 — 성공해야 개입을 닫는다. 낙관적으로 닫으면 422 같은
       // 검증 실패 뒤 카드가 사라져 취소밖에 못 한다(2026-08-28 라이브 사고).
       const result = await postHitlDetailed(runIdRef.current, decisionId, { plan });
-      if (result.ok) dispatch({ type: 'clearHitl' });
+      if (result.ok) dispatch({ type: 'clearHitl', id: decisionId });
       return result;
     },
     [],
