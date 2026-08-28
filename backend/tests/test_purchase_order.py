@@ -38,6 +38,10 @@ GRAPH_STEP_KEYS = [
     "pick_project",
     "read_bom",
     "plan",
+    "confirm_write",
+    "save_move",
+    "save_units",
+    "self_approve",
     "report",
 ]
 
@@ -1089,10 +1093,12 @@ async def test_report_returns_plan_project_summary_and_no_write_notice():
                             "purchasableParts": 2},
         }
     )
-    assert set(out["result"]) == {"plan", "project", "bomSummary"}
+    assert set(out["result"]) == {
+        "plan", "project", "bomSummary", "moveRequestNo", "purchaseRequests", "submitted",
+    }
     assert out["result"]["plan"]["units"][0]["seq"] == 1
     logs = [f["log"] for f in _frames(events) if "log" in f]
-    assert any("저장 자동화는 쓰기 실측 후 개방" in m for m in logs)  # handoff 성격 명시.
+    assert any("화면 ③" in m for m in logs)  # handoff 성격 명시(구매발주일괄입력은 수동).
     assert_keys_declared(PurchaseOrderState, out)
 
 
@@ -1169,9 +1175,9 @@ def test_fixture_promoted_from_placeholder():
     assert "저장" in fx["handoff_note"]  # 쓰기 없음(Phase A) 안내.
     # steps 의 key 순서는 build_purchase_order_graph 노드 등록 순서와 정확히 일치해야 한다.
     assert [s["key"] for s in fx["steps"]] == GRAPH_STEP_KEYS
-    # HITL 은 plan(계획서) 한 스텝만 — pick_project 검색 개입 폴백 제거(2026-08-14).
+    # HITL = plan(계획서) + 비가역 동사 직전 확인 2종(저장·상신, 2026-08-28 쓰기 개방).
     marked = [s["key"] for s in fx["steps"] if s.get("intervention")]
-    assert marked == ["plan"]
+    assert marked == ["plan", "confirm_write", "self_approve"]
 
 
 def test_read_fields_cover_all_candidates():

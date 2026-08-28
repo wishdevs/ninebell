@@ -822,7 +822,10 @@ PURCHASE_ORDER_FLOW: dict = {
         {"id": "read", "kind": "step", "status": "pending", "title": "BOM 트리 읽기", "sub": "장비·모듈(SET)·부품 조립", **_col(3)},
         {"id": "plan", "kind": "step", "status": "pending", "title": "발주 계획서 작성", "sub": "발주단위·사유·납기·거래처(사용자 개입)", **_col(4)},
         {"id": "confirm", "kind": "decision", "status": "pending", "title": "계획 검증", "sub": "사유·납기·의사 거래처 확정 확인", **_col(5)},
-        {"id": "report", "kind": "end", "status": "pending", "title": "계획 확정 반환", "sub": "ERP 저장 없음(Phase A)", **_col(6)},
+        {"id": "save_move", "kind": "step", "status": "pending", "title": "이동요청 저장", "sub": "전체 선택 · 공용자재→프로젝트 · 저장(IRQ)", **_col(6)},
+        {"id": "save_units", "kind": "step", "status": "pending", "title": "구매요청 저장 반복", "sub": "발주단위별 SET 선택·납기·사유 · 저장(PRQ)", **_col(7)},
+        {"id": "approve", "kind": "step", "status": "pending", "title": "셀프결재 상신", "sub": "구매요청처리 · EAP 상신(사용자 확인)", **_col(8)},
+        {"id": "report", "kind": "end", "status": "pending", "title": "결과 반환", "sub": "IRQ/PRQ/상신 결과 · 화면 ③ 수동", **_col(9)},
     ],
     "edges": [
         {"id": "e-access-project", "source": "access", "target": "project"},
@@ -831,7 +834,10 @@ PURCHASE_ORDER_FLOW: dict = {
         {"id": "e-read-plan", "source": "read", "target": "plan"},
         {"id": "e-plan-confirm", "source": "plan", "target": "confirm"},
         {"id": "e-confirm-plan", "source": "confirm", "target": "plan", "label": "보완 ↩", "kind": "loop"},
-        {"id": "e-confirm-report", "source": "confirm", "target": "report", "label": "통과", "kind": "branch"},
+        {"id": "e-confirm-save", "source": "confirm", "target": "save_move", "label": "저장 승인", "kind": "branch"},
+        {"id": "e-save-units", "source": "save_move", "target": "save_units"},
+        {"id": "e-units-approve", "source": "save_units", "target": "approve"},
+        {"id": "e-approve-report", "source": "approve", "target": "report"},
     ],
 }
 
@@ -849,12 +855,13 @@ _PURCHASE_ORDER_FIXTURE: dict = {
     "name": "구매발주",
     "description": (
         "프로젝트를 검색해 BOM 을 불러오고, 모듈(SET)을 발주단위로 묶어 구매사유·납기예정일과 "
-        "거래처를 계획서로 확정합니다. 현재는 계획 확정까지만 진행하며 ERP 저장은 하지 않습니다."
+        "거래처를 계획서로 확정합니다. 확인 후 이동요청 저장 → 발주단위별 구매요청 저장 → "
+        "구매요청처리에서 셀프결재 상신까지 진행합니다."
     ),
     "handoff_note": (
-        "이 실행은 발주 계획 확정까지입니다 — ERP 에는 아무것도 저장하지 않았습니다. "
-        "구매요청 저장·셀프 결재·발주 적용 자동화는 쓰기 실측 후 개방됩니다(Phase B). "
-        "그때까지는 확정된 계획서를 참고해 옴니솔에서 직접 발주단위별 저장을 진행해 주세요."
+        "이 실행은 구매요청 저장과 셀프결재 상신까지입니다. 구매발주일괄입력(화면 ③)의 거래처 "
+        "적용·납기 확정·저장은 아직 자동화되지 않았으니 결과의 구매요청번호(PRQ)로 옴니솔에서 직접 "
+        "진행해 주세요."
     ),
     "drive": "browser",
     "interaction": "autonomous",
@@ -888,7 +895,21 @@ _PURCHASE_ORDER_FIXTURE: dict = {
             "phase": "계획",
             "detail": "발주단위 묶음 + 구매사유·납기예정일 + 거래처 확정을 계획서로 제출(사용자 개입, 최대 30분)",
         },
-        {"key": "report", "label": "계획 확정 반환", "skill": "grid-read", "status": "pending", "phase": "완료", "detail": "확정된 계획을 결과로 반환 — ERP 저장 없음(저장 자동화는 쓰기 실측 후 개방)"},
+        {
+            "key": "confirm_write", "label": "저장 진행 확인", "skill": "grid-input", "status": "pending",
+            "intervention": True,
+            "phase": "저장",
+            "detail": "ERP 비가역 저장(이동요청 1회 + 발주단위별 구매요청) 직전 사용자 확인 — 중단 시 저장 0건으로 종료",
+        },
+        {"key": "save_move", "label": "이동요청 저장", "skill": "save", "status": "pending", "phase": "저장", "detail": "이동요청만 조회 → 전체 선택 → 이동출고=공용자재·이동입고=프로젝트 적용 → 저장(이동요청번호 IRQ)"},
+        {"key": "save_units", "label": "구매요청 저장(발주단위별)", "skill": "save", "status": "pending", "phase": "저장", "detail": "구매요청만 조회 → SET 선택(자손 정확 일치 검증) → 납기예정일 적용 → 구매사유 → 저장(PRQ) 반복"},
+        {
+            "key": "self_approve", "label": "셀프결재 상신", "skill": "eap-submit", "status": "pending",
+            "intervention": True,
+            "phase": "결재",
+            "detail": "구매요청처리(PUOPRQ00300) 진입 → PRQ 조회·가드(결재상태 저장) → 사용자 확인 → 결재창(EAP) 상신(보관 미클릭)",
+        },
+        {"key": "report", "label": "결과 반환", "skill": "grid-read", "status": "pending", "phase": "완료", "detail": "계획 + 이동요청/구매요청번호 + 상신 결과 반환 — 구매발주일괄입력(화면 ③)은 수동"},
     ],
     "logs": [],
 }

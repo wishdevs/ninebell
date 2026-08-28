@@ -1,7 +1,7 @@
-"""report — 확정된 계획을 결과로 반환하고 끝낸다(Phase A 는 여기까지 — 쓰기 없음).
+"""report — 실행 결과 반환(계획 + 저장된 이동요청/구매요청번호 + 상신 결과).
 
-result = {"plan","project","bomSummary"} — 러너가 result 프레임으로 흘리고 영속한다.
-저장(F7)·결재 자동화는 쓰기 실측(Phase B) 후 개방 — handoff 성격의 메시지로 명시한다.
+result = {"plan","project","bomSummary","moveRequestNo","purchaseRequests","submitted"} — 러너가
+result 프레임으로 흘리고 영속한다. 화면 ③(구매발주일괄입력)은 아직 자동화 대상이 아니라 handoff 로 명시.
 """
 
 from __future__ import annotations
@@ -29,12 +29,15 @@ def make_report_node():
         project = state.get("project") or {}
         summary = state.get("bom_summary") or {}
         units = plan.get("units") or []
+        prqs = state.get("purchase_request_nos") or []
+        submitted = [s for s in (state.get("submitted") or []) if s.get("submitted")]
+        prq_txt = ", ".join(str(p.get("number")) for p in prqs if p.get("number")) or "없음"
         await emit_log(
             events,
             (
-                f"발주 계획 확정 — 프로젝트 {project.get('name') or project.get('code')} · "
-                f"발주단위 {len(units)}개. 저장 자동화는 쓰기 실측 후 개방됩니다 — "
-                "이 실행은 계획 확정까지이며 ERP 에는 아무것도 저장하지 않았습니다."
+                f"완료 — 프로젝트 {project.get('name') or project.get('code')} · 발주단위 {len(units)}개 · "
+                f"이동요청 {state.get('move_request_no') or '없음'} · 구매요청 {prq_txt} · "
+                f"상신 {len(submitted)}건. 구매발주일괄입력(화면 ③)은 수동으로 진행하세요."
             ),
             "ok",
         )
@@ -44,6 +47,9 @@ def make_report_node():
                 "plan": plan,
                 "project": project,
                 "bomSummary": summary,
+                "moveRequestNo": state.get("move_request_no"),
+                "purchaseRequests": prqs,
+                "submitted": state.get("submitted") or [],
             }
         }
 
