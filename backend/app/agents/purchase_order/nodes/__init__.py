@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from .confirm_write import make_confirm_write_node
 from .pick_project import make_pick_project_node
+from .place_orders import make_place_orders_node
 from .plan import make_plan_node
 from .read_bom import make_read_bom_node
 from .report import make_report_node
@@ -16,6 +17,7 @@ from .self_approve import make_self_approve_node
 __all__ = [
     "make_confirm_write_node",
     "make_pick_project_node",
+    "make_place_orders_node",
     "make_plan_node",
     "make_read_bom_node",
     "make_report_node",

@@ -28,6 +28,7 @@ from nbkit.omnisol.menu_schemas import PURCHASE_ORDER_BOM, USER_TYPE_SCM
 from .nodes import (
     make_confirm_write_node,
     make_pick_project_node,
+    make_place_orders_node,
     make_plan_node,
     make_read_bom_node,
     make_report_node,
@@ -53,6 +54,7 @@ class PurchaseOrderState(BaseAgentState, total=False):
     move_request_no: str | None  # save_move — 이동요청번호(IRQ…), 대상 0건이면 None
     purchase_request_nos: list  # save_units — [{seq, number(PRQ…), modules, dueDate, purchaseReason}]
     submitted: list  # self_approve — [{number, submitted, status?, gwdocuNo?}]
+    purchase_orders: list  # place_orders — [{prq, seq, orders[PURDOC_NO…], vendors}]
     debug_mode: bool  # 러너/검증이 넣는 디버그 플래그(상신 게이트 런타임 차단)
 
 
@@ -68,6 +70,7 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
     g.add_node("save_move", make_save_move_node())
     g.add_node("save_units", make_save_units_node())
     g.add_node("self_approve", make_self_approve_node(allow_submit=allow_submit))
+    g.add_node("place_orders", make_place_orders_node())
     g.add_node("report", make_report_node())
 
     g.set_entry_point("login")
@@ -79,7 +82,8 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
         ("plan", "confirm_write"),
         ("save_move", "save_units"),
         ("save_units", "self_approve"),
-        ("self_approve", "report"),
+        ("self_approve", "place_orders"),
+        ("place_orders", "report"),
         ("report", END),
     ):
         g.add_edge(a, b)
@@ -90,12 +94,16 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
         # 재실행 경로: params.purchase_order.submit_prqs 가 있으면 계획/저장을 건너뛰고 이미 저장된
         # 구매요청번호만 셀프결재 상신한다(2026-08-28 — 저장은 됐는데 상신 전 중단된 런 복구용).
         po = (state.get("params") or {}).get("purchase_order") or {}
+        if po.get("order_prqs"):  # 상신까지 끝난 PRQ 의 화면 ③ 발주만(params.purchase_order.plan 동봉)
+            return "place_orders"
         if po.get("submit_prqs"):
             return "self_approve"
         return END if state.get("no_modules") else "plan"
 
     g.add_conditional_edges(
-        "read_bom", _after_read_bom, {"plan": "plan", "self_approve": "self_approve", END: END}
+        "read_bom",
+        _after_read_bom,
+        {"plan": "plan", "self_approve": "self_approve", "place_orders": "place_orders", END: END},
     )
 
     # 사용자가 저장을 진행하지 않으면 계획 확정 결과만 남기고 끝낸다(저장 0건).

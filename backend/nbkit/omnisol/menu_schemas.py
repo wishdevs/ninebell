@@ -126,12 +126,25 @@ PURCHASE_REQ_PROCESS = MenuSchema(
     master_id_field=None,
 )
 
+# 구매발주일괄입력[나인벨] — 화면 ③(거래처 적용·납기·발주 저장). 랜딩 실측: .dews-ui-grid 4개(마스터·디테일+숨김 2).
+PURCHASE_PO_BATCH = MenuSchema(
+    key="purchase-po-batch",
+    menu_id="PUOORD02000_X20616",
+    deeplink="/PU/PUOORD02000_X20616",
+    label="구매발주일괄입력[나인벨]",
+    user_type=USER_TYPE_SCM,
+    grids_expected=2,
+    detail_service_url=None,
+    master_id_field=None,
+)
+
 MENU_MAP: dict[str, MenuSchema] = {
     BOM_COLLECTION.key: BOM_COLLECTION,
     EXPENSE_CARD.key: EXPENSE_CARD,
     VOUCHER_RECEIVABLE.key: VOUCHER_RECEIVABLE,
     PURCHASE_ORDER_BOM.key: PURCHASE_ORDER_BOM,
     PURCHASE_REQ_PROCESS.key: PURCHASE_REQ_PROCESS,
+    PURCHASE_PO_BATCH.key: PURCHASE_PO_BATCH,
 }
 
 

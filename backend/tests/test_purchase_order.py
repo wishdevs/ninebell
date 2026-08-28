@@ -42,6 +42,7 @@ GRAPH_STEP_KEYS = [
     "save_move",
     "save_units",
     "self_approve",
+    "place_orders",
     "report",
 ]
 
@@ -1095,10 +1096,11 @@ async def test_report_returns_plan_project_summary_and_no_write_notice():
     )
     assert set(out["result"]) == {
         "plan", "project", "bomSummary", "moveRequestNo", "purchaseRequests", "submitted",
+        "purchaseOrders",
     }
     assert out["result"]["plan"]["units"][0]["seq"] == 1
     logs = [f["log"] for f in _frames(events) if "log" in f]
-    assert any("화면 ③" in m for m in logs)  # handoff 성격 명시(구매발주일괄입력은 수동).
+    assert any("발주 0건" in m for m in logs)  # 화면 ③ 미실행 시에도 결과 요약에 발주 건수 명시.
     assert_keys_declared(PurchaseOrderState, out)
 
 
@@ -1177,7 +1179,7 @@ def test_fixture_promoted_from_placeholder():
     assert [s["key"] for s in fx["steps"]] == GRAPH_STEP_KEYS
     # HITL = plan(계획서) + 비가역 동사 직전 확인 2종(저장·상신, 2026-08-28 쓰기 개방).
     marked = [s["key"] for s in fx["steps"] if s.get("intervention")]
-    assert marked == ["plan", "confirm_write", "self_approve"]
+    assert marked == ["plan", "confirm_write", "self_approve", "place_orders"]
 
 
 def test_read_fields_cover_all_candidates():

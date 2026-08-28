@@ -127,3 +127,33 @@ def test_graph_has_write_nodes_and_abort_edge():
     assert {"confirm_write", "save_move", "save_units", "self_approve"} <= set(g.nodes)
     edges = {(e.source, e.target) for e in g.edges}
     assert ("confirm_write", "save_move") in edges and ("confirm_write", "__end__") in edges
+
+
+# ── 화면 ③ 구매발주일괄입력 — 계획서 ↔ 팝업/마스터 매핑(순수) ────────────────────
+def test_screen3_vendor_keyword_and_matching():
+    from app.agents.purchase_order import steps_screen3 as s3
+
+    assert s3.vendor_keyword("주식회사 해룡엔지니어링") == "해룡엔지니어링"
+    assert s3.vendor_keyword("(주)와이엔에스테크닉스") == "와이엔에스테크닉스"
+    assert s3.vendor_keyword("알파테크") == "알파테크"
+    unit = {"seq": 1, "dueDate": "2026-09-30", "vendorGroups": [
+        {"vendorClass": "가공품", "vendor": "주식회사 해룡엔지니어링", "dueDate": "2026-09-30", "note": "A [직배송]"},
+        {"vendorClass": "판금품", "vendor": "알파테크", "dueDate": "2026-09-23", "note": "B"},
+        {"vendorClass": "(주)아진물산", "vendor": "(주)아진물산", "dueDate": "2026-09-23", "note": "C"},
+    ]}
+    rows = [{"PRINCIPALPARTN_NM": "가공품"}, {"PRINCIPALPARTN_NM": "(주)아진물산"},
+            {"PRINCIPALPARTN_NM": "판금품"}, {"PRINCIPALPARTN_NM": "가공품"}]
+    assert s3.plan_vendor_changes(unit, rows) == {"주식회사 해룡엔지니어링": [0, 3], "알파테크": [2]}
+    assert s3.vendor_group_for(unit, "주식회사 해룡엔지니어링")["note"] == "A [직배송]"
+    assert s3.vendor_group_for(unit, "(주)아진물산")["dueDate"] == "2026-09-23"
+    assert s3.vendor_group_for(unit, "없는거래처") is None
+
+
+def test_place_orders_targets_from_state_and_order_prqs_param():
+    from app.agents.purchase_order.nodes.place_orders import targets_from_state
+
+    plan = {"units": [{"seq": 1, "vendorGroups": []}, {"seq": 2, "vendorGroups": []}]}
+    st = {"confirmed_plan": plan, "purchase_request_nos": [{"seq": 2, "number": "PRQ2"}, {"seq": 1, "number": None}]}
+    assert targets_from_state(st) == [("PRQ2", plan["units"][1])]
+    st2 = {"params": {"purchase_order": {"plan": plan, "order_prqs": ["PRQ1=1", "PRQ9=9"]}}}
+    assert targets_from_state(st2) == [("PRQ1", plan["units"][0]), ("PRQ9", {})]

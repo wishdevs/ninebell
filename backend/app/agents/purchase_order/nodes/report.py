@@ -32,12 +32,14 @@ def make_report_node():
         prqs = state.get("purchase_request_nos") or []
         submitted = [s for s in (state.get("submitted") or []) if s.get("submitted")]
         prq_txt = ", ".join(str(p.get("number")) for p in prqs if p.get("number")) or "없음"
+        orders = state.get("purchase_orders") or []
+        po_nos = [n for o in orders for n in (o.get("orders") or [])]
         await emit_log(
             events,
             (
                 f"완료 — 프로젝트 {project.get('name') or project.get('code')} · 발주단위 {len(units)}개 · "
                 f"이동요청 {state.get('move_request_no') or '없음'} · 구매요청 {prq_txt} · "
-                f"상신 {len(submitted)}건. 구매발주일괄입력(화면 ③)은 수동으로 진행하세요."
+                f"상신 {len(submitted)}건 · 발주 {len(po_nos)}건{(' (' + ', '.join(po_nos) + ')') if po_nos else ''}."
             ),
             "ok",
         )
@@ -50,6 +52,7 @@ def make_report_node():
                 "moveRequestNo": state.get("move_request_no"),
                 "purchaseRequests": prqs,
                 "submitted": state.get("submitted") or [],
+                "purchaseOrders": orders,
             }
         }
 

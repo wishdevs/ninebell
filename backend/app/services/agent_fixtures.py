@@ -825,7 +825,8 @@ PURCHASE_ORDER_FLOW: dict = {
         {"id": "save_move", "kind": "step", "status": "pending", "title": "이동요청 저장", "sub": "전체 선택 · 공용자재→프로젝트 · 저장(IRQ)", **_col(6)},
         {"id": "save_units", "kind": "step", "status": "pending", "title": "구매요청 저장 반복", "sub": "발주단위별 SET 선택·납기·사유 · 저장(PRQ)", **_col(7)},
         {"id": "approve", "kind": "step", "status": "pending", "title": "셀프결재 상신", "sub": "구매요청처리 · EAP 상신(사용자 확인)", **_col(8)},
-        {"id": "report", "kind": "end", "status": "pending", "title": "결과 반환", "sub": "IRQ/PRQ/상신 결과 · 화면 ③ 수동", **_col(9)},
+        {"id": "orders", "kind": "step", "status": "pending", "title": "구매발주 저장", "sub": "일괄입력 · 거래처 변경·납기·비고 · 저장(사용자 확인)", **_col(9)},
+        {"id": "report", "kind": "end", "status": "pending", "title": "결과 반환", "sub": "IRQ/PRQ/상신/발주번호", **_col(10)},
     ],
     "edges": [
         {"id": "e-access-project", "source": "access", "target": "project"},
@@ -837,7 +838,8 @@ PURCHASE_ORDER_FLOW: dict = {
         {"id": "e-confirm-save", "source": "confirm", "target": "save_move", "label": "저장 승인", "kind": "branch"},
         {"id": "e-save-units", "source": "save_move", "target": "save_units"},
         {"id": "e-units-approve", "source": "save_units", "target": "approve"},
-        {"id": "e-approve-report", "source": "approve", "target": "report"},
+        {"id": "e-approve-orders", "source": "approve", "target": "orders"},
+        {"id": "e-orders-report", "source": "orders", "target": "report"},
     ],
 }
 
@@ -909,7 +911,13 @@ _PURCHASE_ORDER_FIXTURE: dict = {
             "phase": "결재",
             "detail": "구매요청처리(PUOPRQ00300) 진입 → PRQ 조회·가드(결재상태 저장) → 사용자 확인 → 결재창(EAP) 상신(보관 미클릭)",
         },
-        {"key": "report", "label": "결과 반환", "skill": "grid-read", "status": "pending", "phase": "완료", "detail": "계획 + 이동요청/구매요청번호 + 상신 결과 반환 — 구매발주일괄입력(화면 ③)은 수동"},
+        {
+            "key": "place_orders", "label": "구매발주 저장(거래처별)", "skill": "save", "status": "pending",
+            "intervention": True,
+            "phase": "발주",
+            "detail": "구매발주일괄입력(PUOORD02000) — 발주단위별 구매요청 팝업 → 가공품/판금품 거래처 변경 → 적용 → 거래처별 납기·비고 → 저장(발주번호). 저장 전 사용자 확인",
+        },
+        {"key": "report", "label": "결과 반환", "skill": "grid-read", "status": "pending", "phase": "완료", "detail": "계획 + 이동요청/구매요청/상신/발주번호 결과 반환"},
     ],
     "logs": [],
 }
