@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { RiCloseLine } from '@remixicon/react';
+import { RiCloseLine, RiDraggable } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
@@ -88,6 +88,21 @@ function ClassColumn({
     onChange(rows.map((r) => ({ ...r, isDefault: r.name === name })));
   }
 
+  // 드래그 순서 변경(2026-08-28) — 같은 분류 안에서만. 저장 순서 = 계획서 콤보박스 노출 순서.
+  const [dragName, setDragName] = useState<string | null>(null);
+  const [overName, setOverName] = useState<string | null>(null);
+
+  function move(from: string, to: string): void {
+    if (from === to) return;
+    const fi = rows.findIndex((r) => r.name === from);
+    const ti = rows.findIndex((r) => r.name === to);
+    if (fi < 0 || ti < 0) return;
+    const next = [...rows];
+    const [moved] = next.splice(fi, 1);
+    next.splice(ti, 0, moved);
+    onChange(next);
+  }
+
   return (
     <div className="border-border-subtle flex min-w-0 flex-col gap-2.5 rounded-[var(--radius-md)] border p-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -106,8 +121,48 @@ function ClassColumn({
           {rows.map((r) => (
             <li
               key={r.name}
-              className="border-border/60 bg-surface flex items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 py-1.5"
+              draggable={!disabled}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', r.name);
+                setDragName(r.name);
+              }}
+              onDragOver={(e) => {
+                if (!dragName || dragName === r.name) return;
+                e.preventDefault(); // 드롭 허용.
+                e.dataTransfer.dropEffect = 'move';
+                if (overName !== r.name) setOverName(r.name);
+              }}
+              onDragLeave={() => {
+                if (overName === r.name) setOverName(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragName) move(dragName, r.name);
+                setDragName(null);
+                setOverName(null);
+              }}
+              onDragEnd={() => {
+                setDragName(null);
+                setOverName(null);
+              }}
+              className={cn(
+                'border-border/60 bg-surface flex items-center gap-2 rounded-[var(--radius-sm)] border px-2 py-1.5',
+                dragName === r.name ? 'opacity-40' : '',
+                // 드롭 대상 표시 — 포커스링 대신 테두리+배경(UI 지침).
+                overName === r.name ? 'border-accent bg-accent/10' : '',
+              )}
             >
+              <span
+                aria-hidden
+                className={cn(
+                  'text-foreground-tertiary shrink-0',
+                  disabled ? 'opacity-40' : 'cursor-grab active:cursor-grabbing',
+                )}
+                title="드래그해서 순서 변경"
+              >
+                <RiDraggable size={14} />
+              </span>
               <span className="text-foreground min-w-0 flex-1 truncate text-[length:var(--text-body-sm)]">
                 {r.name}
               </span>
