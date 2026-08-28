@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from playwright.async_api import async_playwright
@@ -196,6 +197,26 @@ def create_app() -> FastAPI:
             status_code=exc.status_code,
             headers=getattr(exc, "headers", None),
         )
+
+    # 422(경계 검증 실패) 표면화 — 사유를 서버 로그에 남기고(요청 로그는 body 를 자르므로 어느
+    # 필드가 왜 튕겼는지 안 보인다: 2026-08-28 계획서 제출 422 사고), 응답에도 읽을 수 있는
+    # error 요약을 병기한다(detail 은 FastAPI 기본 [{loc,msg,input}] 그대로).
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_surface(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        lines = [
+            f"{'.'.join(str(x) for x in e.get('loc', ()) if x != 'body')}: {e.get('msg', '')}"
+            for e in errors[:5]
+        ]
+        summary = "요청 형식 오류 — " + " / ".join(lines) if lines else "요청 형식 오류"
+        logger.warning(
+            "422 %s %s — %s%s",
+            request.method,
+            request.url.path,
+            "; ".join(lines),
+            f" (input={str(errors[0].get('input'))[:200]!r})" if errors else "",
+        )
+        return JSONResponse({"detail": errors, "error": summary}, status_code=422)
 
     app.include_router(auth.router)
     app.include_router(users.router)
