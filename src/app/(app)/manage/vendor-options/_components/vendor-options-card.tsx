@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { RiCloseLine, RiDraggable } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -104,6 +104,34 @@ function ClassColumn({
     onChange(next);
   }
 
+  // 재배열 애니메이션(FLIP) — 순서가 바뀐 행은 직전 위치에서 새 위치로 transform 으로 미끄러진다.
+  // 레이아웃 속성이 아닌 transform 만 쓰고, 축소 모션 설정이면 건너뛴다.
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  const lastTops = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const nextTops = new Map<string, number>();
+    for (const [name, el] of rowRefs.current) {
+      const top = el.getBoundingClientRect().top;
+      nextTops.set(name, top);
+      const prev = lastTops.current.get(name);
+      if (reduce || prev == null || prev === top) continue;
+      el.style.transition = 'none';
+      el.style.transform = `translateY(${prev - top}px)`;
+      // 미끄러지는 동안은 히트테스트에서 뺀다 — 커서 아래를 지나는 행이 dragover 를 받아
+      // 되돌아가는(왕복) 오작동 방지.
+      el.style.pointerEvents = 'none';
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 180ms cubic-bezier(0.16, 1, 0.3, 1)';
+        el.style.transform = '';
+      });
+      window.setTimeout(() => {
+        el.style.pointerEvents = '';
+      }, 200);
+    }
+    lastTops.current = nextTops;
+  }, [rows]);
+
   return (
     <div className="border-border-subtle flex min-w-0 flex-col gap-2.5 rounded-[var(--radius-md)] border p-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -122,6 +150,10 @@ function ClassColumn({
           {rows.map((r) => (
             <li
               key={r.name}
+              ref={(el) => {
+                if (el) rowRefs.current.set(r.name, el);
+                else rowRefs.current.delete(r.name);
+              }}
               draggable={!disabled}
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = 'move';
