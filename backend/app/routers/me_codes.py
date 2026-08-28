@@ -595,15 +595,19 @@ async def get_catalog(
             ]
     elif kind == "project" and q:
         # 프로젝트 — 프로젝트명(name)·코드 + WBS요소명·위치·프로젝트번호(extra)까지 부분 매칭.
-        ql = q.strip().lower()
+        # 공백으로 나눈 단어는 AND — 'etr 2' 로 'ETRIBE ERP TEST 002' 를 찾는다(2026-08-28).
+        terms = q.lower().split()
         rows = [
             r
             for r in rows
-            if ql in r.name.lower()
-            or ql in r.code.lower()
-            or ql in str((r.extra or {}).get("wbsNm", "")).lower()
-            or ql in str((r.extra or {}).get("loc", "")).lower()
-            or ql in str((r.extra or {}).get("pjtNo", "")).lower()
+            if all(
+                t in r.name.lower()
+                or t in r.code.lower()
+                or t in str((r.extra or {}).get("wbsNm", "")).lower()
+                or t in str((r.extra or {}).get("loc", "")).lower()
+                or t in str((r.extra or {}).get("pjtNo", "")).lower()
+                for t in terms
+            )
         ]
     elif kind == "partner" and q:
         # 거래처 — 거래처명(name)·코드 + 사업자번호(extra)까지 부분 매칭. 정렬은 기본 이름순.

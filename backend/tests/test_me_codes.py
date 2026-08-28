@@ -494,6 +494,11 @@ async def test_catalog_project_q_covers_wbs_extra(client, make_user, auth_as, sm
     # 위치(loc) 매칭.
     by_loc = await client.get("/me/catalog?kind=project&q=서울")
     assert [i["code"] for i in by_loc.json()["items"]] == ["PJ200|W9"]
+    # 공백 구분 다중 단어 = AND(각 단어가 어느 필드에든 있으면 됨) — 'etr 2' → 'ETRIBE ERP TEST 002'.
+    by_terms = await client.get("/me/catalog?kind=project&q=베타 서울")
+    assert [i["code"] for i in by_terms.json()["items"]] == ["PJ200|W9"]
+    by_terms_none = await client.get("/me/catalog?kind=project&q=베타 부산")
+    assert by_terms_none.json()["items"] == []
     # 프로젝트번호(pjtNo) 매칭 + extra 가 응답에 실린다.
     by_pjtno = await client.get("/me/catalog?kind=project&q=PJ100")
     body = by_pjtno.json()

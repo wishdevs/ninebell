@@ -62,8 +62,10 @@ export function CatalogCombobox({
   const [searchError, setSearchError] = useState(false);
 
   const q = text.trim().toLowerCase();
+  // 공백 구분 단어 AND — 서버 검색(/me/catalog q)과 같은 규칙('etr 2' → 'ETRIBE ERP TEST 002').
+  const terms = q.split(/\s+/).filter(Boolean);
   const matches = (p: ComboOption) =>
-    p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    terms.every((t) => p.name.toLowerCase().includes(t) || p.code.toLowerCase().includes(t));
   const filteredRecents = q ? recents.filter(matches) : recents;
   // 최근에 이미 있는 항목은 자주쓰는에서 감춘다 — 두 그룹에 겹쳐 나오면 목록만 길어진다.
   const recentCodes = new Set(filteredRecents.map((r) => r.code));
