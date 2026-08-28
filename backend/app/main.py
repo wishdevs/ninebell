@@ -48,6 +48,7 @@ from app.routers import (
     skills,
     users,
 )
+from app.services.catalog_sync_scheduler import run_daily_catalog_sync
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -136,6 +137,8 @@ def create_app() -> FastAPI:
 
         app.state.browser_factory = _launch_browser
         session_reaper = asyncio.create_task(reap_sessions())
+        # --- 일일 무인 코드 카탈로그 동기화(설정 시에만 실제 루프가 돈다) ---
+        catalog_scheduler = asyncio.create_task(run_daily_catalog_sync(app))
 
         # --- 로그인 시도 제한(인메모리) ---
         app.state.login_limiter = LoginRateLimiter(
@@ -162,6 +165,7 @@ def create_app() -> FastAPI:
             yield
         finally:
             session_reaper.cancel()
+            catalog_scheduler.cancel()
             cred_reaper.cancel()
             signup_reaper.cancel()
             await close_all_sessions()  # 살아있는 라이브 세션의 브라우저까지 정리

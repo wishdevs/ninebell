@@ -13,9 +13,66 @@
 
 from __future__ import annotations
 
+import json
+import logging
+
 from app.config import get_settings
 from nbkit.browser.actions import mouse_click
 from nbkit.patterns.login_flow import ensure_logged_in
+
+logger = logging.getLogger(__name__)
+
+# 조직도 트리 API(Wehago 포탈) — 랜딩 '조직도' 클릭 시 위젯이 이 엔드포인트로 트리를 받는다.
+# erp.ninebell.co.kr 이 아니라 uc.ninebell.co.kr(그룹웨어 백엔드)이고, 인증은 ERP 의
+# x-authenticate-token 이 아니라 Authorization: Bearer <authToken> + session-id + wehago-sign
+# 헤더다(브라우저 위젯이 계산). 그 서명을 브라우저 없이 만들 수 없어, **브라우저로 조직도를
+# 한 번 열어 위젯이 쏜 이 요청의 헤더를 캡처한 뒤 isTreeAllOpen:true 로 재요청**해 전량 트리를
+# 얻는다(하이브리드). 순수 DOM 스크레이프의 lazy-load 누락(미펼친 팀)을 함께 해소한다(실측).
+_ORG_API_MARKER = "gw102A01"
+# orgGubun(회사/사업장/부서) → DOM k-sprite type 과 동일 어휘로 정규화.
+_ORG_GUBUN_TYPE = {"c": "company", "b": "business", "d": "dept"}
+# 재요청 시 캡처 헤더에서 뺄 것(길이·호스트·인코딩·연결은 page.request 가 다시 채운다).
+_ORG_API_DROP_HEADERS = {"content-length", "host", "accept-encoding", "connection"}
+
+
+def api_tree_to_items(tree_list: list[dict]) -> list[dict]:
+    """조직도 API 응답(resultData.treeList) → org_sync 공용 items 형태로 변환.
+
+    반환 [{depth, label, count, type}] 를 **전위순회(preorder)** 로 — flatten_to_hq_team/
+    build_full_tree 가 순서 의존(다음 항목 depth 비교로 leaf 판정)이라, API 의 레벨-그룹 배열을
+    path 기반으로 재정렬한다. id/parentSeq 는 회사·사업장이 같은 코드(1000)를 공유해 모호하므로
+    **path**(예: '1000|1000|1205|') 를 유일 키로 쓰고, 형제는 orderNum 으로 정렬한다.
+    depth=orgLevel(서버 계산), type=orgGubun(c/b/d), count=childUserCnt, label=text.
+    """
+    def _parent_path(path: str) -> str:
+        segs = [s for s in path.split("|") if s]
+        return ("|".join(segs[:-1]) + "|") if len(segs) > 1 else ""
+
+    children: dict[str, list[dict]] = {}
+    for n in tree_list:
+        path = n.get("path") or ""
+        if not path:
+            continue
+        children.setdefault(_parent_path(path), []).append(n)
+    for sibs in children.values():
+        sibs.sort(key=lambda x: (x.get("orderNum") or 0, x.get("path") or ""))
+
+    items: list[dict] = []
+
+    def _dfs(parent_path: str) -> None:
+        for n in children.get(parent_path, []):
+            items.append(
+                {
+                    "depth": int(n.get("orgLevel") or 0),
+                    "label": (n.get("text") or "").strip(),
+                    "count": n.get("childUserCnt"),
+                    "type": _ORG_GUBUN_TYPE.get(n.get("orgGubun"), n.get("orgGubun") or ""),
+                }
+            )
+            _dfs(n.get("path") or "")
+
+    _dfs("")  # 루트(회사) = 부모 경로 ''
+    return items
 
 # 우상단 '조직도' 트리거 후보(정확 텍스트) 좌표 조회 — 화면 안·클릭 가능한 것만.
 FIND_ORG_TRIGGER_JS = r"""() => {
@@ -121,20 +178,75 @@ def build_full_tree(items: list[dict]) -> list[dict]:
     return nodes
 
 
-async def fetch_org_tree(userid: str, password: str, browser_factory) -> dict:
-    """헤드리스로 조직도 스크레이프 → {raw:[...], flat:[...], nodes:[...]}.
+async def _fetch_org_items_via_api(page, req) -> list[dict]:
+    """캡처한 gw102A01 요청을 isTreeAllOpen:true 로 재요청해 **전량** 트리 items 획득.
 
+    위젯이 쏜 요청의 인증 헤더(Authorization/session-id/wehago-sign 등)를 그대로 재사용하되
+    body 의 isTreeAllOpen 만 true 로 바꾼다(wehago-sign 은 body 를 서명하지 않아 통과 — 실측).
+    page.request 는 페이지 컨텍스트의 네트워크라 CORS·쿠키를 그대로 탄다. 실패는 예외로 올려
+    호출부가 DOM 스크레이프로 폴백하게 한다.
+    """
+    headers = {k: v for k, v in (await req.all_headers()).items() if k.lower() not in _ORG_API_DROP_HEADERS}
+    body = json.loads(req.post_data or "{}")
+    body["isTreeAllOpen"] = True
+    resp = await page.request.post(req.url, headers=headers, data=json.dumps(body))
+    if not resp.ok:
+        raise RuntimeError(f"조직도 API HTTP {resp.status}")
+    j = await resp.json()
+    if j.get("resultCode") != 0:
+        raise RuntimeError(f"조직도 API 실패: {j.get('resultMsg')}")
+    tree_list = (j.get("resultData") or {}).get("treeList") or []
+    items = api_tree_to_items(tree_list)
+    if not items:
+        raise RuntimeError("조직도 API treeList 가 비어 있습니다")
+    return items
+
+
+async def fetch_org_tree(userid: str, password: str, browser_factory) -> dict:
+    """헤드리스로 조직도 트리 획득 → {raw, flat, nodes, via}.
+
+    API 우선: 브라우저로 조직도를 한 번 열어(위젯이 gw102A01 을 쏨) 그 요청 헤더를 캡처한 뒤
+    isTreeAllOpen:true 로 재요청해 **전량** 트리를 받는다 — DOM 스크레이프가 한 번도 안 펼친
+    깊은 팀(Kendo lazy-load)을 누락하던 완전성 버그를 해소한다(실측). API 실패 시 DOM
+    스크레이프(FULL_TREE_JS)로 폴백. ERP_API_SYNC_ENABLED=false 면 DOM 만 쓴다.
     raw=전 노드, flat=본부▸팀 2단계(레거시 카탈로그용), nodes=전체 깊이 트리(org_units 미러링용).
     조직도는 랜딩에 있어 로그인만 하면 된다(사용자유형 전환·메뉴이동 불필요). 읽기 전용.
     """
+    prefer_api = get_settings().erp_api_sync_enabled
     browser = await browser_factory()
     try:
         page = await browser.new_page(viewport={"width": 1600, "height": 1000})
+        captured: dict = {"req": None}
+        if prefer_api:
+
+            def _on_req(req) -> None:
+                if captured["req"] is None and _ORG_API_MARKER in req.url and req.method == "POST":
+                    captured["req"] = req
+
+            page.on("request", _on_req)
+
         await ensure_logged_in(page, userid, password, get_settings().erp_base)
         await page.wait_for_timeout(1200)
-        await _open_org_chart(page)
-        full = await page.evaluate(FULL_TREE_JS)
-        items = (full or {}).get("items", [])
-        return {"raw": items, "flat": flatten_to_hq_team(items), "nodes": build_full_tree(items)}
+        await _open_org_chart(page)  # 위젯이 gw102A01 을 쏘고 DOM 트리도 렌더(폴백용).
+
+        items: list[dict] | None = None
+        via = "browser"
+        if prefer_api and captured["req"] is not None:
+            try:
+                items = await _fetch_org_items_via_api(page, captured["req"])
+                via = "api"
+            except Exception:  # noqa: BLE001 — API 실패는 DOM 스크레이프로 폴백.
+                logger.exception("조직도 API 경로 실패 — DOM 스크레이프 폴백")
+                items = None
+        if not items:
+            full = await page.evaluate(FULL_TREE_JS)
+            items = (full or {}).get("items", [])
+            via = "browser"
+        return {
+            "raw": items,
+            "flat": flatten_to_hq_team(items),
+            "nodes": build_full_tree(items),
+            "via": via,
+        }
     finally:
         await browser.close()

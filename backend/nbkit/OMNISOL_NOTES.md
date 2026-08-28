@@ -6,6 +6,22 @@ nbkit 이 인코딩한 옴니솔(더존 ERP) 화면 조작 노하우 요약. 원
 
 > 원칙: (1) 모든 더존 상호작용은 헤드리스 브라우저(Playwright)로만 — 내부 API 직접호출 금지.
 > (2) 자격증명 비저장 — 매 작업마다 1회 로그인 → 작업 → 즉시 폐기.
+>
+> ⚠ (1)의 예외 — **읽기전용 마스터 코드 카탈로그 수집**(예산단위·프로젝트·거래처)은 순수 HTTP
+> API 로 하는 것을 우선한다(사용자 승인 2026-08-28, 실측: `backend/e2e/api_discovery_http_repro.py`).
+> `app/erp/api_client.py` 가 `POST /api/CM/AccountService/login` 으로 access_token(JWT)을 받아
+> `x-authenticate-token` 헤더로 코드도움 서비스(H_*_list)를 직접 호출한다. **실패 시 기존
+> 브라우저 코드피커 경로로 자동 폴백**하며, `ERP_API_SYNC_ENABLED=false` 로 강제 브라우저 전환도
+> 된다. 이 예외는 **읽기전용 수집에 한정**한다 — 전표·발주·상신 등 쓰기/자동화 흐름은 여전히
+> (1) 그대로 브라우저 전용이다(저장·상신을 API 로 하지 않는다).
+>
+> ⚠ 조직구분(org_unit)은 완전 browserless 가 **불가**하다. 조직도 트리 API 는 ERP 가 아니라
+> **Wehago 포탈(uc.ninebell.co.kr) `POST /gw/APIHandler/gw102A01`** 이고, 인증이
+> `Authorization: Bearer <authToken>`(ERP 로그인 JWT 의 authToken 클레임) + `session-id` +
+> `wehago-sign`(브라우저 위젯이 계산, 리버싱 불가)이다. 그래서 **하이브리드**로 간다 —
+> 브라우저로 조직도를 한 번 열어 위젯이 쏜 gw102A01 요청 헤더를 캡처 → `isTreeAllOpen:true` 로
+> 재요청(page.request)해 전량 트리를 받는다(`app/services/org_sync.fetch_org_tree`). 이게 DOM
+> 스크레이프의 Kendo lazy-load 누락(미펼친 팀)까지 해소한다. 실패 시 DOM 스크레이프 폴백.
 
 ---
 

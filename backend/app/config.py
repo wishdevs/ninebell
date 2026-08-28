@@ -62,6 +62,27 @@ class Settings(BaseSettings):
     # 지켜보며 개입하는 용도(2026-08-28 구매발주 쓰기 개방). 배포(컨테이너)는 항상 기본 True.
     erp_headless: bool = True
 
+    # --- 코드 카탈로그 API 동기화(2026-08-28) ---
+    # 카탈로그(예산단위·프로젝트·거래처) 수집을 순수 HTTP API 로 먼저 시도한다(app/erp/api_client).
+    # 실패하면 기존 Playwright 코드피커 경로로 폴백. env ERP_API_SYNC_ENABLED=false 로 강제
+    # 브라우저 전용 전환(API 스펙이 바뀌어 오작동할 때의 킬 스위치). org_unit 은 항상 브라우저.
+    erp_api_sync_enabled: bool = True
+
+    # --- 일일 무인 카탈로그 동기화(스케줄러) ---
+    # 하루 1회 세 카탈로그를 자동 동기화한다. 무인 실행이라 사용자 세션(CredCache) 대신 전용
+    # 서비스 계정이 필요하다 — 둘 다 비면 스케줄러는 뜨지 않는다(미설정=비활성). env
+    # ERP_SYNC_USERID/ERP_SYNC_PASSWORD. 저장소·로그에 비밀번호가 남지 않게 .env 로만 준다.
+    erp_sync_daily_enabled: bool = False
+    erp_sync_userid: str = ""
+    erp_sync_password: str = ""
+    # 실행 시각(서버 로컬 TZ, HH:MM 24h). env ERP_SYNC_AT.
+    erp_sync_at: str = "04:30"
+    # 동기화 대상 kind(쉼표). org_unit 은 관리자·권한 반영이 얽혀 무인 대상에서 제외한다.
+    erp_sync_kinds: str = "budget_unit,project,partner"
+
+    def erp_sync_kind_list(self) -> list[str]:
+        return [x.strip() for x in self.erp_sync_kinds.split(",") if x.strip()]
+
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.
     # gemini-2.0-flash retired(404) → 2.5 → 3.5 → 3.6 → 3.7-flash 상향(2026-08-14 사용자 지시).

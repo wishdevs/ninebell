@@ -139,6 +139,23 @@ def auth_as(sm):
 
 
 @pytest.fixture(autouse=True)
+def _disable_erp_api_sync(monkeypatch):
+    """카탈로그 동기화의 API 우선 경로를 단위 테스트에서 기본 비활성.
+
+    sync_catalog 은 이제 순수 HTTP API(app.erp.api_client)를 먼저 시도한다 — 끄지 않으면
+    브라우저 경로를 몽키패치로 검증하는 기존 스모크(test_me_codes)가 실 ERP 로그인
+    엔드포인트로 실제 네트워크 요청을 보낸 뒤에야 폴백한다(느림·불안정·프로덕션 ERP 타격).
+    _collect_rows 는 code_sync.get_settings().erp_api_sync_enabled 만 읽으므로 그 플래그만
+    False 로 스텁한다. API 경로 자체를 검증하는 테스트는 자기 test 본문에서 다시 켠다
+    (monkeypatch 는 나중 setattr 가 이긴다)."""
+    from types import SimpleNamespace
+
+    from app.services import code_sync
+
+    monkeypatch.setattr(code_sync, "get_settings", lambda: SimpleNamespace(erp_api_sync_enabled=False))
+
+
+@pytest.fixture(autouse=True)
 def _no_realtime_verify_backoff(monkeypatch):
     """확인 커널(nbkit.omnisol.verify)의 재시도 대기를 단위 테스트에서 무효화한다.
 

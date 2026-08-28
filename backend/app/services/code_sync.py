@@ -31,6 +31,8 @@ from app.agents.common.nodes import (
     make_set_gubun_node,
     make_user_type_node,
 )
+from app.config import get_settings
+from app.erp import api_client
 from app.models import ErpCodeCatalog
 from app.services.card_seed_remap import remap_seed_notes_to_catalog
 
@@ -90,13 +92,23 @@ async def _run_entry_chain(page, userid: str, password: str) -> None:
         drainer.cancel()
 
 
-async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
-    rows = await steps.dump_budget_units(page)
+async def _upsert_budget_units(rows: list[dict], sessionmaker: async_sessionmaker) -> int:
+    """예산단위 행 upsert(kind='budget_unit', dept='') + 전량 stale 제거 + 시드 재키잉.
+
+    행 수집(API 또는 브라우저 dump_budget_units)은 호출부가 하고, 여기는 DB 반영만 한다.
+    """
     if not rows:
         return 0
     now = datetime.now(timezone.utc)
     codes = {r["code"] for r in rows}
     async with sessionmaker() as s:
+        prev = (
+            await s.execute(
+                select(func.count())
+                .select_from(ErpCodeCatalog)
+                .where(ErpCodeCatalog.kind == "budget_unit", ErpCodeCatalog.dept == "")
+            )
+        ).scalar() or 0
         for r in rows:
             await s.merge(
                 ErpCodeCatalog(
@@ -113,14 +125,27 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
                     synced_at=now,
                 )
             )
-        # 전량 덤프이므로 kind 전체에서 stale 제거. 과거 dept 스코프로 저장된 잔여 행
-        # (dept != '')은 코드가 같아도 중복이므로 함께 정리한다(초기 구현 정정 마이그레이션 겸용).
+        # 과거 dept 스코프로 저장된 잔여 행(dept != '')은 초기 구현 정정 겸 항상 정리한다.
         await s.execute(
             delete(ErpCodeCatalog).where(
-                ErpCodeCatalog.kind == "budget_unit",
-                (ErpCodeCatalog.code.notin_(codes)) | (ErpCodeCatalog.dept != ""),
+                ErpCodeCatalog.kind == "budget_unit", ErpCodeCatalog.dept != ""
             )
         )
+        # 현재 스코프(dept='')의 stale(code 미포함) 삭제는 부분 수집 보호 — 신규 집계가 기존
+        # 이상일 때만(project·partner 미러). API/브라우저가 부분(잘린 200) 결과를 줘도 전량
+        # 카탈로그를 지우지 않는다.
+        if len(codes) >= prev:
+            await s.execute(
+                delete(ErpCodeCatalog).where(
+                    ErpCodeCatalog.kind == "budget_unit",
+                    ErpCodeCatalog.dept == "",
+                    ErpCodeCatalog.code.notin_(codes),
+                )
+            )
+        else:
+            logger.warning(
+                "예산단위 집계(%d) < 기존(%d) — stale 삭제 생략(부분 수집 보호)", len(codes), prev
+            )
         await s.commit()
     # 카탈로그(9자리 예산계정)가 갱신됐으니 전사 시드(card_seed_notes)를 현 ERP 코드로 재정렬한다.
     # 옛 자료의 5자리 계정과목 코드는 현 ERP 와 겹치지 않으므로, 이름으로 현 코드에 재키잉해야
@@ -134,7 +159,12 @@ async def _sync_budget_units(page, sessionmaker: async_sessionmaker) -> int:
     return len(rows)
 
 
-async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
+async def _browser_fetch_projects(page) -> list[dict]:
+    """브라우저 코드피커로 프로젝트 전량 수집 — 스크롤 페이징 + 미달 시 접두 스윕 보강.
+
+    행 수집만 하고 DB 는 건드리지 않는다(upsert 는 _upsert_projects). API 경로가 실패했을 때의
+    폴백으로 쓰인다.
+    """
     # 1순위: 끝행 포커스+ArrowDown 페이지 로딩으로 전량 수집(스크롤 더보기 실측 대응).
     rows: list[dict] = []
     server_total: int | None = None
@@ -158,6 +188,14 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
         for r in sweep_rows:
             by_code.setdefault(r["code"], r)
         rows = list(by_code.values())
+    return rows
+
+
+async def _upsert_projects(rows: list[dict], sessionmaker: async_sessionmaker) -> int:
+    """프로젝트 행 upsert(kind='project', dept='') + 부분 수집 보호 stale 삭제.
+
+    행 수집(API 또는 브라우저 _browser_fetch_projects)은 호출부가 하고, 여기는 DB 반영만 한다.
+    """
     if not rows:
         return 0
     now = datetime.now(timezone.utc)
@@ -205,19 +243,11 @@ async def _sync_projects(page, sessionmaker: async_sessionmaker) -> int:
     return len(rows)
 
 
-async def _sync_partners(page, sessionmaker: async_sessionmaker) -> int:
-    """거래처(partner) 전량 덤프 → upsert(kind='partner', dept='') + stale 삭제(kind 스코프).
+async def _upsert_partners(rows: list[dict], sessionmaker: async_sessionmaker) -> int:
+    """거래처 행 upsert(kind='partner', dept='') + stale 삭제(kind 스코프, 빈 덤프 보존 예외).
 
-    실제 피커 덤프(dump_partners)는 Track A(trip_domestic)가 프로브 후 구현한다. 앱 기동을
-    깨지 않도록 함수 내부에서 지연 import 하고, 미구현 시 한국어 오류로 실패한다(백그라운드
-    태스크가 sync_state[partner].error 로 남긴다).
+    행 수집(API 또는 브라우저 dump_partners)은 호출부가 하고, 여기는 DB 반영만 한다.
     """
-    try:
-        from app.agents.trip_domestic.steps import dump_partners
-    except ImportError as exc:  # Track A 미완료 — 명확한 한국어 오류로 실패.
-        raise RuntimeError("거래처 덤프 미구현 — Track A 대기") from exc
-
-    rows = await dump_partners(page)
     now = datetime.now(timezone.utc)
     codes = {r["code"] for r in rows}
     async with sessionmaker() as s:
@@ -277,6 +307,7 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
     from app.services.org_sync import fetch_org_tree
 
     tree = await fetch_org_tree(userid, password, browser_factory)
+    via = tree.get("via", "browser")  # API(전량)/브라우저(DOM 스크레이프) 중 무엇으로 받았는지.
     flat = tree["flat"]
     nodes = tree["nodes"]  # 전체 깊이 트리 — org_units 미러링용(catalog 미리보기는 flat 유지).
     now = datetime.now(timezone.utc)
@@ -341,7 +372,61 @@ async def _sync_org(userid: str, password: str, browser_factory, sessionmaker: a
             len(applied.get("deleted", [])),
             len(reassigned),
         )
-    return {"count": len(catalog), "applied": applied, "reassigned": reassigned}
+    return {"count": len(catalog), "applied": applied, "reassigned": reassigned, "via": via}
+
+
+# kind → upsert 함수. 행 수집(API/브라우저)은 _collect_rows 가 하고, 반영만 분리.
+_UPSERTERS = {
+    "budget_unit": _upsert_budget_units,
+    "project": _upsert_projects,
+    "partner": _upsert_partners,
+}
+
+
+async def _browser_collect_rows(kind: str, userid: str, password: str, browser_factory) -> list[dict]:
+    """브라우저(Playwright) 폴백 수집 — fresh 헤드리스로 카드 진입 체인 후 코드피커 전량 읽기.
+
+    행 수집만 하고 DB 는 건드리지 않는다(upsert 는 _UPSERTERS). API 경로가 실패했을 때만 탄다.
+    """
+    browser = await browser_factory()
+    try:
+        page = await browser.new_page(viewport={"width": 1440, "height": 900})
+        await _run_entry_chain(page, userid, password)
+        if kind == "budget_unit":
+            return await steps.dump_budget_units(page)
+        if kind == "project":
+            return await _browser_fetch_projects(page)
+        if kind == "partner":
+            from app.agents.trip_domestic.steps import dump_partners
+
+            return await dump_partners(page)
+        raise ValueError(f"알 수 없는 kind: {kind}")
+    finally:
+        await browser.close()
+
+
+async def _collect_rows(
+    kind: str, userid: str, password: str, browser_factory
+) -> tuple[list[dict], str]:
+    """API 우선 수집 → 실패 시 브라우저 폴백. 반환 (rows, via('api'|'browser')).
+
+    API 실패(로그인 거부·네트워크·state!=success·예외)는 흡수하고 브라우저 경로로 넘어간다
+    (사용자 요구: "api 가 작동 안 하면 기존방식"). API 가 200 으로 부분/빈 결과를 주면 그건
+    '작동'으로 보고 그대로 반영하되, upsert 의 stale 보호(집계<기존이면 삭제 생략, 거래처 빈덤프
+    예외)가 카탈로그 파괴를 막는다.
+    """
+    if get_settings().erp_api_sync_enabled and kind in api_client.API_KINDS:
+        try:
+            rows = await api_client.fetch_catalog_rows(kind, userid, password)
+            return rows, "api"
+        except api_client.ErpApiError as exc:
+            logger.warning("ERP API 수집 실패(kind=%s) — Playwright 폴백: %s", kind, exc)
+        except Exception:  # noqa: BLE001 — 예기치 못한 API 오류도 폴백으로 흡수.
+            logger.exception("ERP API 수집 예외(kind=%s) — Playwright 폴백", kind)
+    if browser_factory is None:
+        raise RuntimeError("API 수집 실패 후 브라우저 폴백 불가 — browser_factory 가 없습니다")
+    rows = await _browser_collect_rows(kind, userid, password, browser_factory)
+    return rows, "browser"
 
 
 async def sync_catalog(
@@ -351,9 +436,10 @@ async def sync_catalog(
     browser_factory,
     sessionmaker: async_sessionmaker,
 ) -> dict:
-    """kind('budget_unit'|'project'|'partner'|'org_unit') 카탈로그 헤드리스 동기화.
+    """kind('budget_unit'|'project'|'partner'|'org_unit') 카탈로그 동기화(API 우선·브라우저 폴백).
 
-    반환 {count, syncedAt}. org_unit 은 org_units 반영·사용자 재배치 요약(applied·reassigned)도 함께.
+    반환 {count, syncedAt, via}. org_unit 은 브라우저 전용(랜딩 우상단 스크레이프)이라 API 경로가
+    없고, org_units 반영·사용자 재배치 요약(applied·reassigned)도 함께 반환한다.
     """
     # 조직도(org_unit)는 랜딩 우상단에 있어 카드 진입 체인이 불필요 — 로그인만 하고 스크레이프.
     if kind == "org_unit":
@@ -361,23 +447,15 @@ async def sync_catalog(
         return {
             "count": org["count"],
             "syncedAt": datetime.now(timezone.utc).isoformat(),
+            "via": org.get("via", "browser"),
             "applied": org.get("applied"),
             "reassigned": org.get("reassigned"),
         }
 
-    browser = await browser_factory()
-    try:
-        page = await browser.new_page(viewport={"width": 1440, "height": 900})
-        await _run_entry_chain(page, userid, password)
-
-        if kind == "budget_unit":
-            count = await _sync_budget_units(page, sessionmaker)
-        elif kind == "project":
-            count = await _sync_projects(page, sessionmaker)
-        elif kind == "partner":
-            count = await _sync_partners(page, sessionmaker)
-        else:
-            raise ValueError(f"알 수 없는 kind: {kind}")
-        return {"count": count, "syncedAt": datetime.now(timezone.utc).isoformat()}
-    finally:
-        await browser.close()
+    upsert = _UPSERTERS.get(kind)
+    if upsert is None:
+        raise ValueError(f"알 수 없는 kind: {kind}")
+    rows, via = await _collect_rows(kind, userid, password, browser_factory)
+    count = await upsert(rows, sessionmaker)
+    logger.info("카탈로그 동기화 kind=%s via=%s count=%d", kind, via, count)
+    return {"count": count, "syncedAt": datetime.now(timezone.utc).isoformat(), "via": via}
