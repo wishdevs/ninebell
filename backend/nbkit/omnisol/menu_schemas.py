@@ -114,11 +114,24 @@ PURCHASE_ORDER_BOM = MenuSchema(
     master_id_field=None,
 )
 
+# 구매요청처리[나인벨] — 화면 ②(셀프결재 상신). 랜딩 실측(2026-08-25): .dews-ui-grid 5개(마스터+탭4).
+PURCHASE_REQ_PROCESS = MenuSchema(
+    key="purchase-req-process",
+    menu_id="PUOPRQ00300_X20616",
+    deeplink="/PU/PUOPRQ00300_X20616",
+    label="구매요청처리[나인벨]",
+    user_type=USER_TYPE_SCM,
+    grids_expected=2,
+    detail_service_url=None,
+    master_id_field=None,
+)
+
 MENU_MAP: dict[str, MenuSchema] = {
     BOM_COLLECTION.key: BOM_COLLECTION,
     EXPENSE_CARD.key: EXPENSE_CARD,
     VOUCHER_RECEIVABLE.key: VOUCHER_RECEIVABLE,
     PURCHASE_ORDER_BOM.key: PURCHASE_ORDER_BOM,
+    PURCHASE_REQ_PROCESS.key: PURCHASE_REQ_PROCESS,
 }
 
 

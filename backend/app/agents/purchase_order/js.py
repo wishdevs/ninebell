@@ -236,3 +236,174 @@ TREEGRID_READ_JS = r"""(fields) => {
     return { ok: true, count, rows };
   } catch (e) { return { ok: false, err: String(e).slice(0, 150) }; }
 }"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase B — 쓰기 경로(2026-08-28 개방). 근거: e2e/purchase_order_screen1_dryrun_probe.py
+# (2026-08-26 드라이런 5회, PROCESS.md '화면 ① 쓰기 경로 실측').
+# ⚠ 체크 API 는 **ds(데이터 행) 공간**의 checkRow/getCheckedRows 만 쓴다 — checkItem 계열은
+#   아이템 인덱스 공간이라 ds 행을 넘기면 다음 발주단위까지 딸려온다(실측 10→99행).
+# ══════════════════════════════════════════════════════════════════════════════
+_TREEGRID_PREAMBLE = (
+    "const el = document.querySelector('.dews-ui-treegrid');"
+    "if (!el) return { ok: false, reason: 'no-treegrid' };"
+    "const g = window.jQuery(el).data('dewsControl')._grid;"
+)
+
+# 전체 선택/해제 — grid.checkAll(bool). 반환 {ok, before, after}.
+TREEGRID_CHECK_ALL_JS = r"""(on) => {
+  try {
+    %s
+    const before = (g.getCheckedRows() || []).length;
+    g.checkAll(!!on);
+    const after = (g.getCheckedRows() || []).length;
+    return { ok: true, before, after };
+  } catch (e) { return { ok: false, err: String(e).slice(0, 150) }; }
+}""" % _TREEGRID_PREAMBLE
+
+# ds 행 목록을 checkRow(row, true) 로 체크(자손 자동 전파) 후 현재 체크 집합을 돌려준다.
+# arg = [rows]. 반환 {ok, checked:[ds행…]}.
+TREEGRID_CHECK_ROWS_JS = r"""(rows) => {
+  try {
+    %s
+    for (const r of rows) g.checkRow(r, true);
+    const checked = (g.getCheckedRows() || []).slice();
+    return { ok: true, checked };
+  } catch (e) { return { ok: false, err: String(e).slice(0, 150) }; }
+}""" % _TREEGRID_PREAMBLE
+
+# 현재 체크된 ds 행 목록(읽기 전용). 반환 {ok, checked}.
+TREEGRID_CHECKED_ROWS_JS = r"""() => {
+  try {
+    %s
+    return { ok: true, checked: (g.getCheckedRows() || []).slice() };
+  } catch (e) { return { ok: false, err: String(e).slice(0, 150) }; }
+}""" % _TREEGRID_PREAMBLE
+
+# 지정 ds 행들의 한 필드 값 — 적용([적용]) 반영 독립 확인용. arg = [rows, field]. 반환 {row: value}.
+TREEGRID_FIELD_JS = r"""([idxs, f]) => {
+  try {
+    const el = document.querySelector('.dews-ui-treegrid');
+    const ds = window.jQuery(el).data('dewsControl')._grid.getDataSource();
+    const out = {};
+    for (const i of idxs) { try { out[i] = ds.getValue(i, f); } catch (e) { out[i] = null; } }
+    return out;
+  } catch (e) { return {}; }
+}"""
+
+# 보이는 확인 다이얼로그(k-window/k-dialog) 목록 — {title,text,buttons}. 프로젝트 도움창 제외는
+# 호출자가 한다.
+DIALOGS_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const wins = [...document.querySelectorAll('.k-window, .k-dialog, [role=alertdialog]')]
+    .filter(w => w.offsetParent !== null);
+  return wins.map(w => ({
+    title: c((w.querySelector('.k-window-title')||{}).innerText),
+    text: c(w.innerText).slice(0, 200),
+    buttons: [...w.querySelectorAll('button')].filter(b => b.offsetParent !== null).map(b => c(b.innerText)),
+  }));
+}"""
+
+# 보이는 다이얼로그 안의 버튼(텍스트 정확 일치) 중앙 좌표. 반환 {x,y} | null.
+DIALOG_BTN_BOX_JS = r"""(btnText) => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const wins = [...document.querySelectorAll('.k-window, .k-dialog, [role=alertdialog]')]
+    .filter(w => w.offsetParent !== null);
+  for (const w of wins) {
+    const b = [...w.querySelectorAll('button')].find(x => x.offsetParent !== null && c(x.innerText) === btnText);
+    if (b) { const r = b.getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }; }
+  }
+  return null;
+}"""
+
+# 요소 id 로 중앙 좌표 — 필터행 `[적용]` 6종은 rowText 로 구분 불가라 **버튼 id 필수**(실측).
+# 반환 {x,y,disabled} | null(미존재/숨김).
+BOX_BY_ID_JS = r"""(id) => {
+  const b = document.getElementById(id);
+  if (!b || b.offsetParent === null) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), disabled: !!b.disabled };
+}"""
+
+# 필터행/상단 코드피커 돋보기 — `<id>-wrapper .dews-codepicker-button`(document 스코프,
+# codepicker._open_picker 는 card_collect 모달 전용이라 안 먹는다 — 실측). 반환 {x,y} | null.
+PICKER_OPEN_BOX_JS = r"""(id) => {
+  const w = document.getElementById(id + '-wrapper');
+  const b = w ? w.querySelector('.dews-codepicker-button') : null;
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+}"""
+
+# 입력 값 읽기(코드피커는 `<id>_text` 표시 우선). 반환 string | null.
+INPUT_VALUE_JS = r"""(id) => {
+  const e = document.getElementById(id + '_text') || document.getElementById(id);
+  return e ? (e.value ?? null) : null;
+}"""
+
+# 셀렉터 중앙 좌표(보이는 것만). 반환 {x,y,disabled} | null.
+BOX_BY_SELECTOR_JS = r"""(sel) => {
+  const b = document.querySelector(sel);
+  if (!b || b.offsetParent === null) return null;
+  const r = b.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), disabled: !!b.disabled };
+}"""
+
+# 화면에 보이는 번호 후보 — 접두(IRQ/PRQ 등)+숫자 패턴을 input 값·텍스트에서 전부 수집.
+# 저장 성공 신호 = 상단에 자동 발급되는 이동요청번호(IRQ…)/구매요청번호(PRQ…)(시연 ✅).
+# 저장 전 스냅샷과 diff 해 **새로 나타난 번호**를 저장 결과로 삼는다. arg = prefix. 반환 string[].
+FIND_NUMBERS_JS = r"""(prefix) => {
+  const re = new RegExp('\\b' + prefix + '\\d{6,}\\b', 'g');
+  const out = new Set();
+  for (const e of document.querySelectorAll('input')) {
+    const v = String(e.value || '');
+    for (const m of v.match(re) || []) out.add(m);
+  }
+  for (const m of (document.body.innerText || '').match(re) || []) out.add(m);
+  return [...out];
+}"""
+
+# 성공 스낵바 문구('자료가 정상적으로 저장되었습니다.' — 시연 ✅) 또는 경고 스낵바 수집.
+SNACKBARS_JS = r"""() => {
+  const c = s => String(s==null?'':s).replace(/\s+/g,' ').trim();
+  const out = [];
+  for (const el of document.querySelectorAll('.dews-ui-snackbar')) {
+    if (el.offsetParent === null) continue;
+    out.push({ text: c(el.innerText), cls: el.className });
+  }
+  return out;
+}"""
+
+# ── 화면 ② 구매요청처리(PUOPRQ00300) — 마스터 그리드(.dews-ui-grid[0]) ─────────────
+# 요청번호 컬럼 PURREQ_NO · 결재상태 ATHZ_ST_NM · 결재상신코드 GWDOCU_NO(2026-08-25 랜딩 실측).
+# 전량 읽기(플랫 그리드 — getJsonRows). 반환 {ok, rows:[{i, PURREQ_NO, ATHZ_ST_NM, GWDOCU_NO, KOR_NM}]}.
+REQ_MASTER_ROWS_JS = r"""() => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    const ds = g.getDataSource();
+    const n = ds.getRowCount();
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const r = {};
+      for (const f of ['PURREQ_NO', 'ATHZ_ST_NM', 'GWDOCU_NO', 'KOR_NM', 'PURREQ_DT']) {
+        try { r[f] = ds.getValue(i, f); } catch (e) { r[f] = null; }
+      }
+      r.i = i;
+      rows.push(r);
+    }
+    return { ok: true, count: n, rows };
+  } catch (e) { return { ok: false, err: String(e).slice(0, 150) }; }
+}"""
+
+# 마스터 행 선택 — setCurrent + checkRow(voucher CHECK_ROW_JS 와 동일 규율). 다른 행 체크는
+# 먼저 전부 해제해 정확히 1행만 체크된 상태로 결재를 연다. arg = idx. 반환 bool.
+REQ_SELECT_ROW_JS = r"""(idx) => {
+  try {
+    const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+    try { g.checkAll(false); } catch (e) {}
+    g.setCurrent({ itemIndex: idx, fieldName: g.getColumns()[1].fieldName });
+    g.checkRow(idx, true);
+    return true;
+  } catch (e) { return false; }
+}"""

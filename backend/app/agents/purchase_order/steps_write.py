@@ -1,0 +1,394 @@
+"""구매발주 Phase B — 쓰기 경로 스텝(2026-08-28 개방, 사용자 지시: ETRI-001 헤디드 실행으로 셀프결재까지).
+
+근거 실측: e2e/purchase_order_screen1_dryrun_probe.py(2026-08-26 드라이런 5회) + PROCESS.md D4/D5/D7.
+규율: 세팅→독립확인(값을 다시 읽어 판정) · 조회는 기대 상태 도달까지 재시도 후 **명시적 실패** ·
+      ⛔ 보관 버튼 미클릭 · 상신은 별도 게이트(nodes/self_approve) 뒤.
+⚠ 체크 API 는 **ds(데이터 행) 공간**의 checkRow/getCheckedRows 만 쓴다 — checkItem 계열은 아이템
+  인덱스 공간이라 ds 행을 넘기면 다음 발주단위까지 딸려온다(실측 10→99행).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from nbkit.omnisol import codepicker, js_lib, latency, selectors, verify
+
+from . import js
+from .steps import (
+    BOM_LOAD_CAP_MS,
+    CHECKBOX_MOVE,
+    CHECKBOX_PURCHASE,
+    POLL_MS,
+    click_lookup,
+    read_bom_signature,
+    set_checkbox,
+)
+
+# 저장위치 2종 — 항상 이 값 고정(사용자 확정 2026-08-25).
+# (필드 id, [적용] 버튼 id, 검색어, 반영 컬럼, 기대 코드)
+STORAGE_LOCATIONS: tuple[tuple[str, str, str, str, str], ...] = (
+    ("n_public_sl_cd", "b_public_sl_cd", "공용자재", "OUT_MV_SL_CD", "1100"),
+    ("n_mv_sl_cd", "b_mv_sl_cd", "프로젝트", "IN_MV_SL_CD", "1000"),
+)
+DUE_DATE_FIELD = "i_bfdedt_dt"
+DUE_DATE_APPLY_BTN = "btn_bfdedt_dt"
+PURCHASE_REASON_FIELD = "i_rmk_dc"
+REQUERY_DIALOG_TEXT = "저장하지 않은 데이터가 있습니다"
+SAVE_DIALOG_TEXT = "저장하시겠습니까"
+SAVE_SUCCESS_TEXT = "자료가 정상적으로 저장되었습니다"
+MOVE_REQ_PREFIX = "IRQ"
+PUR_REQ_PREFIX = "PRQ"
+DIALOG_SCAN_CAP_MS = 4_000
+SAVE_CAP_MS = 40_000
+QUERY_TRIES = 3
+LEVEL_MODULE = 3
+
+
+async def scan_dialog(page: Any, *, cap_ms: int = DIALOG_SCAN_CAP_MS) -> dict | None:
+    """확인 다이얼로그(k-window 등, 버튼 ≤3)가 뜨면 {title,text,buttons}, 상한 내 미발생 None."""
+    waited = 0
+    cap = latency.budget_ms(cap_ms)
+    while True:
+        dialogs = await page.evaluate(js.DIALOGS_JS)
+        cand = next(
+            (
+                d
+                for d in (dialogs or [])
+                if d.get("buttons")
+                and len(d["buttons"]) <= 3
+                and "프로젝트" not in (d.get("title") or "")
+            ),
+            None,
+        )
+        if cand:
+            return cand
+        if waited >= cap:
+            return None
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+
+
+async def click_dialog_button(page: Any, text: str) -> bool:
+    """보이는 다이얼로그의 버튼(예/아니요/확인)을 좌표 클릭. 미발견 False."""
+    box = await page.evaluate(js.DIALOG_BTN_BOX_JS, text)
+    if not box:
+        return False
+    await page.mouse.click(box["x"], box["y"])
+    await verify.DEFAULT_SLEEP(0.5)
+    return True
+
+
+async def _wait_signature(page: Any, prev: dict | None, accept, *, cap_ms: int) -> dict | None:
+    """시그니처가 accept(sig) 를 만족하고 연속 2폴 동일할 때까지 대기. 실패 시 마지막 값."""
+    waited = 0
+    cap = latency.budget_ms(cap_ms)
+    stable: dict | None = None
+    last: dict | None = None
+    while True:
+        sig = await read_bom_signature(page)
+        last = sig
+        if sig and accept(sig) and (prev is None or sig != prev or accept(prev)):
+            if stable == sig:
+                return sig
+            stable = sig
+        else:
+            stable = None
+        if waited >= cap:
+            return last
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+
+
+def view_accepts(sig: dict, *, move_only: bool) -> bool:
+    """뷰 판정 — 이동요청만: count>0 ∧ mvY==count(전부 MV_FG='Y', 실측) / 구매요청만: mvY==0."""
+    c = sig.get("count") or 0
+    if c <= 0:
+        return False
+    return (sig.get("mvY") == c) if move_only else (sig.get("mvY") == 0)
+
+
+async def query_view(page: Any, *, move_only: bool, tries: int = QUERY_TRIES) -> dict:
+    """체크박스를 맞추고 조회(F2) → 미저장 변경 다이얼로그 [예] → 기대 뷰 반영까지 재시도.
+
+    ⚠ 헤드리스 0.4 배율에선 [예] 뒤 첫 조회가 미반영되고 2회차에 반영된 실측이 있어(드라이런
+      3·4·5차) 횟수를 고정하지 않고 기대 상태 도달까지 재시도한다. 끝내 실패하면 명시적 실패 —
+      조용히 넘기면 이후 단계 전부가 잘못된 데이터셋 위에서 돈다.
+    반환 {"ok", "signature", "attempts", "reason"?}.
+    """
+    r1 = await set_checkbox(page, CHECKBOX_PURCHASE, not move_only)
+    r2 = await set_checkbox(page, CHECKBOX_MOVE, move_only)
+    if not r1.get("ok") or not r2.get("ok"):
+        return {"ok": False, "reason": (r1.get("reason") or r2.get("reason"))}
+
+    def accept(sig: dict) -> bool:
+        return view_accepts(sig, move_only=move_only)
+
+    log: list[dict] = []
+    for attempt in range(1, tries + 1):
+        prev = await read_bom_signature(page)
+        await click_lookup(page)
+        dlg = await scan_dialog(page, cap_ms=2_500)
+        if dlg and REQUERY_DIALOG_TEXT in (dlg.get("text") or ""):
+            await click_dialog_button(page, "예")
+        sig = await _wait_signature(page, prev, accept, cap_ms=BOM_LOAD_CAP_MS)
+        log.append({"attempt": attempt, "dialog": bool(dlg), "signature": sig})
+        if sig and accept(sig):
+            return {"ok": True, "signature": sig, "attempts": log}
+        await verify.DEFAULT_SLEEP(1.0)
+    label = "이동요청만" if move_only else "구매요청만"
+    return {
+        "ok": False,
+        "attempts": log,
+        "reason": f"{label} 조회가 {tries}회 시도에도 반영되지 않았습니다 — {log[-1]['signature']}",
+    }
+
+
+async def check_all(page: Any, on: bool) -> dict:
+    return await page.evaluate(js.TREEGRID_CHECK_ALL_JS, on)
+
+
+async def check_rows_exact(page: Any, set_rows: list[int], expected: list[int]) -> dict:
+    """SET ds 행들을 checkRow 로 체크(자손 자동 전파) → getCheckedRows 가 expected 와 **정확 일치**해야 ok.
+
+    불일치(초과=다음 발주단위가 딸려옴 / 누락)는 저장 전에 하드 실패 — 화면상 그럴듯해 보여
+    사후 추적이 어려운 오염이라 여기서 막는다(드라이런 실측 함정).
+    """
+    await check_all(page, False)
+    res = await page.evaluate(js.TREEGRID_CHECK_ROWS_JS, set_rows)
+    if not res.get("ok"):
+        return {"ok": False, "reason": f"checkRow 실패 — {res.get('reason') or res.get('err')}"}
+    got = sorted(int(x) for x in res.get("checked") or [])
+    want = sorted(expected)
+    if got != want:
+        extra = [i for i in got if i not in want][:10]
+        missing = [i for i in want if i not in got][:10]
+        return {
+            "ok": False,
+            "checked": got,
+            "reason": (
+                f"체크 집합 불일치 — 기대 {len(want)}행/실제 {len(got)}행 "
+                f"(초과 {extra}, 누락 {missing})"
+            ),
+        }
+    return {"ok": True, "checked": got}
+
+
+def descendant_rows(rows: list[dict], set_row: int) -> list[int]:
+    """트리 순서 rows(read_bom_rows 반환)에서 ds 행 set_row 의 자손 행(레벨이 더 깊은 연속 행)."""
+    by_i = {r["i"]: r for r in rows}
+    base = by_i.get(set_row)
+    if base is None:
+        return []
+    base_level = base.get("level") or 0
+    out: list[int] = []
+    i = set_row + 1
+    while i in by_i and (by_i[i].get("level") or 0) > base_level:
+        out.append(i)
+        i += 1
+    return out
+
+
+def find_set_rows(rows: list[dict], item_codes: list[str]) -> dict:
+    """모듈 itemCode 목록 → SET(레벨 3) ds 행. 미발견/중복은 명시 실패 {ok:False, reason}."""
+    found: dict[str, list[int]] = {}
+    for r in rows:
+        if r.get("level") == LEVEL_MODULE:
+            code = str(r.get("ITEM_CD") or "").strip()
+            if code in item_codes:
+                found.setdefault(code, []).append(int(r["i"]))
+    missing = [c for c in item_codes if c not in found]
+    dup = [c for c, v in found.items() if len(v) > 1]
+    if missing:
+        return {"ok": False, "reason": f"계획서의 모듈을 그리드에서 찾지 못했습니다 — {missing[:5]}"}
+    if dup:
+        return {"ok": False, "reason": f"같은 품목코드의 SET 행이 여러 개라 특정할 수 없습니다 — {dup[:5]}"}
+    return {"ok": True, "rows": [found[c][0] for c in item_codes]}
+
+
+async def click_by_id(page: Any, elem_id: str) -> dict:
+    box = await page.evaluate(js.BOX_BY_ID_JS, elem_id)
+    if not box:
+        return {"ok": False, "reason": f"'{elem_id}' 버튼을 찾지 못했습니다."}
+    if box.get("disabled"):
+        return {"ok": False, "reason": f"'{elem_id}' 버튼이 비활성입니다."}
+    await page.mouse.click(box["x"], box["y"])
+    await page.wait_for_timeout(900)
+    return {"ok": True}
+
+
+async def pick_code_document(page: Any, field_id: str, keyword: str) -> dict:
+    """최상위 폼/필터행 코드피커 — 돋보기(document 스코프) → 검색 → 첫 행 → 적용 → 표시값 확인.
+
+    codepicker._open_picker 는 card_collect 모달 전용이라 여기선 안 먹는다(실측) — 오픈만 직접.
+    """
+    box = await page.evaluate(js.PICKER_OPEN_BOX_JS, field_id)
+    if not box:
+        return {"ok": False, "reason": f"'{field_id}' 돋보기를 찾지 못했습니다."}
+    await page.mouse.click(box["x"], box["y"])
+    await page.wait_for_timeout(1_200)
+    try:
+        await codepicker._picker_search(page, keyword)
+        await codepicker._wait_picker_rows_stable(page)
+        rows = await page.evaluate(js_lib.PICKER_ROWCOUNT_JS)
+        if not isinstance(rows, int) or rows < 1:
+            await page.keyboard.press("Escape")
+            return {"ok": False, "reason": f"'{keyword}' 검색 결과가 없습니다({field_id})."}
+        await page.evaluate(js_lib.PICKER_SELECT_JS, 0)
+        apply_box = await page.evaluate(js_lib.PICKER_APPLY_BTN_JS)
+        if apply_box:
+            await page.mouse.click(apply_box["x"], apply_box["y"])
+        await codepicker._wait_picker_closed(page)
+    except Exception as exc:  # noqa: BLE001 — 사유를 실패로 승격(조용한 실패 금지).
+        await page.keyboard.press("Escape")
+        return {"ok": False, "reason": f"코드피커 조작 실패({field_id}): {str(exc)[:120]}"}
+    display = await page.evaluate(js.INPUT_VALUE_JS, field_id)
+    if not display or keyword not in str(display):
+        return {"ok": False, "reason": f"'{field_id}' 표시값이 '{keyword}' 가 아닙니다 — {display!r}"}
+    return {"ok": True, "display": display}
+
+
+async def set_text_verified(page: Any, field_id: str, value: str) -> dict:
+    await page.evaluate(js.SET_INPUT_JS, [field_id, value])
+    await verify.DEFAULT_SLEEP(0.3)
+    got = await page.evaluate(js.INPUT_VALUE_JS, field_id)
+    if got != value:
+        return {"ok": False, "reason": f"'{field_id}' 입력 확인 실패 — 기대 {value!r} / 실제 {got!r}"}
+    return {"ok": True}
+
+
+async def read_grid_field(page: Any, rows: list[int], field: str) -> dict[int, Any]:
+    vals = await page.evaluate(js.TREEGRID_FIELD_JS, [rows, field])
+    return {int(k): v for k, v in (vals or {}).items()}
+
+
+def _is_new_number(before: set[str], now: list[str]) -> list[str]:
+    return sorted(set(now) - before)
+
+
+async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
+    """저장(F7) 실클릭 → '저장하시겠습니까?' [예] → 성공 판정.
+
+    성공 = 새 번호(number_prefix+숫자)가 화면에 나타남(시연 ✅ 상단 자동 발급) **또는** 성공
+    스낵바 문구. 경고/오류 스낵바가 먼저 보이면 그 문구로 실패. 상한 내 아무 신호도 없으면 실패
+    (미저장이 성공으로 둔갑하는 조용한 실패 금지). 반환 {"ok", "number"?, "reason"?}.
+    """
+    before = set(await page.evaluate(js.FIND_NUMBERS_JS, number_prefix) or [])
+    box = await page.evaluate(js.BOX_BY_SELECTOR_JS, selectors.BTN_SAVE)
+    if not box:
+        return {"ok": False, "reason": "저장 버튼을 찾지 못했습니다."}
+    if box.get("disabled"):
+        return {"ok": False, "reason": "저장 버튼이 비활성입니다."}
+    await page.mouse.click(box["x"], box["y"])
+    dlg = await scan_dialog(page, cap_ms=DIALOG_SCAN_CAP_MS)
+    if dlg and SAVE_DIALOG_TEXT in (dlg.get("text") or ""):
+        await click_dialog_button(page, "예")
+    elif dlg:
+        return {
+            "ok": False,
+            "reason": f"저장 시 예상 밖 다이얼로그 — {dlg.get('text')!r} {dlg.get('buttons')}",
+        }
+
+    waited = 0
+    cap = latency.budget_ms(SAVE_CAP_MS)
+    seen_success = False
+    while waited < cap:
+        for s in await page.evaluate(js.SNACKBARS_JS) or []:
+            txt = s.get("text") or ""
+            cls = s.get("cls") or ""
+            if SAVE_SUCCESS_TEXT in txt:
+                seen_success = True
+            elif ("warning" in cls or "error" in cls) and txt:
+                return {"ok": False, "reason": f"저장 실패 — {txt}"}
+        new = _is_new_number(before, await page.evaluate(js.FIND_NUMBERS_JS, number_prefix) or [])
+        if new:
+            return {"ok": True, "number": new[-1]}
+        if seen_success:
+            return {"ok": True, "number": None}
+        for d in await page.evaluate(js.DIALOGS_JS) or []:
+            if d.get("buttons") and len(d["buttons"]) <= 2 and "프로젝트" not in (d.get("title") or ""):
+                await click_dialog_button(page, d["buttons"][0])
+                if any(w in (d.get("text") or "") for w in ("실패", "오류", "없습니다", "확인해")):
+                    return {"ok": False, "reason": f"저장 후 안내 — {d.get('text')!r}"}
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+    return {"ok": False, "reason": "저장 후 상한 내에 성공 신호(번호 발급/성공 문구)를 확인하지 못했습니다."}
+
+
+# ── 화면 ② 구매요청처리(PUOPRQ00300) ─────────────────────────────────────────────
+REQ_PLANT_FIELD = "s_plant_cd"
+REQ_NO_FIELD = "s_no_purreq"
+# ❓ 결재 아이콘 2종 중 어느 쪽이 셀프결재인지 미확정(title/aria 공란) — 순서대로 시도.
+REQ_APPROVAL_SELECTORS = ("button.main-button.approval", "button.main-button.etn-approval")
+REQ_QUERY_CAP_MS = 30_000
+
+
+async def ensure_req_plant(page: Any, name: str = "나인벨") -> dict:
+    """공장(필수 코드피커)이 비었으면 name 으로 채운다. 이미 맞으면 무변경."""
+    cur = await page.evaluate(js.INPUT_VALUE_JS, REQ_PLANT_FIELD)
+    if cur and name in str(cur):
+        return {"ok": True, "unchanged": True}
+    return await pick_code_document(page, REQ_PLANT_FIELD, name)
+
+
+async def query_request(page: Any, purreq_no: str) -> dict:
+    """요청번호로 조회(F2) → 마스터 그리드에서 해당 행 찾기. 반환 {"ok", "row"?, "reason"?}."""
+    r = await set_text_verified(page, REQ_NO_FIELD, purreq_no)
+    if not r.get("ok"):
+        return r
+    await click_lookup(page)
+    waited = 0
+    cap = latency.budget_ms(REQ_QUERY_CAP_MS)
+    last: dict = {}
+    while waited < cap:
+        last = await page.evaluate(js.REQ_MASTER_ROWS_JS) or {}
+        for row in last.get("rows") or []:
+            if str(row.get("PURREQ_NO") or "").strip() == purreq_no:
+                return {"ok": True, "row": row}
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+    return {
+        "ok": False,
+        "reason": f"구매요청처리 조회에서 {purreq_no} 행을 찾지 못했습니다(조회 {last.get('count')}행).",
+    }
+
+
+def submit_guard(row: dict) -> str | None:
+    """상신 가드레일 — 결재상태=='저장' ∧ 결재상신코드=='' 인 행만. 위반 사유 또는 None."""
+    st = str(row.get("ATHZ_ST_NM") or "").strip()
+    gw = str(row.get("GWDOCU_NO") or "").strip()
+    if st != "저장" or gw:
+        return f"상신 대상 아님 — 결재상태 {st!r}, 결재상신코드 {gw!r}"
+    return None
+
+
+async def select_request_row(page: Any, idx: int) -> bool:
+    return bool(await page.evaluate(js.REQ_SELECT_ROW_JS, idx))
+
+
+async def open_request_approval(page: Any, *, attempts: int = 2) -> dict:
+    """결재 아이콘 클릭 → 새 Page(EAP 결재창) 캡처. 후보 2종 순서로 시도, 열린 셀렉터를 반환."""
+    from app.agents.voucher_receivable import steps as voucher_steps  # 공용 EAP 프리미티브
+
+    context = page.context
+    for sel in REQ_APPROVAL_SELECTORS:
+        for attempt in range(attempts):
+            await voucher_steps.wait_loading_overlay_gone(page)
+            rect = await page.evaluate(js.BOX_BY_SELECTOR_JS, sel)
+            if not rect:
+                break
+            try:
+                async with context.expect_page(timeout=8_000) as info:
+                    await page.mouse.click(rect["x"], rect["y"])
+            except Exception:  # noqa: BLE001 — 새 창 미출현 → 재시도/다음 후보.
+                dlg = await page.evaluate(js.DIALOGS_JS)
+                if dlg:
+                    return {
+                        "ok": False,
+                        "reason": f"결재 클릭 후 다이얼로그 — {dlg[0].get('text')!r}",
+                        "selector": sel,
+                    }
+                if attempt + 1 < attempts:
+                    await page.wait_for_timeout(500)
+                continue
+            return {"ok": True, "child": await info.value, "selector": sel}
+    return {"ok": False, "reason": "결재 아이콘 클릭으로 결재창(새 창)이 열리지 않았습니다."}
