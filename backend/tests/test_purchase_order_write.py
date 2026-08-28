@@ -46,8 +46,9 @@ def test_find_set_rows_missing_and_duplicate_are_explicit():
 
 
 def test_view_accepts_move_only_vs_purchase_only():
-    assert steps_write.view_accepts({"count": 164, "mvY": 164}, move_only=True)
-    assert not steps_write.view_accepts({"count": 164, "mvY": 0}, move_only=True)
+    assert steps_write.view_accepts({"count": 163, "mvY": 132, "mvN": 31, "leafN": 0}, move_only=True)
+    assert not steps_write.view_accepts({"count": 164, "mvY": 0, "mvN": 31, "leafN": 0}, move_only=True)
+    assert not steps_write.view_accepts({"count": 793, "mvY": 132, "mvN": 661, "leafN": 630}, move_only=True)
     assert steps_write.view_accepts({"count": 664, "mvY": 0}, move_only=False)
     assert not steps_write.view_accepts({"count": 0, "mvY": 0}, move_only=False)
 

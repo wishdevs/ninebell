@@ -29,6 +29,14 @@ def make_save_move_node():
         await emit_step(events, STEP, "running")
         t0 = time.monotonic()
 
+        # 재실행 보호(e2e/재시도용): 이동요청이 이미 저장된 프로젝트에서 중복 생성하지 않도록
+        # params.purchase_order.skip_move_request 로 이 단계를 건너뛴다.
+        po = (state.get("params") or {}).get("purchase_order") or {}
+        if po.get("skip_move_request"):
+            await emit_log(events, "skip_move_request — 이동요청 저장을 건너뜁니다(이미 저장됨).", "warn")
+            await emit_step(events, STEP, "done", _ms(t0))
+            return {"move_request_no": None}
+
         q = await steps_write.query_view(page, move_only=True)
         if not q.get("ok"):
             last = ((q.get("attempts") or [{}])[-1]).get("signature") or {}

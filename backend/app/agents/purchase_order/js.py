@@ -195,13 +195,19 @@ TREEGRID_MV_SIG_JS = r"""() => {
     const g = window.jQuery(el).data('dewsControl')._grid;
     const ds = g.getDataSource();
     const count = ds.getRowCount();
-    let mvY = 0;
+    let mvY = 0, mvN = 0, leafN = 0;
     // ds 인덱스 공간: 0=숨은 루트, 데이터 행은 1..count(경계 프로브 실측 — TREEGRID_READ_JS 참조).
     for (let i = 1; i <= count; i++) {
       // ds.getValue — 레벨과 같은 인덱스 공간(grid 쪽 getValue 는 한 행 앞섬, TREEGRID_READ_JS 참조).
-      try { if (ds.getValue(i, 'MV_FG') === 'Y') mvY++; } catch (e) {}
+      // leafN = 리프(레벨 4) 중 MV_FG='N' — '이동요청만' 뷰 판정용. 구조행(레벨 1~3)은 이동요청만
+      // 뷰에서도 MV_FG='N' 이라(2026-08-28 ETRI-001 실측: 163행 = Y 132 + 구조 N 31) 리프만 센다.
+      try {
+        const v = ds.getValue(i, 'MV_FG');
+        if (v === 'Y') mvY++;
+        else if (v === 'N') { mvN++; if (ds.getLevel(i) === 4) leafN++; }
+      } catch (e) {}
     }
-    return { count, mvY };
+    return { count, mvY, mvN, leafN };
   } catch (e) { return null; }
 }"""
 

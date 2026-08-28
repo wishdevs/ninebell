@@ -100,11 +100,14 @@ async def _wait_signature(page: Any, prev: dict | None, accept, *, cap_ms: int) 
 
 
 def view_accepts(sig: dict, *, move_only: bool) -> bool:
-    """뷰 판정 — 이동요청만: count>0 ∧ mvY==count(전부 MV_FG='Y', 실측) / 구매요청만: mvY==0."""
+    """뷰 판정 — 이동요청만: mvY>0 ∧ leafN==0(구매요청 리프 없음; 구조행은 이 뷰에서도 MV_FG='N' —
+    ETRI-001 실측 163행 = Y 132 + 구조 N 31) / 구매요청만: count>0 ∧ mvY==0."""
     c = sig.get("count") or 0
     if c <= 0:
         return False
-    return (sig.get("mvY") == c) if move_only else (sig.get("mvY") == 0)
+    if move_only:
+        return (sig.get("mvY") or 0) > 0 and (sig.get("leafN") or 0) == 0
+    return sig.get("mvY") == 0
 
 
 async def query_view(page: Any, *, move_only: bool, tries: int = QUERY_TRIES) -> dict:
@@ -136,10 +139,22 @@ async def query_view(page: Any, *, move_only: bool, tries: int = QUERY_TRIES) ->
             return {"ok": True, "signature": sig, "attempts": log}
         await verify.DEFAULT_SLEEP(1.0)
     label = "이동요청만" if move_only else "구매요청만"
+    # 진단 — 체크박스 실제 상태 + 잔존 다이얼로그(조회 클릭을 가로채는 안내창 등)를 사유에 싣는다.
+    try:
+        boxes = {
+            lbl: (await page.evaluate(js.CHECKBOX_RECT_JS, lbl) or {}).get("checked")
+            for lbl in (CHECKBOX_PURCHASE, CHECKBOX_MOVE)
+        }
+        dialogs = [(d.get("text") or "")[:80] for d in (await page.evaluate(js.DIALOGS_JS) or [])]
+    except Exception:  # noqa: BLE001 — 진단 실패는 사유만 줄인다.
+        boxes, dialogs = {}, []
     return {
         "ok": False,
         "attempts": log,
-        "reason": f"{label} 조회가 {tries}회 시도에도 반영되지 않았습니다 — {log[-1]['signature']}",
+        "reason": (
+            f"{label} 조회가 {tries}회 시도에도 반영되지 않았습니다 — {log[-1]['signature']} "
+            f"(체크박스 {boxes}, 다이얼로그 {dialogs})"
+        ),
     }
 
 
@@ -265,6 +280,30 @@ def _is_new_number(before: set[str], now: list[str]) -> list[str]:
     return sorted(set(now) - before)
 
 
+async def settle_after_save(page: Any, *, cap_ms: int = 4_000) -> None:
+    """저장 성공 뒤 정착 — 잔존 안내 다이얼로그(확인 1버튼)를 닫고 로딩 오버레이가 걷힐 때까지 대기.
+
+    저장 직후 뜨는 안내창/로딩이 다음 조회 클릭을 가로채면 그리드가 갱신되지 않는다(2026-08-28
+    ETRI-001 실측: 이동요청 저장 직후 '구매요청만' 재조회 3회 미반영).
+    """
+    from app.agents.voucher_receivable import steps as voucher_steps
+
+    waited = 0
+    while waited < cap_ms:
+        closed = False
+        for d in await page.evaluate(js.DIALOGS_JS) or []:
+            btns = d.get("buttons") or []
+            if btns and len(btns) <= 2 and "프로젝트" not in (d.get("title") or ""):
+                await click_dialog_button(page, btns[0])
+                closed = True
+        if not closed:
+            break
+        await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+        waited += POLL_MS
+    await voucher_steps.wait_loading_overlay_gone(page)
+    await verify.DEFAULT_SLEEP(1.0)
+
+
 async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
     """저장(F7) 실클릭 → '저장하시겠습니까?' [예] → 성공 판정.
 
@@ -300,10 +339,9 @@ async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
             elif ("warning" in cls or "error" in cls) and txt:
                 return {"ok": False, "reason": f"저장 실패 — {txt}"}
         new = _is_new_number(before, await page.evaluate(js.FIND_NUMBERS_JS, number_prefix) or [])
-        if new:
-            return {"ok": True, "number": new[-1]}
-        if seen_success:
-            return {"ok": True, "number": None}
+        if new or seen_success:
+            await settle_after_save(page)
+            return {"ok": True, "number": new[-1] if new else None}
         for d in await page.evaluate(js.DIALOGS_JS) or []:
             if d.get("buttons") and len(d["buttons"]) <= 2 and "프로젝트" not in (d.get("title") or ""):
                 await click_dialog_button(page, d["buttons"][0])
