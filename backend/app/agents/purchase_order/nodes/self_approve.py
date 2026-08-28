@@ -135,6 +135,6 @@ def make_self_approve_node(*, allow_submit: bool = False):
             await emit_shot(events.put, page)
 
         await emit_step(events, STEP, "done", _ms(t0))
-        return {"submitted": submitted}
+        return {"submitted": submitted, "page": page}
 
     return self_approve

@@ -86,12 +86,14 @@ def make_place_orders_node():
         base = get_settings().erp_base
         today = datetime.now(KST).strftime("%Y-%m-%d")
         done: list[dict] = []
+        cur = {"page": page}  # navigate_schema 가 page 를 교체하면 여기에 반영(닫힌 page 재사용 방지)
         for prq, unit in targets:
             seq = unit.get("seq")
             try:
                 active = await navigate_schema(page, PURCHASE_PO_BATCH, base, emit=events.put)
                 if active is not None:
                     page = active
+                    cur["page"] = page
             except Exception as exc:  # noqa: BLE001
                 return await _fail(events, t0, done, f"{prq}: 구매발주일괄입력 진입 실패 — {str(exc)[:160]}")
             r = await s3.ensure_po_type(page)
@@ -151,7 +153,7 @@ def make_place_orders_node():
             await emit_shot(events.put, page)
 
         await emit_step(events, STEP, "done", _ms(t0))
-        return {"purchase_orders": done}
+        return {"purchase_orders": done, "page": cur["page"]}
 
     async def _fail(events, t0, done, msg):
         await emit_step(events, STEP, "failed")
