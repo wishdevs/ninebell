@@ -79,13 +79,20 @@ async def click_dialog_button(page: Any, text: str) -> bool:
     # 진행하시겠습니까?')는 좌표 클릭이 먹지 않고 **로케이터 클릭**만 닫는다. 아직 같은 버튼이
     # 보이면 로케이터로 한 번 더 누른다(초기화/저장 확인창은 좌표 클릭으로 이미 닫혀 no-op).
     if await page.evaluate(js.DIALOG_BTN_BOX_JS, text):
-        try:
-            await page.get_by_role("button", name=text, exact=True).first.click(timeout=2_000)
-        except Exception:  # noqa: BLE001 — role 매칭 실패 시 텍스트 로케이터.
+        # ⚠ `.first` 가 숨은 동명 버튼을 잡아 클릭이 헛돌던 사례(2026-08-28 ETRI-003 '저장하시겠습니까?'
+        #   [예] 28분 미닫힘) → **보이는 k-window 안의 보이는 버튼**으로 한정한다.
+        for sel in (
+            f'.k-window:visible button:visible:text-is("{text}")',
+            f'.k-window:visible [role=button]:visible:text-is("{text}")',
+            f'button:visible:text-is("{text}")',
+        ):
             try:
-                await page.get_by_text(text, exact=True).first.click(timeout=2_000)
-            except Exception:  # noqa: BLE001
-                return False
+                await page.locator(sel).last.click(timeout=2_000)
+                break
+            except Exception:  # noqa: BLE001 — 다음 셀렉터.
+                continue
+        else:
+            return False
         await verify.DEFAULT_SLEEP(0.5)
     return True
 
