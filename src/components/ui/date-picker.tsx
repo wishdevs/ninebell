@@ -16,7 +16,8 @@ import { cn } from '@/lib/utils';
  * 다중 선택(엑셀 셀처럼): 한 화면의 DatePicker 는 전부 모듈 레지스트리에 등록되고, 한 필드에서
  * 마우스를 누른 채 다른 필드까지 끌면 DOM 순서로 그 사이 필드가 범위 선택된다. 선택 상태에서
  * ⌘C 는 날짜를 줄바꿈으로 이어 복사하고, ⌘V 는 클립보드 날짜(1개면 전체에 같은 값, 여러 줄이면
- * 순서대로)를 **선택된 필드에만** 넣는다. Esc·바깥 클릭이면 선택 해제.
+ * 순서대로)를 **선택된 필드에만** 넣는다. 선택된 필드의 달력에서 날짜를 고르면 선택 전부에 같은
+ * 날짜가 들어간다. Esc·바깥 클릭이면 선택 해제.
  */
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'] as const;
@@ -110,6 +111,11 @@ function selectRange(target: string) {
   setSelection(new Set(ids.slice(lo, hi + 1)));
 }
 
+/** 선택된 필드 전부에 같은 값을 넣는다. */
+function applyToSelection(v: string) {
+  for (const id of selected) registry.get(id)?.setValue(v);
+}
+
 function entryAtPoint(x: number, y: number): string | null {
   for (const [id, e] of registry) {
     const r = e.el.getBoundingClientRect();
@@ -145,6 +151,8 @@ function bindDocument() {
     // 등록된 필드 밖 클릭 → 선택 해제.
     const t = e.target as Node | null;
     for (const { el } of registry.values()) if (t && el.contains(t)) return;
+    // 달력 팝오버는 포털(필드 바깥 DOM)이라 별도로 제외 — 선택 상태에서 달력으로 고르는 경로.
+    if (t instanceof Element && t.closest('[data-date-picker-popover]')) return;
     clearSelection();
   });
 
@@ -273,7 +281,10 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
     setView((v) => (v.m0 === 11 ? { y: v.y + 1, m0: 0 } : { y: v.y, m0: v.m0 + 1 }));
 
   const pick = (d: number) => {
-    onChange(toIso(view.y, view.m0, d));
+    const iso = toIso(view.y, view.m0, d);
+    // 드래그 범위 선택 중인 필드에서 고르면 선택된 필드 전부에 같은 날짜를 넣는다(2026-08-28).
+    if (selected.size > 1 && selected.has(id)) applyToSelection(iso);
+    else onChange(iso);
     setOpen(false);
   };
 
@@ -366,7 +377,7 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
             <RiCalendarLine size={15} aria-hidden />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-auto p-3">
+        <PopoverContent align="end" className="w-auto p-3" data-date-picker-popover="">
           <div className="mb-2 flex items-center justify-between">
             <button
               type="button"
