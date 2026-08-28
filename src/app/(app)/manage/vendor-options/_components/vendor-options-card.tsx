@@ -89,8 +89,9 @@ function ClassColumn({
   }
 
   // 드래그 순서 변경(2026-08-28) — 같은 분류 안에서만. 저장 순서 = 계획서 콤보박스 노출 순서.
+  // 끌고 있는 행은 다른 행 위를 지나는 순간 그 자리로 **즉시 이동**한다(예상 위치 미리보기) —
+  // 드롭 대상 강조 방식이 아니라, 놓기 전에 결과 순서가 그대로 보인다.
   const [dragName, setDragName] = useState<string | null>(null);
-  const [overName, setOverName] = useState<string | null>(null);
 
   function move(from: string, to: string): void {
     if (from === to) return;
@@ -128,29 +129,17 @@ function ClassColumn({
                 setDragName(r.name);
               }}
               onDragOver={(e) => {
-                if (!dragName || dragName === r.name) return;
+                if (!dragName) return;
                 e.preventDefault(); // 드롭 허용.
                 e.dataTransfer.dropEffect = 'move';
-                if (overName !== r.name) setOverName(r.name);
+                if (dragName !== r.name) move(dragName, r.name); // 지나는 자리로 즉시 이동.
               }}
-              onDragLeave={() => {
-                if (overName === r.name) setOverName(null);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragName) move(dragName, r.name);
-                setDragName(null);
-                setOverName(null);
-              }}
-              onDragEnd={() => {
-                setDragName(null);
-                setOverName(null);
-              }}
+              onDrop={(e) => e.preventDefault()}
+              onDragEnd={() => setDragName(null)}
               className={cn(
-                'border-border/60 bg-surface flex items-center gap-2 rounded-[var(--radius-sm)] border px-2 py-1.5',
-                dragName === r.name ? 'opacity-40' : '',
-                // 드롭 대상 표시 — 포커스링 대신 테두리+배경(UI 지침).
-                overName === r.name ? 'border-accent bg-accent/10' : '',
+                'border-border/60 bg-surface flex items-center gap-2 rounded-[var(--radius-sm)] border px-2 py-1.5 transition-colors',
+                // 끌고 있는 행 — 자리는 실시간으로 바뀌고, 표시는 테두리+배경(포커스링 미사용).
+                dragName === r.name ? 'border-accent bg-accent/10' : '',
               )}
             >
               <span
