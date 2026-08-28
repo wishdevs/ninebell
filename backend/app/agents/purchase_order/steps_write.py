@@ -251,8 +251,25 @@ async def pick_code_document(page: Any, field_id: str, keyword: str) -> dict:
     box = await page.evaluate(js.PICKER_OPEN_BOX_JS, field_id)
     if not box:
         return {"ok": False, "reason": f"'{field_id}' 돋보기를 찾지 못했습니다."}
-    await page.mouse.click(box["x"], box["y"])
-    await page.wait_for_timeout(1_200)
+    # 돋보기 클릭 → **새 k-window 출현을 확인**(개수 증가)할 때까지 대기, 안 열리면 1회 재클릭.
+    # (2026-08-28 실측: 직전 [적용] 직후 클릭이 유실돼 피커 없이 검색 → 행 -1 실패)
+    before = await page.evaluate(js_lib.POPUP_COUNT_JS)
+    opened = False
+    for _ in range(2):
+        await page.mouse.click(box["x"], box["y"])
+        waited = 0
+        while waited < 5_000:
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
+            now = await page.evaluate(js_lib.POPUP_COUNT_JS)
+            if isinstance(now, int) and isinstance(before, int) and now > before:
+                opened = True
+                break
+        if opened:
+            break
+    if not opened:
+        return {"ok": False, "reason": f"'{field_id}' 코드피커 창이 열리지 않았습니다."}
+    await page.wait_for_timeout(600)
     try:
         # 검색 → 검색어를 **포함하는 행**을 찾아 선택(첫 행 맹선택 금지 — 2026-08-28 실측: 검색이
         # 목록을 좁히기 전 첫 행 'ACM Research…' 선택). 못 찾으면 검색 1회 재시도.

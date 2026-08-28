@@ -295,7 +295,11 @@ async def set_master_note(page: Any, idx: int, text: str) -> dict:
             await page.keyboard.press("Enter")
             await verify.DEFAULT_SLEEP(0.6)
             if await _read_note(page, idx) == text.strip():
-                return {"ok": True, "via": "fill"}
+                # 에디터가 열린 채 남으면(2026-08-28 스크린샷) 저장 클릭을 방해할 수 있어 Tab 으로 닫고 재확인.
+                await page.keyboard.press("Tab")
+                await verify.DEFAULT_SLEEP(0.4)
+                if await _read_note(page, idx) == text.strip():
+                    return {"ok": True, "via": "fill"}
             tried.append(f"fill→{await _read_note(page, idx)!r}")
         except Exception as exc:  # noqa: BLE001
             tried.append(f"fill EXC {str(exc)[:60]}")

@@ -125,9 +125,11 @@ def make_place_orders_node():
                 sel = await s3.select_master_row(page, i, vendor=vendor)
                 if not sel.get("ok"):
                     return await _fail(events, t0, done, f"{prq}: {sel.get('reason')}")
-                if due and s3.due_before_today(due, today):
-                    await emit_log(events, f"{prq}/{vendor}: 계획 납기 {due} 가 발주일({today}) 이전이라 적용하지 않습니다(구매요청 납기 유지).", "warn")
-                    due = ""
+                # 발주일 이전 납기는 ERP 가 [적용]도 저장도 조용히 거부한다(2026-08-28 실측: 요청 납기
+                # 08-21 인 발주단위 #2 저장 무응답) → 발주일(오늘)로 대체하고 경고를 남긴다.
+                if (not due) or s3.due_before_today(due, today):
+                    await emit_log(events, f"{prq}/{vendor}: 계획 납기 {due or '(없음)'} 가 발주일({today}) 이전이라 납기를 발주일로 대체합니다.", "warn")
+                    due = today
                 if due:
                     d = await s3.apply_due_to_detail(page, due)
                     if not d.get("ok"):
