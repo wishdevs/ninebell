@@ -163,7 +163,7 @@ def make_switch_evdn_node():
             await emit_step(events, "switch_evdn", "failed")
             return {"error": "2차 조회에 실패했습니다(그리드 로딩 실패)."}
         lst2 = await steps.read_rows(page, limit=500)
-        # 저장 제외 필터(1차 query 와 동일 규칙) — 저장 전 리스트 재확인: 승인번호 00000000·
+        # 저장 제외 필터(1차 query 와 동일 규칙) — 저장 전 리스트 재확인:
         # 거래처 빈 행은 매칭 후보에서 뺀다(같은 복합키의 정상 행을 오소비하는 것도 방지).
         dropped2 = [(r, why) for r in lst2 if (why := _shared._exclude_reason(r))]
         if dropped2:

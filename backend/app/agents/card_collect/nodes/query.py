@@ -122,7 +122,7 @@ def make_query_node():
             await emit_step(events, "query", "failed")
             return {"error": "조회에 실패했습니다(그리드 로딩 실패)."}
         lst = await steps.read_rows(page, limit=500)
-        # 저장 제외 필터(사용자 규칙 2026-07-29): 승인번호 00000000·거래처 빈 행은 처리
+        # 저장 제외 필터(사용자 규칙 2026-07-29): 거래처 빈 행은 처리
         # 대상에서 뺀다 — 이후 그리드·반영·저장 전부에서 자연히 제외된다.
         dropped = [(r, why) for r in lst if (why := _shared._exclude_reason(r))]
         if dropped:

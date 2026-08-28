@@ -1842,20 +1842,21 @@ async def test_apply_group_fields_fails_when_note_reverted_by_picker(monkeypatch
     assert applied == []  # 일괄적용을 실행하지 않았다
 
 
-# ── 저장 제외 필터(승인번호 00000000·거래처 빈 값 — 사용자 규칙 2026-07-29) ──────────
+# ── 저장 제외 필터(거래처 빈 값 — 사용자 규칙 2026-07-29; 승인번호 00000000 제외는 2026-08-28 제거) ──
 from app.agents.card_collect.nodes import _shared as cc_shared  # noqa: E402
 
 
 def test_exclude_reason_rules():
-    assert cc_shared._exclude_reason({"APRVL_NO": "00000000", "TRAN_NM": "가맹점"}) == "승인번호 00000000"
+    # 승인번호 00000000 은 더 이상 제외하지 않는다(2026-08-28 사용자 지시).
+    assert cc_shared._exclude_reason({"APRVL_NO": "00000000", "TRAN_NM": "가맹점"}) is None
     assert cc_shared._exclude_reason({"APRVL_NO": "12345678", "TRAN_NM": "  "}) == "거래처 없음"
     assert cc_shared._exclude_reason({"APRVL_NO": "12345678", "TRAN_NM": "가맹점"}) is None
     # 빈 승인번호만으로는 제외하지 않는다(규칙은 '전부 0'만) — 거래처가 있으면 정상 처리.
     assert cc_shared._exclude_reason({"APRVL_NO": "", "TRAN_NM": "가맹점"}) is None
 
 
-async def test_query_excludes_zero_aprvl_and_empty_merchant(monkeypatch):
-    """1차 조회 리스트에서 제외 행을 걸러내고(i 보존) 경고 로그를 남긴다."""
+async def test_query_excludes_empty_merchant_but_keeps_zero_aprvl(monkeypatch):
+    """1차 조회 리스트에서 거래처 빈 행만 걸러내고(i 보존) 승인번호 00000000 행은 유지한다."""
 
     async def _q(page, timeout_polls=20):
         return 3
@@ -1871,7 +1872,7 @@ async def test_query_excludes_zero_aprvl_and_empty_merchant(monkeypatch):
     monkeypatch.setattr(steps, "read_rows", _read)
     events: asyncio.Queue = asyncio.Queue()
     out = await cc_nodes.make_query_node()({"events": events, "page": object()})
-    assert [r["i"] for r in out["rows_list"]] == [0]
+    assert [r["i"] for r in out["rows_list"]] == [0, 1]
     logs, titles = [], []
     while not events.empty():
         ev = events.get_nowait()
@@ -1879,8 +1880,8 @@ async def test_query_excludes_zero_aprvl_and_empty_merchant(monkeypatch):
             logs.append(ev["log"])
         if isinstance(ev.get("transactions"), dict):
             titles.append(ev["transactions"]["title"])
-    assert any("저장 제외 2건" in m for m in logs)
-    assert titles and "1건" in titles[0] and "제외 2건" in titles[0]
+    assert any("저장 제외 1건" in m for m in logs)
+    assert titles and "2건" in titles[0] and "제외 1건" in titles[0]
 
 
 async def test_grid_submit_uses_grid_index_after_exclusion(monkeypatch):
@@ -1914,7 +1915,7 @@ async def test_grid_submit_uses_grid_index_after_exclusion(monkeypatch):
 
 
 async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
-    """2차 재조회 리스트에도 저장 제외 필터 적용 — 제외 행은 매칭 후보·rows2_list 에서 빠진다."""
+    """2차 재조회 리스트에도 저장 제외 필터 적용 — 거래처 빈 행은 빠지고 승인번호 00000000 행은 남는다."""
 
     async def _ok_close(page):
         return {"ok": True}
@@ -1930,6 +1931,7 @@ async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
 
     rows2 = _mixed_rows()
     rows2.append({**_rows(1)[0], "i": 3, "APRVL_NO": "00000000", "TRAN_NM": "무승인가맹점"})
+    rows2.append({**_rows(1)[0], "i": 4, "APRVL_NO": "55555555", "TRAN_NM": ""})
 
     async def _read(page, limit=200):
         return rows2
@@ -1960,7 +1962,8 @@ async def test_switch_evdn_filters_excluded_rows_in_requery(monkeypatch):
         "pending_nontax": pending, "period": ["2026-06-01", "2026-06-30"],
     }
     out = await make_switch_evdn_node()(state)
-    assert all(r.get("APRVL_NO") != "00000000" for r in out["rows2_list"])
+    assert any(r.get("APRVL_NO") == "00000000" for r in out["rows2_list"])
+    assert all(str(r.get("TRAN_NM") or "").strip() for r in out["rows2_list"])
     assert [w["label"] for w in out["pass2_work"]] == [2]
 
 

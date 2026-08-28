@@ -103,13 +103,10 @@ def _row_key(r: dict) -> str:
 def _exclude_reason(r: dict) -> str | None:
     """저장 제외 판정(사용자 규칙 2026-07-29) — 제외면 사유 문자열, 정상이면 None.
 
-    승인번호가 전부 0('00000000')이거나 거래처(가맹점명 TRAN_NM)가 빈 행은 정상 승인
-    거래가 아니므로 전표 반영·저장 대상에서 뺀다. 1차 조회와 2차(불공) 재조회 양쪽
-    리스트에 적용한다(저장 전 리스트 재확인).
+    거래처(가맹점명 TRAN_NM)가 빈 행은 정상 승인 거래가 아니므로 전표 반영·저장 대상에서
+    뺀다. 1차 조회와 2차(불공) 재조회 양쪽 리스트에 적용한다(저장 전 리스트 재확인).
+    (승인번호 00000000 제외 규칙은 2026-08-28 사용자 지시로 제거 — 이제 저장 대상이다.)
     """
-    aprvl = str(r.get("APRVL_NO") or "").strip()
-    if aprvl and set(aprvl) == {"0"}:
-        return f"승인번호 {aprvl}"
     if not str(r.get("TRAN_NM") or "").strip():
         return "거래처 없음"
     return None
