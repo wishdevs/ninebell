@@ -21,6 +21,7 @@ from app.models.erp_code_catalog import ErpCodeCatalog
 from app.models.merchant_dict_rule import MerchantDictRule
 from app.models.org_unit import AgentOrgAccess, OrgUnit
 from app.models.permission import Permission
+from app.models.purchase_order_plan import PurchaseOrderPlan
 from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
@@ -51,4 +52,5 @@ __all__ = [
     "CardLearnedNote",
     "CardSeedNote",
     "CardAiNote",
+    "PurchaseOrderPlan",
 ]

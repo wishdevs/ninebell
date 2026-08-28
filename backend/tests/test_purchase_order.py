@@ -987,7 +987,7 @@ async def _next_hitl(events: asyncio.Queue, *, tries: int = 200) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_plan_node_reemits_on_invalid_then_accepts_valid():
+async def test_plan_node_reemits_on_invalid_then_accepts_valid(monkeypatch):
     events = _q()
     planner_bom = planner.assemble_planner_bom(
         _sample_rows(), {"code": "2297", "name": "CX85-137"}
@@ -996,9 +996,18 @@ async def test_plan_node_reemits_on_invalid_then_accepts_valid():
         "events": events,
         "page": _Page(),
         "planner_bom": planner_bom,
-        "owner": None,
-        "run_id": None,
+        "owner": "owner-1",
+        "run_id": "run-1",
+        "project": {"code": "2297", "name": "CX85-137", "wbs": "PO-1"},
+        "bom_summary": {"modules": 1},
     }
+    # 확정 계획서 보관 호출 검증 — 수락된 계획만, 상태의 owner/run_id/project/bom_summary 와 함께.
+    recorded: list[dict] = []
+
+    async def _fake_record(owner, **kw):
+        recorded.append({"owner": owner, **kw})
+
+    monkeypatch.setattr(plan_mod.purchase_order_plans, "record_plan", _fake_record)
     task = asyncio.create_task(make_plan_node()(state))
 
     frame = await _next_hitl(events)
@@ -1021,6 +1030,38 @@ async def test_plan_node_reemits_on_invalid_then_accepts_valid():
     assert out["confirmed_plan"] == good
     assert_keys_declared(PurchaseOrderState, out)
     assert frame["id"] not in _hitl_queues
+    # 위반 제출은 보관하지 않고, 수락된 계획 1건만 보관한다.
+    assert recorded == [
+        {
+            "owner": "owner-1",
+            "run_id": "run-1",
+            "agent_id": "purchase-order",
+            "plan": good,
+            "project": state["project"],
+            "bom_summary": {"modules": 1},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_node_survives_record_plan_failure(monkeypatch):
+    events = _q()
+    planner_bom = planner.assemble_planner_bom(
+        _sample_rows(), {"code": "2297", "name": "CX85-137"}
+    )
+    state = {"events": events, "page": _Page(), "planner_bom": planner_bom,
+             "owner": "owner-1", "run_id": "run-1"}
+
+    async def _boom(owner, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(plan_mod.purchase_order_plans, "record_plan", _boom)
+    task = asyncio.create_task(make_plan_node()(state))
+    frame = await _next_hitl(events)
+    good = _plan()
+    resolve_hitl(frame["id"], {"plan": good, "query": None, "value": None})
+    out = await asyncio.wait_for(task, timeout=5)
+    assert out["confirmed_plan"] == good  # 보관 실패는 런을 깨지 않는다.
 
 
 @pytest.mark.asyncio

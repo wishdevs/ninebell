@@ -31,6 +31,7 @@ import { FULL_WIDTH_SIMULATION_AGENTS, SIMULATION_PANELS } from '@/components/li
 import { orderPatternsFromSettings } from '@/lib/purchase/order-patterns';
 import { vendorOptionsFromSettings } from '@/lib/purchase/vendor-options';
 import { vendorCategoriesFrom } from '@/components/live/simulation/purchase-order/catalog';
+import { PastPlansButton } from '@/components/live/simulation/purchase-order/past-plans-dialog';
 import { AgentSidePanel } from './agent-side-panel';
 import { LiveBrowserStage, type StageEtaHint } from './live-browser-stage';
 import { LiveSidePanel } from './live-side-panel';
@@ -265,6 +266,8 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
 
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
             <SessionStatus isLive={isLive} status={run.status} />
+            {/* 이전 계획서 — 저장된 구매발주 계획서 열람(읽기 전용 다이얼로그, 화면 이동 없음). */}
+            {agent.id === 'purchase-order' ? <PastPlansButton /> : null}
             {/* 테스트 문서 정리(디버그, 2026-08-10) — 디버그 모드 + 정리 워크플로우가 있는
                 에이전트에서만, 실행 대기 상태에서만 노출. hidden 워크플로우를 같은 라이브
                 패널로 실행한다(본인 작성·미결 문서 전량 가드 통과 시에만 F6 삭제). */}

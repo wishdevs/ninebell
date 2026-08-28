@@ -23,6 +23,7 @@ import uuid
 from app.agents.purchase_order import planner
 from app.live.events import emit_hitl, emit_log, emit_step
 from app.live.hitl import close_hitl_channel, open_hitl_channel
+from app.services import purchase_order_plans
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,18 @@ def make_plan_node():
                     events, f"계획 확정 — 발주단위 {len(units)}개 수령.", "ok"
                 )
                 await emit_step(events, STEP, "done", _ms(t0))
+                # 확정 계획서 보관 — 부가기능이라 실패해도 런은 계속.
+                try:
+                    await purchase_order_plans.record_plan(
+                        state.get("owner"),
+                        run_id=state.get("run_id"),
+                        agent_id="purchase-order",
+                        plan=submitted,
+                        project=state.get("project"),
+                        bom_summary=state.get("bom_summary"),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("purchase-order plan: 계획서 보관 실패")
                 # 상태 키는 confirmed_plan — 노드명 'plan' 과 같은 키는 LangGraph 가 거부한다.
                 return {"confirmed_plan": submitted}
         finally:
