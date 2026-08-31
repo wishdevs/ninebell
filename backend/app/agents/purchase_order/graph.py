@@ -98,7 +98,13 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
             return "self_approve"
         if po.get("order_prqs"):  # 상신까지 끝난 PRQ 의 화면 ③ 발주만(params.purchase_order.plan 동봉)
             return "place_orders"
-        return END if state.get("no_modules") else "plan"
+        if state.get("no_modules"):
+            # 자동 재개(2026-08-31) — 구매요청 저장은 끝났지만 상신/발주 전에 중단된 프로젝트:
+            # read_bom 이 수거한 잔여 PRQ 가 있으면 END 대신 뒷단계로(save_move 는 IRQ 기록으로 스킵).
+            if ((state.get("resume") or {}).get("prqs")):
+                return "save_move"
+            return END
+        return "plan"
 
     g.add_conditional_edges(
         "read_bom",

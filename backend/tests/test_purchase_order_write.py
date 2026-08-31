@@ -173,8 +173,12 @@ def test_resume_parse_run_artifacts():
         {"message": "발주단위 #4 저장 완료 — 구매요청번호 PRQ2026080757."},
         {"level": "error", "message": "발주단위 #5 구매요청 저장 실패 — ..."},
     ]
+    logs.append({"message": "PRQ2026080754: 상신 완료 — 결재상태 종결 · 결재상신코드 (주)나인벨-2026-17482."})
+    logs.append({"message": "PRQ2026080754: 발주 저장 완료 — 발주번호 ['PUR2026082421']."})
     art = parse_run_artifacts(logs)
     assert art["projectCode"] == "ETRI-005"
     assert art["moveRequestNo"] == "IRQ2026081447"
     assert art["units"] == [(1, "PRQ2026080754"), (4, "PRQ2026080757")]
-    assert parse_run_artifacts([]) == {"projectCode": None, "moveRequestNo": None, "units": []}
+    assert art["submitted"] == {"PRQ2026080754"} and art["ordered"] == {"PRQ2026080754"}
+    empty = parse_run_artifacts([])
+    assert empty["projectCode"] is None and empty["units"] == [] and empty["submitted"] == set()

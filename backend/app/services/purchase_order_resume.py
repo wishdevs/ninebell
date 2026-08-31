@@ -25,15 +25,21 @@ logger = logging.getLogger(__name__)
 RE_PROJECT = re.compile(r"프로젝트 '[^']*'\(코드 ([^)]+)\) 적용")
 RE_UNIT = re.compile(r"발주단위 #(\d+) 저장 완료 — 구매요청번호 (PRQ\d+)")
 RE_MOVE = re.compile(r"이동요청번호 (IRQ\d+)")
-#: 잔여물 수거 대상 런 상태 — 성공 런의 PRQ 는 이미 끝까지 처리됐으므로 제외.
-RESUMABLE_STATUSES = ("failed", "cancelled")
+RE_SUBMITTED = re.compile(r"(PRQ\d+): 상신 완료")
+RE_ORDERED = re.compile(r"(PRQ\d+): 발주 저장 완료")
+#: 잔여물 수거 대상 런 상태 — succeeded 도 포함한다(디버그 런은 저장만 실제·상신 가상인 채
+#: succeeded 로 끝난다, 2026-08-31 ETRI-006 실측). 완주 여부는 상태가 아니라 PRQ 별
+#: 상신/발주 완료 로그로 판별한다.
+RESUMABLE_STATUSES = ("failed", "cancelled", "succeeded")
 
 
 def parse_run_artifacts(logs: list) -> dict:
-    """런 로그(list[{message,...}]) → {"projectCode", "moveRequestNo", "units": [(seq, prq)]}. 순수."""
+    """런 로그 → {"projectCode","moveRequestNo","units":[(seq,prq)],"submitted":set,"ordered":set}. 순수."""
     project_code: str | None = None
     move_no: str | None = None
     units: list[tuple[int, str]] = []
+    submitted: set[str] = set()
+    ordered: set[str] = set()
     for entry in logs or []:
         msg = str((entry or {}).get("message") or "")
         if project_code is None:
@@ -46,7 +52,19 @@ def parse_run_artifacts(logs: list) -> dict:
         m = RE_UNIT.search(msg)
         if m:
             units.append((int(m.group(1)), m.group(2)))
-    return {"projectCode": project_code, "moveRequestNo": move_no, "units": units}
+        m = RE_SUBMITTED.search(msg)
+        if m:
+            submitted.add(m.group(1))
+        m = RE_ORDERED.search(msg)
+        if m:
+            ordered.add(m.group(1))
+    return {
+        "projectCode": project_code,
+        "moveRequestNo": move_no,
+        "units": units,
+        "submitted": submitted,
+        "ordered": ordered,
+    }
 
 
 async def prior_artifacts(project_code: str, *, exclude_run_id: str | None = None) -> dict:
@@ -76,7 +94,9 @@ async def prior_artifacts(project_code: str, *, exclude_run_id: str | None = Non
                 .all()
             )
             move_no: str | None = None
-            prqs: list[dict] = []
+            candidates: list[dict] = []
+            submitted: set[str] = set()
+            ordered: set[str] = set()
             seen: set[str] = set()
             run_ids: list[str] = []
             for run in runs:
@@ -87,13 +107,19 @@ async def prior_artifacts(project_code: str, *, exclude_run_id: str | None = Non
                     continue
                 if art["moveRequestNo"]:
                     move_no = art["moveRequestNo"]
+                submitted |= art["submitted"]
+                ordered |= art["ordered"]
                 for seq, prq in art["units"]:
                     if prq in seen:
                         continue
                     seen.add(prq)
-                    prqs.append({"seq": seq, "number": prq, "runId": str(run.id)})
+                    candidates.append({"seq": seq, "number": prq, "runId": str(run.id)})
                 if art["units"] or art["moveRequestNo"]:
                     run_ids.append(str(run.id))
+            # 잔여 = 저장됐지만 (상신 ∧ 발주)가 모두 확인되지 않은 PRQ — 완주 프로젝트는 빈 목록이
+            # 되어 no_modules 조기 종료가 그대로 유지된다. ERP 가드(종결 스킵·팝업 0행 스킵)는
+            # 그 위의 최종 방어선이다.
+            prqs = [c for c in candidates if not (c["number"] in submitted and c["number"] in ordered)]
             plan_by_run: dict[str, dict] = {}
             if run_ids:
                 rows = (

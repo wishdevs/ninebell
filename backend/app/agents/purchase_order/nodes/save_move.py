@@ -40,7 +40,7 @@ def make_save_move_node():
 
         # 자동 재개(2026-08-31) — 같은 프로젝트의 이전 실패/취소 런 잔여물을 1회 수거해 상태에 싣는다.
         # 이동요청 행은 저장 후에도 화면에서 소멸하지 않아(프로브 실측) 기록 기준으로만 중복을 막는다.
-        resume = await purchase_order_resume.prior_artifacts(
+        resume = state.get("resume") or await purchase_order_resume.prior_artifacts(
             str((state.get("project") or {}).get("code") or ""), exclude_run_id=state.get("run_id")
         )
         if resume.get("moveRequestNo") or resume.get("prqs"):

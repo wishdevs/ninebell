@@ -13,6 +13,7 @@ import time
 
 from app.agents.purchase_order import planner, steps
 from app.live.events import emit_log, emit_step
+from app.services import purchase_order_resume
 from nbkit.patterns import emit_shot
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,26 @@ def make_read_bom_node():
                         "못했습니다 — 레벨 매핑을 확인해 주세요."
                     )
                 }
-            # SET 은 있는데 전부 하위 부품이 없다 = 발주가 끝난 프로젝트. 실패가 아니라
-            # '할 일 없음'이므로 계획서(HITL)를 띄우지 않고 여기서 끝낸다(사용자 확정 2026-08-14).
+            # SET 은 있는데 전부 하위 부품이 없다 = 구매요청 저장이 끝난 프로젝트. 실패가 아니라
+            # '할 일 없음'이므로 계획서(HITL)를 띄우지 않고 끝낸다(사용자 확정 2026-08-14).
+            # ⚠ 자동 재개(2026-08-31): 저장은 다 됐지만 상신/발주 전에 중단된 프로젝트도 여기로
+            #   들어온다 — 이전 중단 런 잔여물이 있으면 END 대신 뒷단계로 이어간다(graph 분기).
             msg = (
                 f"발주할 모듈이 없습니다 — SET {set_rows}건이 모두 하위 부품 없이 "
-                "조회됐습니다(이미 발주 완료)."
+                "조회됐습니다(구매요청 저장 완료)."
             )
-            await emit_log(events, msg, "warn")
+            resume = await purchase_order_resume.prior_artifacts(
+                str(planner_bom["project"].get("code") or ""), exclude_run_id=state.get("run_id")
+            )
+            if resume.get("prqs"):
+                await emit_log(
+                    events,
+                    msg + f" 이전 중단 런의 구매요청 {len(resume['prqs'])}건을 이어서 처리합니다"
+                    "(이미 상신/발주된 건은 자동 스킵).",
+                    "info",
+                )
+            else:
+                await emit_log(events, msg, "warn")
             await emit_shot(events.put, page)
             await emit_step(events, STEP, "done", _ms(t0))
             return {
@@ -87,6 +101,7 @@ def make_read_bom_node():
                 "bom_summary": summary,
                 "project": planner_bom["project"],
                 "no_modules": True,
+                "resume": resume,
                 "result": msg,
             }
 
