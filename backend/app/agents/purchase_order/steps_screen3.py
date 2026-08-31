@@ -270,13 +270,30 @@ async def select_master_row(page: Any, idx: int, *, vendor: str | None = None) -
         await verify.DEFAULT_SLEEP(0.2)
         cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
         tried.append(("nudge", cur))
+    stagnant = 0
+    refocused = False
     for _ in range(60):
         if cur == idx or cur < 0:
             break
+        prev = cur
         await page.keyboard.press("ArrowDown" if cur < idx else "ArrowUp")
         await verify.DEFAULT_SLEEP(0.2)
         cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
         tried.append(("key", cur))
+        if cur == prev:
+            stagnant += 1
+            # ⚠ 직전 행의 비고 에디터/납기 입력에 키보드 포커스가 남으면 방향키가 그리드에 안 닿아
+            #   현재 행이 고정된다(2026-08-31 ETRI-005 0756 실측: idx 5 이동 실패, 4 고정) —
+            #   정체 3회면 그리드를 한 번 클릭해 포커스를 되찾고 이어서 보행한다(1회 한정).
+            if stagnant >= 3 and not refocused:
+                refocused = True
+                await page.mouse.click(rect["x"] + 200, rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX // 2)
+                await verify.DEFAULT_SLEEP(0.5)
+                cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
+                tried.append(("refocus", cur))
+                stagnant = 0
+        else:
+            stagnant = 0
     for _ in range(1):
         if cur != idx:
             continue
