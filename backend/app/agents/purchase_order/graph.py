@@ -91,10 +91,12 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
         # 재실행 경로: params.purchase_order.submit_prqs 가 있으면 계획/저장을 건너뛰고 이미 저장된
         # 구매요청번호만 셀프결재 상신한다(2026-08-28 — 저장은 됐는데 상신 전 중단된 런 복구용).
         po = (state.get("params") or {}).get("purchase_order") or {}
-        if po.get("order_prqs"):  # 상신까지 끝난 PRQ 의 화면 ③ 발주만(params.purchase_order.plan 동봉)
-            return "place_orders"
+        # submit_prqs 우선 — 상신 후 place_orders 로 자연히 이어져 '상신+발주' 한 런 재개가 된다.
+        # (order_prqs 만 주면 발주만 — 상신은 이미 끝난 경우.)
         if po.get("submit_prqs"):
             return "self_approve"
+        if po.get("order_prqs"):  # 상신까지 끝난 PRQ 의 화면 ③ 발주만(params.purchase_order.plan 동봉)
+            return "place_orders"
         return END if state.get("no_modules") else "plan"
 
     g.add_conditional_edges(
