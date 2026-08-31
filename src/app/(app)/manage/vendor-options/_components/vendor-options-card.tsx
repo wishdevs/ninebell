@@ -2,8 +2,6 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { RiCloseLine, RiDraggable } from '@remixicon/react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { CatalogCombobox, type ComboOption } from '@/components/live/pre-run/catalog-combobox';
 import { fetchCatalog } from '@/lib/api/me-codes';
 import {
@@ -28,9 +26,10 @@ interface VendorOptionsFieldsProps {
  * 통합 지정 거래처 후보 편집 필드(분류 3열) — 계획서 콤보박스(통합 지정·발주단위 거래처
  * 그룹)의 선택지를 편집한다. 카드 셸·저장 바는 클라이언트(vendor-options-client)가 소유한다.
  *
- * 추가는 **거래처 카탈로그 검색**이 기본이다 — ERP 화면 ③(구매발주일괄입력)의 변경 거래처
+ * 추가는 **거래처 카탈로그 검색뿐**이다 — ERP 화면 ③(구매발주일괄입력)의 변경 거래처
  * 코드피커가 이름으로 대조하므로, 카탈로그의 실명과 일치해야 적용이 된다(tax-invoice 선례).
- * 카탈로그에 없는 거래처만 직접 입력으로 추가한다.
+ * ERP 가 데이터 단일 소스라 직접 입력 폴백은 두지 않는다(제거 2026-08-31) — 거래처 등록은
+ * ERP 에서 한다.
  */
 export function VendorOptionsFields({
   value,
@@ -63,9 +62,6 @@ function ClassColumn({
   disabled: boolean;
   onChange: (rows: VendorOptions[VendorClass]) => void;
 }) {
-  // 카탈로그에 없는 거래처용 폴백 — 검색 추가가 기본이고, 직접 입력은 접혀 있다.
-  const [manual, setManual] = useState(false);
-  const [manualName, setManualName] = useState('');
   const full = rows.length >= MAX_VENDOR_OPTIONS_PER_CLASS;
 
   function add(name: string): void {
@@ -229,46 +225,6 @@ function ClassColumn({
         onSelect={(opt) => add(opt.name)}
         onClear={() => {}}
       />
-      <div>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => setManual((v) => !v)}
-          className="text-accent hover:text-accent/80 text-[11px] font-semibold underline underline-offset-2 disabled:opacity-50"
-        >
-          {manual ? '검색으로 추가하기' : '카탈로그에 없나요? 직접 입력'}
-        </button>
-      </div>
-      {manual ? (
-        <div className="flex gap-2">
-          <Input
-            value={manualName}
-            disabled={disabled || full}
-            placeholder="거래처명 그대로 입력"
-            maxLength={MAX_VENDOR_NAME_LEN}
-            onChange={(e) => setManualName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                add(manualName);
-                setManualName('');
-              }
-            }}
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={disabled || full || !manualName.trim()}
-            onClick={() => {
-              add(manualName);
-              setManualName('');
-            }}
-          >
-            추가
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RiInformationLine, RiPlayLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
-import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { fetchCatalog, fetchFavorites } from '@/lib/api/me-codes';
 import { CatalogCombobox, type ComboOption, projectCodeLabel } from './catalog-combobox';
@@ -24,13 +23,14 @@ import type { PreRunFormProps } from './index';
  *   - project_name= 표시·검증용 전체 이름.
  *
  * 카탈로그는 WBS 행 단위라 한 프로젝트가 여러 행으로 나온다 → PJT_NO 기준으로 접어 1건으로 본다.
- * 스냅샷이 낡을 수 있으므로(동기화 시점 표기) 카탈로그에 없는 프로젝트는 '직접 입력'으로 실행한다.
+ * ERP 가 데이터 단일 소스다 — 목록에 없는 프로젝트는 카탈로그 동기화 후 실행한다
+ * (직접 입력 폴백 제거 2026-08-31).
  */
 
 /** 카탈로그 검색 요청 건수 — WBS 행 단위라 PJT_NO 로 접으면 크게 줄어들어 넉넉히 받는다. */
 const SEARCH_LIMIT = 60;
 
-const STALE_CATALOG_HINT = '최근 프로젝트는 카탈로그 동기화 후 표시됩니다.';
+const STALE_CATALOG_HINT = '최근 프로젝트는 카탈로그 동기화 후 표시됩니다. 등록·수정은 ERP 에서 합니다.';
 
 // ── 최근 실행 프로젝트(로컬스토리지, 사용자 요청 2026-08-26) ─────────────────
 
@@ -119,41 +119,24 @@ function asString(v: unknown): string {
 }
 
 interface Seed {
-  manual: boolean;
   project: { code: string; name: string };
-  keyword: string;
-  projectNo: string;
 }
 
-/** 마지막 제출 params → 폼 초기값 복원(종료 후 값 수정 재실행). 카탈로그 선택이었는지는
- *  keyword 가 이름에서 파생된 값과 같은지로 판별한다 — 다르면 직접 입력으로 되살린다. */
+/** 마지막 제출 params → 폼 초기값 복원(종료 후 값 수정 재실행). 카탈로그 선택만 되살린다. */
 function seedFromParams(initial: Record<string, unknown> | undefined): Seed {
-  const empty: Seed = {
-    manual: false,
-    project: { code: '', name: '' },
-    keyword: '',
-    projectNo: '',
-  };
+  const empty: Seed = { project: { code: '', name: '' } };
   const po = initial?.purchase_order as Record<string, unknown> | undefined;
   if (!po || typeof po !== 'object') return empty;
   const name = asString(po.project_name);
   const projectNo = asString(po.project_no);
-  const keyword = asString(po.keyword);
-  if (name && projectNo && deriveKeyword(name) === keyword) {
-    return { ...empty, project: { code: projectNo, name } };
-  }
-  if (!keyword && !projectNo) return empty;
-  return { manual: true, project: { code: '', name: '' }, keyword: keyword || name, projectNo };
+  if (name && projectNo) return { project: { code: projectNo, name } };
+  return empty;
 }
 
 export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: PreRunFormProps) {
   // 마지막 제출값 복원 — 부모가 key 로 remount 하면 초기값이 다시 시드된다.
   const seed = useMemo(() => seedFromParams(initialParams), [initialParams]);
   const [project, setProject] = useState(() => seed.project);
-  // 카탈로그에 없는 프로젝트용 폴백 — 검색어(필수) + 프로젝트 번호(선택)를 직접 입력.
-  const [manual, setManual] = useState(seed.manual);
-  const [manualKeyword, setManualKeyword] = useState(seed.keyword);
-  const [manualNo, setManualNo] = useState(seed.projectNo);
 
   const [favorites, setFavorites] = useState<ComboOption[]>([]);
   // 최근 실행 프로젝트 — SSR 프리렌더와 어긋나지 않게 마운트 후 로컬스토리지에서 읽는다.
@@ -197,11 +180,11 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
     return options;
   }, []);
 
-  // 제출값 — 카탈로그 선택이면 이름에서 검색어를 파생하고, 직접 입력이면 입력값 그대로 쓴다.
-  const keyword = manual ? manualKeyword.trim() : deriveKeyword(project.name) || project.code;
-  const projectNo = manual ? manualNo.trim() : project.code;
-  const projectName = manual ? keyword : project.name || keyword;
-  const canSubmit = !disabled && !!keyword && (manual || !!project.code);
+  // 제출값 — 카탈로그 선택에서 이름으로 검색어를 파생한다.
+  const keyword = deriveKeyword(project.name) || project.code;
+  const projectNo = project.code;
+  const projectName = project.name || keyword;
+  const canSubmit = !disabled && !!keyword && !!project.code;
 
   const syncedLabel = formatSyncedAt(syncedAt);
 
@@ -231,7 +214,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
         <p className="text-foreground-tertiary text-xs leading-relaxed">
           프로젝트 목록은 법인카드·출장과 같은 카탈로그를 씁니다.
           {syncedLabel ? <> 카탈로그 동기화: {syncedLabel}.</> : null} 목록에 없는 최근 프로젝트는
-          아래 <b>직접 입력</b>으로 실행하세요.
+          카탈로그 동기화 후 실행하세요 — 프로젝트 등록은 ERP 에서 합니다.
         </p>
       </div>
 
@@ -241,11 +224,9 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
           label="프로젝트"
           required
           hint={
-            manual
-              ? '직접 입력을 사용하는 동안에는 목록 선택이 잠깁니다.'
-              : emptySearch
-                ? STALE_CATALOG_HINT
-                : '이름 일부(예: CX85)로 검색해 고르세요. WBS 는 프로젝트 단위로 묶여 표시됩니다.'
+            emptySearch
+              ? STALE_CATALOG_HINT
+              : '이름 일부(예: CX85)로 검색해 고르세요. WBS 는 프로젝트 단위로 묶여 표시됩니다.'
           }
         >
           <CatalogCombobox
@@ -253,7 +234,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
             placeholder="프로젝트 선택"
             favorites={favorites}
             recents={recents.map((r) => ({ code: r.code, name: r.name, codeLabel: r.code }))}
-            disabled={disabled || manual}
+            disabled={disabled}
             search={search}
             onSelect={(o) => {
               setProject({ code: o.code, name: o.name });
@@ -262,49 +243,6 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
             onClear={() => setProject({ code: '', name: '' })}
           />
         </FormField>
-
-        <div>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => setManual((v) => !v)}
-            className="text-accent hover:text-accent/80 inline-flex items-center text-xs font-semibold underline underline-offset-2 disabled:opacity-50 pointer-coarse:-mx-2 pointer-coarse:min-h-11 pointer-coarse:px-2"
-          >
-            {manual ? '카탈로그에서 선택하기' : '카탈로그에 없나요? 직접 입력'}
-          </button>
-        </div>
-
-        {manual ? (
-          <div className="border-border/60 bg-muted/20 grid gap-3 rounded-[var(--radius-md)] border p-3 sm:grid-cols-[1fr_10rem]">
-            <FormField
-              id="po-manual-keyword"
-              label="검색어"
-              required
-              hint="ERP 도움창에서 이 문자열로 찾습니다."
-            >
-              <Input
-                id="po-manual-keyword"
-                value={manualKeyword}
-                disabled={disabled}
-                placeholder="예: CX85-137"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                onChange={(e) => setManualKeyword(e.target.value)}
-              />
-            </FormField>
-            <FormField id="po-manual-no" label="프로젝트 번호" hint="선택 — 알면 입력.">
-              <Input
-                id="po-manual-no"
-                inputMode="numeric"
-                value={manualNo}
-                disabled={disabled}
-                placeholder="예: 2297"
-                onChange={(e) => setManualNo(e.target.value)}
-              />
-            </FormField>
-          </div>
-        ) : null}
       </div>
 
       {/* 제출 요약 — 도움창에 실제로 들어갈 검색어를 미리 보여준다(이름에서 파생되므로). */}
@@ -329,7 +267,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
         {/* 비활성 사유 — disabled:pointer-events-none 라 title 툴팁은 안 뜨므로 인라인으로 안내. */}
         {!canSubmit ? (
           <p className="text-foreground-tertiary text-xs md:text-right">
-            프로젝트를 고르거나 검색어를 입력하면 실행할 수 있습니다.
+            프로젝트를 고르면 실행할 수 있습니다.
           </p>
         ) : null}
         <Button

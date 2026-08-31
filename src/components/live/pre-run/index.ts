@@ -38,7 +38,7 @@ export const PRE_RUN_FORMS: Record<string, ComponentType<PreRunFormProps>> = {
   'voucher-by-type': VoucherTypePreRunForm,
   // 미지급금 법인카드 — 조회기간(회계일)만 받는 폼. 기본값 이번 달 1일~말일.
   'voucher-card': VoucherPreRunForm,
-  // 구매발주 — 대상 프로젝트(카탈로그 재사용 + 직접 입력 폴백)만 받고 실행한다.
+  // 구매발주 — 대상 프로젝트(카탈로그 선택)만 받고 실행한다.
   'purchase-order': PurchaseOrderPreRunForm,
   // 세금계산서 — 증빙유형 질문·입력항목·분할 계획을 폼으로 받고, 발행 후 행 선택만 라이브 HITL.
   'tax-invoice': TaxInvoicePreRunForm,
