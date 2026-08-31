@@ -124,54 +124,56 @@ function PlanList({ onSelect }: { onSelect: (id: string) => void }) {
             : '구매발주 실행에서 계획서를 확정하면 여기에 쌓입니다.',
         }}
       >
-      <TableCard
-        minWidth={760}
-        ariaLabel="이전 계획서 목록"
-        head={
-          <tr>
-            <Th>프로젝트</Th>
-            <Th>WBS</Th>
-            <Th className="text-right">발주단위</Th>
-            <Th className="text-right">합계 금액</Th>
-            <Th>실행자</Th>
-            <Th>저장 일시</Th>
-          </tr>
-        }
-      >
-        {rows.map((r, i) => [
-          dayOf(r.createdAt) !== dayOf(rows[i - 1]?.createdAt ?? null) || i === 0 ? (
-            <tr key={`day-${r.id}`} data-testid="past-plans-day">
-              {/* Td 는 colSpan 을 안 받는다 — 그룹 헤더 행만 원시 td. */}
-              <td
-                colSpan={6}
-                className="bg-muted/40 text-foreground-secondary border-border/60 border-t px-3 py-1.5 text-[11px] font-semibold"
-              >
-                {dayOf(r.createdAt)}
-              </td>
+        <TableCard
+          minWidth={760}
+          ariaLabel="이전 계획서 목록"
+          head={
+            <tr>
+              <Th>프로젝트</Th>
+              <Th>WBS</Th>
+              <Th className="text-right">발주단위</Th>
+              <Th className="text-right">합계 금액</Th>
+              <Th>실행자</Th>
+              <Th>저장 일시</Th>
             </tr>
-          ) : null,
-          <tr
-            key={r.id}
-            data-testid="past-plans-row"
-            onClick={() => onSelect(r.id)}
-            className={cn(tableRowClass, 'cursor-pointer')}
-          >
-            <Td>
-              <span className="text-foreground font-medium">{r.project.name}</span>
-              <span className="text-foreground-tertiary ml-1.5 text-[11px]">{r.project.code}</span>
-            </Td>
-            <Td className="text-foreground-secondary tabular-nums">{r.wbs || '—'}</Td>
-            <Td className="text-foreground-secondary text-right tabular-nums">{r.unitCount}</Td>
-            <Td className="text-foreground-secondary text-right whitespace-nowrap tabular-nums">
-              {formatInteger(r.totalAmount)}
-            </Td>
-            <Td className="text-foreground-secondary">{r.userDisplayName ?? r.userId}</Td>
-            <Td className="text-foreground-secondary whitespace-nowrap tabular-nums">
-              {formatDateTime(r.createdAt)}
-            </Td>
-          </tr>,
-        ])}
-      </TableCard>
+          }
+        >
+          {rows.map((r, i) => [
+            dayOf(r.createdAt) !== dayOf(rows[i - 1]?.createdAt ?? null) || i === 0 ? (
+              <tr key={`day-${r.id}`} data-testid="past-plans-day">
+                {/* Td 는 colSpan 을 안 받는다 — 그룹 헤더 행만 원시 td. */}
+                <td
+                  colSpan={6}
+                  className="bg-muted/40 text-foreground-secondary border-border/60 border-t px-3 py-1.5 text-[11px] font-semibold"
+                >
+                  {dayOf(r.createdAt)}
+                </td>
+              </tr>
+            ) : null,
+            <tr
+              key={r.id}
+              data-testid="past-plans-row"
+              onClick={() => onSelect(r.id)}
+              className={cn(tableRowClass, 'cursor-pointer')}
+            >
+              <Td>
+                <span className="text-foreground font-medium">{r.project.name}</span>
+                <span className="text-foreground-tertiary ml-1.5 text-[11px]">
+                  {r.project.code}
+                </span>
+              </Td>
+              <Td className="text-foreground-secondary tabular-nums">{r.wbs || '—'}</Td>
+              <Td className="text-foreground-secondary text-right tabular-nums">{r.unitCount}</Td>
+              <Td className="text-foreground-secondary text-right whitespace-nowrap tabular-nums">
+                {formatInteger(r.totalAmount)}
+              </Td>
+              <Td className="text-foreground-secondary">{r.userDisplayName ?? r.userId}</Td>
+              <Td className="text-foreground-secondary whitespace-nowrap tabular-nums">
+                {formatDateTime(r.createdAt)}
+              </Td>
+            </tr>,
+          ])}
+        </TableCard>
         {total > PAGE_SIZE ? (
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
         ) : null}
