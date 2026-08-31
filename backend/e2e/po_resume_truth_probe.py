@@ -35,7 +35,10 @@ DELAY_SCALE = float(os.environ.get("E2E_DELAY_SCALE", "0.4"))
 ART = Path(__file__).resolve().parent / "artifacts"
 ART.mkdir(exist_ok=True)
 
-PRQS = [f"PRQ20260807{n}" for n in range(75, 84)]
+# 대상 PRQ — env E2E_PRQS(콤마 구분)로 교체 가능. 기본 = ETRI-006 9건.
+PRQS = [p.strip() for p in os.environ.get("E2E_PRQS", "").split(",") if p.strip()] or [
+    f"PRQ20260807{n}" for n in range(75, 84)
+]
 SCREEN2 = ("/PU/PUOPRQ00300_X20616", "구매요청처리[나인벨]")
 SCREEN3 = ("/PU/PUOORD02000_X20616", "구매발주일괄입력[나인벨]")
 
