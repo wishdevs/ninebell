@@ -19,8 +19,6 @@ from nbkit.omnisol.menu_schemas import PURCHASE_PO_BATCH
 from nbkit.patterns import emit_shot
 from nbkit.patterns.menu_navigate_flow import navigate_schema
 
-from .confirm import ask_confirm
-
 STEP = "place_orders"
 
 
@@ -48,7 +46,7 @@ def targets_from_state(state: dict) -> list[tuple[str, dict]]:
 
 def make_place_orders_node():
     async def place_orders(state: dict) -> dict:
-        if state.get("error") or state.get("write_aborted"):
+        if state.get("error"):
             return {}
         events = state["events"]
         page = state["page"]
@@ -64,24 +62,12 @@ def make_place_orders_node():
             await emit_step(events, STEP, "failed")
             return {"error": f"계획서 발주단위를 찾지 못한 구매요청 — {missing[:5]} (order_prqs 는 'PRQ=seq' 형식)."}
 
-        value = await ask_confirm(
-            state,
-            title="구매발주 저장 확인",
-            prompt=(
-                "구매발주일괄입력에서 발주단위별로 거래처 적용·납기·비고를 넣고 저장합니다"
-                "(발주번호 발급, 되돌릴 수 없음):\n"
-                + "\n".join(f"· {prq} (발주단위 #{u.get('seq')}, 거래처 그룹 {len(u.get('vendorGroups') or [])})" for prq, u in targets)
-                + "\n\n브라우저에서 확인한 뒤 선택하세요."
-            ),
-            options=[
-                {"value": "yes", "label": "발주 저장 진행", "recommended": True},
-                {"value": "no", "label": "발주하지 않고 종료"},
-            ],
+        # 개입 없음(사용자 확정 2026-08-31) — 계획서 확인 이후는 전부 자동 진행.
+        await emit_log(
+            events,
+            "구매발주 저장 시작 — " + ", ".join(f"{prq}(#{u.get('seq')})" for prq, u in targets) + ".",
+            "info",
         )
-        if value != "yes":
-            await emit_log(events, "사용자가 발주 저장을 진행하지 않았습니다.", "warn")
-            await emit_step(events, STEP, "done", _ms(t0))
-            return {"purchase_orders": []}
 
         base = get_settings().erp_base
         today = datetime.now(KST).strftime("%Y-%m-%d")

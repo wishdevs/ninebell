@@ -38,7 +38,6 @@ GRAPH_STEP_KEYS = [
     "pick_project",
     "read_bom",
     "plan",
-    "confirm_write",
     "save_move",
     "save_units",
     "self_approve",
@@ -1177,9 +1176,9 @@ def test_fixture_promoted_from_placeholder():
     assert "저장" in fx["handoff_note"]  # 쓰기 없음(Phase A) 안내.
     # steps 의 key 순서는 build_purchase_order_graph 노드 등록 순서와 정확히 일치해야 한다.
     assert [s["key"] for s in fx["steps"]] == GRAPH_STEP_KEYS
-    # HITL = plan(계획서) + 비가역 동사 직전 확인 2종(저장·상신, 2026-08-28 쓰기 개방).
+    # HITL = plan(계획서) 하나뿐 — 계획 확정 이후는 전부 자동 진행(사용자 확정 2026-08-31).
     marked = [s["key"] for s in fx["steps"] if s.get("intervention")]
-    assert marked == ["plan", "confirm_write", "self_approve", "place_orders"]
+    assert marked == ["plan"]
 
 
 def test_read_fields_cover_all_candidates():

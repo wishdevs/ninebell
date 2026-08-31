@@ -3,8 +3,7 @@
   (1) descendant_rows/find_set_rows — ds 행 공간에서 SET+자손 집합을 만든다(다음 SET 은 포함 금지).
   (2) check_rows_exact — 체크 집합이 기대와 다르면 저장 전에 하드 실패.
   (3) submit_guard — 결재상태 '저장' ∧ 상신코드 빈칸만 상신.
-  (4) confirm_write — '중단' 이면 write_aborted + result(저장 0건), 그래프는 END 로.
-  (5) self_approve — 디버그 모드/allow_submit=False 면 상신 없이 가상 상신.
+  (4) self_approve — 디버그 모드/allow_submit=False 면 상신 없이 가상 상신.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ import pytest
 
 from app.agents.purchase_order import steps_write
 from app.agents.purchase_order.graph import PurchaseOrderState, build_purchase_order_graph
-from app.agents.purchase_order.nodes import make_confirm_write_node
 from app.live.hitl import resolve_hitl, set_hitl_owner
 from tests.support.state_contract import assert_keys_declared
 
@@ -99,34 +97,13 @@ def _plan():
     }
 
 
-@pytest.mark.asyncio
-async def test_confirm_write_abort_ends_without_error():
-    events = asyncio.Queue()
-    node = make_confirm_write_node()
-    state = {"events": events, "confirmed_plan": _plan(), "project": {"code": "1"}, "owner": "u", "run_id": "r"}
-    task = asyncio.create_task(node(state))
-    frame = None
-    for _ in range(50):
-        await asyncio.sleep(0.01)
-        while not events.empty():
-            f = events.get_nowait()
-            if "hitl" in f:
-                frame = f["hitl"]
-        if frame:
-            break
-    assert frame and frame["kind"] == "confirm" and [o["value"] for o in frame["options"]] == ["yes", "no"]
-    set_hitl_owner(frame["id"], "u")
-    assert resolve_hitl(frame["id"], {"value": "no"})
-    out = await task
-    assert out["write_aborted"] is True and "error" not in out
-    assert_keys_declared(PurchaseOrderState, out)
-
-
-def test_graph_has_write_nodes_and_abort_edge():
+def test_graph_write_nodes_auto_chain():
+    """계획 확정 이후 자동 진행(2026-08-31) — plan→save_move 직결, 확인 노드 없음."""
     g = build_purchase_order_graph().get_graph()
-    assert {"confirm_write", "save_move", "save_units", "self_approve"} <= set(g.nodes)
+    assert {"save_move", "save_units", "self_approve", "place_orders"} <= set(g.nodes)
+    assert "confirm_write" not in g.nodes
     edges = {(e.source, e.target) for e in g.edges}
-    assert ("confirm_write", "save_move") in edges and ("confirm_write", "__end__") in edges
+    assert ("plan", "save_move") in edges and ("save_units", "self_approve") in edges
 
 
 # ── 화면 ③ 구매발주일괄입력 — 계획서 ↔ 팝업/마스터 매핑(순수) ────────────────────

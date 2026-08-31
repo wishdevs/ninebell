@@ -22,7 +22,7 @@ def _ms(t0: float) -> int:
 
 def make_save_move_node():
     async def save_move(state: dict) -> dict:
-        if state.get("error") or state.get("write_aborted"):
+        if state.get("error"):
             return {}
         events = state["events"]
         page = state["page"]

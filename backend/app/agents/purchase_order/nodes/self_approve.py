@@ -1,8 +1,8 @@
 """self_approve — D7 셀프결재(화면 ② 구매요청처리 PUOPRQ00300): 저장된 PRQ 번호마다 조회 →
 가드레일(결재상태 '저장' ∧ 결재상신코드 빈칸) → 행 선택 → 결재 아이콘 → EAP 결재창 → 상신.
 
-게이트 3겹: (1) 빌더 allow_submit, (2) params.debug(디버그 모드면 결재창을 열고 닫기만),
-(3) 상신 직전 사용자 confirm HITL(헤디드로 직접 보고 승인). ⛔ 보관 버튼은 절대 클릭하지 않는다.
+게이트 2겹: (1) 빌더 allow_submit, (2) params.debug(디버그 모드면 결재창을 열고 닫기만) —
+계획 확정 이후는 전부 자동 진행(사용자 확정 2026-08-31). ⛔ 보관 버튼은 절대 클릭하지 않는다.
 결재라인은 본인만(셀프) — 교차 지정 없음. 상신 성공 판정 = 결재창 닫힘 + 재조회에서 결재상태 변화.
 """
 
@@ -18,8 +18,6 @@ from nbkit.omnisol.menu_schemas import PURCHASE_REQ_PROCESS
 from nbkit.patterns import emit_shot
 from nbkit.patterns.menu_navigate_flow import navigate_schema
 
-from .confirm import ask_confirm
-
 STEP = "self_approve"
 
 
@@ -29,7 +27,7 @@ def _ms(t0: float) -> int:
 
 def make_self_approve_node(*, allow_submit: bool = False):
     async def self_approve(state: dict) -> dict:
-        if state.get("error") or state.get("write_aborted"):
+        if state.get("error"):
             return {}
         events = state["events"]
         page = state["page"]
@@ -64,24 +62,14 @@ def make_self_approve_node(*, allow_submit: bool = False):
             await emit_step(events, STEP, "failed")
             return {"error": f"공장(나인벨) 지정 실패 — {p.get('reason')}"}
 
+        # 개입 없음(사용자 확정 2026-08-31) — 계획서 확인 이후는 전부 자동 진행. 상신 게이트는
+        # allow_submit(빌더) ∧ ¬debug 만 남는다.
         if submit_on:
-            value = await ask_confirm(
-                state,
-                title="셀프결재 상신 확인",
-                prompt=(
-                    "다음 구매요청을 결재라인 본인만으로 전자결재 상신합니다(보관 미클릭):\n"
-                    + "\n".join(f"· {x['number']} (발주단위 #{x['seq']})" for x in prqs)
-                    + "\n\n브라우저에서 저장 결과를 확인한 뒤 선택하세요."
-                ),
-                options=[
-                    {"value": "yes", "label": "상신 진행", "recommended": True},
-                    {"value": "no", "label": "상신하지 않고 종료"},
-                ],
+            await emit_log(
+                events,
+                "셀프결재 상신 시작 — " + ", ".join(str(x["number"]) for x in prqs) + " (결재라인 본인만, 보관 미클릭).",
+                "info",
             )
-            if value != "yes":
-                await emit_log(events, "사용자가 상신을 진행하지 않았습니다 — 구매요청 저장까지 완료.", "warn")
-                await emit_step(events, STEP, "done", _ms(t0))
-                return {"submitted": []}
 
         submitted: list[dict] = []
         for x in prqs:

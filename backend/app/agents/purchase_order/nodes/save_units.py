@@ -39,7 +39,7 @@ def _digits(s: object) -> str:
 
 def make_save_units_node():
     async def save_units(state: dict) -> dict:
-        if state.get("error") or state.get("write_aborted"):
+        if state.get("error"):
             return {}
         events = state["events"]
         page = state["page"]

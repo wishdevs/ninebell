@@ -117,25 +117,54 @@ async def _wait_popup_rows_stable(page: Any, *, cap_ms: int = POPUP_CAP_MS) -> i
     return int(last or -1)
 
 
-async def popup_query_prq(page: Any, prq: str) -> dict:
-    """구매요청번호 필드 + trusted Enter → 그 PRQ 라인만(프로브 ✅ 647→84, 팝업 소멸 없음)."""
+async def popup_query_prq(page: Any, prq: str, *, tries: int = 4) -> dict:
+    """구매요청번호 필드 + trusted Enter → 그 PRQ 라인만(프로브 ✅ 647→84, 팝업 소멸 없음).
+
+    ⚠ 결과검증형 재시도(2026-08-31 ETRI-004 실측): Enter 직후 서버 재조회 중에는 그리드가 잠깐
+      **0행**이 되는데, 0→0 을 '안정'으로 오판해 즉시 실패했다(행 0/조회 전 17). 0행은 실패 확정이
+      아니라 재시도 사유다 — 행이 생기고 전부 해당 PRQ 일 때만 성공, 타 요청이 섞이면 즉시 실패.
+    """
     before = await page.evaluate(j3.POPUP_GRID_COUNT_JS, 0)
     r = await set_text_verified(page, POPUP_PRQ_FIELD, prq)
     if not r.get("ok"):
         return r
-    await page.keyboard.press("Enter")
-    await verify.DEFAULT_SLEEP(1.0)
-    n = await _wait_popup_rows_stable(page)
-    read = await page.evaluate(j3.POPUP_GRID_ROWS_JS, [0, 2000])
-    rows = read.get("rows") or []
-    other = [x for x in rows if str(x.get("PURREQ_NO") or "").strip() != prq]
-    if not rows or other:
-        return {
-            "ok": False,
-            "reason": f"{prq} 조회 결과가 그 요청번호만이 아닙니다(행 {len(rows)}, 타 요청 {len(other)}, 조회 전 {before}).",
-            "rows": rows,
-        }
-    return {"ok": True, "rows": rows, "count": n}
+    attempts: list[int] = []
+    for attempt in range(1, tries + 1):
+        await page.keyboard.press("Enter")
+        await verify.DEFAULT_SLEEP(1.5)
+        # 0행(재조회 중 공백)은 안정으로 치지 않고 행이 생길 때까지 기다린다(상한 내).
+        waited = 0
+        cap = latency.budget_ms(POPUP_CAP_MS)
+        n = -1
+        while waited < cap:
+            n = await page.evaluate(j3.POPUP_GRID_COUNT_JS, 0)
+            if isinstance(n, int) and n > 0:
+                stable = await _wait_popup_rows_stable(page)
+                n = stable if stable > 0 else n
+                break
+            await verify.DEFAULT_SLEEP(0.6)
+            waited += 600
+        attempts.append(int(n))
+        if not isinstance(n, int) or n <= 0:
+            continue  # 여전히 0행 — 재조회 지연으로 보고 Enter 재시도.
+        read = await page.evaluate(j3.POPUP_GRID_ROWS_JS, [0, 2000])
+        rows = read.get("rows") or []
+        other = [x for x in rows if str(x.get("PURREQ_NO") or "").strip() != prq]
+        if rows and not other:
+            return {"ok": True, "rows": rows, "count": n}
+        if other:
+            return {
+                "ok": False,
+                "reason": f"{prq} 조회에 타 요청이 섞였습니다(행 {len(rows)}, 타 요청 {len(other)}).",
+                "rows": rows,
+            }
+    return {
+        "ok": False,
+        "reason": (
+            f"{prq} 조회가 {tries}회 시도에도 행을 반환하지 않았습니다"
+            f"(시도별 행수 {attempts}, 조회 전 {before}) — 상신 반영 지연 또는 요청일 범위 문제."
+        ),
+    }
 
 
 async def popup_apply_vendor(page: Any, row_idxs: list[int], vendor_name: str) -> dict:
