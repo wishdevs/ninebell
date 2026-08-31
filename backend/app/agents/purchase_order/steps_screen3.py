@@ -124,7 +124,7 @@ async def _wait_popup_rows_stable(page: Any, *, cap_ms: int = POPUP_CAP_MS) -> i
     return int(last or -1)
 
 
-async def popup_query_prq(page: Any, prq: str, *, tries: int = 4) -> dict:
+async def popup_query_prq(page: Any, prq: str, *, tries: int = 4, allow_missing: bool = False) -> dict:
     """구매요청번호 필드 + trusted Enter → 그 PRQ 라인만(프로브 ✅ 647→84, 팝업 소멸 없음).
 
     ⚠ 결과검증형 재시도(2026-08-31 ETRI-004 실측): Enter 직후 서버 재조회 중에는 그리드가 잠깐
@@ -169,6 +169,9 @@ async def popup_query_prq(page: Any, prq: str, *, tries: int = 4) -> dict:
                 "count": n,
                 "foreign": foreign,
             }
+    if allow_missing:
+        # 자동 재개 대상(이전 런 PRQ)은 0행 = 이미 발주 완료가 지배적 — 실패가 아니라 스킵 신호.
+        return {"ok": True, "already": True, "rows": [], "idxs": []}
     return {
         "ok": False,
         "reason": (

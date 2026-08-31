@@ -11,6 +11,7 @@ import time
 
 from app.agents.purchase_order import js, steps_write
 from app.live.events import emit_log, emit_step
+from app.services import purchase_order_resume
 from nbkit.patterns import emit_shot
 
 STEP = "save_move"
@@ -36,6 +37,27 @@ def make_save_move_node():
             await emit_log(events, "skip_move_request — 이동요청 저장을 건너뜁니다(이미 저장됨).", "warn")
             await emit_step(events, STEP, "done", _ms(t0))
             return {"move_request_no": None}
+
+        # 자동 재개(2026-08-31) — 같은 프로젝트의 이전 실패/취소 런 잔여물을 1회 수거해 상태에 싣는다.
+        # 이동요청 행은 저장 후에도 화면에서 소멸하지 않아(프로브 실측) 기록 기준으로만 중복을 막는다.
+        resume = await purchase_order_resume.prior_artifacts(
+            str((state.get("project") or {}).get("code") or ""), exclude_run_id=state.get("run_id")
+        )
+        if resume.get("moveRequestNo") or resume.get("prqs"):
+            await emit_log(
+                events,
+                f"이전 중단 런 잔여물 감지 — 이동요청 {resume.get('moveRequestNo') or '없음'} · "
+                f"구매요청 {len(resume.get('prqs') or [])}건. 남은 단계부터 이어서 진행합니다.",
+                "info",
+            )
+        if resume.get("moveRequestNo"):
+            await emit_log(
+                events,
+                f"이동요청은 이전 런에서 저장됨({resume['moveRequestNo']}) — 중복 생성하지 않고 건너뜁니다.",
+                "warn",
+            )
+            await emit_step(events, STEP, "done", _ms(t0))
+            return {"move_request_no": resume["moveRequestNo"], "resume": resume}
 
         q = await steps_write.query_view(page, move_only=True)
         if not q.get("ok"):
@@ -80,6 +102,6 @@ def make_save_move_node():
         await emit_log(events, f"이동요청 저장 완료 — {count}행, 이동요청번호 {no or '(화면에서 미확인)'}.", "ok")
         await emit_shot(events.put, page)
         await emit_step(events, STEP, "done", _ms(t0))
-        return {"move_request_no": no}
+        return {"move_request_no": no, "resume": resume}
 
     return save_move

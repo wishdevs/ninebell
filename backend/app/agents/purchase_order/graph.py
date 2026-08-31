@@ -52,6 +52,7 @@ class PurchaseOrderState(BaseAgentState, total=False):
     move_request_no: str | None  # save_move — 이동요청번호(IRQ…), 대상 0건이면 None
     purchase_request_nos: list  # save_units — [{seq, number(PRQ…), modules, dueDate, purchaseReason}]
     submitted: list  # self_approve — [{number, submitted, status?, gwdocuNo?}]
+    resume: dict  # save_move — 이전 중단 런 잔여물({moveRequestNo, prqs, planByRun}, 자동 재개용)
     purchase_orders: list  # place_orders — [{prq, seq, orders[PURDOC_NO…], vendors}]
     debug_mode: bool  # 러너/검증이 넣는 디버그 플래그(상신 게이트 런타임 차단)
 

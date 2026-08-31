@@ -131,9 +131,25 @@ def test_place_orders_targets_from_state_and_order_prqs_param():
 
     plan = {"units": [{"seq": 1, "vendorGroups": []}, {"seq": 2, "vendorGroups": []}]}
     st = {"confirmed_plan": plan, "purchase_request_nos": [{"seq": 2, "number": "PRQ2"}, {"seq": 1, "number": None}]}
-    assert targets_from_state(st) == [("PRQ2", plan["units"][1])]
+    assert targets_from_state(st) == [("PRQ2", plan["units"][1], False)]
     st2 = {"params": {"purchase_order": {"plan": plan, "order_prqs": ["PRQ1=1", "PRQ9=9"]}}}
-    assert targets_from_state(st2) == [("PRQ1", plan["units"][0]), ("PRQ9", {})]
+    assert targets_from_state(st2) == [("PRQ1", plan["units"][0], True), ("PRQ9", {}, True)]
+    # 자동 재개 — resume.prqs 는 그 런의 보관 계획서(planByRun)에서 unit 을 찾아 prior=True 로 합류.
+    old_plan = {"units": [{"seq": 1, "vendorGroups": [], "dueDate": "2026-09-01"}]}
+    st3 = {
+        "confirmed_plan": plan,
+        "purchase_request_nos": [{"seq": 1, "number": "PRQ-NEW"}],
+        "resume": {
+            "prqs": [
+                {"seq": 1, "number": "PRQ-OLD", "runId": "r-old"},
+                {"seq": 1, "number": "PRQ-NEW", "runId": "r-old"},  # 중복은 미합류
+            ],
+            "planByRun": {"r-old": old_plan},
+        },
+    }
+    t3 = targets_from_state(st3)
+    assert ("PRQ-NEW", plan["units"][0], False) in t3
+    assert ("PRQ-OLD", old_plan["units"][0], True) in t3 and len(t3) == 2
 
 
 def test_screen3_due_before_today():
@@ -143,3 +159,22 @@ def test_screen3_due_before_today():
     assert not due_before_today("2026-08-28", "2026-08-28")
     assert not due_before_today("2026-09-30", "2026-08-28")
     assert not due_before_today("", "2026-08-28")
+
+
+# ── 자동 재개(2026-08-31) — 런 로그 파서(순수) ─────────────────────────────────
+def test_resume_parse_run_artifacts():
+    from app.services.purchase_order_resume import parse_run_artifacts
+
+    logs = [
+        {"message": "실행 전 선택한 프로젝트 'ETRIBE ERP TEST 005' 적용 중… (도움창 검색어 'ETRI-005', 코드 ETRI-005)"},
+        {"message": "프로젝트 'ETRIBE ERP TEST 005'(코드 ETRI-005) 적용 — 필드 반영 확인 ✅"},
+        {"message": "이동요청 저장 완료 — 92행, 이동요청번호 IRQ2026081447."},
+        {"message": "발주단위 #1 저장 완료 — 구매요청번호 PRQ2026080754."},
+        {"message": "발주단위 #4 저장 완료 — 구매요청번호 PRQ2026080757."},
+        {"level": "error", "message": "발주단위 #5 구매요청 저장 실패 — ..."},
+    ]
+    art = parse_run_artifacts(logs)
+    assert art["projectCode"] == "ETRI-005"
+    assert art["moveRequestNo"] == "IRQ2026081447"
+    assert art["units"] == [(1, "PRQ2026080754"), (4, "PRQ2026080757")]
+    assert parse_run_artifacts([]) == {"projectCode": None, "moveRequestNo": None, "units": []}

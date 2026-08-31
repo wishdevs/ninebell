@@ -36,6 +36,20 @@ def make_self_approve_node(*, allow_submit: bool = False):
         await emit_step(events, STEP, "running")
         t0 = time.monotonic()
         prqs = [p for p in (state.get("purchase_request_nos") or []) if p.get("number")]
+        # 자동 재개(2026-08-31) — 이전 중단 런의 PRQ 를 합류시킨다. 이미 상신된 건은 아래 가드
+        # (결재상태 '저장'만 상신)가 로그와 함께 자연 스킵한다.
+        prior = [
+            {**p, "prior": True}
+            for p in ((state.get("resume") or {}).get("prqs") or [])
+            if p.get("number") not in {x.get("number") for x in prqs}
+        ]
+        if prior:
+            await emit_log(
+                events,
+                "재개 — 이전 런에서 저장된 구매요청 합류: " + ", ".join(str(p["number"]) for p in prior),
+                "info",
+            )
+            prqs = [*prqs, *prior]
         # 재실행 경로 — 이미 저장된 PRQ 만 상신(graph._after_read_bom 이 여기로 직행시킨다).
         po = (state.get("params") or {}).get("purchase_order") or {}
         if po.get("submit_prqs"):

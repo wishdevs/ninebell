@@ -26,21 +26,37 @@ def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
-def targets_from_state(state: dict) -> list[tuple[str, dict]]:
-    """(PRQ, unit) 목록 — 저장 루프 결과(purchase_request_nos) 또는 재실행 파라미터(order_prqs 'PRQ=seq')."""
+def targets_from_state(state: dict) -> list[tuple[str, dict, bool]]:
+    """(PRQ, unit, prior) 목록 — 이 런의 저장 결과 + 자동 재개(resume) 합류 + 재실행 파라미터.
+
+    prior=True(이전 런 잔여물)는 발주 팝업이 0행이면 '이미 발주됨'으로 보고 스킵한다 — 이 런에서
+    막 상신한 PRQ 의 0행(반영 지연)은 여전히 하드 실패다.
+    """
     plan = state.get("confirmed_plan") or ((state.get("params") or {}).get("purchase_order") or {}).get("plan") or {}
     units = {int(u.get("seq") or i + 1): u for i, u in enumerate(plan.get("units") or [])}
     po = (state.get("params") or {}).get("purchase_order") or {}
-    out: list[tuple[str, dict]] = []
+    out: list[tuple[str, dict, bool]] = []
     if po.get("order_prqs"):
         for item in po["order_prqs"]:
             prq, _, seq = str(item).partition("=")
             unit = units.get(int(seq)) if seq.strip().isdigit() else None
-            out.append((prq.strip(), unit or {}))
+            out.append((prq.strip(), unit or {}, True))
         return out
     for p in state.get("purchase_request_nos") or []:
         if p.get("number"):
-            out.append((str(p["number"]), units.get(int(p.get("seq") or 0)) or {}))
+            out.append((str(p["number"]), units.get(int(p.get("seq") or 0)) or {}, False))
+    # 자동 재개 — 이전 런 PRQ 는 그 런의 보관 계획서에서 unit(seq)을 찾는다.
+    resume = state.get("resume") or {}
+    plan_by_run = resume.get("planByRun") or {}
+    have = {prq for prq, _, _ in out}
+    for p in resume.get("prqs") or []:
+        no = str(p.get("number") or "")
+        if not no or no in have:
+            continue
+        r_plan = plan_by_run.get(str(p.get("runId"))) or {}
+        r_units = {int(u.get("seq") or i + 1): u for i, u in enumerate(r_plan.get("units") or [])}
+        unit = r_units.get(int(p.get("seq") or 0)) or units.get(int(p.get("seq") or 0)) or {}
+        out.append((no, unit, True))
     return out
 
 
@@ -64,7 +80,7 @@ def make_place_orders_node():
             await emit_log(events, "발주할 구매요청번호가 없어 구매발주일괄입력을 건너뜁니다.", "warn")
             await emit_step(events, STEP, "done", _ms(t0))
             return {"purchase_orders": []}
-        missing = [prq for prq, u in targets if not u]
+        missing = [prq for prq, u, _ in targets if not u]
         if missing:
             await emit_step(events, STEP, "failed")
             return {"error": f"계획서 발주단위를 찾지 못한 구매요청 — {missing[:5]} (order_prqs 는 'PRQ=seq' 형식)."}
@@ -72,7 +88,9 @@ def make_place_orders_node():
         # 개입 없음(사용자 확정 2026-08-31) — 계획서 확인 이후는 전부 자동 진행.
         await emit_log(
             events,
-            "구매발주 저장 시작 — " + ", ".join(f"{prq}(#{u.get('seq')})" for prq, u in targets) + ".",
+            "구매발주 저장 시작 — "
+            + ", ".join(f"{prq}(#{u.get('seq')}{', 재개' if prior else ''})" for prq, u, prior in targets)
+            + ".",
             "info",
         )
 
@@ -80,7 +98,7 @@ def make_place_orders_node():
         today = datetime.now(KST).strftime("%Y-%m-%d")
         done: list[dict] = []
         cur = {"page": page}  # navigate_schema 가 page 를 교체하면 여기에 반영(닫힌 page 재사용 방지)
-        for prq, unit in targets:
+        for prq, unit, prior in targets:
             seq = unit.get("seq")
             try:
                 active = await navigate_schema(page, PURCHASE_PO_BATCH, base, emit=events.put)
@@ -95,9 +113,12 @@ def make_place_orders_node():
             r = await s3.open_request_popup(page)
             if not r.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {r.get('reason')}")
-            q = await s3.popup_query_prq(page, prq)
+            q = await s3.popup_query_prq(page, prq, allow_missing=prior)
             if not q.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {q.get('reason')}")
+            if q.get("already"):
+                await emit_log(events, f"{prq}: 발주 팝업에 잔여 라인이 없어 이미 발주된 것으로 판단 — 건너뜁니다.", "warn")
+                continue
             rows = q["rows"]
             real_idxs = q.get("idxs") or list(range(len(rows)))
             if q.get("foreign"):
