@@ -109,7 +109,15 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
     g.add_conditional_edges(
         "read_bom",
         _after_read_bom,
-        {"plan": "plan", "self_approve": "self_approve", "place_orders": "place_orders", END: END},
+        {
+            "plan": "plan",
+            "self_approve": "self_approve",
+            "place_orders": "place_orders",
+            # 자동 재개(no_modules ∧ resume.prqs) — 매핑 누락으로 KeyError 실런 발생(2026-08-31
+            # ETRI-007 재개), 라우터가 반환하는 모든 값은 여기 반드시 등록한다.
+            "save_move": "save_move",
+            END: END,
+        },
     )
 
     return g.compile().with_config({"recursion_limit": RECURSION_LIMIT})

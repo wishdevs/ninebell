@@ -236,3 +236,15 @@ def test_resume_regexes_match_node_skip_wordings():
     assert RE_ORDERED.search("PRQ1: 발주 저장 완료 — 발주번호 ['PUR1'].")
     # 가상 상신(디버그)은 완료로 오인하면 안 된다.
     assert not RE_SUBMITTED.search("PRQ1: (가상 상신) 결재창 확인 후 닫습니다.")
+
+
+def test_graph_read_bom_resume_edge_registered():
+    """no_modules ∧ resume.prqs 재개 분기(read_bom→save_move)가 엣지 매핑에 있어야 한다.
+
+    2026-08-31 ETRI-007 실런: 라우터는 'save_move' 를 반환했지만 add_conditional_edges 매핑에
+    없어 KeyError 로 죽었다 — 라우터 반환값 전수(plan/self_approve/place_orders/save_move)를 잠근다.
+    """
+    g = build_purchase_order_graph().get_graph()
+    edges = {(e.source, e.target) for e in g.edges}
+    for target in ("plan", "self_approve", "place_orders", "save_move"):
+        assert ("read_bom", target) in edges, f"read_bom→{target} 엣지 누락"
