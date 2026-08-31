@@ -133,7 +133,12 @@ type AccessKey = `agent:${string}` | `group:${string}`;
 const agentKey = (id: string): AccessKey => `agent:${id}`;
 const groupKey = (id: string): AccessKey => `group:${id}`;
 
-function AgentAccessBody({ orgUnits, accessData, groupAccessData, onReload }: AgentAccessBodyProps) {
+function AgentAccessBody({
+  orgUnits,
+  accessData,
+  groupAccessData,
+  onReload,
+}: AgentAccessBodyProps) {
   const serverSel = useMemo<Record<string, string[]>>(
     () =>
       Object.fromEntries([
@@ -481,9 +486,7 @@ function AgentRow({
   onEdit: () => void;
 }) {
   return (
-    <div
-      className={cn('flex items-center justify-between gap-3 px-4 py-3', indent && 'pl-8')}
-    >
+    <div className={cn('flex items-center justify-between gap-3 px-4 py-3', indent && 'pl-8')}>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-foreground truncate font-medium">{agent.agentName}</p>

@@ -30,7 +30,8 @@ import type { PreRunFormProps } from './index';
 /** 카탈로그 검색 요청 건수 — WBS 행 단위라 PJT_NO 로 접으면 크게 줄어들어 넉넉히 받는다. */
 const SEARCH_LIMIT = 60;
 
-const STALE_CATALOG_HINT = '최근 프로젝트는 카탈로그 동기화 후 표시됩니다. 등록·수정은 ERP 에서 합니다.';
+const STALE_CATALOG_HINT =
+  '최근 프로젝트는 카탈로그 동기화 후 표시됩니다. 등록·수정은 ERP 에서 합니다.';
 
 // ── 최근 실행 프로젝트(로컬스토리지, 사용자 요청 2026-08-26) ─────────────────
 
