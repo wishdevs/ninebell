@@ -1093,11 +1093,9 @@ async def test_report_returns_plan_project_summary_and_no_write_notice():
                             "purchasableParts": 2},
         }
     )
-    assert set(out["result"]) == {
-        "plan", "project", "bomSummary", "moveRequestNo", "purchaseRequests", "submitted",
-        "purchaseOrders",
-    }
-    assert out["result"]["plan"]["units"][0]["seq"] == 1
+    # 와이어 계약(프론트 types.ts): result 는 문자열 — dict 는 결과 카드를 터뜨린다(2026-08-31 실측).
+    assert isinstance(out["result"], str)
+    assert "CX85-137" in out["result"] and "발주단위 2개" in out["result"]
     logs = [f["log"] for f in _frames(events) if "log" in f]
     assert any("발주 0건" in m for m in logs)  # 화면 ③ 미실행 시에도 결과 요약에 발주 건수 명시.
     assert_keys_declared(PurchaseOrderState, out)

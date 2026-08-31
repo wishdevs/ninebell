@@ -252,8 +252,9 @@ export function LiveResult({
       {result ? (
         <div className="border-success/30 bg-success/10 flex items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5">
           <RiCheckLine size={16} aria-hidden className="text-success mt-0.5 shrink-0" />
-          <p className="text-foreground text-[length:var(--text-body-sm)] leading-relaxed">
-            {result}
+          {/* 계약상 result 는 문자열이지만, 객체가 와도 카드가 터지지 않게 방어(2026-08-31 실측). */}
+          <p className="text-foreground text-[length:var(--text-body-sm)] leading-relaxed whitespace-pre-line">
+            {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
           </p>
         </div>
       ) : null}

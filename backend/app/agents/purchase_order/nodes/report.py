@@ -44,16 +44,22 @@ def make_report_node():
             "ok",
         )
         await emit_step(events, STEP, "done", _ms(t0))
-        return {
-            "result": {
-                "plan": plan,
-                "project": project,
-                "bomSummary": summary,
-                "moveRequestNo": state.get("move_request_no"),
-                "purchaseRequests": prqs,
-                "submitted": state.get("submitted") or [],
-                "purchaseOrders": orders,
-            }
-        }
+        # ⚠ 와이어 계약(프론트 types.ts): result 는 **문자열**이다 — dict 를 넣으면 결과 카드가
+        #   React child 오류로 터진다(2026-08-31 실측). 구조 데이터는 계획서 보관(purchase_order_plans)
+        #   과 런 로그에 이미 있으므로 여기선 사람이 읽는 요약만 반환한다.
+        lines = [
+            f"프로젝트 {project.get('name') or project.get('code')} — 발주단위 {len(units)}개 처리.",
+        ]
+        if state.get("move_request_no"):
+            lines.append(f"이동요청: {state.get('move_request_no')}")
+        if prq_txt != "없음":
+            lines.append(f"구매요청: {prq_txt}")
+        if submitted:
+            lines.append(
+                "상신: " + ", ".join(f"{s.get('number')}({s.get('gwdocuNo') or '종결'})" for s in submitted)
+            )
+        if po_nos:
+            lines.append(f"구매발주 {len(po_nos)}건: " + ", ".join(po_nos))
+        return {"result": "\n".join(lines)}
 
     return report
