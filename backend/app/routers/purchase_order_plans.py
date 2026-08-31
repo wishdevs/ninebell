@@ -36,11 +36,22 @@ def _plan_summary(p: PurchaseOrderPlan) -> dict:
 
 
 @router.get("")
-async def list_plans(user: CurrentUser, db: DbSession, page: PageQuery) -> dict:
+async def list_plans(
+    user: CurrentUser, db: DbSession, page: PageQuery, q: str | None = None
+) -> dict:
     stmt = select(PurchaseOrderPlan).order_by(PurchaseOrderPlan.created_at.desc())
     # 관리자(logs:read)는 전체, 일반 사용자는 소유 스코프 — runs 목록과 같은 규칙.
     if not user_has_permission(user, LOGS_READ):
         stmt = stmt.where(PurchaseOrderPlan.user_id == user.id)
+    # 검색(2026-08-31) — 프로젝트명·코드·WBS 부분일치(대소문자 무시).
+    term = (q or "").strip()[:80]
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(
+            PurchaseOrderPlan.project_name.ilike(like)
+            | PurchaseOrderPlan.project_code.ilike(like)
+            | PurchaseOrderPlan.wbs.ilike(like)
+        )
     result = await paginate(db, stmt, page)
     return {
         "items": [_plan_summary(p) for p in result.items],

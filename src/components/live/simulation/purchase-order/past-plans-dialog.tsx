@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { RiArrowLeftLine, RiFileList3Line, RiHistoryLine } from '@remixicon/react';
+import { RiArrowLeftLine, RiFileList3Line, RiHistoryLine, RiSearchLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogBody } from '@/components/ui/dialog';
 import { ListStatePanel } from '@/components/ui/list-state';
@@ -59,30 +59,71 @@ function PastPlansContent() {
 
 function PlanList({ onSelect }: { onSelect: (id: string) => void }) {
   const [page, setPage] = useState(1);
-  const fetchPage = useCallback(async (args: { limit: number; offset: number }) => {
-    const { items, total } = await fetchPlans(args);
-    return { rows: items, total };
-  }, []);
+  // 검색(2026-08-31) — 입력은 즉시, 서버 질의는 400ms 디바운스(프로젝트명·코드·WBS 부분일치).
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQuery(search.trim());
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [search]);
+  const fetchPage = useCallback(
+    async (args: { limit: number; offset: number }) => {
+      const { items, total } = await fetchPlans({ ...args, q: query });
+      return { rows: items, total };
+    },
+    [query],
+  );
   const { rows, total, phase, error, reload } = usePagedQuery(fetchPage, {
     page,
     pageSize: PAGE_SIZE,
     setPage,
   });
 
+  // 날짜별 그루핑(2026-08-31) — 최신순 유지, 저장 일시의 로컬 날짜가 바뀌는 지점에 그룹 헤더 행.
+  const dayOf = (iso: string | null) =>
+    iso
+      ? new Date(iso).toLocaleDateString('ko-KR', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          weekday: 'short',
+        })
+      : '날짜 미상';
+
   return (
-    <ListStatePanel
-      phase={phase}
-      error={error}
-      loadingLabel="계획서를 불러오는 중…"
-      errorTitle="계획서를 불러오지 못했습니다"
-      onRetry={reload}
-      isEmpty={rows.length === 0}
-      empty={{
-        icon: <RiFileList3Line size={18} aria-hidden />,
-        title: '저장된 계획서가 없습니다',
-        description: '구매발주 실행에서 계획서를 확정하면 여기에 쌓입니다.',
-      }}
-    >
+    <div className="flex flex-col gap-3">
+      <div className="relative w-full sm:max-w-xs">
+        <RiSearchLine
+          size={14}
+          aria-hidden
+          className="text-foreground-tertiary pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+        />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="프로젝트명·코드·WBS 검색"
+          aria-label="이전 계획서 검색"
+          className="border-border bg-surface text-foreground placeholder:text-muted-foreground focus-visible:border-accent focus-visible:ring-accent/40 h-8 w-full rounded-sm border pr-2 pl-8 text-[length:var(--text-body-sm)] outline-none focus-visible:ring-2"
+        />
+      </div>
+      <ListStatePanel
+        phase={phase}
+        error={error}
+        loadingLabel="계획서를 불러오는 중…"
+        errorTitle="계획서를 불러오지 못했습니다"
+        onRetry={reload}
+        isEmpty={rows.length === 0}
+        empty={{
+          icon: <RiFileList3Line size={18} aria-hidden />,
+          title: query ? '검색 결과가 없습니다' : '저장된 계획서가 없습니다',
+          description: query
+            ? '프로젝트명·코드·WBS 로 검색합니다. 검색어를 바꿔 보세요.'
+            : '구매발주 실행에서 계획서를 확정하면 여기에 쌓입니다.',
+        }}
+      >
       <TableCard
         minWidth={760}
         ariaLabel="이전 계획서 목록"
@@ -97,7 +138,18 @@ function PlanList({ onSelect }: { onSelect: (id: string) => void }) {
           </tr>
         }
       >
-        {rows.map((r) => (
+        {rows.map((r, i) => [
+          dayOf(r.createdAt) !== dayOf(rows[i - 1]?.createdAt ?? null) || i === 0 ? (
+            <tr key={`day-${r.id}`} data-testid="past-plans-day">
+              {/* Td 는 colSpan 을 안 받는다 — 그룹 헤더 행만 원시 td. */}
+              <td
+                colSpan={6}
+                className="bg-muted/40 text-foreground-secondary border-border/60 border-t px-3 py-1.5 text-[11px] font-semibold"
+              >
+                {dayOf(r.createdAt)}
+              </td>
+            </tr>
+          ) : null,
           <tr
             key={r.id}
             data-testid="past-plans-row"
@@ -117,13 +169,14 @@ function PlanList({ onSelect }: { onSelect: (id: string) => void }) {
             <Td className="text-foreground-secondary whitespace-nowrap tabular-nums">
               {formatDateTime(r.createdAt)}
             </Td>
-          </tr>
-        ))}
+          </tr>,
+        ])}
       </TableCard>
-      {total > PAGE_SIZE ? (
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
-      ) : null}
-    </ListStatePanel>
+        {total > PAGE_SIZE ? (
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+        ) : null}
+      </ListStatePanel>
+    </div>
   );
 }
 

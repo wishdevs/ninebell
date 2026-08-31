@@ -38,11 +38,13 @@ export interface PlanRecord extends PlanRecordSummary {
 export async function fetchPlans(query: {
   limit: number;
   offset: number;
+  q?: string;
 }): Promise<{ items: PlanRecordSummary[]; total: number }> {
   const params = new URLSearchParams({
     limit: String(query.limit),
     offset: String(query.offset),
   });
+  if (query.q?.trim()) params.set('q', query.q.trim());
   const res = await api.get<{ items?: PlanRecordSummary[]; total: number }>(
     `/purchase-order/plans?${params}`,
   );

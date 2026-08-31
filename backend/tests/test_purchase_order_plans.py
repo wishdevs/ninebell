@@ -142,3 +142,28 @@ async def test_detail_includes_plan_and_hides_others(client, make_user, auth_as)
 
     auth_as(admin)
     assert (await client.get(f"/purchase-order/plans/{pid}")).status_code == 200
+
+
+async def test_list_search_q_matches_project_and_wbs(client, make_user, auth_as):
+    """검색(2026-08-31) — q 가 프로젝트명·코드·WBS 부분일치(대소문자 무시)로 거른다."""
+    a = await make_user("po-search", "user")
+    await _record(a, run_id="run-cx")  # CX85-137 / 2297 / PO-X
+    # record_plan 은 plan 페이로드의 project/wbs 를 우선하므로 plan 쪽을 오버라이드한다.
+    await _record(
+        a,
+        run_id="run-et",
+        plan=_plan(project={"code": "ETRI-009", "name": "ETRIBE ERP TEST 009"}, wbs="WBS-ET9"),
+    )
+    auth_as(a)
+
+    async def _q(q: str) -> list[str]:
+        r = await client.get(f"/purchase-order/plans?q={q}")
+        assert r.status_code == 200, r.text
+        return [i["runId"] for i in r.json()["items"]]
+
+    assert await _q("etri-009") == ["run-et"]  # 코드, 소문자
+    assert await _q("cx85") == ["run-cx"]  # 이름 부분일치
+    assert await _q("WBS-ET9") == ["run-et"]  # WBS
+    assert await _q("없는검색어") == []
+    r = await client.get("/purchase-order/plans")
+    assert r.json()["total"] == 2  # q 없으면 전체
