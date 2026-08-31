@@ -73,20 +73,16 @@ def plan_vendor_changes(unit: dict, rows: list[dict]) -> dict[str, list[int]]:
 
 
 async def ensure_po_type(page: Any) -> dict:
-    """구매발주유형=원재료 — 코드(1000)+표시 직접 세팅(사용자 시연 실측: 피커 불필요, 매 PRQ ~5s 절약).
+    """구매발주유형=원재료 — **반드시 코드피커 경로**.
 
-    D3 구매그룹과 같은 hidden+`_text` 코드피커 쌍이라 코드·표시 동시 세팅 후 독립 재확인. 실패 시
-    기존 코드피커 팝업 경로 폴백.
+    ⛔ 코드+표시(hidden/_text) 직접 세팅은 폼 값만 채우고 **위젯 내부 모델이 비어** `구매요청`
+    버튼이 다이얼로그조차 없이 무반응이 된다(2026-08-31 po_potype_diag 프로브 실측: direct →
+    팝업 미출현, picker → 정상). D3 의 '위젯 내부 모델 미검증' 경고가 이 화면에서 실증된 것 —
+    속도 최적화로 되돌리지 말 것.
     """
     cur = await page.evaluate(js.INPUT_VALUE_JS, PO_TYPE_FIELD)
     if cur and PO_TYPE_NAME in str(cur):
         return {"ok": True, "unchanged": True}
-    await page.evaluate(js.SET_INPUT_JS, [PO_TYPE_FIELD, "1000"])
-    await page.evaluate(js.SET_INPUT_JS, [f"{PO_TYPE_FIELD}_text", PO_TYPE_NAME])
-    await verify.DEFAULT_SLEEP(0.3)
-    got = await page.evaluate(js.INPUT_VALUE_JS, PO_TYPE_FIELD)
-    if got and PO_TYPE_NAME in str(got):
-        return {"ok": True, "via": "direct"}
     return await pick_code_document(page, PO_TYPE_FIELD, PO_TYPE_NAME)
 
 

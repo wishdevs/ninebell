@@ -52,6 +52,13 @@ def make_place_orders_node():
         page = state["page"]
         await emit_step(events, STEP, "running")
         t0 = time.monotonic()
+        # 디버그 모드 — 상신이 가상(실상신 0)이라 발주 팝업에 요청이 안 뜬다. 저장 자체도 비가역이라
+        # 디버그에서는 발주 단계를 통째로 건너뛴다(self_approve 의 debug 게이트와 일관, 2026-08-31).
+        debug = bool((state.get("params") or {}).get("debug")) or bool(state.get("debug_mode"))
+        if debug:
+            await emit_log(events, "디버그 모드 — 구매발주 저장을 건너뜁니다(상신도 가상이므로 발주 불가).", "info")
+            await emit_step(events, STEP, "done", _ms(t0))
+            return {"purchase_orders": []}
         targets = targets_from_state(state)
         if not targets:
             await emit_log(events, "발주할 구매요청번호가 없어 구매발주일괄입력을 건너뜁니다.", "warn")
