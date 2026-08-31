@@ -73,9 +73,20 @@ def plan_vendor_changes(unit: dict, rows: list[dict]) -> dict[str, list[int]]:
 
 
 async def ensure_po_type(page: Any) -> dict:
+    """구매발주유형=원재료 — 코드(1000)+표시 직접 세팅(사용자 시연 실측: 피커 불필요, 매 PRQ ~5s 절약).
+
+    D3 구매그룹과 같은 hidden+`_text` 코드피커 쌍이라 코드·표시 동시 세팅 후 독립 재확인. 실패 시
+    기존 코드피커 팝업 경로 폴백.
+    """
     cur = await page.evaluate(js.INPUT_VALUE_JS, PO_TYPE_FIELD)
     if cur and PO_TYPE_NAME in str(cur):
         return {"ok": True, "unchanged": True}
+    await page.evaluate(js.SET_INPUT_JS, [PO_TYPE_FIELD, "1000"])
+    await page.evaluate(js.SET_INPUT_JS, [f"{PO_TYPE_FIELD}_text", PO_TYPE_NAME])
+    await verify.DEFAULT_SLEEP(0.3)
+    got = await page.evaluate(js.INPUT_VALUE_JS, PO_TYPE_FIELD)
+    if got and PO_TYPE_NAME in str(got):
+        return {"ok": True, "via": "direct"}
     return await pick_code_document(page, PO_TYPE_FIELD, PO_TYPE_NAME)
 
 
@@ -112,8 +123,8 @@ async def _wait_popup_rows_stable(page: Any, *, cap_ms: int = POPUP_CAP_MS) -> i
         if n is not None and n >= 0 and n == last:
             return int(n)
         last = n
-        await verify.DEFAULT_SLEEP(0.6)
-        waited += 600
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
     return int(last or -1)
 
 
@@ -131,7 +142,7 @@ async def popup_query_prq(page: Any, prq: str, *, tries: int = 4) -> dict:
     attempts: list[int] = []
     for attempt in range(1, tries + 1):
         await page.keyboard.press("Enter")
-        await verify.DEFAULT_SLEEP(1.5)
+        await verify.DEFAULT_SLEEP(0.5)
         # 0행(재조회 중 공백)은 안정으로 치지 않고 행이 생길 때까지 기다린다(상한 내).
         waited = 0
         cap = latency.budget_ms(POPUP_CAP_MS)
@@ -181,9 +192,17 @@ async def popup_apply_vendor(page: Any, row_idxs: list[int], vendor_name: str) -
     a = await click_by_id(page, POPUP_APPLY_BTN)
     if not a.get("ok"):
         return a
-    await verify.DEFAULT_SLEEP(1.2)
-    vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, row_idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
-    bad = [i for i in row_idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
+    # 반영을 고정 슬립 대신 결과 폴링으로 확인(0.3s 간격, 상한 6s) — 보통 1s 내 반영.
+    waited = 0
+    vals: dict = {}
+    bad: list[int] = list(row_idxs)
+    while waited < 6_000:
+        vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, row_idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
+        bad = [i for i in row_idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
+        if not bad:
+            break
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
     if bad:
         sample = (vals.get(str(bad[0])) or vals.get(bad[0]) or {})
         return {"ok": False, "reason": f"변경거래처 적용 미반영 행 {len(bad)}/{len(row_idxs)} — 예 {sample}"}
@@ -206,11 +225,16 @@ async def popup_bottom_apply(page: Any, row_idxs: list[int]) -> dict:
         await click_dialog_button(page, "예" if "예" in dlg["buttons"] else dlg["buttons"][0])
     if not await _wait_popup(page, False):
         return {"ok": False, "reason": "하단 적용 후 팝업이 닫히지 않았습니다."}
-    await verify.DEFAULT_SLEEP(1.0)
-    n = await page.evaluate(j3.MAIN_GRID_COUNT_JS, 0)
-    if not isinstance(n, int) or n <= 0:
-        return {"ok": False, "reason": "하단 적용 후 본화면 마스터에 행이 생기지 않았습니다."}
-    return {"ok": True, "master_rows": n}
+    # 마스터 행 출현을 결과 폴링으로(고정 1.0s 슬립 대체).
+    waited = 0
+    n = -1
+    while waited < 8_000:
+        n = await page.evaluate(j3.MAIN_GRID_COUNT_JS, 0)
+        if isinstance(n, int) and n > 0:
+            return {"ok": True, "master_rows": n}
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
+    return {"ok": False, "reason": "하단 적용 후 본화면 마스터에 행이 생기지 않았습니다."}
 
 
 async def master_rows(page: Any) -> list[dict]:
@@ -227,25 +251,34 @@ async def select_master_row(page: Any, idx: int, *, vendor: str | None = None) -
     rect = await page.evaluate(j3.MAIN_GRID_RECT_JS, 0)
     if not rect:
         return {"ok": False, "reason": "마스터 그리드 rect 미발견"}
-    # 1) 그리드 안(첫 데이터 컬럼 근방) 실클릭으로 포커스 → 2) 현재 행을 읽고 방향키(신뢰 입력)로
-    #    idx 까지 이동(2026-08-28 실측: y 를 바꿔 클릭해도 현재 행이 항상 마지막 행 — 좌표 클릭이
-    #    선택을 못 바꿈. 방향키는 currentChanged 를 발화해 디테일 재조회까지 일으킨다).
-    # ⚠ 마스터 그리드는 ~5행만 보인다(2026-08-28 ETRI-002 #3: 6행째 위치 클릭이 그리드 밖에 떨어져
-    #   포커스 실패 → 방향키 무반응). 항상 보이는 **첫 행** 위치를 클릭해 포커스를 잡고 방향키로 이동한다.
-    x = rect["x"] + 200
-    y = rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX // 2
-    await page.mouse.click(x, y)
-    await verify.DEFAULT_SLEEP(0.8)
+    # 현재 행이 이미 잡혀 있으면(직전 거래처 처리 후) **거기서부터** 방향키로 이동 — 매 행마다 첫 행
+    # 클릭 후 0행부터 재보행하던 낭비 제거(거래처 10행 PRQ 에서 ~20s, 2026-08-31 속도 개선. 키 간격도
+    # 0.5→0.2s — currentChanged 발화는 getCurrent 재확인으로 담보). 현재 행이 없을 때만 항상 보이는
+    # **첫 행** 위치를 실클릭해 포커스를 잡는다(마스터는 ~5행만 보여 6행째 이상 좌표는 그리드 밖 —
+    # 2026-08-28 ETRI-002 #3 실측. 좌표 클릭은 선택을 못 바꾸고 방향키가 디테일 재조회까지 일으킨다).
     tried: list[tuple[str, int]] = []
     cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
-    tried.append(("click", cur))
-    for _ in range(40):
-        if cur == idx:
-            break
-        if cur < 0:
+    if cur < 0:
+        x = rect["x"] + 200
+        y = rect["y"] + MASTER_HEADER_PX + MASTER_ROW_PX // 2
+        await page.mouse.click(x, y)
+        await verify.DEFAULT_SLEEP(0.6)
+        cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
+    tried.append(("start", cur))
+    if cur == idx:
+        # 이동이 없으면 currentChanged 가 안 나가 디테일 재조회가 발화되지 않을 수 있다 — 한 칸 왕복.
+        first, second = ("ArrowDown", "ArrowUp") if idx == 0 else ("ArrowUp", "ArrowDown")
+        await page.keyboard.press(first)
+        await verify.DEFAULT_SLEEP(0.2)
+        await page.keyboard.press(second)
+        await verify.DEFAULT_SLEEP(0.2)
+        cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
+        tried.append(("nudge", cur))
+    for _ in range(60):
+        if cur == idx or cur < 0:
             break
         await page.keyboard.press("ArrowDown" if cur < idx else "ArrowUp")
-        await verify.DEFAULT_SLEEP(0.5)
+        await verify.DEFAULT_SLEEP(0.2)
         cur = await page.evaluate(j3.MAIN_CURRENT_ROW_JS, 0)
         tried.append(("key", cur))
     for _ in range(1):
@@ -279,12 +312,20 @@ async def apply_due_to_detail(page: Any, due: str) -> dict:
     a = await click_by_id(page, DUE_APPLY_BTN)
     if not a.get("ok"):
         return a
-    await verify.DEFAULT_SLEEP(1.0)
-    vals = await page.evaluate(j3.MAIN_FIELDS_JS, [1, list(range(n)), [DUE_FIELD]])
     from .nodes.save_units import _digits  # KST 정규화 공유
 
     want = _digits(due)
-    bad = [i for i in range(n) if _digits((vals.get(str(i)) or vals.get(i) or {}).get(DUE_FIELD)) != want]
+    # 반영을 결과 폴링으로(고정 1.0s 슬립 대체, 0.3s 간격 상한 6s).
+    waited = 0
+    vals: dict = {}
+    bad: list[int] = list(range(n))
+    while waited < 6_000:
+        vals = await page.evaluate(j3.MAIN_FIELDS_JS, [1, list(range(n)), [DUE_FIELD]])
+        bad = [i for i in range(n) if _digits((vals.get(str(i)) or vals.get(i) or {}).get(DUE_FIELD)) != want]
+        if not bad:
+            break
+        await verify.DEFAULT_SLEEP(0.3)
+        waited += 300
     if bad:
         snacks = [s.get("text") for s in (await page.evaluate(js.SNACKBARS_JS) or []) if s.get("text")]
         cur = (vals.get(str(bad[0])) or vals.get(bad[0]) or {}).get(DUE_FIELD)
