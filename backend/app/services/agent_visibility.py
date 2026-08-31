@@ -4,10 +4,13 @@
 runs.py 가 agents.py 프라이빗 심볼(_HIDDEN_AGENT_IDS, _is_org_admin)을 직접 import 했다
 — 여기로 승격해 단일 소스화(docs/LIST-COMMONALIZATION-BE.md §4).
 
-조직구분 접근 규칙(두 문맥 공통):
-- access_configured=false(최초 미설정) = 전체 허용.
-- 소속(org_unit) 미지정 사용자는 allow_unassigned 로 허용 여부 결정.
-- 그 외에는 AgentOrgAccess 에 (agent, 소속 조직구분) 행이 있어야 허용. admin+ 는 우회.
+조직구분 접근 규칙(두 문맥 공통, 2026-08-31 그룹 층 추가):
+- **그룹 게이트 AND 에이전트 게이트** — 에이전트가 그룹에 속하면(agents.group_id) 그룹 접근과
+  에이전트 접근을 둘 다 통과해야 한다. 각 층은 대칭 규칙:
+  - access_configured=false(최초 미설정) = 그 층은 전체 허용.
+  - 소속(org_unit) 미지정 사용자는 그 층의 allow_unassigned 로 허용 여부 결정.
+  - 그 외에는 (Agent|AgentGroup)OrgAccess 에 (대상, 소속 조직구분) 행이 있어야 허용.
+- admin+ 는 두 층 모두 우회.
 
 숨김(hidden=True 픽스처) 취급은 문맥별로 다르다(의도된 비대칭 — 통합하지 않고 보존):
 - 목록/상세(visible_agents): 관리자 포함 전원에게 숨긴다(UI 도달 차단, 직접 URL 도 404).
@@ -20,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import ROLE_ADMIN, ROLE_RANK, role_rank
-from app.models import Agent, AgentOrgAccess, User
+from app.models import Agent, AgentGroup, AgentGroupOrgAccess, AgentOrgAccess, User
 from app.services.agent_fixtures import AGENT_FIXTURES
 
 # 숨김 에이전트(hidden=True) — 목록/상세/실행에서 제외한다(현재 숨김 대상 0 — 전 에이전트 노출.
@@ -44,12 +47,54 @@ async def accessible_agent_ids(db: AsyncSession, user: User) -> set[str]:
     return set(rows.scalars())
 
 
-def is_visible(agent: Agent, user: User, allowed_ids: set[str]) -> bool:
-    if not agent.access_configured:
-        return True  # 최초(미설정) = 전체 허용.
+async def accessible_group_ids(db: AsyncSession, user: User) -> set[str]:
+    """user 소속 조직구분이 명시 허용된 그룹 id 집합(미지정 사용자는 빈 집합) — 에이전트와 대칭."""
     if not user.org_unit_id:
-        return agent.allow_unassigned
-    return agent.id in allowed_ids
+        return set()
+    rows = await db.execute(
+        select(AgentGroupOrgAccess.group_id).where(
+            AgentGroupOrgAccess.org_unit_id == user.org_unit_id
+        )
+    )
+    return set(rows.scalars())
+
+
+def _layer_allows(
+    *, configured: bool, allow_unassigned: bool, target_id: str, user: User, allowed_ids: set[str]
+) -> bool:
+    """한 층(그룹 또는 에이전트)의 조직접근 판정 — 미설정=전체 허용, 미지정 사용자=allow_unassigned."""
+    if not configured:
+        return True
+    if not user.org_unit_id:
+        return allow_unassigned
+    return target_id in allowed_ids
+
+
+def is_visible(
+    agent: Agent,
+    user: User,
+    allowed_ids: set[str],
+    allowed_group_ids: set[str] | None = None,
+    groups_by_id: dict[str, AgentGroup] | None = None,
+) -> bool:
+    """그룹 게이트 AND 에이전트 게이트. allowed_group_ids/groups_by_id 미전달 = 그룹 층 생략(하위 호환)."""
+    if allowed_group_ids is not None and groups_by_id is not None and agent.group_id:
+        group = groups_by_id.get(agent.group_id)
+        if group is not None and not _layer_allows(
+            configured=group.access_configured,
+            allow_unassigned=group.allow_unassigned,
+            target_id=group.id,
+            user=user,
+            allowed_ids=allowed_group_ids,
+        ):
+            return False
+    return _layer_allows(
+        configured=agent.access_configured,
+        allow_unassigned=agent.allow_unassigned,
+        target_id=agent.id,
+        user=user,
+        allowed_ids=allowed_ids,
+    )
 
 
 async def visible_agents(
@@ -64,7 +109,10 @@ async def visible_agents(
     rows = [a for a in rows if a.id not in hidden_ids]
     if not is_org_admin(user):
         allowed_ids = await accessible_agent_ids(db, user)
-        rows = [a for a in rows if is_visible(a, user, allowed_ids)]
+        allowed_group_ids = await accessible_group_ids(db, user)
+        groups = (await db.execute(select(AgentGroup))).scalars().all()
+        groups_by_id = {g.id: g for g in groups}
+        rows = [a for a in rows if is_visible(a, user, allowed_ids, allowed_group_ids, groups_by_id)]
     return rows
 
 
@@ -74,12 +122,33 @@ async def ensure_can_run(
     """실행 게이트 — 차단 사유(한국어, 라우터가 그대로 403 body 로 감싼다)를 반환, 통과면 None.
 
     - 숨김(검증 전) 에이전트는 비관리자 차단(관리자는 게이트 스모크 실행 허용).
-    - 조직구분 접근제어: 명시 설정된 에이전트는 user 롤에 한해 소속 조직구분을 검사(admin+ 우회).
-      미지정 사용자는 에이전트 접근 설정의 '미지정' 체크(allow_unassigned)로 허용 가능.
+    - 조직구분 접근제어: 그룹 게이트 AND 에이전트 게이트(admin+ 우회) — is_visible 과 같은 판정식.
+      미지정 사용자는 각 층의 '미지정' 체크(allow_unassigned)로 허용 가능.
     """
     if agent.id in hidden_ids and not is_org_admin(user):
         return "아직 공개되지 않은(검증 전) 에이전트입니다. 관리자만 실행할 수 있습니다."
-    if agent.access_configured and not is_org_admin(user):
+    if is_org_admin(user):
+        return None
+    if agent.group_id:
+        group = (
+            await db.execute(select(AgentGroup).where(AgentGroup.id == agent.group_id))
+        ).scalar_one_or_none()
+        if group is not None and group.access_configured:
+            allowed_group_ids = await accessible_group_ids(db, user)
+            if not _layer_allows(
+                configured=True,
+                allow_unassigned=group.allow_unassigned,
+                target_id=group.id,
+                user=user,
+                allowed_ids=allowed_group_ids,
+            ):
+                if not user.org_unit_id:
+                    return (
+                        "조직구분이 지정되지 않아 이 에이전트 그룹을 사용할 수 없습니다. "
+                        "관리자에게 문의하세요."
+                    )
+                return "이 에이전트 그룹을 사용할 권한이 없습니다(조직구분 접근 제한)."
+    if agent.access_configured:
         if not user.org_unit_id:
             if not agent.allow_unassigned:
                 return "조직구분이 지정되지 않아 이 에이전트를 실행할 수 없습니다. 관리자에게 문의하세요."

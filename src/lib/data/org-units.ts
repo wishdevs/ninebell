@@ -25,6 +25,19 @@ export interface OrgUnit {
 export interface AgentAccess {
   agentId: string;
   agentName: string;
+  /** 소속 에이전트 그룹 id — 그룹 없는 단독 에이전트는 null. */
+  groupId: string | null;
+  orgUnitIds: string[];
+}
+
+/**
+ * 에이전트 그룹별 사용 가능 조직구분(백엔드 `GET /agent-group-access`).
+ * 최종 접근 = 그룹 허용 AND 에이전트 허용 — 그룹 없는 단독 에이전트는 에이전트 게이트만 적용된다.
+ * 미설정 그룹은 백엔드가 전체 조직 id + '__none__' 로 반환한다.
+ */
+export interface AgentGroupAccess {
+  groupId: string;
+  groupName: string;
   orgUnitIds: string[];
 }
 

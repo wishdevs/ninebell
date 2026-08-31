@@ -21,6 +21,7 @@ import {
   hasOwnMembers,
   ownMemberUnits,
   type AgentAccess,
+  type AgentGroupAccess,
   type OrgUnit,
   type OrgUnitNode,
 } from '@/lib/data/org-units';
@@ -42,10 +43,12 @@ export function AgentAccessClient() {
 
   const orgs = useApiResource<OrgUnit[]>('/org-units');
   const access = useApiResource<AgentAccess[]>('/agent-access');
+  const groupAccess = useApiResource<AgentGroupAccess[]>('/agent-group-access');
 
   const reloadAll = () => {
     orgs.reload();
     access.reload();
+    groupAccess.reload();
   };
 
   return (
@@ -67,13 +70,19 @@ export function AgentAccessClient() {
 
       {!isAdmin ? (
         <LockedEmptyState description="에이전트 접근 관리는 관리자 이상만 사용할 수 있습니다." />
-      ) : orgs.status !== 'success' || access.status !== 'success' ? (
-        <LoadState error={access.error ?? orgs.error} onReload={reloadAll} />
+      ) : orgs.status !== 'success' ||
+        access.status !== 'success' ||
+        groupAccess.status !== 'success' ? (
+        <LoadState error={access.error ?? groupAccess.error ?? orgs.error} onReload={reloadAll} />
       ) : (
         <AgentAccessBody
           orgUnits={orgs.data ?? []}
           accessData={access.data ?? []}
-          onReload={access.reload}
+          groupAccessData={groupAccess.data ?? []}
+          onReload={() => {
+            access.reload();
+            groupAccess.reload();
+          }}
         />
       )}
     </div>
@@ -115,25 +124,35 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 interface AgentAccessBodyProps {
   orgUnits: OrgUnit[];
   accessData: AgentAccess[];
+  groupAccessData: AgentGroupAccess[];
   onReload: () => void;
 }
 
-function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProps) {
+/** 초안/편집 키 — 에이전트·그룹 접근을 한 키 공간에 담는다(저장 시 접두사로 PATCH 경로 분기). */
+type AccessKey = `agent:${string}` | `group:${string}`;
+const agentKey = (id: string): AccessKey => `agent:${id}`;
+const groupKey = (id: string): AccessKey => `group:${id}`;
+
+function AgentAccessBody({ orgUnits, accessData, groupAccessData, onReload }: AgentAccessBodyProps) {
   const serverSel = useMemo<Record<string, string[]>>(
-    () => Object.fromEntries(accessData.map((a) => [a.agentId, a.orgUnitIds])),
-    [accessData],
+    () =>
+      Object.fromEntries([
+        ...accessData.map((a): [string, string[]] => [agentKey(a.agentId), a.orgUnitIds]),
+        ...groupAccessData.map((g): [string, string[]] => [groupKey(g.groupId), g.orgUnitIds]),
+      ]),
+    [accessData, groupAccessData],
   );
-  // 접근 초안(agentId→변경 선택). 서버값과 다른 에이전트만 담는다(즉시저장 아님 — 저장 버튼으로 일괄).
+  // 접근 초안(키→변경 선택). 서버값과 다른 대상(에이전트/그룹)만 담는다(즉시저장 아님 — 저장 버튼으로 일괄).
   const [draft, setDraft] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
-  // 편집 팝업 대상(에이전트 id) — 목록은 요약 행만, 상세 조직 선택은 다이얼로그에서.
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // 편집 팝업 대상 키(agent:/group:) — 목록은 요약 행만, 상세 조직 선택은 다이얼로그에서.
+  const [editingKey, setEditingKey] = useState<AccessKey | null>(null);
   useEffect(() => {
     setDraft({}); // 새 목록(서버 갱신·저장 후 재조회) 도착 시 초안 리셋.
-  }, [accessData]);
+  }, [accessData, groupAccessData]);
 
-  const dirtyIds = Object.keys(draft);
-  const dirty = dirtyIds.length > 0;
+  const dirtyKeys = Object.keys(draft);
+  const dirty = dirtyKeys.length > 0;
   useUnsavedGuard(dirty); // 변경 있으면 새로고침·앱내 이동 시 이탈 확인.
 
   // 직접 소속원을 가진 노드만 접근 대상 — 말단 팀 + 직속 인원이 있는 중간 그룹. 순수 컨테이너는 제외.
@@ -157,15 +176,15 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
     );
   }
 
-  const effective = (agentId: string): string[] => draft[agentId] ?? serverSel[agentId] ?? [];
+  const effective = (key: AccessKey): string[] => draft[key] ?? serverSel[key] ?? [];
 
   // 스테이징 — 서버값과 같아지면 초안에서 제거(변경 없음 처리).
-  const stage = (agentId: string, nextIds: string[]) => {
+  const stage = (key: AccessKey, nextIds: string[]) => {
     setDraft((prev) => {
-      const server = serverSel[agentId] ?? [];
+      const server = serverSel[key] ?? [];
       const next = { ...prev };
-      if (sameSet(server, nextIds)) delete next[agentId];
-      else next[agentId] = nextIds;
+      if (sameSet(server, nextIds)) delete next[key];
+      else next[key] = nextIds;
       return next;
     });
   };
@@ -176,21 +195,21 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
     return options.filter((o) => set.has(o.id)).map((o) => o.id);
   };
 
-  const toggle = (agentId: string, orgId: string) => {
-    const s = new Set(effective(agentId));
+  const toggle = (key: AccessKey, orgId: string) => {
+    const s = new Set(effective(key));
     if (s.has(orgId)) s.delete(orgId);
     else s.add(orgId);
-    stage(agentId, canonical(s));
+    stage(key, canonical(s));
   };
 
   // 그룹 헤더 '전체' 토글 — 그 노드 하위(자기 포함) 배정 대상 전부 선택/해제(on=true 선택).
-  const toggleParent = (agentId: string, unitIds: string[], on: boolean) => {
-    const s = new Set(effective(agentId));
+  const toggleParent = (key: AccessKey, unitIds: string[], on: boolean) => {
+    const s = new Set(effective(key));
     for (const id of unitIds) {
       if (on) s.add(id);
       else s.delete(id);
     }
-    stage(agentId, canonical(s));
+    stage(key, canonical(s));
   };
 
   // 요약 문구/톤 — 목록 행에 접근 상태를 한 줄로. 전체=모든 조직, 0=접근 없음, 그 외 팀 수(+미지정).
@@ -205,13 +224,32 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
     return { text: parts.join(' · '), tone: 'some' };
   };
 
+  const toneClass = (tone: 'all' | 'some' | 'none'): string =>
+    tone === 'all' ? 'text-success' : tone === 'none' ? 'text-danger' : 'text-foreground-secondary';
+
+  // 그룹 섹션 구성 — 그룹 소속 에이전트는 그룹 헤더 아래, 그룹 없는(또는 미지의 그룹) 에이전트는 단독 섹션.
+  const knownGroupIds = new Set(groupAccessData.map((g) => g.groupId));
+  const groupSections = groupAccessData.map((group) => ({
+    group,
+    agents: accessData.filter((a) => a.groupId === group.groupId),
+  }));
+  const standaloneAgents = accessData.filter((a) => !a.groupId || !knownGroupIds.has(a.groupId));
+
   const save = async () => {
     setSaving(true);
     try {
       await Promise.all(
-        dirtyIds.map((id) => api.patch(`/agent-access/${id}`, { orgUnitIds: draft[id] })),
+        dirtyKeys.map((key) =>
+          key.startsWith('group:')
+            ? api.patch(`/agent-group-access/${key.slice('group:'.length)}`, {
+                orgUnitIds: draft[key],
+              })
+            : api.patch(`/agent-access/${key.slice('agent:'.length)}`, {
+                orgUnitIds: draft[key],
+              }),
+        ),
       );
-      toast.success(`에이전트 접근 ${dirtyIds.length}건 저장했습니다`);
+      toast.success(`접근 설정 ${dirtyKeys.length}건 저장했습니다`);
       setDraft({});
       onReload();
     } catch (err) {
@@ -221,8 +259,31 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
     }
   };
 
-  const editing = accessData.find((a) => a.agentId === editingId) ?? null;
-  const editingSel = editing ? new Set(effective(editing.agentId)) : new Set<string>();
+  // 편집 대상 해석 — agent:/group: 키를 이름·설명으로 매핑(대상이 사라졌으면 팝업 닫힘 처리).
+  const editing = ((): { key: AccessKey; title: string; description: string } | null => {
+    if (!editingKey) return null;
+    if (editingKey.startsWith('group:')) {
+      const group = groupAccessData.find((g) => groupKey(g.groupId) === editingKey);
+      return group
+        ? {
+            key: editingKey,
+            title: `${group.groupName} — 그룹 접근 조직`,
+            description:
+              '이 그룹의 에이전트를 실행할 수 있는 조직(팀)을 선택하세요. 그룹 내 각 에이전트 접근권한과 함께(AND) 적용되며, 저장 버튼을 눌러야 반영됩니다.',
+          }
+        : null;
+    }
+    const agent = accessData.find((a) => agentKey(a.agentId) === editingKey);
+    return agent
+      ? {
+          key: editingKey,
+          title: `${agent.agentName} — 접근 조직`,
+          description:
+            '이 에이전트를 실행할 수 있는 조직(팀)을 선택하세요. 저장 버튼을 눌러야 반영됩니다.',
+        }
+      : null;
+  })();
+  const editingSel = editing ? new Set(effective(editing.key)) : new Set<string>();
   // 선택 수는 옵션 멤버십으로 센다(선택 집합에 옵션 외 값이 섞여도 견고).
   const selectedCount = options.filter((o) => editingSel.has(o.id)).length;
   const allSelected = selectedCount === options.length;
@@ -234,12 +295,13 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-muted-foreground min-w-0 flex-1 text-[length:var(--text-body-sm)]">
           각 행의 <b>편집</b>에서 조직을 선택한 뒤 저장하세요. 지정하지 않으면 모든 조직이 실행할 수
-          있습니다.
+          있습니다. 그룹 접근권한과 그룹 내 에이전트 접근권한을 <b>둘 다</b> 통과해야 사용자에게
+          보입니다.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {dirty ? (
             <span className="text-foreground-secondary text-xs whitespace-nowrap">
-              <b className="text-foreground tabular-nums">{dirtyIds.length}개</b> 에이전트 변경
+              <b className="text-foreground tabular-nums">{dirtyKeys.length}건</b> 변경
             </span>
           ) : null}
           <Button
@@ -262,48 +324,76 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
         </div>
       </div>
 
-      {/* 요약 행 목록 — 에이전트당 한 줄(이름 + 접근 요약 + 편집). */}
+      {/* 요약 행 목록 — 그룹 섹션(그룹 헤더 행 + 소속 에이전트 행) 뒤에 단독 에이전트 섹션. */}
       <div className="border-border bg-surface divide-border-subtle flex flex-col divide-y rounded-[var(--radius-lg)] border shadow-[var(--shadow-card)]">
-        {accessData.map((agent) => {
-          const s = summarize(new Set(effective(agent.agentId)));
-          const staged = agent.agentId in draft;
+        {groupSections.map(({ group, agents }) => {
+          const gKey = groupKey(group.groupId);
+          const gSummary = summarize(new Set(effective(gKey)));
           return (
-            <div key={agent.agentId} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-foreground truncate font-medium">{agent.agentName}</p>
-                  {staged ? (
-                    <span className="text-accent inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold">
-                      <span className="bg-accent size-1.5 rounded-full" aria-hidden />
-                      변경됨
+            <div key={group.groupId} className="divide-border-subtle flex flex-col divide-y">
+              {/* 그룹 헤더 행 — 소속 에이전트 전체의 상위 게이트. */}
+              <div className="bg-muted/30 flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-foreground truncate font-medium">{group.groupName}</p>
+                    <span className="text-foreground-tertiary shrink-0 text-[10px] font-semibold">
+                      그룹 접근권한
                     </span>
-                  ) : null}
+                    {gKey in draft ? (
+                      <span className="text-accent inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold">
+                        <span className="bg-accent size-1.5 rounded-full" aria-hidden />
+                        변경됨
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className={cn('mt-0.5 text-xs', toneClass(gSummary.tone))}>{gSummary.text}</p>
                 </div>
-                <p
-                  className={cn(
-                    'mt-0.5 text-xs',
-                    s.tone === 'all'
-                      ? 'text-success'
-                      : s.tone === 'none'
-                        ? 'text-danger'
-                        : 'text-foreground-secondary',
-                  )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => setEditingKey(gKey)}
                 >
-                  {s.text}
-                </p>
+                  <RiPencilLine size={14} aria-hidden />
+                  편집
+                </Button>
               </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setEditingId(agent.agentId)}
-              >
-                <RiPencilLine size={14} aria-hidden />
-                편집
-              </Button>
+              {agents.map((agent) => (
+                <AgentRow
+                  key={agent.agentId}
+                  agent={agent}
+                  indent
+                  groupRestricted={gSummary.tone !== 'all'}
+                  summary={summarize(new Set(effective(agentKey(agent.agentId))))}
+                  toneClass={toneClass}
+                  staged={agentKey(agent.agentId) in draft}
+                  onEdit={() => setEditingKey(agentKey(agent.agentId))}
+                />
+              ))}
             </div>
           );
         })}
+        {standaloneAgents.length > 0 ? (
+          <div className="divide-border-subtle flex flex-col divide-y">
+            {groupSections.length > 0 ? (
+              <div className="bg-muted/30 px-4 py-2">
+                <p className="text-foreground-secondary text-xs font-semibold">단독 에이전트</p>
+              </div>
+            ) : null}
+            {standaloneAgents.map((agent) => (
+              <AgentRow
+                key={agent.agentId}
+                agent={agent}
+                indent={false}
+                groupRestricted={false}
+                summary={summarize(new Set(effective(agentKey(agent.agentId))))}
+                toneClass={toneClass}
+                staged={agentKey(agent.agentId) in draft}
+                onEdit={() => setEditingKey(agentKey(agent.agentId))}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {/* 편집 팝업 — 조직 트리(상위 노드 전체 토글) + 미지정. 변경은 초안에만 담기고 저장 버튼을
@@ -311,13 +401,13 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
       {editing ? (
         <Dialog
           open
-          onClose={() => setEditingId(null)}
-          title={`${editing.agentName} — 접근 조직`}
-          description="이 에이전트를 실행할 수 있는 조직(팀)을 선택하세요. 저장 버튼을 눌러야 반영됩니다."
+          onClose={() => setEditingKey(null)}
+          title={editing.title}
+          description={editing.description}
           size="lg"
           footer={
             <div className="flex items-center justify-end">
-              <Button onClick={() => setEditingId(null)}>닫기</Button>
+              <Button onClick={() => setEditingKey(null)}>닫기</Button>
             </div>
           }
         >
@@ -338,7 +428,7 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
                   disabled={allSelected}
                   onClick={() =>
                     stage(
-                      editing.agentId,
+                      editing.key,
                       options.map((o) => o.id),
                     )
                   }
@@ -349,7 +439,7 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
                   variant="secondary"
                   size="sm"
                   disabled={selectedCount === 0}
-                  onClick={() => stage(editing.agentId, [])}
+                  onClick={() => stage(editing.key, [])}
                 >
                   전체 해제
                 </Button>
@@ -360,12 +450,63 @@ function AgentAccessBody({ orgUnits, accessData, onReload }: AgentAccessBodyProp
               forest={forest}
               selected={editingSel}
               noneChecked={editingSel.has(ORG_NONE)}
-              onToggle={(id) => toggle(editing.agentId, id)}
-              onToggleParent={(unitIds, on) => toggleParent(editing.agentId, unitIds, on)}
+              onToggle={(id) => toggle(editing.key, id)}
+              onToggleParent={(unitIds, on) => toggleParent(editing.key, unitIds, on)}
             />
           </DialogBody>
         </Dialog>
       ) : null}
+    </div>
+  );
+}
+
+// ── 에이전트 요약 행 — 이름 + 접근 요약(+그룹 제한 힌트) + 편집 버튼 ─────────────────
+function AgentRow({
+  agent,
+  indent,
+  groupRestricted,
+  summary,
+  toneClass,
+  staged,
+  onEdit,
+}: {
+  agent: AgentAccess;
+  /** 그룹 섹션 소속 행이면 들여쓰기. */
+  indent: boolean;
+  /** 그룹 접근이 좁혀져 있으면(모든 조직 허용이 아니면) 힌트 배지 표시. */
+  groupRestricted: boolean;
+  summary: { text: string; tone: 'all' | 'some' | 'none' };
+  toneClass: (tone: 'all' | 'some' | 'none') => string;
+  staged: boolean;
+  onEdit: () => void;
+}) {
+  return (
+    <div
+      className={cn('flex items-center justify-between gap-3 px-4 py-3', indent && 'pl-8')}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="text-foreground truncate font-medium">{agent.agentName}</p>
+          {staged ? (
+            <span className="text-accent inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold">
+              <span className="bg-accent size-1.5 rounded-full" aria-hidden />
+              변경됨
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <p className={cn('text-xs', toneClass(summary.tone))}>{summary.text}</p>
+          {groupRestricted ? (
+            <span className="border-border text-foreground-tertiary inline-flex shrink-0 items-center rounded-full border px-1.5 py-px text-[10px]">
+              그룹 제한 적용 중
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <Button variant="secondary" size="sm" className="shrink-0" onClick={onEdit}>
+        <RiPencilLine size={14} aria-hidden />
+        편집
+      </Button>
     </div>
   );
 }

@@ -2,6 +2,8 @@
 
 - /org-units       : 조직구분 CRUD + 순서변경.
 - /agent-access    : 에이전트별 사용 가능 조직구분 조회/설정.
+- /agent-group-access : 에이전트 **그룹**별 사용 가능 조직구분 조회/설정(2026-08-31) —
+  최종 접근 = 그룹 게이트 AND 에이전트 게이트(agent_visibility 단일 판정식).
 '최초 모두 선택' = agents.access_configured=false 이면 GET 이 전체 조직구분을 반환. PATCH 시
 명시 행으로 교체하고 access_configured=true. 응답은 프론트 규약대로 camelCase.
 """
@@ -15,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
 from app.core.deps import DbSession, RequireAdmin
-from app.models import Agent, AgentOrgAccess, OrgUnit
+from app.models import Agent, AgentGroup, AgentGroupOrgAccess, AgentOrgAccess, OrgUnit
 from app.models.org_unit import COST_TYPES
 from app.services.ordering import reorder_by_client_order
 from app.services.org_apply import _has_own_member_ids
@@ -212,7 +214,9 @@ async def list_agent_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
         else:
             # 최초 = 모두 선택(미지정 포함 — 게이트도 미설정 상태에선 검사하지 않는다).
             allowed = [*all_org_ids, ORG_NONE_SENTINEL]
-        out.append({"agentId": a.id, "agentName": a.name, "orgUnitIds": allowed})
+        out.append(
+            {"agentId": a.id, "agentName": a.name, "groupId": a.group_id, "orgUnitIds": allowed}
+        )
     return out
 
 
@@ -257,3 +261,77 @@ async def set_agent_access(
     if allow_unassigned:
         ordered.append(ORG_NONE_SENTINEL)
     return {"agentId": agent_id, "orgUnitIds": ordered}
+
+
+# ── 에이전트 그룹 접근 관리 (2026-08-31) ──────────────────────────────────────
+# 에이전트 접근과 완전 대칭: 행 존재 = 허용, access_configured=false = 전체 허용,
+# '미지정' 은 ORG_NONE_SENTINEL. 최종 접근 = 그룹 AND 에이전트(agent_visibility.is_visible).
+@router.get("/agent-group-access")
+async def list_agent_group_access(db: DbSession, _actor: RequireAdmin) -> list[dict]:
+    """에이전트 그룹별 사용 가능 조직구분 — /agent-access 의 그룹판(정렬 = 그룹 sort_order)."""
+    _rows = (
+        (await db.execute(select(OrgUnit).order_by(OrgUnit.sort_order.asc()))).scalars().all()
+    )
+    _own = _has_own_member_ids(_rows)
+    all_org_ids = [o.id for o in _rows if o.id in _own]
+    groups = (
+        (await db.execute(select(AgentGroup).order_by(AgentGroup.sort_order.asc())))
+        .scalars()
+        .all()
+    )
+    access_rows = (await db.execute(select(AgentGroupOrgAccess))).scalars().all()
+    by_group: dict[str, set[str]] = {}
+    for r in access_rows:
+        by_group.setdefault(r.group_id, set()).add(r.org_unit_id)
+    out: list[dict] = []
+    for g in groups:
+        if g.access_configured:
+            allowed = [oid for oid in all_org_ids if oid in by_group.get(g.id, set())]
+            if g.allow_unassigned:
+                allowed.append(ORG_NONE_SENTINEL)
+        else:
+            allowed = [*all_org_ids, ORG_NONE_SENTINEL]
+        out.append({"groupId": g.id, "groupName": g.name, "orgUnitIds": allowed})
+    return out
+
+
+@router.patch("/agent-group-access/{group_id}")
+async def set_agent_group_access(
+    group_id: str, body: AgentAccessSetIn, db: DbSession, _actor: RequireAdmin
+) -> dict:
+    """그룹 접근 설정 — set_agent_access 와 동일 규율(with_for_update·422 stale 거부·센티널)."""
+    group = (
+        await db.execute(select(AgentGroup).where(AgentGroup.id == group_id).with_for_update())
+    ).scalar_one_or_none()
+    if group is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="에이전트 그룹을 찾을 수 없습니다."
+        )
+    valid_ids = await _own_member_ids(db)
+    allow_unassigned = ORG_NONE_SENTINEL in body.orgUnitIds
+    requested = [oid for oid in dict.fromkeys(body.orgUnitIds) if oid in valid_ids]
+    if body.orgUnitIds and not requested and not allow_unassigned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="요청한 조직구분이 모두 유효하지 않습니다. 목록을 새로고침해 주세요.",
+        )
+    await db.execute(
+        delete(AgentGroupOrgAccess).where(AgentGroupOrgAccess.group_id == group_id)
+    )
+    for oid in requested:
+        db.add(AgentGroupOrgAccess(group_id=group_id, org_unit_id=oid))
+    group.access_configured = True
+    group.allow_unassigned = allow_unassigned
+    await db.commit()
+    ordered = list(
+        (
+            await db.execute(
+                select(OrgUnit.id)
+                .where(OrgUnit.id.in_(requested))
+                .order_by(OrgUnit.sort_order.asc())
+            )
+        ).scalars()
+    )
+    if allow_unassigned:
+        ordered.append(ORG_NONE_SENTINEL)
+    return {"groupId": group_id, "orgUnitIds": ordered}

@@ -14,12 +14,15 @@ from pydantic import BaseModel
 
 from app.core.deps import DbSession, RequireAdmin, require_permission
 from app.core.permissions import AGENTS_READ
-from app.models import Agent, User
+from sqlalchemy import select
+
+from app.models import Agent, AgentGroup, User
 from app.services.agent_fixtures import AGENT_FIXTURES
 from app.services.agent_settings import validate_settings
 from app.services.agent_visibility import (
     HIDDEN_AGENT_IDS,
     accessible_agent_ids,
+    accessible_group_ids,
     is_org_admin,
     is_visible,
     visible_agents,
@@ -68,7 +71,10 @@ async def get_agent(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다.")
     if not is_org_admin(actor):
         allowed_ids = await accessible_agent_ids(db, actor)
-        if not is_visible(agent, actor, allowed_ids):
+        # 그룹 게이트 AND 에이전트 게이트(2026-08-31) — 목록(visible_agents)과 동일 판정식.
+        allowed_group_ids = await accessible_group_ids(db, actor)
+        groups_by_id = {g.id: g for g in (await db.execute(select(AgentGroup))).scalars()}
+        if not is_visible(agent, actor, allowed_ids, allowed_group_ids, groups_by_id):
             # 접근 불가 에이전트는 존재 자체를 숨긴다(목록 제외와 일관).
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="에이전트를 찾을 수 없습니다."
