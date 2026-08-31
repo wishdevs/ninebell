@@ -113,9 +113,13 @@ def make_place_orders_node():
             r = await s3.open_request_popup(page)
             if not r.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {r.get('reason')}")
-            # 재개 대상(prior)은 0행 = 이미 발주가 지배적(2026-08-31 ETRI-006 실측: 9건 전부
-            # PUR 발급 완료) — 재시도를 절반으로 줄여 PRQ 당 대기(~80s→~40s)를 줄인다.
-            q = await s3.popup_query_prq(page, prq, tries=2 if prior else 4, allow_missing=prior)
+            # 재개 대상(prior)은 0행 = 이미 발주가 지배적(2026-08-31 ETRI-004~006 실측: 22건 전부
+            # PUR 발급 완료) — 재시도 2회 + 0행 대기 5초로 잘라 이미 발주 건은 ~10초 안에 스킵한다.
+            # 행이 뜰 거면 보통 1~2초 안에 뜨므로(무필터 조회 실측) 순간 공백 함정도 5초면 충분하다.
+            q = await s3.popup_query_prq(
+                page, prq, tries=2 if prior else 4, allow_missing=prior,
+                zero_cap_ms=5_000 if prior else None,
+            )
             if not q.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {q.get('reason')}")
             if q.get("already"):

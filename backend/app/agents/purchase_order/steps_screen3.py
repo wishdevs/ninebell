@@ -124,7 +124,14 @@ async def _wait_popup_rows_stable(page: Any, *, cap_ms: int = POPUP_CAP_MS) -> i
     return int(last or -1)
 
 
-async def popup_query_prq(page: Any, prq: str, *, tries: int = 4, allow_missing: bool = False) -> dict:
+async def popup_query_prq(
+    page: Any,
+    prq: str,
+    *,
+    tries: int = 4,
+    allow_missing: bool = False,
+    zero_cap_ms: int | None = None,
+) -> dict:
     """구매요청번호 필드 + trusted Enter → 그 PRQ 라인만(프로브 ✅ 647→84, 팝업 소멸 없음).
 
     ⚠ 결과검증형 재시도(2026-08-31 ETRI-004 실측): Enter 직후 서버 재조회 중에는 그리드가 잠깐
@@ -141,7 +148,9 @@ async def popup_query_prq(page: Any, prq: str, *, tries: int = 4, allow_missing:
         await verify.DEFAULT_SLEEP(0.5)
         # 0행(재조회 중 공백)은 안정으로 치지 않고 행이 생길 때까지 기다린다(상한 내).
         waited = 0
-        cap = latency.budget_ms(POPUP_CAP_MS)
+        # zero_cap_ms: 0행이 이어질 때 행 출현을 기다리는 상한. 재개 대상은 '0행 = 이미 발주'가
+        # 지배적이라(2026-08-31 ETRI-004~006 실측) 짧게 자르고 즉시 스킵 판정으로 넘어간다.
+        cap = latency.budget_ms(zero_cap_ms or POPUP_CAP_MS)
         n = -1
         while waited < cap:
             n = await page.evaluate(j3.POPUP_GRID_COUNT_JS, 0)
