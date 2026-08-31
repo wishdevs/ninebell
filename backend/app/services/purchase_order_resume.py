@@ -22,7 +22,7 @@ from app.models import AgentRun, PurchaseOrderPlan
 
 logger = logging.getLogger(__name__)
 
-RE_PROJECT = re.compile(r"프로젝트 '[^']*'\(코드 ([^)]+)\) 적용")
+RE_PROJECT = re.compile(r"프로젝트 '([^']*)'\(코드 ([^)]+)\) 적용")
 RE_UNIT = re.compile(r"발주단위 #(\d+) 저장 완료 — 구매요청번호 (PRQ\d+)")
 RE_MOVE = re.compile(r"이동요청번호 (IRQ\d+)")
 RE_SUBMITTED = re.compile(r"(PRQ\d+): 상신 완료")
@@ -36,6 +36,7 @@ RESUMABLE_STATUSES = ("failed", "cancelled", "succeeded")
 def parse_run_artifacts(logs: list) -> dict:
     """런 로그 → {"projectCode","moveRequestNo","units":[(seq,prq)],"submitted":set,"ordered":set}. 순수."""
     project_code: str | None = None
+    project_name: str | None = None
     move_no: str | None = None
     units: list[tuple[int, str]] = []
     submitted: set[str] = set()
@@ -45,7 +46,8 @@ def parse_run_artifacts(logs: list) -> dict:
         if project_code is None:
             m = RE_PROJECT.search(msg)
             if m:
-                project_code = m.group(1).strip()
+                project_name = m.group(1).strip()
+                project_code = m.group(2).strip()
         m = RE_MOVE.search(msg)
         if m:
             move_no = m.group(1)
@@ -60,6 +62,7 @@ def parse_run_artifacts(logs: list) -> dict:
             ordered.add(m.group(1))
     return {
         "projectCode": project_code,
+        "projectName": project_name,
         "moveRequestNo": move_no,
         "units": units,
         "submitted": submitted,
@@ -136,3 +139,71 @@ async def prior_artifacts(project_code: str, *, exclude_run_id: str | None = Non
     except Exception:  # noqa: BLE001 — 수거 실패는 재개 없이 진행(정상 실행 보호).
         logger.exception("purchase-order resume: 잔여물 수거 실패")
         return empty
+
+
+async def resume_candidates(*, user_id=None) -> list[dict]:
+    """중단된 프로젝트 목록 — 저장된 PRQ 중 (상신 ∧ 발주) 미완이 남은 프로젝트별 요약.
+
+    구매발주 메인 페이지의 '이어서 실행' 배너용(2026-08-31 사용자 요청). user_id 를 주면 그
+    사용자의 런만 본다(재개 주체 = 실행자). 실패는 빈 목록 — 배너가 화면을 깨선 안 된다.
+    """
+    try:
+        async with get_sessionmaker()() as s:
+            stmt = (
+                select(AgentRun)
+                .where(
+                    AgentRun.agent_id == "purchase-order",
+                    AgentRun.status.in_(RESUMABLE_STATUSES),
+                )
+                .order_by(AgentRun.started_at.asc())
+            )
+            if user_id is not None:
+                stmt = stmt.where(AgentRun.user_id == user_id)
+            runs = (await s.execute(stmt)).scalars().all()
+        by_code: dict[str, dict] = {}
+        for run in runs:
+            art = parse_run_artifacts(run.logs or [])
+            code = art["projectCode"]
+            if not code:
+                continue
+            g = by_code.setdefault(
+                code,
+                {
+                    "projectCode": code,
+                    "projectName": art["projectName"] or code,
+                    "units": {},
+                    "submitted": set(),
+                    "ordered": set(),
+                    "lastRunAt": None,
+                },
+            )
+            if art["projectName"]:
+                g["projectName"] = art["projectName"]
+            for seq, prq in art["units"]:
+                g["units"].setdefault(prq, seq)
+            g["submitted"] |= art["submitted"]
+            g["ordered"] |= art["ordered"]
+            if run.started_at is not None:
+                g["lastRunAt"] = run.started_at
+        out: list[dict] = []
+        for g in by_code.values():
+            pending = [
+                prq
+                for prq in g["units"]
+                if not (prq in g["submitted"] and prq in g["ordered"])
+            ]
+            if not pending:
+                continue
+            out.append(
+                {
+                    "projectCode": g["projectCode"],
+                    "projectName": g["projectName"],
+                    "pendingPrqs": sorted(pending),
+                    "lastRunAt": g["lastRunAt"].isoformat() if g["lastRunAt"] else None,
+                }
+            )
+        out.sort(key=lambda x: x["lastRunAt"] or "", reverse=True)
+        return out
+    except Exception:  # noqa: BLE001 — 배너용 조회 실패는 빈 목록.
+        logger.exception("purchase-order resume: 후보 조회 실패")
+        return []

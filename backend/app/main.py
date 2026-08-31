@@ -239,6 +239,7 @@ def create_app() -> FastAPI:
     app.include_router(skills.router)
     app.include_router(changelog.router)
     app.include_router(purchase_order_plans.router)
+    app.include_router(purchase_order_plans.resume_router)
     # 로컬 dev 전용 게이트 라우터 — LLM_PROVIDER_TOGGLE off(기본)면 전 엔드포인트 404.
     app.include_router(dev_llm.router)
 

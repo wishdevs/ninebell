@@ -54,3 +54,15 @@ export async function fetchPlans(query: {
 export function fetchPlan(id: string): Promise<PlanRecord> {
   return api.get<PlanRecord>(`/purchase-order/plans/${encodeURIComponent(id)}`);
 }
+
+/** 자동 재개 후보 — 저장된 구매요청 중 상신·발주 미완이 남은 프로젝트(본인 런 기준). */
+export interface ResumeCandidate {
+  projectCode: string;
+  projectName: string;
+  pendingPrqs: string[];
+  lastRunAt: string | null;
+}
+
+export function fetchResumeCandidates(): Promise<ResumeCandidate[]> {
+  return api.get<ResumeCandidate[]>('/purchase-order/resume-candidates');
+}

@@ -95,7 +95,10 @@ def make_self_approve_node(*, allow_submit: bool = False):
             row = q["row"]
             guard = steps_write.submit_guard(row)
             if guard:
-                await emit_log(events, f"{no}: {guard} — 건너뜁니다.", "warn")
+                # 이미 상신된 문서(결재상태 진행/종결 또는 상신코드 존재) — 재개 런의 정상 경로다.
+                # 'PRQ…: 상신 완료' 는 재개 파서(purchase_order_resume.RE_SUBMITTED) 규격 문구 —
+                # 이 로그가 남아야 다음 실행/배너가 이 PRQ 를 완료로 인식한다(기록 자가 보정).
+                await emit_log(events, f"{no}: 상신 완료 — 이전 런에서 상신됨({guard}). 건너뜁니다.", "info")
                 continue
             if not await steps_write.select_request_row(page, int(row["i"])):
                 await emit_step(events, STEP, "failed")

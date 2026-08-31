@@ -117,7 +117,9 @@ def make_place_orders_node():
             if not q.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {q.get('reason')}")
             if q.get("already"):
-                await emit_log(events, f"{prq}: 발주 팝업에 잔여 라인이 없어 이미 발주된 것으로 판단 — 건너뜁니다.", "warn")
+                # 'PRQ…: 발주 저장 완료' 는 재개 파서(RE_ORDERED) 규격 문구 — ERP 확인(팝업 0행)을
+                # 기록에 남겨야 다음 실행/배너가 이 PRQ 를 완료로 인식한다(기록 자가 보정).
+                await emit_log(events, f"{prq}: 발주 저장 완료 — 이전 런에서 발주됨(팝업 잔여 0행). 건너뜁니다.", "info")
                 continue
             rows = q["rows"]
             real_idxs = q.get("idxs") or list(range(len(rows)))

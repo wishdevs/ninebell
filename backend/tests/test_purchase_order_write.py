@@ -182,3 +182,57 @@ def test_resume_parse_run_artifacts():
     assert art["submitted"] == {"PRQ2026080754"} and art["ordered"] == {"PRQ2026080754"}
     empty = parse_run_artifacts([])
     assert empty["projectCode"] is None and empty["units"] == [] and empty["submitted"] == set()
+
+
+@pytest.mark.asyncio
+async def test_resume_candidates_lists_only_pending_projects(sm):
+    """중단 배너 후보 — 잔여 PRQ 가 있는 프로젝트만, 소유 스코프로 반환."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from app.models.agent_run import AgentRun
+    from app.services.purchase_order_resume import resume_candidates
+
+    uid = _uuid.uuid4()
+    t = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
+    interrupted = [  # ETRI-006: PRQ2 저장만 되고 상신·발주 미완 → 후보
+        {"message": "프로젝트 'ETRIBE ERP TEST 006'(코드 ETRI-006) 적용 — 필드 반영 확인 ✅"},
+        {"message": "이동요청 저장 완료 — 10행, 이동요청번호 IRQ0006."},
+        {"message": "발주단위 #1 저장 완료 — 구매요청번호 PRQ0001."},
+        {"message": "발주단위 #2 저장 완료 — 구매요청번호 PRQ0002."},
+        {"message": "PRQ0001: 상신 완료 — 결재상태 종결."},
+        {"message": "PRQ0001: 발주 저장 완료 — 발주번호 ['PUR1']."},
+    ]
+    completed = [  # ETRI-005: 전 PRQ 상신+발주 완료 → 후보 아님
+        {"message": "프로젝트 'ETRIBE ERP TEST 005'(코드 ETRI-005) 적용 — 필드 반영 확인 ✅"},
+        {"message": "발주단위 #1 저장 완료 — 구매요청번호 PRQ0005."},
+        {"message": "PRQ0005: 상신 완료 — 결재상태 종결."},
+        {"message": "PRQ0005: 발주 저장 완료 — 발주번호 ['PUR5']."},
+    ]
+    async with sm() as s:
+        s.add(AgentRun(id="r-int", agent_id="purchase-order", user_id=uid,
+                       status="failed", started_at=t, logs=interrupted))
+        s.add(AgentRun(id="r-done", agent_id="purchase-order", user_id=uid,
+                       status="succeeded", started_at=t, logs=completed))
+        await s.commit()
+
+    out = await resume_candidates(user_id=uid)
+    assert [c["projectCode"] for c in out] == ["ETRI-006"]
+    assert out[0]["projectName"] == "ETRIBE ERP TEST 006"
+    assert out[0]["pendingPrqs"] == ["PRQ0002"]
+    assert (out[0]["lastRunAt"] or "").startswith("2026-08-31T10:00:00")  # SQLite 는 tz 미보존
+    # 소유 스코프 — 다른 사용자에게는 빈 목록.
+    assert await resume_candidates(user_id=_uuid.uuid4()) == []
+
+
+def test_resume_regexes_match_node_skip_wordings():
+    """가드 스킵 로그(기록 자가 보정)가 재개 파서 규격과 일치해야 한다 — 문구 드리프트 방지."""
+    from app.services.purchase_order_resume import RE_ORDERED, RE_SUBMITTED
+
+    # self_approve 가드 스킵 / 실상신, place_orders 팝업 0행 스킵 / 실발주 — 노드 f-string 과 동일 형태.
+    assert RE_SUBMITTED.search("PRQ1: 상신 완료 — 이전 런에서 상신됨(결재상태 '진행'). 건너뜁니다.")
+    assert RE_SUBMITTED.search("PRQ1: 상신 완료 — 결재상태 종결 · 결재상신코드 (주)나인벨-2026-1.")
+    assert RE_ORDERED.search("PRQ1: 발주 저장 완료 — 이전 런에서 발주됨(팝업 잔여 0행). 건너뜁니다.")
+    assert RE_ORDERED.search("PRQ1: 발주 저장 완료 — 발주번호 ['PUR1'].")
+    # 가상 상신(디버그)은 완료로 오인하면 안 된다.
+    assert not RE_SUBMITTED.search("PRQ1: (가상 상신) 결재창 확인 후 닫습니다.")

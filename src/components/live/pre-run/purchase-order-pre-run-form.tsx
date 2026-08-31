@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RiInformationLine, RiPlayLine } from '@remixicon/react';
+import { RiErrorWarningLine, RiInformationLine, RiPlayLine } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { SectionCard } from '@/components/ui/section-card';
 import { fetchCatalog, fetchFavorites } from '@/lib/api/me-codes';
+import { fetchResumeCandidates, type ResumeCandidate } from '@/lib/api/purchase-order-plans';
 import { CatalogCombobox, type ComboOption, projectCodeLabel } from './catalog-combobox';
 import type { PreRunFormProps } from './index';
 
@@ -137,6 +138,21 @@ function seedFromParams(initial: Record<string, unknown> | undefined): Seed {
 export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: PreRunFormProps) {
   // 마지막 제출값 복원 — 부모가 key 로 remount 하면 초기값이 다시 시드된다.
   const seed = useMemo(() => seedFromParams(initialParams), [initialParams]);
+  // 중단된 프로젝트(자동 재개 후보, 2026-08-31) — 저장된 구매요청 중 상신·발주 미완이 남은 건.
+  // 조회 실패는 배너 없이 무시한다(실행 폼 본기능과 무관).
+  const [resumeCandidates, setResumeCandidates] = useState<ResumeCandidate[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetchResumeCandidates()
+      .then((list) => {
+        if (alive) setResumeCandidates(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const [project, setProject] = useState(() => seed.project);
 
   const [favorites, setFavorites] = useState<ComboOption[]>([]);
@@ -199,6 +215,20 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
     });
   };
 
+  /** 중단 프로젝트 [이어서 실행] — 프로젝트를 채우고 곧바로 실행한다(재개는 백엔드가 런 기록으로 판별). */
+  const resumeRun = (c: ResumeCandidate) => {
+    if (disabled) return;
+    setProject({ code: c.projectCode, name: c.projectName });
+    setRecents(pushRecentProject({ code: c.projectCode, name: c.projectName }));
+    onStart({
+      purchase_order: {
+        project_no: c.projectCode,
+        project_name: c.projectName,
+        keyword: deriveKeyword(c.projectName) || c.projectCode,
+      },
+    });
+  };
+
   return (
     <SectionCard
       caption="실행 전 입력"
@@ -206,6 +236,49 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
       description="발주 계획을 세울 프로젝트를 먼저 고르고 실행하세요. 선택한 프로젝트 이름으로 ERP 도움창을 검색합니다."
       density="comfortable"
     >
+      {resumeCandidates.length > 0 ? (
+        <div className="border-warning/40 bg-warning/5 rounded-[var(--radius-md)] border p-3">
+          <div className="flex gap-2">
+            <RiErrorWarningLine size={16} aria-hidden className="text-warning mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-foreground text-xs font-medium">
+                중간에 중단된 프로젝트가 있습니다 — 이어서 실행하면 완료된 단계는 건너뛰고 남은
+                상신·발주부터 진행합니다.
+              </p>
+              <ul className="space-y-1.5">
+                {resumeCandidates.map((c) => (
+                  <li
+                    key={c.projectCode}
+                    className="flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <span className="text-foreground-secondary min-w-0 truncate text-xs">
+                      <span className="text-foreground font-medium">{c.projectName}</span>{' '}
+                      <span className="text-foreground-tertiary">({c.projectCode})</span> · 구매요청{' '}
+                      {c.pendingPrqs.length}건 남음
+                      {c.lastRunAt ? (
+                        <span className="text-foreground-tertiary">
+                          {' '}
+                          · 마지막 실행 {formatSyncedAt(c.lastRunAt) ?? ''}
+                        </span>
+                      ) : null}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={disabled}
+                      onClick={() => resumeRun(c)}
+                    >
+                      <RiPlayLine size={14} aria-hidden />
+                      이어서 실행
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="border-border/60 bg-muted/30 flex gap-2 rounded-[var(--radius-md)] border p-3">
         <RiInformationLine
           size={16}

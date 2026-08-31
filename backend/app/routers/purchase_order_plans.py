@@ -15,6 +15,7 @@ from app.core.deps import CurrentUser, DbSession, user_has_permission
 from app.core.listing import PageQuery, paginate
 from app.core.permissions import LOGS_READ
 from app.models import PurchaseOrderPlan
+from app.services import purchase_order_resume
 
 router = APIRouter(prefix="/purchase-order/plans", tags=["purchase-order"])
 
@@ -77,3 +78,18 @@ async def get_plan(plan_id: str, user: CurrentUser, db: DbSession) -> dict:
     if p is None:
         raise not_found
     return {**_plan_summary(p), "plan": p.plan, "bomSummary": p.bom_summary}
+
+
+# ── 자동 재개 후보(2026-08-31) — 구매발주 페이지 '이어서 실행' 배너용 ────────────
+# /purchase-order/plans/{plan_id} 와 경로가 겹치지 않게 별도 라우터(prefix /purchase-order).
+resume_router = APIRouter(prefix="/purchase-order", tags=["purchase-order"])
+
+
+@resume_router.get("/resume-candidates")
+async def list_resume_candidates(user: CurrentUser) -> list[dict]:
+    """중단된 프로젝트 목록 — 저장된 구매요청 중 상신·발주가 끝나지 않은 건이 남은 프로젝트.
+
+    소유 스코프(본인 런) 기준 — 재개 주체는 실행자 본인이다. logs:read(관리자)는 전체.
+    """
+    scope_user = None if user_has_permission(user, LOGS_READ) else user.id
+    return await purchase_order_resume.resume_candidates(user_id=scope_user)
