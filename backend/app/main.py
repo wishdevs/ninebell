@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -222,7 +223,10 @@ def create_app() -> FastAPI:
             "; ".join(lines),
             f" (input={str(errors[0].get('input'))[:200]!r})" if errors else "",
         )
-        return JSONResponse({"detail": errors, "error": summary}, status_code=422)
+        # ⚠ pydantic v2 의 errors[].ctx 에는 ValueError 객체가 들어올 수 있다(EmailStr 등) —
+        #   그대로 직렬화하면 422 응답 자체가 TypeError 로 터진다(2026-08-31 pytest 실측 2건).
+        safe_errors = jsonable_encoder(errors, custom_encoder={Exception: str})
+        return JSONResponse({"detail": safe_errors, "error": summary}, status_code=422)
 
     app.include_router(auth.router)
     app.include_router(users.router)
