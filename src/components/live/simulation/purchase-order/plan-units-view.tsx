@@ -40,14 +40,23 @@ export function PlanUnitsView({ payload }: { payload: PlanSubmit }) {
               ))}
             </ul>
             <div className="border-border overflow-x-auto rounded-[var(--radius-md)] border">
-              <table className="w-full min-w-[640px] border-collapse text-[11px]">
+              {/* table-fixed + colgroup 고정 폭 — 발주단위마다 표가 따로라 auto 레이아웃이면
+                  내용 길이에 따라 컬럼 폭이 제각각이 되어 위/아래 표 비교가 안 된다(2026-08-31). */}
+              <table className="w-full min-w-[640px] table-fixed border-collapse text-[11px]">
+                <colgroup>
+                  <col className="w-[230px]" />
+                  <col className="w-[64px]" />
+                  <col className="w-[88px]" />
+                  <col className="w-[104px]" />
+                  <col />
+                </colgroup>
                 {/* accent 밴드 아래 내부 표 — 밴드보다 한 단 옅게(order-unit-card 와 동일). */}
                 <thead className="bg-muted/50 text-foreground-tertiary">
                   <tr>
                     <Th>거래처</Th>
                     <Th className="text-right">부품 수</Th>
                     <Th className="text-right">금액</Th>
-                    <Th className="w-28">납기예정일</Th>
+                    <Th>납기예정일</Th>
                     <Th>비고</Th>
                   </tr>
                 </thead>
