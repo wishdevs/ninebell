@@ -99,14 +99,19 @@ def make_place_orders_node():
             if not q.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {q.get('reason')}")
             rows = q["rows"]
+            real_idxs = q.get("idxs") or list(range(len(rows)))
+            if q.get("foreign"):
+                await emit_log(events, f"{prq}: 팝업에 타 요청 잔존 {q['foreign']}행 — 대상 {len(rows)}행만 선택합니다.", "warn")
+            # plan_vendor_changes 는 rows 내 위치를 돌려주므로 팝업 그리드 실 인덱스로 변환한다.
             changes = s3.plan_vendor_changes(unit, rows)
-            for vendor, idxs in changes.items():
+            for vendor, poss in changes.items():
+                idxs = [real_idxs[p] for p in poss]
                 a = await s3.popup_apply_vendor(page, idxs, vendor)
                 if not a.get("ok"):
                     return await _fail(events, t0, done, f"{prq}: {a.get('reason')}")
                 await emit_log(events, f"{prq}: {vendor} ← {len(idxs)}행 변경거래처 적용(코드 {a.get('codes')}).", "info")
             await emit_shot(events.put, page)
-            b = await s3.popup_bottom_apply(page, list(range(len(rows))))
+            b = await s3.popup_bottom_apply(page, real_idxs)
             if not b.get("ok"):
                 return await _fail(events, t0, done, f"{prq}: {b.get('reason')}")
             masters = await s3.master_rows(page)

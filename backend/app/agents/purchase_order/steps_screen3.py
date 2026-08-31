@@ -156,14 +156,18 @@ async def popup_query_prq(page: Any, prq: str, *, tries: int = 4) -> dict:
             continue  # 여전히 0행 — 재조회 지연으로 보고 Enter 재시도.
         read = await page.evaluate(j3.POPUP_GRID_ROWS_JS, [0, 2000])
         rows = read.get("rows") or []
-        other = [x for x in rows if str(x.get("PURREQ_NO") or "").strip() != prq]
-        if rows and not other:
-            return {"ok": True, "rows": rows, "count": n}
-        if other:
+        # ⚠ 필터가 간헐 미적용돼 타 요청 잔존 행이 섞일 수 있다(2026-08-31 ETRI-005 #4: 141 = 대상
+        #   124 + 잔존 17). 순수성을 요구하지 말고 **일치 행만 골라**(실 인덱스 보존) 진행한다 —
+        #   비일치 행은 체크하지 않으므로 하단 적용에서 자연 배제된다.
+        matched = [(i, x) for i, x in enumerate(rows) if str(x.get("PURREQ_NO") or "").strip() == prq]
+        if matched:
+            foreign = len(rows) - len(matched)
             return {
-                "ok": False,
-                "reason": f"{prq} 조회에 타 요청이 섞였습니다(행 {len(rows)}, 타 요청 {len(other)}).",
-                "rows": rows,
+                "ok": True,
+                "rows": [x for _, x in matched],
+                "idxs": [i for i, _ in matched],
+                "count": n,
+                "foreign": foreign,
             }
     return {
         "ok": False,
