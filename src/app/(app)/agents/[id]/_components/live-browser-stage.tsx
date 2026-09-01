@@ -6,6 +6,7 @@ import {
   RiPlayCircleLine,
   RiPlayLine,
   RiRestartLine,
+  RiErrorWarningLine,
 } from '@remixicon/react';
 import { Button } from '@/components/ui/button';
 import { LiveScreen } from '@/components/live/LiveScreen';
@@ -46,6 +47,11 @@ interface LiveBrowserStageProps {
   aiWorking?: string | null;
   /** 병렬 워커 상태(place_orders 등) — 2개 이상일 때만 화면 하단에 세션별 처리 칩을 얹는다. */
   workers?: readonly LiveWorkerChip[] | null;
+  /**
+   * 완료 후 사람이 이어서 할 일(에이전트 handoff_note) — 성공 종료 오버레이에 경고톤
+   * 콜아웃으로 크게 보여준다(우측 결과 탭의 안내가 작아 안 보인다는 피드백 2026-09-01).
+   */
+  handoffNote?: string | null;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -72,6 +78,7 @@ export function LiveBrowserStage({
   etaHint = null,
   aiWorking = null,
   workers = null,
+  handoffNote = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
   // 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열려 자식 화면이 있으면 탭 토글을 노출한다.
@@ -127,7 +134,13 @@ export function LiveBrowserStage({
           {/* 실행 CTA — 우상단 버튼이 안 보인다는 피드백에 따라, 세션이 없거나(idle)
               종료됐을 때 화면 중앙에 대형 실행 진입점을 겹쳐 보여준다(실행 중엔 숨김). */}
           {onStart && !live ? (
-            <StageRunCta status={status} canRun={canRun} onStart={onStart} etaHint={etaHint} />
+            <StageRunCta
+              status={status}
+              canRun={canRun}
+              onStart={onStart}
+              etaHint={etaHint}
+              handoffNote={handoffNote}
+            />
           ) : null}
         </div>
       </section>
@@ -221,11 +234,13 @@ function StageRunCta({
   canRun,
   onStart,
   etaHint,
+  handoffNote = null,
 }: {
   status: LiveRunStatus;
   canRun: boolean;
   onStart: () => void;
   etaHint: StageEtaHint | null;
+  handoffNote?: string | null;
 }) {
   const terminal = status === 'succeeded' || status === 'failed';
   const title =
@@ -245,55 +260,87 @@ function StageRunCta({
   return (
     <div
       className={cn(
-        'absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center',
+        // 콜아웃이 붙으면 내용이 16:10 높이를 넘칠 수 있어(모바일) 오버레이 자체를 스크롤
+        // 컨테이너로 두고, 안쪽 래퍼 m-auto 로 센터링한다 — 넘치면 잘리는 대신 스크롤된다.
+        'absolute inset-0 z-10 overflow-y-auto',
         // idle 은 불투명 배경 — 밑의 LiveScreen 플레이스홀더('라이브 화면 없음')와 글자 겹침 방지.
         // 종료 상태는 마지막 스크린샷 맥락을 살려 dim+blur 로만 얹는다.
         terminal ? 'bg-background/60 backdrop-blur-[2px]' : 'bg-surface',
       )}
     >
-      <RiPlayCircleLine
-        size={44}
-        aria-hidden
-        className={cn(
-          status === 'failed'
-            ? 'text-danger'
-            : status === 'succeeded'
-              ? 'text-success'
-              : 'text-accent',
-        )}
-      />
-      <div className="flex flex-col gap-1">
-        <p className="text-foreground text-[length:var(--text-heading-sm)] font-semibold">
-          {title}
-        </p>
-        <p className="text-muted-foreground max-w-[36ch] text-[length:var(--text-body-sm)] leading-relaxed">
-          {description}
-        </p>
-        {etaLine ? (
-          <p className="text-foreground-tertiary text-[11px] tracking-[0.04em] tabular-nums">
-            {etaLine}
+      <div className="flex min-h-full flex-col items-center justify-center gap-3 px-6 py-4 text-center">
+        <RiPlayCircleLine
+          size={44}
+          aria-hidden
+          className={cn(
+            status === 'failed'
+              ? 'text-danger'
+              : status === 'succeeded'
+                ? 'text-success'
+                : 'text-accent',
+          )}
+        />
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-foreground text-[length:var(--text-heading-sm)] font-semibold">
+            {title}
           </p>
-        ) : null}
+          {status === 'succeeded' && handoffNote ? (
+            <>
+              {/* 다음 할 일(handoff) — 우측 결과 탭에만 있던 안내가 작아 안 보인다는 피드백
+                (2026-09-01, 법인카드 상신 안내). 완료 오버레이의 주인공으로 승격하고,
+                재실행 안내는 아래 보조 줄로 강등한다. */}
+              <div className="border-warning/45 bg-warning/10 mt-1.5 flex max-w-[52ch] items-start gap-2.5 rounded-[var(--radius-md)] border px-4 py-3 text-left shadow-[var(--shadow-card)]">
+                <RiErrorWarningLine
+                  size={18}
+                  aria-hidden
+                  className="text-warning mt-0.5 shrink-0"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <p className="text-warning text-[length:var(--text-caption)] font-semibold tracking-[0.04em]">
+                    다음 할 일 — 직접 마무리가 필요합니다
+                  </p>
+                  <p className="text-foreground text-[length:var(--text-body-sm)] leading-relaxed">
+                    {handoffNote}
+                  </p>
+                </div>
+              </div>
+              <p className="text-foreground-tertiary mt-1 text-[11px] tracking-[0.04em]">
+                같은 워크플로우를 새 세션으로 다시 실행할 수 있습니다.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-muted-foreground max-w-[36ch] text-[length:var(--text-body-sm)] leading-relaxed">
+                {description}
+              </p>
+              {etaLine ? (
+                <p className="text-foreground-tertiary text-[11px] tracking-[0.04em] tabular-nums">
+                  {etaLine}
+                </p>
+              ) : null}
+            </>
+          )}
+        </div>
+        <Button
+          size="lg"
+          onClick={onStart}
+          disabled={!canRun}
+          title={canRun ? undefined : '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'}
+          className="mt-1 min-w-40"
+        >
+          {terminal ? (
+            <>
+              <RiRestartLine size={16} aria-hidden />
+              다시 실행
+            </>
+          ) : (
+            <>
+              <RiPlayLine size={16} aria-hidden />
+              실행
+            </>
+          )}
+        </Button>
       </div>
-      <Button
-        size="lg"
-        onClick={onStart}
-        disabled={!canRun}
-        title={canRun ? undefined : '실행 가능한 워크플로우가 연결되지 않은 에이전트입니다.'}
-        className="mt-1 min-w-40"
-      >
-        {terminal ? (
-          <>
-            <RiRestartLine size={16} aria-hidden />
-            다시 실행
-          </>
-        ) : (
-          <>
-            <RiPlayLine size={16} aria-hidden />
-            실행
-          </>
-        )}
-      </Button>
     </div>
   );
 }
