@@ -102,13 +102,6 @@ function toProjectOptions(rows: readonly ProjectRow[]): ComboOption[] {
   return [...byPjtNo.values()];
 }
 
-/** ERP 도움창 검색어 = 프로젝트명의 콤마·'#' 앞 토큰('CX85-137, 12CH PROCESS' → 'CX85-137',
- * 'MISC-ESR3 #2' → 'MISC-ESR3'). '#' 포함 검색은 도움창 팝업을 죽인다(백엔드 프로브 실측
- * 2026-08-14) — 넓힌 검색어 + PJT_NO 행 선택이 검증된 경로. 백엔드 sanitize_keyword 미러. */
-function deriveKeyword(projectName: string): string {
-  return (projectName.split(',')[0] ?? '').split('#')[0].trim();
-}
-
 /** ISO 타임스탬프 → 'YYYY-MM-DD'(표시용). 형식이 아니면 null. */
 function formatSyncedAt(iso: string | null): string | null {
   if (!iso) return null;
@@ -197,8 +190,9 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
     return options;
   }, []);
 
-  // 제출값 — 카탈로그 선택에서 이름으로 검색어를 파생한다.
-  const keyword = deriveKeyword(project.name) || project.code;
+  // 제출값 — 검색어 = 프로젝트 **코드**(PJT_NO). 이름은 중복 가능, 코드는 유일키라 더 정확하다
+  // (사용자 지시 2026-09-01; 코드 검색은 e2e 드라이버가 상시 사용해 온 검증된 경로).
+  const keyword = project.code;
   const projectNo = project.code;
   const projectName = project.name || keyword;
   const canSubmit = !disabled && !!keyword && !!project.code;
@@ -224,7 +218,7 @@ export function PurchaseOrderPreRunForm({ disabled, initialParams, onStart }: Pr
       purchase_order: {
         project_no: c.projectCode,
         project_name: c.projectName,
-        keyword: deriveKeyword(c.projectName) || c.projectCode,
+        keyword: c.projectCode,
       },
     });
   };
