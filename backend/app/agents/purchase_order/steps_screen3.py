@@ -374,12 +374,27 @@ async def _read_note(page: Any, idx: int) -> str:
 
 
 async def set_master_note(page: Any, idx: int, text: str) -> dict:
-    """마스터 RMK_DC 인라인 편집 — 방식 폴백 체인, 각 단계 `ds.getValue` 독립 확인.
+    """마스터 RMK_DC 인라인 편집 — 빠른 것부터 폴백 체인, 각 단계 `ds.getValue` 독립 확인.
 
-    ① 에디터 오픈 → 오버레이 input 로케이터 fill + Enter  ② 오픈 → 트리플클릭 전체선택 → 타이핑 + Enter
-    ③ 그리드 setValue(마지막 수단 — 2026-08-28 실측: Ctrl/Meta+A 후 타이핑+Tab 은 커밋되지 않았다).
+    ⓪ 그리드 setValue + 즉시 확인(수 ms — 사용자 지시 2026-09-01: 싸고 빠른 걸 먼저, 실패 시에만
+      느리고 확실한 UI 경로)  ① 에디터 오픈 → 오버레이 input 로케이터 fill + Enter
+    ② 오픈 → 트리플클릭 전체선택 → 타이핑 + Enter.
+    ⚠ getValue 확인은 그리드 모델 반영까지 보장 — 저장 시 서버 반영은 실발주 런에서 최종 검증
+      (setValue 파생 미동기 전례: 발주유형 직접 세팅 시 버튼 무반응, po_potype_diag).
     """
     tried: list[str] = []
+
+    # ⓪ setValue 선시도 — 실패/미반영 시에만 UI 편집으로 폴백.
+    r = await page.evaluate(
+        """([i, f, v]) => { try {
+             const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
+             g.setValue(i, f, v); return { ok: true };
+           } catch (e) { return { ok: false, err: String(e).slice(0, 100) }; } }""",
+        [idx, "RMK_DC", text],
+    )
+    if r.get("ok") and await _read_note(page, idx) == text.strip():
+        return {"ok": True, "via": "setValue"}
+    tried.append(f"setValue {r} → {await _read_note(page, idx)!r}")
 
     async def _open() -> dict | None:
         o = await page.evaluate(j3.MAIN_OPEN_EDITOR_JS, [idx, "RMK_DC"])
@@ -420,18 +435,6 @@ async def set_master_note(page: Any, idx: int, text: str) -> dict:
         tried.append(f"type→{await _read_note(page, idx)!r}")
         await page.keyboard.press("Escape")
 
-    # ③ 그리드 setValue
-    r = await page.evaluate(
-        """([i, f, v]) => { try {
-             const g = window.jQuery(document.querySelectorAll('.dews-ui-grid')[0]).data('dewsControl')._grid;
-             g.setValue(i, f, v); return { ok: true };
-           } catch (e) { return { ok: false, err: String(e).slice(0, 100) }; } }""",
-        [idx, "RMK_DC", text],
-    )
-    await verify.DEFAULT_SLEEP(0.4)
-    if r.get("ok") and await _read_note(page, idx) == text.strip():
-        return {"ok": True, "via": "setValue"}
-    tried.append(f"setValue {r}")
     return {"ok": False, "reason": f"비고 커밋 실패 — 기대 {text!r}, 시도 {tried}"}
 
 
