@@ -212,7 +212,7 @@ def make_self_approve_node(*, allow_submit: bool = False):
             page_w = wpage
             # 워커당 1회 — 화면 진입 + 공장(나인벨) 지정. 실패하면 이 워커만 빠진다(큐는 남는다).
             try:
-                active = await navigate_schema(page_w, PURCHASE_REQ_PROCESS, base, emit=events.put)
+                active = await navigate_schema(page_w, PURCHASE_REQ_PROCESS, base, emit=events.put, step_id=None)
                 if active is not None:
                     page_w = active
                     if wid == 0:

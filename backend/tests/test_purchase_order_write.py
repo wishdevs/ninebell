@@ -171,7 +171,7 @@ async def test_place_orders_parallel_workers_split_queue_and_aggregate(monkeypat
         boots.append(userid)
         return _Ctx(), object()
 
-    async def _fake_navigate(page, schema, base, *, emit=None):
+    async def _fake_navigate(page, schema, base, *, emit=None, **kw):
         return None
 
     async def _fake_process(page, prq, unit, prior, events, today):
@@ -297,7 +297,7 @@ async def test_self_approve_parallel_workers_then_cleanup_pass(monkeypatch):
         boots.append(userid)
         return _Ctx(), object()
 
-    async def _fake_navigate(page, schema, base, *, emit=None):
+    async def _fake_navigate(page, schema, base, *, emit=None, **kw):
         return None
 
     async def _fake_plant(page):
@@ -352,7 +352,7 @@ async def test_place_orders_serial_fallback_without_browser(monkeypatch):
     async def _boom(*a, **k):  # 부트스트랩이 불리면 안 된다.
         raise AssertionError("bootstrap should not be called")
 
-    async def _fake_navigate(page, schema, base, *, emit=None):
+    async def _fake_navigate(page, schema, base, *, emit=None, **kw):
         return None
 
     async def _fake_process(page, prq, unit, prior, events, today):

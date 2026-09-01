@@ -109,14 +109,20 @@ async def navigate(
     label: str = "메뉴",
     grids_required: int = 1,
     emit: Optional[EmitFn] = None,
+    step_id: Optional[str] = "menu_nav",
 ) -> Any:
     """``base+menu_path`` 딥링크로 진입(그리드 로드 폴링·권한팝업 즉시실패).
 
     반환: 진입에 실제 사용된 page — 크래시 복구로 교체됐으면 **새 page**(호출부는 이후
     조작에 반환값을 써야 한다), 아니면 인자로 받은 page 그대로(기존 호출부는 반환값을
     무시해도 동작 불변).
+
+    step_id=None 이면 **스텝 프레임만 억제**한다(로그·스냅샷은 유지) — 병렬 워커·단계 중간
+    재진입이 완료된 menu_nav 스텝을 running 으로 되돌려 진행 타임라인이 뒤로 점프하던
+    문제의 근본 수정(2026-09-01, 구매발주 3세션 병렬화 실측).
     """
-    await emit_step(emit, "menu_nav", "running")
+    if step_id:
+        await emit_step(emit, step_id, "running")
     await emit_log(emit, f"{label} 메뉴 진입 중…", "info")
     t0 = time.monotonic()
     try:
@@ -124,19 +130,27 @@ async def navigate(
             page, menu_path, base, label=label, grids_required=grids_required, emit=emit
         )
     except Exception:
-        await emit_step(emit, "menu_nav", "failed")
+        if step_id:
+            await emit_step(emit, step_id, "failed")
         raise
     await emit_shot(emit, active)
-    await emit_step(emit, "menu_nav", "done", int((time.monotonic() - t0) * 1000))
+    if step_id:
+        await emit_step(emit, step_id, "done", int((time.monotonic() - t0) * 1000))
     return active
 
 
 async def navigate_schema(
-    page: Any, schema: MenuSchema, base: str, *, emit: Optional[EmitFn] = None
+    page: Any,
+    schema: MenuSchema,
+    base: str,
+    *,
+    emit: Optional[EmitFn] = None,
+    step_id: Optional[str] = "menu_nav",
 ) -> Any:
     """:class:`MenuSchema` 로 진입(딥링크·라벨·기대 그리드 수를 스키마에서).
 
     반환: :func:`navigate` 와 동일 — 진입에 실제 사용된 page(크래시 복구 시 새 page).
+    step_id=None 은 :func:`navigate` 와 같은 의미(스텝 프레임 억제 — 워커 재진입용).
     """
     return await navigate(
         page,
@@ -145,4 +159,5 @@ async def navigate_schema(
         label=schema.label,
         grids_required=schema.grids_expected,
         emit=emit,
+        step_id=step_id,
     )

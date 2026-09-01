@@ -213,3 +213,26 @@ async def test_scaled_proxy_is_rewrapped_with_same_scale():
     assert isinstance(out, _ScaledProxy)
     assert out._page is fresh_raw and out._scale == 0.4
     assert old_raw.closed is True  # close 는 원본(raw)에 간다.
+
+
+# ── step_id 계약(2026-09-01) — 워커 재진입은 스텝 프레임을 억제한다(로그는 유지) ──
+async def test_step_id_none_suppresses_step_frames_but_keeps_logs():
+    """병렬 워커의 화면 재진입이 완료된 menu_nav 를 running 으로 되돌리지 않는다."""
+    page = _FakePage(_FakeCtx())
+    frames, emit = _collector()
+
+    out = await navigate(page, "/IM/TEST", "http://erp", emit=emit, step_id=None)
+
+    assert out is page
+    assert _step_statuses(frames) == []  # 스텝 프레임 없음
+    assert any("메뉴 진입 중" in line for line in _logs(frames))  # 로그는 그대로
+
+
+async def test_default_step_id_still_emits_menu_nav():
+    """기존 호출부(step_id 미지정)는 동작 불변 — running→done 방출."""
+    page = _FakePage(_FakeCtx())
+    frames, emit = _collector()
+
+    await navigate(page, "/IM/TEST", "http://erp", emit=emit)
+
+    assert _step_statuses(frames) == ["running", "done"]

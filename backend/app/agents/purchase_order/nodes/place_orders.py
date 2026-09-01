@@ -268,7 +268,7 @@ def make_place_orders_node():
                     return
                 await tracker.working(wid, prq, unit.get("seq"))
                 try:
-                    active = await navigate_schema(page_w, PURCHASE_PO_BATCH, base, emit=events.put)
+                    active = await navigate_schema(page_w, PURCHASE_PO_BATCH, base, emit=events.put, step_id=None)
                     if active is not None:
                         page_w = active
                         if wid == 0:

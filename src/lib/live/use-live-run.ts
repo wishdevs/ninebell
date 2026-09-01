@@ -78,9 +78,14 @@ function upsertStep(steps: readonly LiveStepState[], next: LiveStepState): LiveS
   const i = steps.findIndex((s) => s.step === next.step);
   if (i === -1) return [...steps, next];
   const copy = steps.slice();
+  // done → running 회귀 무시(구버전 이벤트·화면 재진입 방어) — 완료된 스텝이 되돌아가면
+  // 진행 타임라인 마커가 뒤로 점프한다(2026-09-01 구매발주 병렬화 실측). 백엔드도
+  // 워커 재진입 스텝 프레임을 억제하지만(navigate step_id=None), 과거 런 재생을 위해
+  // 프론트에서도 지킨다. failed → running(재시도)은 정상 갱신.
+  const regressed = copy[i].status === 'done' && next.status === 'running';
   copy[i] = {
     ...copy[i],
-    status: next.status,
+    status: regressed ? copy[i].status : next.status,
     ms: next.ms ?? copy[i].ms,
     progress: next.progress ?? copy[i].progress,
   };
