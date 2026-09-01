@@ -187,6 +187,21 @@ def test_assemble_planner_bom_maps_levels_to_contract_shape():
     assert machine["modules"][1]["parts"][0]["vendorClass"] == "해룡"
 
 
+def test_assemble_planner_bom_defaults_empty_vendor_class_to_unassigned():
+    # 품목거래처명이 빈 부품 → '미지정' — 빈 vendorClass 가 그룹 키/제출 payload 로 흘러가
+    # PlanVendorGroupIn(min_length=1) 422 를 내던 라이브 결함(2026-09-01) 회귀 방지.
+    rows = [
+        _grid_row(0),
+        _grid_row(1, ITEM_CD="2297", ITEM_NM="프로젝트", WBS_NM="P"),
+        _grid_row(2, ITEM_CD="M-1", ITEM_NM="장비"),
+        _grid_row(3, ITEM_CD="S-1", ITEM_NM="SET"),
+        _grid_row(4, ITEM_CD="P-1", ITEM_NM="부품"),
+    ]
+    bom = planner.assemble_planner_bom(rows, {"code": "2297", "name": "X"})
+    part = bom["machines"][0]["modules"][0]["parts"][0]
+    assert part["vendorClass"] == "미지정"
+
+
 def test_assemble_planner_bom_drops_orphan_rows():
     # 계층이 깨진 행(machine 없는 SET, module 없는 부품)은 버린다 — 조립을 죽이지 않는다.
     rows = [
@@ -772,8 +787,16 @@ def test_purchase_order_params_absent_means_no_preselection():
 _STALE_SIG = {"count": 410, "mvY": 56}  # 무필터 시그니처 — 체크박스 프로브 실측(CX85-137).
 
 
-def _patch_read(monkeypatch, *, rows=None, checkbox_ok=True, bom_rows=8):
+def _patch_read(monkeypatch, *, rows=None, checkbox_ok=True, bom_rows=8, resume=None):
     calls: dict = {"checkbox": [], "lookup": 0, "signature": 0}
+
+    async def _prior_artifacts(code, *, exclude_run_id=None):
+        calls["resume_code"] = code
+        return resume or {"moveRequestNo": None, "prqs": [], "planByRun": {}}
+
+    from app.agents.purchase_order.nodes import read_bom as read_bom_mod
+
+    monkeypatch.setattr(read_bom_mod.purchase_order_resume, "prior_artifacts", _prior_artifacts)
 
     async def _set_checkbox(page, label, want):
         calls["checkbox"].append((label, want))
@@ -851,6 +874,21 @@ async def test_read_bom_ends_cleanly_when_every_set_is_done(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_read_bom_collects_resume_even_with_modules_left(monkeypatch):
+    """잔여 PRQ 가 있으면 BOM 에 모듈이 남아 있어도 resume 을 실어 계획서를 건너뛰게 한다
+    (2026-09-01 사용자 확정 — 재개는 중단 지점부터, 신규 항목은 재개 완주 후 새 계획서)."""
+    prior = {"moveRequestNo": "IRQ1", "prqs": [{"seq": 3, "number": "PRQ1", "runId": "r1"}], "planByRun": {}}
+    _patch_read(monkeypatch, rows=_sample_rows(), resume=prior)
+    out = await make_read_bom_node()(
+        {"events": _q(), "page": _Page(), "project": {"code": "2297", "name": "X"}}
+    )
+    assert "error" not in out and not out.get("no_modules")
+    assert out["bom_summary"]["modules"] > 0
+    assert out["resume"] == prior  # graph 분기(resume.prqs → save_move)가 이 키를 본다.
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+@pytest.mark.asyncio
 async def test_read_bom_fails_when_checkbox_unreachable(monkeypatch):
     _patch_read(monkeypatch, checkbox_ok=False)
     out = await make_read_bom_node()(
@@ -906,6 +944,17 @@ async def test_wait_bom_filtered_accepts_unchanged_when_already_clean():
     clean = {"count": 200, "mvY": 0}
     page = _SigPage([clean, clean])
     assert await steps_mod.wait_bom_filtered(page, dict(clean)) == 200
+
+
+@pytest.mark.asyncio
+async def test_wait_bom_filtered_accepts_residual_mv_leaf():
+    """ETRI-014 실측(2026-09-01) — 구매불가(PUR_FG=N)인데 MV_FG='Y' 로 남는 리프가 있으면
+    필터가 정상 반영돼도 mvY 가 0 이 안 된다(408/74 → 335/1 안정). mvY==0 하드 조건은
+    오탐이라 제거 — 변화(sig != prev) + 연속 2폴 안정로만 수락한다."""
+    prev = {"count": 408, "mvY": 74}
+    residual = {"count": 335, "mvY": 1}
+    page = _SigPage([prev, residual, residual])
+    assert await steps_mod.wait_bom_filtered(page, dict(prev)) == 335
 
 
 @pytest.mark.asyncio

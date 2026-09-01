@@ -120,13 +120,19 @@ async def _wait_signature(page: Any, prev: dict | None, accept, *, cap_ms: int) 
 
 def view_accepts(sig: dict, *, move_only: bool) -> bool:
     """뷰 판정 — 이동요청만: mvY>0 ∧ leafN==0(구매요청 리프 없음; 구조행은 이 뷰에서도 MV_FG='N' —
-    ETRI-001 실측 163행 = Y 132 + 구조 N 31) / 구매요청만: count>0 ∧ mvY==0."""
+    ETRI-001 실측 163행 = Y 132 + 구조 N 31) / 구매요청만: count>0 ∧ **leafN>0**(구매요청 리프 존재).
+
+    ⚠ 구매요청만의 `mvY==0` 하드 조건은 2026-09-01 제거 — ETRI-014 실측: 구매불가(PUR_FG=N)인데
+      MV_FG='Y' 로 남는 리프가 이 뷰에도 잔존해(read_bom 335행/1건, save_units 619행/2건) 영원히
+      미수락 오탐. 임계값(잔존 ≤n) 같은 명목 카운터는 두지 않는다 — 스테일 구분은 query_view 의
+      변화(prev)+연속 2폴 안정이, 체크박스 상태는 set_checkbox 실검증이 담당한다.
+    """
     c = sig.get("count") or 0
     if c <= 0:
         return False
     if move_only:
         return (sig.get("mvY") or 0) > 0 and (sig.get("leafN") or 0) == 0
-    return sig.get("mvY") == 0
+    return (sig.get("leafN") or 0) > 0
 
 
 async def query_view(page: Any, *, move_only: bool, tries: int = QUERY_TRIES) -> dict:
@@ -369,6 +375,27 @@ async def click_save_and_wait(page: Any, number_prefix: str) -> dict:
     seen: list[str] = []  # 진단 — 관측한 스낵바/다이얼로그 문구(실패 사유에 싣는다)
     seen.append(f"save-btn:{box}")
     seen.append(f"first-dialog:{(dlg or {}).get('text', '')[:80]!r}{(dlg or {}).get('buttons')}")
+
+    async def _any_quick_signal() -> bool:
+        # 3초 내 번호 발급/스낵바가 하나라도 보이면 저장이 이미 진행 중 — 재클릭 금지(이중 저장 방어).
+        waited = 0
+        while waited < 3_000:
+            if await page.evaluate(js.SNACKBARS_JS):
+                return True
+            if _is_new_number(before, await page.evaluate(js.FIND_NUMBERS_JS, number_prefix) or []):
+                return True
+            await verify.DEFAULT_SLEEP(POLL_MS / 1000)
+            waited += POLL_MS
+        return False
+
+    if dlg is None and not await _any_quick_signal():
+        # 확인창 미출현 + 무신호 = 저장 클릭 유실(2026-09-01 ETRI-012 #6 실측: 납기 120행 반영
+        # 직후 저장 클릭이 완전 무반응 — 다이얼로그·스낵바·번호 40s 전무). 코드피커 오픈 유실과
+        # 같은 계열의 간헐 클릭 유실로 보고 1회 재클릭한다(무신호일 때만 — 이중 저장 방어).
+        await page.mouse.click(box["x"], box["y"])
+        seen.append("save-reclick")
+        dlg = await scan_dialog(page, cap_ms=DIALOG_SCAN_CAP_MS)
+        seen.append(f"second-dialog:{(dlg or {}).get('text', '')[:80]!r}{(dlg or {}).get('buttons')}")
     if dlg and SAVE_DIALOG_TEXT in (dlg.get("text") or ""):
         await click_dialog_button(page, "예")
     elif dlg:

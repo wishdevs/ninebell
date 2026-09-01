@@ -181,7 +181,8 @@ export function OrderUnitCard({
                 <Th className="text-right">부품 수</Th>
                 <Th className="text-right">금액</Th>
                 <Th className="w-36">납기예정일</Th>
-                <Th className="w-[264px]">비고</Th>{/* 1.5×(기존 w-44=176px) — 예외 문구가 잘리던 것 완화(2026-09-01) */}
+                <Th className="w-[264px]">비고</Th>
+                {/* 1.5×(기존 w-44=176px) — 예외 문구가 잘리던 것 완화(2026-09-01) */}
               </tr>
             </thead>
             <tbody>

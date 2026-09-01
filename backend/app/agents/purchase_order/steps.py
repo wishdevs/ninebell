@@ -103,13 +103,21 @@ def _grid_sig(grid: dict) -> tuple | None:
 
 
 async def _type_keyword(page: Any, keyword: str) -> bool:
-    """#keyword 를 **실타이핑**으로 교체하고 값 반영을 검증한다.
+    """#keyword 에 검색어를 넣고 값 반영을 검증한다 — fill 선시도, 실패 시 실타이핑 폴백.
 
-    ⛔ JS 세터(SET_KEYWORD_JS) 금지 — 매트릭스 프로브 2/2 실측: 세터로 넣으면 제출 방식과
-      무관하게 팝업이 소멸하고, 실타이핑은 두 제출 방식 모두에서 생존한다.
+    ⛔ JS 세터(SET_KEYWORD_JS) 금지 — 매트릭스 프로브 2/2 실측(2026-08-14, 2026-09-01 재검증):
+      세터로 넣으면 제출 방식과 무관하게 팝업이 소멸하고, 실타이핑은 두 제출 방식 모두에서 생존한다.
+    0차: Playwright fill(브라우저 레벨 입력) — 세터와 달리 팝업 생존+검색 반영
+      (2026-09-01 매트릭스 프로브 2/2 PASS). 실패/미지원이면 아래 실타이핑으로.
     1차: 오픈 직후 자동 포커스+전체선택 상태를 믿고 바로 타이핑.
     2차: 값 불일치 시 트리플클릭(입력 전체선택) 후 재타이핑.
     """
+    try:
+        await page.locator("#keyword").fill(keyword, timeout=3_000)
+        if str(await page.evaluate(js.KEYWORD_VALUE_JS)).strip() == keyword:
+            return True
+    except Exception:  # noqa: BLE001 — fill 실패는 실타이핑 폴백으로 흡수
+        pass
     for tries in range(2):
         if tries == 1:
             kwbox = await page.evaluate(js.KEYWORD_BOX_JS)
@@ -421,9 +429,13 @@ async def wait_bom_filtered(page: Any, prev: dict | None, *, cap_ms: int = BOM_L
 
     stale-grid 레이스 방지(2026-08-13 스모크 실측: 직전 무필터 410행이 'rows>0' 을 즉시
     충족해 필터 재조회 완료 전에 읽힘). 조회 전 시그니처(prev)를 받아
-      수락 = count>0 ∧ mvY==0 ∧ (prev 와 다름 ∨ prev 도 이미 mvY==0)
+      수락 = count>0 ∧ (prev 와 다름 ∨ prev 도 이미 mvY==0)
              ∧ 연속 2회 폴 동일(부분 로드 스냅샷 오독 방지).
     행수가 우연히 같아도 mvY(내용)로 구별한다 — voucher 세팅→독립확인 규율과 동일.
+    ⚠ `mvY==0` 하드 조건은 2026-09-01 제거 — ETRI-014 실측: 구매불가(PUR_FG=N)인데
+      MV_FG='Y' 로 남는 리프 1건이 실재해(필터는 1초 내 정상 반영·안정) 영원히 미수락 오탐.
+      mvY 는 stale 구분용 대리 지표였지 "필터 후 항상 0" 이 보장되는 값이 아니다. 구매대상
+      판별은 다운스트림 planner 가 PUR_FG 로 하므로 잔존 mvY 는 조립에 무해.
     """
     t0 = time.monotonic()
     waited = 0
@@ -435,7 +447,6 @@ async def wait_bom_filtered(page: Any, prev: dict | None, *, cap_ms: int = BOM_L
             sig is not None
             and isinstance(sig.get("count"), int)
             and sig["count"] > 0
-            and sig.get("mvY") == 0
             and (prev is None or sig != prev or prev.get("mvY") == 0)
         )
         if accept:

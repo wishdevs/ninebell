@@ -116,6 +116,20 @@ def make_read_bom_node():
             f"(구매대상 {summary['purchasableParts']}).{excluded_txt}",
             "ok",
         )
+        # 자동 재개(2026-09-01 사용자 확정): 이전 중단 런의 잔여 PRQ 가 있으면 BOM 에 모듈이
+        # 남아 있어도(계획서 미포함 신규 항목) 계획서 HITL 을 띄우지 않는다 — 재개는 중단
+        # 지점부터, 신규 항목은 재개 완주 후 새 계획서로 처리한다(graph 분기가 resume 우선).
+        resume = await purchase_order_resume.prior_artifacts(
+            str(planner_bom["project"].get("code") or ""), exclude_run_id=state.get("run_id")
+        )
+        if resume.get("prqs"):
+            await emit_log(
+                events,
+                f"이전 중단 런의 구매요청 {len(resume['prqs'])}건이 남아 있어 계획서를 건너뛰고 "
+                f"남은 상신·발주부터 이어갑니다. 계획서 미포함 모듈 {summary['modules']}건은 "
+                "재개 완료 후 새로 실행해 계획서를 작성하세요.",
+                "info",
+            )
         await emit_shot(events.put, page)
         await emit_step(events, STEP, "done", _ms(t0))
         # 프로젝트 wbs 는 그리드(WBS_NM)에서 회수될 수 있어 조립 결과의 project 로 갱신한다.
@@ -123,6 +137,7 @@ def make_read_bom_node():
             "planner_bom": planner_bom,
             "bom_summary": summary,
             "project": planner_bom["project"],
+            "resume": resume,
         }
 
     return read_bom

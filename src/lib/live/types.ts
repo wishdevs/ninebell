@@ -350,8 +350,18 @@ export interface LiveFrame {
   hitl?: LiveHitl;
   chat?: ChatFrame;
   transactions?: LiveTransactions;
+  /** 병렬 워커 상태(구매발주 place_orders 등) — 라이브 스테이지 하단에 세션별 처리 항목 칩. */
+  workers?: LiveWorkerChip[];
   result?: string;
   error?: string;
+}
+
+/** 병렬 워커 칩 — 세션(id)별 현재 처리 중인 항목(prq/seq)과 상태. */
+export interface LiveWorkerChip {
+  id: number;
+  status: 'idle' | 'working' | 'done';
+  prq?: string;
+  seq?: number;
 }
 
 /** 라이브 뷰의 브라우저 창 구분 — 주 페이지(parent) / 팝업·자식 창(child). */
@@ -437,6 +447,8 @@ export interface LiveRunState {
   error: string | null;
   /** SSE 스트림이 현재 붙어 있는지(끊김 표시용). */
   connected: boolean;
+  /** 병렬 워커 상태(place_orders 등) — 없으면 null(비병렬 런). */
+  workers: readonly LiveWorkerChip[] | null;
 }
 
 export interface LiveRunActions {

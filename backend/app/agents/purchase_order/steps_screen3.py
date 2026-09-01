@@ -61,15 +61,40 @@ def vendor_group_for(unit: dict, vendor_name: str) -> dict | None:
     return None
 
 
+UNASSIGNED_CLASS = "미지정"  # planner 가 품목거래처 공란 부품에 붙이는 분류(assemble_planner_bom 미러)
+
+
 def plan_vendor_changes(unit: dict, rows: list[dict]) -> dict[str, list[int]]:
-    """팝업 행(PRINCIPALPARTN_NM) 중 의사 거래처(가공품/판금품) → 계획서 실거래처명별 행 인덱스 묶음."""
+    """팝업 행(PRINCIPALPARTN_NM) 중 의사 거래처(가공품/판금품)·공란(→'미지정') → 계획서 실거래처명별 행 인덱스 묶음.
+
+    공란 행은 계획서 '미지정' 그룹에 **실거래처**(라벨 echo 가 아닌 실제 이름)가 지정된 경우에만
+    변경거래처 적용 대상에 포함한다 — 매핑이 없으면 unorderable_positions 가 하단 적용에서 뺀다.
+    """
     by_class = {g.get("vendorClass"): g.get("vendor") for g in unit.get("vendorGroups") or []}
     out: dict[str, list[int]] = {}
     for i, r in enumerate(rows):
         cls = str(r.get("PRINCIPALPARTN_NM") or "").strip()
         if cls in PSEUDO_VENDORS and by_class.get(cls):
             out.setdefault(str(by_class[cls]), []).append(i)
+        elif not cls:
+            v = str(by_class.get(UNASSIGNED_CLASS) or "").strip()
+            if v and v != UNASSIGNED_CLASS:
+                out.setdefault(v, []).append(i)
     return out
+
+
+def unorderable_positions(unit: dict, rows: list[dict]) -> list[int]:
+    """품목주거래처 공란 + 계획서 실거래처 매핑도 없는 행 위치 — 하단 적용 제외 대상.
+
+    ERP 는 이런 행이 체크에 섞이면 '적용하시겠습니까?' [예] 를 받고도 **무반응**(에러·경고
+    없음)으로 팝업을 유지해 공란 1행이 배치 전체를 20s 타임아웃으로 막는다
+    (2026-09-01 empty_vendor 프로브 실측 — PROCESS.md D8).
+    """
+    by_class = {g.get("vendorClass"): g.get("vendor") for g in unit.get("vendorGroups") or []}
+    v = str(by_class.get(UNASSIGNED_CLASS) or "").strip()
+    if v and v != UNASSIGNED_CLASS:
+        return []
+    return [i for i, r in enumerate(rows) if not str(r.get("PRINCIPALPARTN_NM") or "").strip()]
 
 
 async def ensure_po_type(page: Any) -> dict:
@@ -204,22 +229,45 @@ async def popup_apply_vendor(page: Any, row_idxs: list[int], vendor_name: str) -
     a = await click_by_id(page, POPUP_APPLY_BTN)
     if not a.get("ok"):
         return a
-    # 반영을 고정 슬립 대신 결과 폴링으로 확인(0.3s 간격, 상한 6s) — 보통 1s 내 반영.
-    waited = 0
-    vals: dict = {}
-    bad: list[int] = list(row_idxs)
-    while waited < 6_000:
-        vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, row_idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
-        bad = [i for i in row_idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
-        if not bad:
-            break
-        await verify.DEFAULT_SLEEP(0.3)
-        waited += 300
+
+    async def _poll_reflect() -> tuple[list[int], dict]:
+        # 반영을 고정 슬립 대신 결과 폴링으로 확인(0.3s 간격, 상한 6s) — 보통 1s 내 반영.
+        waited = 0
+        vals: dict = {}
+        bad: list[int] = list(row_idxs)
+        while waited < 6_000:
+            vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, row_idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
+            bad = [i for i in row_idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
+            if not bad:
+                break
+            await verify.DEFAULT_SLEEP(0.3)
+            waited += 300
+        return bad, vals
+
+    bad, vals = await _poll_reflect()
+    retried = False
+    checked_n = -1
+    if bad:
+        # 간헐 ERP 무반응 방어(2026-09-01 라이브 4d252115 33/33 미반영 — targeted 재현 3/3 실패,
+        # 원인 미확정): 체크 유지 여부를 진단으로 남기고 [적용] 을 1회 재클릭 후 재폴링한다.
+        # 성공 시 retried 를 반환해 호출부(place_orders)가 경고 로그로 표면화한다 — 조용한 재시도 금지.
+        chk = await page.evaluate(j3.POPUP_CHECK_ROWS_JS, [0, []])  # 빈 목록 = 체크 변경 없이 현황만.
+        checked_n = len(chk.get("checked") or []) if chk.get("ok") else -1
+        a2 = await click_by_id(page, POPUP_APPLY_BTN)
+        if a2.get("ok"):
+            retried = True
+            bad, vals = await _poll_reflect()
     if bad:
         sample = (vals.get(str(bad[0])) or vals.get(bad[0]) or {})
-        return {"ok": False, "reason": f"변경거래처 적용 미반영 행 {len(bad)}/{len(row_idxs)} — 예 {sample}"}
+        return {
+            "ok": False,
+            "reason": (
+                f"변경거래처 적용 미반영 행 {len(bad)}/{len(row_idxs)} — 예 {sample}"
+                f" (재클릭 {'1회 포함' if retried else '실패'} · 1차 무반응 시 체크 유지 {checked_n}행)"
+            ),
+        }
     codes = {str((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_CD")) for i in row_idxs}
-    return {"ok": True, "display": p.get("display"), "codes": sorted(codes)}
+    return {"ok": True, "display": p.get("display"), "codes": sorted(codes), "retried": retried}
 
 
 async def popup_bottom_apply(page: Any, row_idxs: list[int]) -> dict:

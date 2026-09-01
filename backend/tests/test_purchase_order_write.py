@@ -47,7 +47,11 @@ def test_view_accepts_move_only_vs_purchase_only():
     assert steps_write.view_accepts({"count": 163, "mvY": 132, "mvN": 31, "leafN": 0}, move_only=True)
     assert not steps_write.view_accepts({"count": 164, "mvY": 0, "mvN": 31, "leafN": 0}, move_only=True)
     assert not steps_write.view_accepts({"count": 793, "mvY": 132, "mvN": 661, "leafN": 630}, move_only=True)
-    assert steps_write.view_accepts({"count": 664, "mvY": 0}, move_only=False)
+    assert steps_write.view_accepts({"count": 664, "mvY": 0, "mvN": 664, "leafN": 633}, move_only=False)
+    # ETRI-014 잔존 mvY(2026-09-01 라이브) — 구매불가 리프가 MV_FG='Y' 로 남아도 구매요청만 수락.
+    assert steps_write.view_accepts({"count": 619, "mvY": 2, "mvN": 617, "leafN": 588}, move_only=False)
+    # 구조행뿐(리프 0)인 스냅샷은 구매요청만으로 수락하지 않는다.
+    assert not steps_write.view_accepts({"count": 164, "mvY": 0, "mvN": 164, "leafN": 0}, move_only=False)
     assert not steps_write.view_accepts({"count": 0, "mvY": 0}, move_only=False)
 
 
@@ -124,6 +128,250 @@ def test_screen3_vendor_keyword_and_matching():
     assert s3.vendor_group_for(unit, "주식회사 해룡엔지니어링")["note"] == "A [직배송]"
     assert s3.vendor_group_for(unit, "(주)아진물산")["dueDate"] == "2026-09-23"
     assert s3.vendor_group_for(unit, "없는거래처") is None
+
+
+def test_screen3_empty_principal_vendor_rows():
+    """품목주거래처 공란 행 — ERP 가 하단 적용을 조용히 거부(2026-09-01 프로브)하는 케이스.
+
+    '미지정' 그룹에 실거래처가 있으면 변경거래처 매핑에 포함, 라벨 echo('미지정')뿐이면
+    unorderable 로 분류해 하단 적용에서 제외한다.
+    """
+    from app.agents.purchase_order import steps_screen3 as s3
+
+    rows = [{"PRINCIPALPARTN_NM": "(주)아진물산"}, {"PRINCIPALPARTN_NM": ""}, {"PRINCIPALPARTN_NM": None}]
+    # ① 실거래처 미지정(라벨 echo) → 매핑 없음 + 공란 행 전부 제외 대상.
+    unit_echo = {"seq": 3, "vendorGroups": [{"vendorClass": "미지정", "vendor": "미지정"}]}
+    assert s3.plan_vendor_changes(unit_echo, rows) == {}
+    assert s3.unorderable_positions(unit_echo, rows) == [1, 2]
+    # ② '미지정' 그룹에 실거래처 지정 → 공란 행을 그 거래처로 매핑, 제외 없음.
+    unit_real = {"seq": 3, "vendorGroups": [{"vendorClass": "미지정", "vendor": "알파테크"}]}
+    assert s3.plan_vendor_changes(unit_real, rows) == {"알파테크": [1, 2]}
+    assert s3.unorderable_positions(unit_real, rows) == []
+    # ③ '미지정' 그룹 자체가 없으면(공란 부품 없던 계획) 공란 행은 제외 대상.
+    unit_none = {"seq": 3, "vendorGroups": []}
+    assert s3.unorderable_positions(unit_none, rows) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_place_orders_parallel_workers_split_queue_and_aggregate(monkeypatch):
+    """병렬 발주(2026-09-01) — 워커 3개(메인+부트스트랩 2)가 PRQ 큐를 분담하고, 실패 PRQ 는
+    기록만 남기고 나머지를 완주한 뒤 종합 보고한다. done 은 대상 순서로 정렬된다."""
+    import asyncio
+
+    from app.agents.purchase_order.nodes import place_orders as po_mod
+
+    boots: list = []
+    processed: list[str] = []
+
+    class _Ctx:
+        async def close(self):  # noqa: D401
+            pass
+
+    async def _fake_bootstrap(browser, *, userid, password, base, scale):
+        boots.append(userid)
+        return _Ctx(), object()
+
+    async def _fake_navigate(page, schema, base, *, emit=None):
+        return None
+
+    async def _fake_process(page, prq, unit, prior, events, today):
+        await asyncio.sleep(0)  # 다른 워커에 양보 — 실제 분담을 흉내.
+        processed.append(prq)
+        if prq == "PRQ3":
+            return {"ok": False, "reason": "PRQ3: 실패 재현"}
+        if prq == "PRQ4":
+            return {"ok": True, "record": None}  # 이미 발주 스킵.
+        return {"ok": True, "record": {"prq": prq, "seq": unit.get("seq"), "orders": [f"PUR-{prq}"], "vendors": []}}
+
+    monkeypatch.setattr(po_mod, "_bootstrap_worker_page", _fake_bootstrap)
+    monkeypatch.setattr(po_mod, "navigate_schema", _fake_navigate)
+    monkeypatch.setattr(po_mod, "_process_prq", _fake_process)
+
+    units = [{"seq": i, "purchaseReason": "r", "dueDate": "2026-12-31"} for i in range(1, 6)]
+    state = {
+        "events": asyncio.Queue(),
+        "page": object(),
+        "browser": object(),
+        "userid": "이트라이브2",
+        "password": "x",
+        "params": {},
+        "confirmed_plan": {"units": units},
+        "purchase_request_nos": [{"seq": i, "number": f"PRQ{i}"} for i in range(1, 6)],
+    }
+    out = await po_mod.make_place_orders_node()(state)
+    assert len(boots) == 2  # 메인 페이지 + 부트스트랩 2 = 워커 3.
+    assert sorted(processed) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4", "PRQ5"]  # 전 건 소비(실패에도 계속).
+    assert [r["prq"] for r in out["purchase_orders"]] == ["PRQ1", "PRQ2", "PRQ5"]  # 대상 순서 정렬.
+    assert "PRQ3" in out["error"] and "1건 실패" in out["error"] and "3건 저장 완료" in out["error"]
+    # 워커 상태 프레임(FE 라이브 스테이지 칩) — 부트스트랩 직후 3세션 브로드캐스트, 처리 항목(prq)
+    # 이 실리고, 마지막 프레임은 전 워커 done.
+    frames = []
+    while not state["events"].empty():
+        frames.append(state["events"].get_nowait())
+    wframes = [f["workers"] for f in frames if isinstance(f, dict) and "workers" in f]
+    assert wframes and len(wframes[0]) == 3
+    assert any(any(w.get("prq") for w in ws) for ws in wframes)
+    assert all(w["status"] == "done" for w in wframes[-1])
+
+
+@pytest.mark.asyncio
+async def test_submit_one_requery_verdict_and_reopen_retry(monkeypatch):
+    """상신 무반응 계열(2026-09-01 실측) — 재조회(결재상태)가 진실원천: ① 닫힘 지연이지만
+    재조회 종결 → 성공(재시도 없음) ② 재조회 '저장'(미상신 확정) → 결재창 재오픈 1회 재시도 후
+    성공 ③ 2차까지 무반응 → 실패(사유에 재조회 상태·재시도 이력)."""
+    import asyncio
+
+    from app.agents.purchase_order.nodes import self_approve as sa_mod
+
+    calls = {"open": 0}
+    script: dict = {}
+
+    async def _query(page, no):
+        return {"ok": True, "row": script["rows"].pop(0)}
+
+    async def _select(page, i):
+        return True
+
+    async def _open(page):
+        calls["open"] += 1
+        return {"ok": True, "child": object(), "selector": "x"}
+
+    async def _ready(child):
+        return [{"text": "상신"}]
+
+    async def _click(child):
+        return script["clicks"].pop(0)
+
+    async def _noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(sa_mod.steps_write, "query_request", _query)
+    monkeypatch.setattr(sa_mod.steps_write, "select_request_row", _select)
+    monkeypatch.setattr(sa_mod.steps_write, "open_request_approval", _open)
+    monkeypatch.setattr(sa_mod.voucher_steps, "poll_child_ready", _ready)
+    monkeypatch.setattr(sa_mod.voucher_steps, "click_child_submit", _click)
+    monkeypatch.setattr(sa_mod.voucher_steps, "close_child", _noop)
+    monkeypatch.setattr(sa_mod.voucher_steps, "settle_parent_after_child_close", _noop)
+    monkeypatch.setattr(sa_mod, "emit_shot", _noop)
+
+    saved = {"i": 0, "ATHZ_ST_NM": "저장", "GWDOCU_NO": ""}
+    done = {"i": 0, "ATHZ_ST_NM": "종결", "GWDOCU_NO": "GW-1"}
+    close_fail = {"ok": False, "reason": "상신 클릭 후 결제창이 닫히지 않았습니다(적용 미확인)."}
+
+    # ① 닫힘 지연 + 재조회 종결 → 성공, 결재창은 1번만 열림.
+    script.update(rows=[dict(saved), dict(done)], clicks=[dict(close_fail)])
+    out = await sa_mod._submit_one(object(), {"number": "PRQA"}, asyncio.Queue(), True)
+    assert out["ok"] and out["record"]["status"] == "종결" and calls["open"] == 1
+
+    # ② 1차 무반응(재조회 '저장') → 결재창 재오픈 재시도 → 성공.
+    calls["open"] = 0
+    script.update(rows=[dict(saved), dict(saved), dict(done)], clicks=[dict(close_fail), {"ok": True}])
+    out2 = await sa_mod._submit_one(object(), {"number": "PRQB"}, asyncio.Queue(), True)
+    assert out2["ok"] and out2["record"]["submitted"] is True and calls["open"] == 2
+
+    # ③ 2차까지 무반응 → 실패.
+    calls["open"] = 0
+    script.update(rows=[dict(saved), dict(saved), dict(saved)], clicks=[dict(close_fail), dict(close_fail)])
+    out3 = await sa_mod._submit_one(object(), {"number": "PRQC"}, asyncio.Queue(), True)
+    assert not out3["ok"] and "재조회 결재상태" in out3["reason"] and calls["open"] == 2
+
+
+@pytest.mark.asyncio
+async def test_self_approve_parallel_workers_then_cleanup_pass(monkeypatch):
+    """병렬 상신(2026-09-01) — 워커 3개가 PRQ 큐를 분담, 실패 PRQ 는 기록 후 나머지 완주.
+    끝나면 정리 패스가 추가 세션을 전부 닫고 FE 자식창 표시를 해제한다('한 개의 창' 정돈 —
+    발주는 새 병렬 세션으로, 사용자 지시)."""
+    import asyncio
+
+    from app.agents.purchase_order.nodes import self_approve as sa_mod
+
+    boots: list = []
+    closed: list = []
+    processed: list[str] = []
+
+    class _Ctx:
+        async def close(self):
+            closed.append(1)
+
+    async def _fake_bootstrap(browser, *, userid, password, base, scale):
+        boots.append(userid)
+        return _Ctx(), object()
+
+    async def _fake_navigate(page, schema, base, *, emit=None):
+        return None
+
+    async def _fake_plant(page):
+        return {"ok": True}
+
+    async def _fake_submit(page, x, events, submit_on):
+        await asyncio.sleep(0)
+        processed.append(x["number"])
+        if x["number"] == "PRQ2":
+            return {"ok": False, "reason": "PRQ2: 상신 실패 재현"}
+        return {"ok": True, "record": {"number": x["number"], "submitted": True}}
+
+    monkeypatch.setattr(sa_mod, "_bootstrap_worker_page", _fake_bootstrap)
+    monkeypatch.setattr(sa_mod, "navigate_schema", _fake_navigate)
+    monkeypatch.setattr(sa_mod.steps_write, "ensure_req_plant", _fake_plant)
+    monkeypatch.setattr(sa_mod, "_submit_one", _fake_submit)
+
+    state = {
+        "events": asyncio.Queue(),
+        "page": object(),
+        "browser": object(),
+        "userid": "이트라이브2",
+        "password": "x",
+        "params": {},
+        "purchase_request_nos": [{"seq": i, "number": f"PRQ{i}"} for i in range(1, 5)],
+    }
+    out = await sa_mod.make_self_approve_node(allow_submit=True)(state)
+    assert len(boots) == 2 and len(closed) == 2  # 워커 3 부트스트랩, 정리 패스가 추가 세션 종료.
+    assert sorted(processed) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4"]
+    assert [r["number"] for r in out["submitted"]] == ["PRQ1", "PRQ3", "PRQ4"]
+    assert "PRQ2" in out["error"] and "1건 실패" in out["error"]
+    assert "worker_pool" not in out  # 인계 폐기 — 발주는 새 세션으로.
+    # 워커 칩 프레임 — 3세션 브로드캐스트 + 처리 항목 탑재 + 최종 전원 done. 정리 패스는
+    # FE 자식창(PIP) 표시 해제 프레임을 남긴다.
+    frames = []
+    while not state["events"].empty():
+        frames.append(state["events"].get_nowait())
+    wframes = [f["workers"] for f in frames if isinstance(f, dict) and "workers" in f]
+    assert wframes and len(wframes[0]) == 3
+    assert any(any(w.get("prq") for w in ws) for ws in wframes)
+    assert all(w["status"] == "done" for w in wframes[-1])
+    assert any(isinstance(f, dict) and f.get("closed") and f.get("window") == "child" for f in frames)
+
+
+@pytest.mark.asyncio
+async def test_place_orders_serial_fallback_without_browser(monkeypatch):
+    """browser 가 없거나 대상이 1건이면 부트스트랩 없이 메인 페이지 단독(직렬)으로 완주한다."""
+    import asyncio
+
+    from app.agents.purchase_order.nodes import place_orders as po_mod
+
+    async def _boom(*a, **k):  # 부트스트랩이 불리면 안 된다.
+        raise AssertionError("bootstrap should not be called")
+
+    async def _fake_navigate(page, schema, base, *, emit=None):
+        return None
+
+    async def _fake_process(page, prq, unit, prior, events, today):
+        return {"ok": True, "record": {"prq": prq, "seq": unit.get("seq"), "orders": [], "vendors": []}}
+
+    monkeypatch.setattr(po_mod, "_bootstrap_worker_page", _boom)
+    monkeypatch.setattr(po_mod, "navigate_schema", _fake_navigate)
+    monkeypatch.setattr(po_mod, "_process_prq", _fake_process)
+    state = {
+        "events": asyncio.Queue(),
+        "page": object(),
+        "browser": None,
+        "params": {},
+        "confirmed_plan": {"units": [{"seq": 1}, {"seq": 2}]},
+        "purchase_request_nos": [{"seq": 1, "number": "PRQ1"}, {"seq": 2, "number": "PRQ2"}],
+    }
+    out = await po_mod.make_place_orders_node()(state)
+    assert "error" not in out
+    assert [r["prq"] for r in out["purchase_orders"]] == ["PRQ1", "PRQ2"]
 
 
 def test_place_orders_targets_from_state_and_order_prqs_param():

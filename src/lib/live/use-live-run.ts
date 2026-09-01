@@ -60,6 +60,7 @@ const initialState: LiveRunState = {
   result: null,
   error: null,
   connected: false,
+  workers: null,
 };
 
 type Action =
@@ -140,6 +141,10 @@ function applyFrame(state: LiveRunState, frame: LiveFrame): LiveRunState {
     const childOpened = window === 'child' && state.screenshots.child == null;
     const activeWindow: LiveWindow = childOpened ? 'child' : state.activeWindow;
     return { ...state, screenshots, activeWindow, screenshot: screenshots[activeWindow] };
+  }
+  if (frame.workers) {
+    // 병렬 워커 상태 — 세션별 현재 처리 항목(라이브 스테이지 칩). 상태머신은 건드리지 않는다.
+    return { ...state, workers: frame.workers, status: progressStatus(state) };
   }
   if (frame.log != null) {
     const line: LiveLogLine = {

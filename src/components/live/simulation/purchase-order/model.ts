@@ -279,9 +279,13 @@ export function vendorGroupsOf(modules: readonly BomModule[]): VendorGroup[] {
   const byClass = new Map<string, BomPart[]>();
   for (const m of modules) {
     for (const p of m.parts) {
-      const list = byClass.get(p.vendorClass);
+      // 품목거래처명이 빈 부품은 '미지정' 그룹 — 빈 키가 payload vendorClass 로 나가면
+      // 백엔드 PlanVendorGroupIn(min_length=1) 422 (2026-09-01 라이브). 백엔드 planner 도
+      // 같은 정규화를 하지만, 이미 생성된 런의 plannerBom 방어를 위해 여기서도 접는다.
+      const cls = p.vendorClass.trim() || '미지정';
+      const list = byClass.get(cls);
       if (list) list.push(p);
-      else byClass.set(p.vendorClass, [p]);
+      else byClass.set(cls, [p]);
     }
   }
   const groups = [...byClass.entries()].map(([vendorClass, parts]) => ({

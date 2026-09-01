@@ -380,6 +380,7 @@ export function AgentDetailClient({ agent }: { agent: Agent }) {
               canRun={canRun}
               etaHint={etaHint}
               aiWorking={aiWorkingLabel}
+              workers={run.workers}
               // 실행 전 폼 에이전트는 스테이지 중앙 CTA 를 항상 숨긴다(폼 제출이 유일한 실행
               // 진입점) — idle 은 폼이, 종료 후엔 '닫기'로 폼 복귀가 실행을 주도한다.
               // 시뮬레이션 에이전트도 숨긴다 — 실행 자체가 불가라 CTA 가 설 자리가 없다.

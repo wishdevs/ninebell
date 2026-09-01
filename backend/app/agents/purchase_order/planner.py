@@ -108,7 +108,9 @@ def _part_from_row(row: dict) -> dict:
         "remainQty": _num(row, "remainQty"),
         "unitPrice": _num(row, "unitPrice"),
         "amount": _num(row, "amount"),
-        "vendorClass": _text(row, "vendorClass"),
+        # 품목거래처명이 빈 행은 '미지정' — 빈 문자열이 그룹 키/제출 payload 로 흘러가면
+        # PlanVendorGroupIn(min_length=1) 422 가 난다(2026-09-01 라이브).
+        "vendorClass": _text(row, "vendorClass") or "미지정",
         "account": _text(row, "account"),
         "purchasable": _bool_yn(row, "purchasable"),
     }

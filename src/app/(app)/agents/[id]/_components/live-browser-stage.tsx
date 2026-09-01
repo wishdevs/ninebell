@@ -12,7 +12,7 @@ import { LiveScreen } from '@/components/live/LiveScreen';
 import { ThinkingOrb } from '@/components/ui/thinking-orb';
 import { RunStatusBadge, type RunBadgeStatus } from '@/components/ui/run-status-badge';
 import { formatEta } from '@/lib/data/format';
-import type { LiveRunStatus, LiveWindow } from '@/lib/live/types';
+import type { LiveRunStatus, LiveWindow, LiveWorkerChip } from '@/lib/live/types';
 import { cn } from '@/lib/utils';
 
 /**
@@ -44,6 +44,8 @@ interface LiveBrowserStageProps {
   etaHint?: StageEtaHint | null;
   /** AI 추천 계산 구간이면 그 단계 라벨 — 화면 위에 'AI가 계산하는 중…' 오버레이. null=미표시. */
   aiWorking?: string | null;
+  /** 병렬 워커 상태(place_orders 등) — 2개 이상일 때만 화면 하단에 세션별 처리 칩을 얹는다. */
+  workers?: readonly LiveWorkerChip[] | null;
 }
 
 const LIVE_STATUSES: ReadonlySet<LiveRunStatus> = new Set([
@@ -69,6 +71,7 @@ export function LiveBrowserStage({
   onStart,
   etaHint = null,
   aiWorking = null,
+  workers = null,
 }: LiveBrowserStageProps) {
   const live = LIVE_STATUSES.has(status);
   // 진짜 두 번째 브라우저 창(SSO 전자결재 팝업 등)이 열려 자식 화면이 있으면 탭 토글을 노출한다.
@@ -107,6 +110,9 @@ export function LiveBrowserStage({
           <LiveScreen src={screenshots.parent} live={live} />
           {/* 자식창(전자결재 결제창) — 부모를 살짝 어둡게 깔고 그 위로 별도 카드로 띄운다. */}
           {showChildPip ? <ChildPipCard src={screenshots.child as string} /> : null}
+          {/* 병렬 워커 칩 — 세션 3개가 각각 어떤 PRQ 를 처리 중인지(2026-09-01 사용자 요청).
+              생중계는 세션 1뿐이라, 나머지 세션의 진행은 이 칩이 시각화한다. */}
+          {live && workers && workers.length > 1 ? <WorkerStrip workers={workers} /> : null}
           {/* AI 추천 계산 오버레이 — 화면 변화가 없는 긴 AI 콜 구간이 멈춰 보이지 않게, 라이브
               화면 중앙에 눈에 띄게 표시(우측 패널만으론 잘 안 보인다는 피드백). */}
           {aiWorking ? (
@@ -125,6 +131,50 @@ export function LiveBrowserStage({
           ) : null}
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * 병렬 워커 스트립 — 스크린캐스트 하단에 세션별 칩("세션 n · PRQ… (#seq)")을 얹는다.
+ * 생중계 화면은 세션 1(메인)뿐이므로, 세션 2·3의 "지금 무엇을 처리 중인지"는 이 칩이 담당한다.
+ * 처리 중은 accent 펄스, 완료는 success 점, 대기는 중립 점 — 색은 상태 의미로만 쓴다.
+ */
+function WorkerStrip({ workers }: { workers: readonly LiveWorkerChip[] }) {
+  return (
+    <div className="absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-center gap-1.5 px-3 pb-2">
+      {workers.map((w) => (
+        <span
+          key={w.id}
+          className={cn(
+            'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium backdrop-blur-sm',
+            w.status === 'working'
+              ? 'border-accent/40 bg-surface/85 text-foreground'
+              : 'border-border bg-surface/70 text-foreground-tertiary',
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              'size-1.5 rounded-full',
+              w.status === 'working'
+                ? 'bg-accent animate-pulse'
+                : w.status === 'done'
+                  ? 'bg-success'
+                  : 'bg-border-strong',
+            )}
+          />
+          세션 {w.id}
+          {w.status === 'working' && w.prq ? (
+            <span className="font-mono tabular-nums">
+              {w.prq}
+              {w.seq != null ? ` (#${w.seq})` : ''}
+            </span>
+          ) : (
+            <span>{w.status === 'done' ? '완료' : '대기'}</span>
+          )}
+        </span>
+      ))}
     </div>
   );
 }

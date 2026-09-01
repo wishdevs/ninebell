@@ -9,6 +9,8 @@
     {"log": str, "level": "info"|"ok"|"error"|"warn"}
     {"screenshot": "data:image/jpeg;base64,...", "window"?: "parent"|"child"}  # 비버퍼(창별 최신 1장)
     {"window": "child", "closed": true}                   # 자식 창 닫힘 전이(버퍼/커서 대상 — 재생 가능)
+    {"workers": [{"id": int, "status": "idle"|"working"|"done", "prq"?: str, "seq"?: int}]}
+                                                           # 병렬 워커 상태(버퍼/커서 대상 — 재생 가능)
     {"hitl": {"id","kind","title","prompt","options"?}}
     {"chat": {"id","role","content","streaming"?,"done"?,"note"?}}
     {"transactions": {"title","columns","rows"}}
@@ -46,6 +48,11 @@ async def emit_step(
 
 async def emit_log(events: asyncio.Queue, message: str, level: str = "info") -> None:
     await events.put({"log": message, "level": level})
+
+
+async def emit_workers(events: asyncio.Queue, workers: list[dict]) -> None:
+    """병렬 워커 상태(place_orders 등) — FE 라이브 스테이지가 세션별 현재 처리 항목 칩을 그린다."""
+    await events.put({"workers": workers})
 
 
 async def emit_screenshot(events: asyncio.Queue, data_url: str) -> None:
