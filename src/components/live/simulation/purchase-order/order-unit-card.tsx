@@ -291,7 +291,7 @@ function VendorGroupRow({
           {applied?.due ? <ExceptionCaption>{applied.due}</ExceptionCaption> : null}
         </Td>
         <Td>
-          {/* 기본값 = 예외 비고 또는 가공품 거래처 직배송 문구 — 수정·삭제하면 오버라이드. */}
+          {/* 기본값 = 예외 비고 또는 '직배송 {가공품 거래처}' 문구 — 수정·삭제하면 오버라이드. */}
           <Input
             value={defaults.noteMessage}
             onChange={(e) => onVendorPatch(g.vendorClass, { note: e.target.value })}

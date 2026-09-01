@@ -61,7 +61,9 @@ export interface PatternException {
   due?: ExceptionDueRule;
   /** 거래처 고정(이름) — 예: BUFFER 의 가공품 → 한국메카트로닉스. */
   vendor?: string;
-  /** 비고 메시지 오버라이드 — finalNoteOf 의 [메시지] 부분(기본 '가공품 거래처(x) 직배송' 대체). */
+  /** 비고 메시지 오버라이드 — finalNoteOf 의 [메시지] 부분(기본 '직배송 {가공품 거래처 축약명}' 대체).
+   *  본문의 의사 거래처 토큰(가공품·판금품)은 계획서 파생 시 그 분류 유효 거래처의
+   *  축약명(법인 표기 제거 — shortVendorName)으로 치환된다(사용자 지시 2026-09-01). */
   note?: string;
 }
 

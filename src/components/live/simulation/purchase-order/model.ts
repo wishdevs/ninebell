@@ -333,8 +333,8 @@ export function resolveDueRule(
 }
 
 /**
- * 그룹 기본 **비고 메시지** — '가공품 거래처(해룡엔지니어링) 직배송'. 괄호 안은 그 발주단위 가공품
- * 그룹의 유효 거래처명 동적 표기. 사유: 가공품 외 거래처가 제작품을 가공품 제작처로
+ * 그룹 기본 **비고 메시지** — '직배송 해룡엔지니어링'(사용자 확정 2026-09-01 — '직배송 +
+ * 거래처 축약명' 단일 표기). 거래처명은 그 발주단위 가공품 그룹의 유효 거래처명 동적 표기. 사유: 가공품 외 거래처가 제작품을 가공품 제작처로
  * 직배송하고, 거기서 조립해 모듈 단위로 받는다.
  *
  * 빈 값이 되는 경우 둘 — ① 가공품 그룹 자신, ② **발주단위에 가공품이 없을 때**(직배송할
@@ -357,7 +357,20 @@ export function defaultNoteOf(
   // (사용자 확정 2026-08-14: 종전엔 거래처명 없이 '가공품 거래처 직배송'을 남겨,
   //  가공품이 한 건도 없는 발주에도 무의미한 문구가 붙었다).
   if (!groups.some((g) => g.vendorClass === PROCESSED_CLASS)) return '';
-  return processedVendorName ? `가공품 거래처(${processedVendorName}) 직배송` : '';
+  // 거래처명은 법인 표기를 뗀 축약명 — 예외 비고 치환과 같은 표기 규칙(2026-09-01).
+  return processedVendorName ? `직배송 ${shortVendorName(processedVendorName)}` : '';
+}
+
+/**
+ * 거래처명 축약 — 법인 표기(주식회사·유한회사·(주)·㈜·(유))를 떼고 공백을 정돈한다.
+ * 예: '주식회사 해룡엔지니어링' → '해룡엔지니어링'. 비고 치환 표기용(사용자 지시 2026-09-01
+ * — 비고에는 법인 표기 없는 회사명이 더 직관적이다).
+ */
+export function shortVendorName(name: string): string {
+  return name
+    .replace(/주식회사|유한회사|\(주\)|㈜|\(유\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // ── 예외 규칙 리졸버(파생 단일 권위) ────────────────────────────────────────
@@ -498,10 +511,20 @@ export function vendorDefaultsOf(
         : dueOf(g.vendorClass, processedDue?.dueDate ?? '');
     // ④ 비고 — '' 저장도 오버라이드(문구를 지운 상태)라 ?? 로 가른다.
     const noteOverride = unit.vendorEdits[g.vendorClass]?.note;
-    const noteException =
+    const rawNote =
       noteOverride === undefined
         ? firstException(exceptions, g.vendorClass, nameOf(g.vendorClass), (x) => x.note)
         : undefined;
+    // 예외 비고의 의사 거래처 토큰(가공품·판금품)은 그 분류 유효 거래처의 축약명으로 치환한다
+    // — '직배송 판금품' → '직배송 해룡엔지니어링'(사용자 지시 2026-09-01: 분류명이 아니라
+    // 실제 작업 회사명). 분류가 이 발주단위에 없거나 거래처 미지정이면 토큰을 그대로 둔다.
+    const noteException =
+      rawNote === undefined
+        ? undefined
+        : [...PSEUDO_VENDOR_CLASSES].reduce((text, cls) => {
+            const name = vendors.get(cls)?.vendor?.name;
+            return name ? text.split(cls).join(shortVendorName(name)) : text;
+          }, rawNote);
     const noteMessage =
       noteOverride ??
       noteException ??
@@ -526,7 +549,7 @@ export function vendorDefaultsOf(
 /**
  * 최종 비고 = **최종 구매사유 + [비고 메시지]**(사용자 규칙 2026-08-14) — ERP 발주 리스트의
  * 비고에는 기본적으로 구매사유가 포함되고, 뒤에 메시지가 대괄호로 묶여 붙거나 안 붙는다.
- *   예) 'CX85-137 · 12CH PROCESS BUFFER [가공품 거래처(해룡엔지니어링) 직배송]'
+ *   예) 'CX85-137 · 12CH PROCESS BUFFER [직배송 해룡엔지니어링]'
  *
  * 앞부분은 **구매사유 필드에 들어가는 것과 같은 완성 문자열**(finalPurchaseReasonOf)이다 —
  * 두 필드가 어긋나지 않게 한 함수를 공유한다. 메시지는 리졸버가 이미 접은 값

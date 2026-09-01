@@ -364,7 +364,7 @@ export function GroupEditor({
                   aria-label={`${coord} 예외 ${xi + 1} 비고`}
                   value={exception.note}
                   disabled={disabled}
-                  placeholder="예: 직배송 가공품"
+                  placeholder="예: 직배송 가공품 (분류명은 거래처명으로 치환)"
                   maxLength={200}
                   className="h-9 text-[12px]"
                   onChange={(e) => patchException(exception.id, { note: e.target.value })}
