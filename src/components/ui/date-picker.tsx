@@ -312,7 +312,9 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
       data-date-picker=""
       data-selected={isSelected ? '' : undefined}
       className={cn(
-        'border-border bg-surface flex h-10 w-full items-center gap-2 rounded-sm border pr-2 pl-3 text-sm',
+        // min-w-0: grid/flex 아이템으로 놓일 때 입력의 고유 폭(size 기반, 윈도우 폰트에서 더 넓음)이
+        // 컬럼을 넘겨 이웃 필드에 겹치고 달력 아이콘이 잘리던 문제(2026-09-02 윈도우 실측) 방지.
+        'border-border bg-surface flex h-10 w-full min-w-0 items-center gap-2 rounded-sm border pr-2 pl-3 text-sm',
         'focus-within:border-accent',
         isSelected ? 'border-accent bg-accent/10' : '',
         disabled ? 'cursor-not-allowed opacity-50' : '',
@@ -329,6 +331,7 @@ export function DatePicker({ value, onChange, disabled, ariaLabel, className }: 
     >
       <input
         type="text"
+        size={10}
         value={draft}
         disabled={disabled}
         aria-label={ariaLabel}
