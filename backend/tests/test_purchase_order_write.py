@@ -496,3 +496,152 @@ def test_graph_read_bom_resume_edge_registered():
     edges = {(e.source, e.target) for e in g.edges}
     for target in ("plan", "self_approve", "place_orders", "save_move"):
         assert ("read_bom", target) in edges, f"read_bom→{target} 엣지 누락"
+
+
+# ── 화면 ③ 팝업 — 행 식별키 재탐색(2026-09-02 ETRI-026 118/119 변경거래처 미반영 23/23) ─────
+# 조회 직후 잡은 행 번호가 늦게 온 필터 재조회로 무효화되면 반영 확인(전부 None)·재클릭(체크 0행)이
+# 헛돌았다. 행 번호 대신 식별키(구매요청번호|순번|품목코드#n)로 매 단계 다시 찾는다.
+from app.agents.purchase_order import steps_screen3 as _s3  # noqa: E402
+
+
+class _PopupPage:
+    """팝업 그리드 흉내 — rows 를 시나리오가 갈아끼우고, [적용] 클릭 시 on_apply 콜백이 반영을 흉내낸다."""
+
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+        self.checked: list[int] = []
+        self.on_apply = None
+        self.apply_clicks = 0
+        self.pick_calls = 0
+
+    async def evaluate(self, script, arg=None):
+        if "checkAll(" in script:
+            self.checked = []
+            return {"ok": True, "before": 0, "after": 0}
+        if "checkRow(" in script:
+            _, idxs = arg
+            for i in idxs:
+                if i not in self.checked:
+                    self.checked.append(i)
+            return {"ok": True, "checked": list(self.checked)}
+        if "getJsonRows" in script:
+            return {"ok": True, "rowCount": len(self.rows), "rows": [dict(r) for r in self.rows]}
+        if "getValue(i, f)" in script:
+            _, idxs, fields = arg
+            return {i: {f: (self.rows[i].get(f) if i < len(self.rows) else None) for f in fields} for i in idxs}
+        raise AssertionError(script[:60])
+
+
+def _prow(prq: str, item: str, cls: str = "판금품") -> dict:
+    return {"PURREQ_NO": prq, "ITEM_CD": item, "PRINCIPALPARTN_NM": cls, "CHG_PARTNER_NM": None, "CHG_PARTNER_CD": None}
+
+
+def _patch_popup(monkeypatch, page: _PopupPage):
+    async def _pick(pg, field, kw):
+        page.pick_calls += 1
+        return {"ok": True, "display": kw}
+
+    async def _click(pg, elem_id):
+        page.apply_clicks += 1
+        if page.on_apply:
+            page.on_apply(page)
+        return {"ok": True}
+
+    async def _sleep(_s):
+        return None
+
+    monkeypatch.setattr(_s3, "pick_code_document", _pick)
+    monkeypatch.setattr(_s3, "click_by_id", _click)
+    monkeypatch.setattr(_s3.verify, "DEFAULT_SLEEP", _sleep)
+
+
+def test_row_keys_distinguish_duplicate_items_by_order():
+    rows = [_prow("P1", "A"), _prow("P1", "A"), _prow("P2", "A")]
+    assert _s3.row_keys(rows) == ["P1||A#0", "P1||A#1", "P2||A#0"]
+
+
+@pytest.mark.asyncio
+async def test_popup_apply_vendor_relocates_rows_after_grid_refresh(monkeypatch):
+    # 조회 시점: 타 요청 잔존 2행 + 대상 2행(번호 2,3). [적용] 직후 그리드가 필터 재조회로
+    # 갈아끼워져 대상 행이 0,1 번으로 옮겨가고 값은 그 새 행에 반영된다 → 키로 다시 찾아 성공.
+    page = _PopupPage([_prow("X1", "Z"), _prow("X2", "Z"), _prow("P1", "A"), _prow("P1", "B")])
+    keys = [_s3.row_keys(page.rows)[2], _s3.row_keys(page.rows)[3]]
+
+    def _apply(pg: _PopupPage):
+        pg.rows = [_prow("P1", "A"), _prow("P1", "B")]
+        for r in pg.rows:
+            r["CHG_PARTNER_NM"], r["CHG_PARTNER_CD"] = "알파테크", "10061"
+        pg.checked = []
+
+    page.on_apply = _apply
+    _patch_popup(monkeypatch, page)
+    r = await _s3.popup_apply_vendor(page, [2, 3], "알파테크", keys=keys)
+    assert r["ok"] is True and r["relocated"] is True and r["retried"] is False
+    assert r["idxs"] == [0, 1] and r["codes"] == ["10061"]
+
+
+@pytest.mark.asyncio
+async def test_popup_apply_vendor_retry_rechecks_rows_and_repicks(monkeypatch):
+    # 1차 [적용]이 무반응(체크만 풀림) → 종전엔 빈 적용을 재클릭해 헛돌았다. 이제 행 재체크 +
+    # 피커 재선택 후 재클릭하고, 2차에서 반영되면 retried=True 로 성공한다.
+    page = _PopupPage([_prow("P1", "A"), _prow("P1", "B"), _prow("P1", "C", "가공품")])
+    keys = _s3.row_keys(page.rows)[:2]
+
+    def _apply(pg: _PopupPage):
+        if pg.apply_clicks == 1:
+            pg.checked = []  # 무반응 + 체크 풀림
+            return
+        assert sorted(pg.checked) == [0, 1], "재클릭 전에 행이 다시 체크돼 있어야 한다"
+        for i in pg.checked:
+            pg.rows[i]["CHG_PARTNER_NM"], pg.rows[i]["CHG_PARTNER_CD"] = "알파테크", "10061"
+
+    page.on_apply = _apply
+    _patch_popup(monkeypatch, page)
+    r = await _s3.popup_apply_vendor(page, [0, 1], "알파테크", keys=keys)
+    assert r["ok"] is True and r["retried"] is True and r["idxs"] == [0, 1]
+    assert page.apply_clicks == 2 and page.pick_calls == 2
+    assert page.rows[2]["CHG_PARTNER_NM"] is None  # 대상 아닌 행은 손대지 않는다.
+
+
+@pytest.mark.asyncio
+async def test_popup_apply_vendor_fails_when_rows_vanish(monkeypatch):
+    page = _PopupPage([_prow("P1", "A")])
+    keys = _s3.row_keys(page.rows)
+
+    def _apply(pg: _PopupPage):
+        pg.rows = [_prow("Q9", "Z")]  # 대상 행이 사라짐(재조회 결과에 없음)
+        pg.checked = []
+
+    page.on_apply = _apply
+    _patch_popup(monkeypatch, page)
+    r = await _s3.popup_apply_vendor(page, [0], "알파테크", keys=keys)
+    assert r["ok"] is False and "재탐색 실패" in r["reason"]
+
+
+@pytest.mark.asyncio
+async def test_popup_bottom_apply_relocates_by_keys(monkeypatch):
+    # 변경거래처 적용 뒤 그리드가 재정렬돼도 하단 적용은 키로 찾은 새 번호를 체크한다.
+    page = _PopupPage([_prow("P1", "A"), _prow("P1", "B")])
+    keys = _s3.row_keys(page.rows)  # A#0, B#0
+    page.rows = [_prow("P1", "B"), _prow("P1", "A")]  # 재정렬
+    seen: dict = {}
+
+    async def _box(*a, **k):
+        return None  # 버튼 탐색 실패로 끊어 체크 결과만 검증
+
+    orig = page.evaluate
+
+    async def _ev(script, arg=None):
+        if "confirm.ok" in script:
+            seen["checked"] = list(page.checked)
+            return None
+        return await orig(script, arg)
+
+    page.evaluate = _ev
+    r = await _s3.popup_bottom_apply(page, [0, 1], keys=keys)
+    assert r["ok"] is False and "버튼" in r["reason"]
+    assert sorted(seen["checked"]) == [0, 1]
+    # 부분 키만 남아도 새 번호로 매핑된다.
+    page.checked = []
+    r2 = await _s3.popup_bottom_apply(page, [0], keys=[keys[0]])  # A → 재정렬 후 1번
+    assert r2["ok"] is False and seen["checked"] == [1]

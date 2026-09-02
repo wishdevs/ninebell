@@ -99,6 +99,9 @@ async def _process_prq(page, prq: str, unit: dict, prior: bool, events, today: s
         return {"ok": True, "record": None}
     rows = q["rows"]
     real_idxs = q.get("idxs") or list(range(len(rows)))
+    # 행 식별키(구매요청번호|순번|품목코드) — 이후 단계는 행 번호 대신 이 키로 행을 다시 찾는다
+    # (그리드 재조회·재정렬 방어, 2026-09-02 ETRI-026 118/119 변경거래처 미반영 원인).
+    row_keys = q.get("keys") or [None] * len(rows)
     if q.get("foreign"):
         await emit_log(events, f"{prq}: 팝업에 타 요청 잔존 {q['foreign']}행 — 대상 {len(rows)}행만 선택합니다.", "warn")
     # plan_vendor_changes 는 rows 내 위치를 돌려주므로 팝업 그리드 실 인덱스로 변환한다.
@@ -117,13 +120,21 @@ async def _process_prq(page, prq: str, unit: dict, prior: bool, events, today: s
         )
     for vendor, poss in changes.items():
         idxs = [real_idxs[p] for p in poss]
-        a = await s3.popup_apply_vendor(page, idxs, vendor)
+        keys = [row_keys[p] for p in poss]
+        a = await s3.popup_apply_vendor(page, idxs, vendor, keys=keys if all(keys) else None)
         if not a.get("ok"):
             return {"ok": False, "reason": f"{prq}: {a.get('reason')}"}
+        if a.get("relocated"):
+            await emit_log(
+                events,
+                f"{prq}: {vendor} 적용 중 팝업 그리드가 바뀌어 행을 식별키로 다시 찾았습니다"
+                "(조회 직후 재조회 지연 — 2026-09-02 함정).",
+                "warn",
+            )
         if a.get("retried"):
             await emit_log(
                 events,
-                f"{prq}: {vendor} 적용 1차가 무반응이라 [적용] 재클릭으로 반영했습니다"
+                f"{prq}: {vendor} 적용 1차가 미반영이라 행 재체크·피커 재선택 후 [적용] 재클릭으로 반영했습니다"
                 "(간헐 ERP 무반응 — 2026-09-01 함정).",
                 "warn",
             )
@@ -134,7 +145,8 @@ async def _process_prq(page, prq: str, unit: dict, prior: bool, events, today: s
         # 팝업은 연 채 두어도 다음 PRQ 의 딥링크 재진입이 화면을 초기화한다(D8 실측).
         await emit_log(events, f"{prq}: 발주 가능한 행이 없어(전부 거래처 미지정) 건너뜁니다.", "warn")
         return {"ok": True, "record": None}
-    b = await s3.popup_bottom_apply(page, apply_idxs)
+    apply_keys = [k for p, k in enumerate(row_keys) if p not in skip_pos]
+    b = await s3.popup_bottom_apply(page, apply_idxs, keys=apply_keys if apply_keys and all(apply_keys) else None)
     if not b.get("ok"):
         return {"ok": False, "reason": f"{prq}: {b.get('reason')}"}
     masters = await s3.master_rows(page)

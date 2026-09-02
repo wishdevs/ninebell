@@ -149,6 +149,45 @@ async def _wait_popup_rows_stable(page: Any, *, cap_ms: int = POPUP_CAP_MS) -> i
     return int(last or -1)
 
 
+def row_key(row: dict) -> str:
+    """팝업 행 식별키 — 구매요청번호|순번|품목코드. 행 번호는 재조회·재정렬로 무효가 된다."""
+    return "|".join(
+        str(row.get(f) or "").strip() for f in ("PURREQ_NO", "PURREQ_SQ", "ITEM_CD")
+    )
+
+
+def row_keys(rows: list[dict]) -> list[str]:
+    """그리드 전 행의 식별키(같은 키가 여러 행이면 등장 순서 #n 으로 구분)."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for r in rows:
+        k = row_key(r)
+        n = seen.get(k, 0)
+        seen[k] = n + 1
+        out.append(f"{k}#{n}")
+    return out
+
+
+async def popup_locate_rows(page: Any, keys: list[str]) -> dict:
+    """식별키로 현재 그리드에서 행 번호를 다시 찾는다 — {ok, idxs, missing, rowCount}.
+
+    2026-09-02 ETRI-026 실측: 타 요청 잔존 행이 섞인 채 조회가 끝난 것처럼 보인 뒤 필터 재조회
+    결과가 늦게 도착해 그리드가 갈아끼워지면, 조회 시점의 행 번호가 무효가 되어 변경거래처
+    적용 확인(전부 None)·재클릭(체크 0행)이 헛돌았다. 번호 대신 키로 매번 다시 찾는다.
+    """
+    read = await page.evaluate(j3.POPUP_GRID_ROWS_JS, [0, 2000])
+    rows = (read or {}).get("rows") or []
+    pos = {k: i for i, k in enumerate(row_keys(rows))}
+    found = [(k, pos.get(k)) for k in keys]
+    missing = [k for k, i in found if i is None]
+    return {
+        "ok": not missing,
+        "idxs": [i for _, i in found if i is not None],
+        "missing": missing,
+        "rowCount": len(rows),
+    }
+
+
 async def popup_query_prq(
     page: Any,
     prq: str,
@@ -196,10 +235,24 @@ async def popup_query_prq(
         matched = [(i, x) for i, x in enumerate(rows) if str(x.get("PURREQ_NO") or "").strip() == prq]
         if matched:
             foreign = len(rows) - len(matched)
+            if foreign > 0:
+                # 잔존 행이 섞였다 = 필터 재조회가 아직 안 끝났을 수 있다(2026-09-02 ETRI-026 실측:
+                # 조회 직후 잡은 행 번호가 늦게 온 재조회로 무효화 → 변경거래처 미반영 23/23).
+                # 잠깐 더 기다려 그리드가 바뀌었으면 바뀐 그리드로 다시 매칭한다.
+                await verify.DEFAULT_SLEEP(1.0)
+                again = await page.evaluate(j3.POPUP_GRID_ROWS_JS, [0, 2000])
+                rows2 = (again or {}).get("rows") or []
+                if rows2 and len(rows2) != len(rows):
+                    rows = rows2
+                    matched = [(i, x) for i, x in enumerate(rows) if str(x.get("PURREQ_NO") or "").strip() == prq]
+                    foreign = len(rows) - len(matched)
+                    n = len(rows)
+            keys_all = row_keys(rows)
             return {
                 "ok": True,
                 "rows": [x for _, x in matched],
                 "idxs": [i for i, _ in matched],
+                "keys": [keys_all[i] for i, _ in matched],
                 "count": n,
                 "foreign": foreign,
             }
@@ -215,13 +268,40 @@ async def popup_query_prq(
     }
 
 
-async def popup_apply_vendor(page: Any, row_idxs: list[int], vendor_name: str) -> dict:
-    """행 체크 → 변경거래처 코드피커(검색어) → #btn_apply → 체크 행의 CHG_PARTNER_NM 반영 확인."""
-    await page.evaluate(j3.POPUP_CHECK_ALL_JS, [0, False])
-    c = await page.evaluate(j3.POPUP_CHECK_ROWS_JS, [0, row_idxs])
-    got = sorted(int(x) for x in (c.get("checked") or []))
-    if not c.get("ok") or got != sorted(row_idxs):
-        return {"ok": False, "reason": f"팝업 행 체크 불일치 — 기대 {len(row_idxs)} / 실제 {len(got)}"}
+async def popup_apply_vendor(
+    page: Any, row_idxs: list[int], vendor_name: str, *, keys: list[str] | None = None
+) -> dict:
+    """행 체크 → 변경거래처 코드피커(검색어) → #btn_apply → 대상 행의 CHG_PARTNER_NM 반영 확인.
+
+    keys 가 있으면 행 번호를 믿지 않고 매 단계 식별키로 다시 찾는다(그리드 재조회·재정렬 방어).
+    미반영이면 행 재체크 + 피커 재선택 + [적용] 재클릭 1회(종전 재클릭은 체크가 풀린 상태에서
+    빈 적용을 눌러 헛돌았다 — 2026-09-02 ETRI-026 118/119).
+    반환 {ok, display, codes, retried, idxs(최종 행 번호), relocated}.
+    """
+    original = list(row_idxs)
+
+    async def _current() -> tuple[list[int] | None, str | None]:
+        if not keys:
+            return list(row_idxs), None
+        loc = await popup_locate_rows(page, keys)
+        if not loc.get("ok"):
+            return None, f"팝업 행 재탐색 실패 — 누락 {len(loc.get('missing') or [])}/{len(keys)}(그리드 {loc.get('rowCount')}행)"
+        return list(loc["idxs"]), None
+
+    async def _check(idxs: list[int]) -> dict | None:
+        await page.evaluate(j3.POPUP_CHECK_ALL_JS, [0, False])
+        c = await page.evaluate(j3.POPUP_CHECK_ROWS_JS, [0, idxs])
+        got = sorted(int(x) for x in (c.get("checked") or []))
+        if not c.get("ok") or got != sorted(idxs):
+            return {"ok": False, "reason": f"팝업 행 체크 불일치 — 기대 {len(idxs)} / 실제 {len(got)}"}
+        return None
+
+    cur, err = await _current()
+    if err:
+        return {"ok": False, "reason": err}
+    bad_check = await _check(cur)
+    if bad_check:
+        return bad_check
     kw = vendor_keyword(vendor_name)
     p = await pick_code_document(page, POPUP_VENDOR_FIELD, kw)
     if not p.get("ok"):
@@ -230,48 +310,77 @@ async def popup_apply_vendor(page: Any, row_idxs: list[int], vendor_name: str) -
     if not a.get("ok"):
         return a
 
-    async def _poll_reflect() -> tuple[list[int], dict]:
+    async def _poll_reflect() -> tuple[list[int], dict, list[int]]:
         # 반영을 고정 슬립 대신 결과 폴링으로 확인(0.3s 간격, 상한 6s) — 보통 1s 내 반영.
+        # 매 회 식별키로 행을 다시 찾는다(그리드가 갈아끼워져도 같은 행을 본다).
         waited = 0
         vals: dict = {}
-        bad: list[int] = list(row_idxs)
+        idxs = list(cur)
+        bad: list[int] = list(idxs)
         while waited < 6_000:
-            vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, row_idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
-            bad = [i for i in row_idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
+            found, _ = await _current()
+            if found is not None:
+                idxs = found
+            vals = await page.evaluate(j3.POPUP_FIELDS_JS, [0, idxs, ["CHG_PARTNER_NM", "CHG_PARTNER_CD"]])
+            bad = [i for i in idxs if norm(kw) not in norm((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_NM"))]
             if not bad:
                 break
             await verify.DEFAULT_SLEEP(0.3)
             waited += 300
-        return bad, vals
+        return bad, vals, idxs
 
-    bad, vals = await _poll_reflect()
+    bad, vals, final = await _poll_reflect()
     retried = False
     checked_n = -1
     if bad:
-        # 간헐 ERP 무반응 방어(2026-09-01 라이브 4d252115 33/33 미반영 — targeted 재현 3/3 실패,
-        # 원인 미확정): 체크 유지 여부를 진단으로 남기고 [적용] 을 1회 재클릭 후 재폴링한다.
-        # 성공 시 retried 를 반환해 호출부(place_orders)가 경고 로그로 표면화한다 — 조용한 재시도 금지.
+        # 미반영 — 체크 유지 여부를 진단으로 남기고, 행을 다시 찾아 재체크·피커 재선택 후 [적용]
+        # 1회 재클릭. 성공 시 retried 를 반환해 호출부가 경고 로그로 표면화한다(조용한 재시도 금지).
         chk = await page.evaluate(j3.POPUP_CHECK_ROWS_JS, [0, []])  # 빈 목록 = 체크 변경 없이 현황만.
         checked_n = len(chk.get("checked") or []) if chk.get("ok") else -1
+        cur2, err2 = await _current()
+        if err2:
+            return {"ok": False, "reason": err2 + " (변경거래처 적용 미반영 후 재탐색)"}
+        cur = cur2
+        bad_check = await _check(cur)
+        if bad_check:
+            return bad_check
+        p2 = await pick_code_document(page, POPUP_VENDOR_FIELD, kw)
+        if not p2.get("ok"):
+            return {"ok": False, "reason": f"변경거래처 '{kw}' 재선택 실패 — {p2.get('reason')}"}
         a2 = await click_by_id(page, POPUP_APPLY_BTN)
         if a2.get("ok"):
             retried = True
-            bad, vals = await _poll_reflect()
+            bad, vals, final = await _poll_reflect()
     if bad:
         sample = (vals.get(str(bad[0])) or vals.get(bad[0]) or {})
         return {
             "ok": False,
             "reason": (
-                f"변경거래처 적용 미반영 행 {len(bad)}/{len(row_idxs)} — 예 {sample}"
-                f" (재클릭 {'1회 포함' if retried else '실패'} · 1차 무반응 시 체크 유지 {checked_n}행)"
+                f"변경거래처 적용 미반영 행 {len(bad)}/{len(final)} — 예 {sample}"
+                f" (재체크+재클릭 {'1회 포함' if retried else '실패'} · 1차 무반응 시 체크 유지 {checked_n}행)"
             ),
         }
-    codes = {str((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_CD")) for i in row_idxs}
-    return {"ok": True, "display": p.get("display"), "codes": sorted(codes), "retried": retried}
+    codes = {str((vals.get(str(i)) or vals.get(i) or {}).get("CHG_PARTNER_CD")) for i in final}
+    return {
+        "ok": True,
+        "display": p.get("display"),
+        "codes": sorted(codes),
+        "retried": retried,
+        "idxs": final,
+        "relocated": final != original,
+    }
 
 
-async def popup_bottom_apply(page: Any, row_idxs: list[int]) -> dict:
-    """대상 행 체크 → 하단 적용 → '적용하시겠습니까?' [예] → 팝업 닫힘 → 마스터 행수."""
+async def popup_bottom_apply(page: Any, row_idxs: list[int], *, keys: list[str] | None = None) -> dict:
+    """대상 행 체크 → 하단 적용 → '적용하시겠습니까?' [예] → 팝업 닫힘 → 마스터 행수.
+
+    keys 가 있으면 체크 직전 식별키로 행 번호를 다시 찾는다(변경거래처 적용 뒤 그리드가 바뀐 경우).
+    """
+    if keys:
+        loc = await popup_locate_rows(page, keys)
+        if not loc.get("ok"):
+            return {"ok": False, "reason": f"하단 적용 전 행 재탐색 실패 — 누락 {len(loc.get('missing') or [])}/{len(keys)}(그리드 {loc.get('rowCount')}행)"}
+        row_idxs = list(loc["idxs"])
     await page.evaluate(j3.POPUP_CHECK_ALL_JS, [0, False])
     c = await page.evaluate(j3.POPUP_CHECK_ROWS_JS, [0, row_idxs])
     if not c.get("ok") or len(c.get("checked") or []) != len(row_idxs):
