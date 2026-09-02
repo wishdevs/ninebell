@@ -1252,3 +1252,109 @@ def test_plan_in_accepts_large_unit_and_long_reason_note():
     assert len(parsed.units[0].modules) == 300
     assert parsed.units[0].purchaseReason == reason
     assert parsed.units[0].vendorGroups[0].note.endswith("[직배송]")
+
+
+# ── read_bom 분기 + 건너뛴 스텝 마감 ─────────────────────────────────────────
+# 재개·재실행 분기가 plan(개입) 등을 건너뛰면 그 스텝은 프레임이 없어 영원히 '대기'로 남았다 —
+# 워크플로우 패널이 "곧 입력을 요청합니다"를 거짓 예고하고 타임라인 마커가 채움에서 떨어지며
+# 완주해도 10/11 로 끝났다(2026-09-02 ETRI-026 재개 런 실측). 건너뛴 스텝은 done 으로 마감한다.
+from langgraph.graph import END  # noqa: E402
+
+from app.agents.purchase_order.nodes import read_bom as read_bom_mod  # noqa: E402
+from app.services import purchase_order_resume  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({"params": {"purchase_order": {"submit_prqs": ["PRQ1"]}}, "resume": {"prqs": [1]}}, "self_approve"),
+        ({"params": {"purchase_order": {"order_prqs": ["PRQ1"]}}, "no_modules": True}, "place_orders"),
+        ({"resume": {"prqs": [{"number": "PRQ1"}]}, "no_modules": True}, "save_move"),
+        ({"resume": {"prqs": []}, "no_modules": True}, END),
+        ({"resume": {"prqs": []}}, "plan"),
+    ],
+)
+def test_route_after_read_bom_priority(state, expected):
+    assert read_bom_mod.route_after_read_bom(state) == expected
+
+
+def _patch_read_bom(monkeypatch, rows, prqs):
+    async def _ok(*a, **kw):
+        return {"ok": True}
+
+    async def _sig(*a, **kw):
+        return "sig"
+
+    async def _wait(*a, **kw):
+        return len(rows)
+
+    async def _rows(*a, **kw):
+        return {"ok": True, "rows": rows, "count": len(rows)}
+
+    async def _prior(code, *, exclude_run_id=None):
+        return {"moveRequestNo": "IRQ1" if prqs else None, "prqs": prqs, "planByRun": {}}
+
+    async def _shot(*a, **kw):
+        return None
+
+    monkeypatch.setattr(steps_mod, "set_checkbox", _ok)
+    monkeypatch.setattr(steps_mod, "read_bom_signature", _sig)
+    monkeypatch.setattr(steps_mod, "click_lookup", _ok)
+    monkeypatch.setattr(steps_mod, "wait_bom_filtered", _wait)
+    monkeypatch.setattr(steps_mod, "read_bom_rows", _rows)
+    monkeypatch.setattr(read_bom_mod, "emit_shot", _shot)
+    monkeypatch.setattr(purchase_order_resume, "prior_artifacts", _prior)
+
+
+def _step_frames(events) -> list[tuple[str, str]]:
+    return [(f["step"], f["status"]) for f in _frames(events) if "step" in f]
+
+
+async def _run_read_bom(events, params=None):
+    return await asyncio.wait_for(
+        make_read_bom_node()({"events": events, "page": _Page(), "params": params or {}, "project": {"code": "2297"}}),
+        timeout=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_bom_resume_closes_skipped_plan_step(monkeypatch):
+    # 모듈이 남아 있어도 잔여 PRQ 가 있으면 계획서를 건너뛴다 — plan 을 done 으로 마감.
+    _patch_read_bom(monkeypatch, _sample_rows(), [{"seq": 1, "number": "PRQ1", "runId": "r1"}])
+    events = _q()
+    out = await _run_read_bom(events)
+    frames = _step_frames(events)
+    assert out["resume"]["prqs"]
+    assert ("read_bom", "done") in frames
+    assert frames[-1] == ("plan", "done")
+    assert ("save_move", "done") not in frames  # save_move 는 노드가 직접 스킵 로그와 함께 마감.
+    assert_keys_declared(PurchaseOrderState, out)
+
+
+@pytest.mark.asyncio
+async def test_read_bom_resume_on_no_modules_closes_plan_step(monkeypatch):
+    # 발주 완료 BOM(no_modules) + 잔여 PRQ → save_move 로 이어지므로 plan 마감.
+    _patch_read_bom(monkeypatch, _shallow_rows(), [{"seq": 1, "number": "PRQ1", "runId": "r1"}])
+    events = _q()
+    out = await _run_read_bom(events)
+    assert out["no_modules"] is True
+    assert ("plan", "done") in _step_frames(events)
+
+
+@pytest.mark.asyncio
+async def test_read_bom_without_resume_leaves_plan_untouched(monkeypatch):
+    # 정상 경로 — plan 노드가 스스로 running/done 을 보내야 하므로 read_bom 은 건드리지 않는다.
+    _patch_read_bom(monkeypatch, _sample_rows(), [])
+    events = _q()
+    await _run_read_bom(events)
+    assert not [f for f in _step_frames(events) if f[0] != "read_bom"]
+
+
+@pytest.mark.asyncio
+async def test_read_bom_submit_prqs_rerun_closes_plan_and_save_steps(monkeypatch):
+    # 상신부터 재실행(submit_prqs) — plan·save_move·save_units 를 건너뛰므로 셋 다 마감.
+    _patch_read_bom(monkeypatch, _sample_rows(), [])
+    events = _q()
+    await _run_read_bom(events, {"purchase_order": {"submit_prqs": ["PRQ1"]}})
+    frames = _step_frames(events)
+    assert frames[-3:] == [("plan", "done"), ("save_move", "done"), ("save_units", "done")]

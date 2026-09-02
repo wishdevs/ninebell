@@ -35,6 +35,7 @@ from .nodes import (
     make_save_units_node,
     make_self_approve_node,
 )
+from .nodes.read_bom import route_after_read_bom
 
 RECURSION_LIMIT = 20
 
@@ -88,29 +89,16 @@ def build_purchase_order_graph(*, allow_submit: bool = True):
 
     # 발주 대상 모듈 0건: read_bom 이 '발주할 모듈이 없습니다' 결과를 남기고 즉시 종료 —
     # 빈 계획서(HITL)를 띄워 사용자를 기다리게 하지 않는다(사용자 확정 2026-08-14).
-    def _after_read_bom(state: PurchaseOrderState) -> str:
-        # 재실행 경로: params.purchase_order.submit_prqs 가 있으면 계획/저장을 건너뛰고 이미 저장된
-        # 구매요청번호만 셀프결재 상신한다(2026-08-28 — 저장은 됐는데 상신 전 중단된 런 복구용).
-        po = (state.get("params") or {}).get("purchase_order") or {}
-        # submit_prqs 우선 — 상신 후 place_orders 로 자연히 이어져 '상신+발주' 한 런 재개가 된다.
-        # (order_prqs 만 주면 발주만 — 상신은 이미 끝난 경우.)
-        if po.get("submit_prqs"):
-            return "self_approve"
-        if po.get("order_prqs"):  # 상신까지 끝난 PRQ 의 화면 ③ 발주만(params.purchase_order.plan 동봉)
-            return "place_orders"
-        # 자동 재개 — 구매요청 저장은 끝났지만 상신/발주 전에 중단된 프로젝트: read_bom 이
-        # 수거한 잔여 PRQ 가 있으면 뒷단계로(save_move 는 IRQ 기록으로 스킵). 2026-09-01 사용자
-        # 확정: BOM 에 모듈이 남아 있어도(계획서 미포함 신규 항목) 계획서를 띄우지 않는다 —
-        # 재개는 중단 지점부터, 신규 항목은 재개 완주 후 새 계획서로.
-        if ((state.get("resume") or {}).get("prqs")):
-            return "save_move"
-        if state.get("no_modules"):
-            return END
-        return "plan"
-
+    # 분기 판정은 read_bom.route_after_read_bom(순수) 하나뿐 — read_bom 노드가 같은 판정으로
+    # 건너뛰는 스텝(plan 등)을 done 으로 마감하므로 여기서 따로 판정하면 어긋난다(2026-09-02).
+    #   submit_prqs 우선 — 상신 후 place_orders 로 자연히 이어져 '상신+발주' 한 런 재개가 된다.
+    #   (order_prqs 만 주면 발주만 — 상신은 이미 끝난 경우.)
+    #   자동 재개 — 구매요청 저장은 끝났지만 상신/발주 전에 중단된 프로젝트: read_bom 이 수거한
+    #   잔여 PRQ 가 있으면 뒷단계로(save_move 는 IRQ 기록으로 스킵). 2026-09-01 사용자 확정:
+    #   BOM 에 모듈이 남아 있어도(계획서 미포함 신규 항목) 계획서를 띄우지 않는다.
     g.add_conditional_edges(
         "read_bom",
-        _after_read_bom,
+        route_after_read_bom,
         {
             "plan": "plan",
             "self_approve": "self_approve",

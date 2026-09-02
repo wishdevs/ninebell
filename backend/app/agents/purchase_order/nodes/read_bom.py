@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import time
 
+from langgraph.graph import END
+
 from app.agents.purchase_order import planner, steps
 from app.live.events import emit_log, emit_step
 from app.services import purchase_order_resume
@@ -23,6 +25,41 @@ STEP = "read_bom"
 
 def _ms(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
+
+
+def route_after_read_bom(state: dict) -> str:
+    """read_bom 다음 노드 결정(순수) — graph 의 조건 분기와 스킵 스텝 마감이 같은 판정을 쓴다.
+
+    우선순위: submit_prqs(상신부터 재실행) > order_prqs(발주만) > 자동 재개(잔여 PRQ → save_move,
+    IRQ 기록으로 스킵) > no_modules(END) > plan(계획서 HITL).
+    """
+    po = (state.get("params") or {}).get("purchase_order") or {}
+    if po.get("submit_prqs"):
+        return "self_approve"
+    if po.get("order_prqs"):
+        return "place_orders"
+    if (state.get("resume") or {}).get("prqs"):
+        return "save_move"
+    if state.get("no_modules"):
+        return END
+    return "plan"
+
+
+#: 분기가 건너뛰는 스텝 — 프레임을 안 보내면 워크플로우 패널에서 영원히 '대기'로 남아
+#: 개입 예고("곧 입력을 요청합니다")·타임라인 마커 이탈·N/11 미달이 생긴다(2026-09-02 ETRI-026
+#: 재개 런 실측). 건너뛴 스텝은 done(ms 0)으로 마감한다.
+_SKIPPED_STEPS_BY_ROUTE: dict[str, tuple[str, ...]] = {
+    "save_move": ("plan",),
+    "self_approve": ("plan", "save_move", "save_units"),
+    "place_orders": ("plan", "save_move", "save_units", "self_approve"),
+}
+
+
+async def _close_skipped_steps(events, state: dict, out: dict) -> None:
+    """read_bom 산출을 반영한 분기 기준으로 건너뛰는 스텝을 done 으로 마감한다."""
+    route = route_after_read_bom({**state, **out})
+    for step in _SKIPPED_STEPS_BY_ROUTE.get(route, ()):
+        await emit_step(events, step, "done", 0)
 
 
 def make_read_bom_node():
@@ -96,7 +133,7 @@ def make_read_bom_node():
                 await emit_log(events, msg, "warn")
             await emit_shot(events.put, page)
             await emit_step(events, STEP, "done", _ms(t0))
-            return {
+            out = {
                 "planner_bom": planner_bom,
                 "bom_summary": summary,
                 "project": planner_bom["project"],
@@ -104,6 +141,8 @@ def make_read_bom_node():
                 "resume": resume,
                 "result": msg,
             }
+            await _close_skipped_steps(events, state, out)
+            return out
 
         # 제외분은 조용히 버리지 않고 로그에 남긴다 — 그리드 행수와 모듈 수가 안 맞는 이유가 된다.
         excluded_txt = (
@@ -133,11 +172,13 @@ def make_read_bom_node():
         await emit_shot(events.put, page)
         await emit_step(events, STEP, "done", _ms(t0))
         # 프로젝트 wbs 는 그리드(WBS_NM)에서 회수될 수 있어 조립 결과의 project 로 갱신한다.
-        return {
+        out = {
             "planner_bom": planner_bom,
             "bom_summary": summary,
             "project": planner_bom["project"],
             "resume": resume,
         }
+        await _close_skipped_steps(events, state, out)
+        return out
 
     return read_bom
