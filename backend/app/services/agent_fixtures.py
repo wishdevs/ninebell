@@ -824,8 +824,8 @@ PURCHASE_ORDER_FLOW: dict = {
         {"id": "confirm", "kind": "decision", "status": "pending", "title": "계획 검증", "sub": "사유·납기·의사 거래처 확정 확인", **_col(5)},
         {"id": "save_move", "kind": "step", "status": "pending", "title": "이동요청 저장", "sub": "전체 선택 · 공용자재→프로젝트 · 저장(IRQ)", **_col(6)},
         {"id": "save_units", "kind": "step", "status": "pending", "title": "구매요청 저장 반복", "sub": "발주단위별 SET 선택·납기·사유 · 저장(PRQ)", **_col(7)},
-        {"id": "approve", "kind": "step", "status": "pending", "title": "셀프결재 상신", "sub": "구매요청처리 · EAP 상신(사용자 확인)", **_col(8)},
-        {"id": "orders", "kind": "step", "status": "pending", "title": "구매발주 저장", "sub": "일괄입력 · 거래처 변경·납기·비고 · 저장(사용자 확인)", **_col(9)},
+        {"id": "approve", "kind": "step", "status": "pending", "title": "셀프결재 상신", "sub": "구매요청처리 · EAP 상신(자동 진행)", **_col(8)},
+        {"id": "orders", "kind": "step", "status": "pending", "title": "구매발주 저장", "sub": "일괄입력 · 거래처 변경·납기·비고 · 저장(자동 진행)", **_col(9)},
         {"id": "report", "kind": "end", "status": "pending", "title": "결과 반환", "sub": "IRQ/PRQ/상신/발주번호", **_col(10)},
     ],
     "edges": [
@@ -858,12 +858,12 @@ _PURCHASE_ORDER_FIXTURE: dict = {
     "description": (
         "프로젝트를 검색해 BOM 을 불러오고, 모듈(SET)을 발주단위로 묶어 구매사유·납기예정일과 "
         "거래처를 계획서로 확정합니다. 확인 후 이동요청 저장 → 발주단위별 구매요청 저장 → "
-        "구매요청처리에서 셀프결재 상신까지 진행합니다."
+        "구매요청처리에서 셀프결재 상신, 구매발주일괄입력에서 발주 저장까지 진행합니다."
     ),
     "handoff_note": (
-        "이 실행은 구매요청 저장과 셀프결재 상신까지입니다. 구매발주일괄입력(화면 ③)의 거래처 "
-        "적용·납기 확정·저장은 아직 자동화되지 않았으니 결과의 구매요청번호(PRQ)로 옴니솔에서 직접 "
-        "진행해 주세요."
+        "이동요청·구매요청 저장, 셀프결재 상신, 구매발주 저장까지 끝났습니다. 결과의 이동요청번호(IRQ)·"
+        "구매요청번호(PRQ)·발주번호로 옴니솔에서 내용을 확인하세요. 상신·발주는 이 대시보드에서 "
+        "되돌릴 수 없습니다."
     ),
     "drive": "browser",
     "interaction": "autonomous",
