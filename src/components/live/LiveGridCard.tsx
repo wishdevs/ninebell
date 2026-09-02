@@ -73,7 +73,7 @@ function normAcctName(s?: string): string {
 // 정확일치(특정 세부계정) — 복리후생비-'업무'만 불공('석식' 아님).
 // ⚠ 백엔드 _NONDEDUCTIBLE_ACCTS 와 항목이 같아야 한다 — backend/tests/test_fe_be_mirror_parity.py 가 대조.
 const NONDEDUCTIBLE_ACCTS = new Set(
-  ['복리후생비-업무', '여비교통비-해외출장', '차량유지비-유류', '차량유지비-관리', '기부금'].map(
+  ['복리후생비-업무', '여비교통비-해외출장', '여비교통비-기타', '차량유지비-유류', '차량유지비-관리', '기부금'].map(
     normAcctName,
   ),
 );

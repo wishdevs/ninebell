@@ -22,6 +22,12 @@ def test_nondeductible_by_account_various_prefixes():
     # (판)/(제) 접두·하이픈 무시하고 불공 계정 매칭.
     assert classify_vat("과세", "(제)복리후생비-업무") == NONDEDUCTIBLE
     assert classify_vat("과세", "(판)여비교통비-해외출장") == NONDEDUCTIBLE
+    # 여비교통비-기타는 전부 불공(사용자 지시 2026-09-02). 괄호 표기·(제) 접두도 흡수.
+    assert classify_vat("과세", "(판)여비교통비-기타") == NONDEDUCTIBLE
+    assert classify_vat("과세", "(제)여비교통비(기타)", merchant="카카오 대리운전") == NONDEDUCTIBLE
+    # 정확일치라 형제 계정(국내출장·시내)은 영향 없음.
+    assert classify_vat("과세", "(판)여비교통비-국내출장") == TAXABLE
+    assert classify_vat("과세", "(판)여비교통비-시내") == TAXABLE
     assert classify_vat("과세", "차량유지비-유류") == NONDEDUCTIBLE
     assert classify_vat("과세", "(판)차량유지비-관리") == NONDEDUCTIBLE
     assert classify_vat("과세", "기부금") == NONDEDUCTIBLE
