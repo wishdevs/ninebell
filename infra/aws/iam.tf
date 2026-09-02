@@ -27,6 +27,7 @@ data "aws_iam_policy_document" "read_secrets" {
       aws_secretsmanager_secret.db_url.arn,
       aws_secretsmanager_secret.auth_secret.arn,
       aws_secretsmanager_secret.gemini.arn,
+      aws_secretsmanager_secret.erp_sync_password.arn,
     ]
   }
 }

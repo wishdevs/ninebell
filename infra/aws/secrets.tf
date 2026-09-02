@@ -42,3 +42,13 @@ resource "aws_secretsmanager_secret_version" "gemini" {
   # Secrets Manager 는 빈 문자열 거부 → 미지정 시 placeholder. 실제 키는 tfvars 나 콘솔로 나중에 갱신.
   secret_string = var.gemini_api_key != "" ? var.gemini_api_key : "REPLACE_ME"
 }
+
+resource "aws_secretsmanager_secret" "erp_sync_password" {
+  name                    = "${local.name}/ERP_SYNC_PASSWORD"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "erp_sync_password" {
+  secret_id     = aws_secretsmanager_secret.erp_sync_password.id
+  secret_string = var.erp_sync_password != "" ? var.erp_sync_password : "REPLACE_ME"
+}

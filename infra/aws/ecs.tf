@@ -67,12 +67,14 @@ resource "aws_ecs_task_definition" "api" {
       { name = "COOKIE_DOMAIN", value = var.enable_https ? var.cookie_domain : "" },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
+      { name = "ERP_SYNC_USERID", value = var.erp_sync_userid }, # 자정 자동 동기화 서비스 계정(비밀번호는 secrets)
     ]
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.db_url.arn },
       { name = "AUTH_SECRET", valueFrom = aws_secretsmanager_secret.auth_secret.arn },
       { name = "GEMINI_API_KEY", valueFrom = aws_secretsmanager_secret.gemini.arn },
+      { name = "ERP_SYNC_PASSWORD", valueFrom = aws_secretsmanager_secret.erp_sync_password.arn },
     ]
 
     logConfiguration = {
