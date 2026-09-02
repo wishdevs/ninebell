@@ -40,13 +40,18 @@ export function ManualClient({ docId }: { docId?: string }) {
   // (agents.ts DEBUG_ONLY_AGENT_IDS)은 일반 모드에서 목차·본문 어디에도 나오지 않는다
   // (직접 /manual/{id} 도 미해석).
   const accessibleIds = data ? new Set(data.map((agent) => agent.id)) : null;
-  const agentSections = AGENT_MANUAL_SECTIONS.map((section) => ({
-    label: section.label,
-    items: filterByDebugMode(
-      accessibleIds ? section.items.filter((item) => accessibleIds.has(item.id)) : section.items,
+  const agentSections = AGENT_MANUAL_SECTIONS.map((section) => {
+    // standalone(비-에이전트 부속 문서, 예: 발주 패턴)은 교집합 대상이 아니다 — 같은 분류의
+    // 에이전트 문서가 하나라도 보일 때만 함께 노출한다(분류 접근권한을 그대로 따른다).
+    const items = filterByDebugMode(
+      accessibleIds
+        ? section.items.filter((item) => item.standalone || accessibleIds.has(item.id))
+        : section.items,
       debugMode,
-    ),
-  })).filter((section) => section.items.length > 0);
+    );
+    const hasAgentDoc = items.some((item) => !item.standalone);
+    return { label: section.label, items: hasAgentDoc ? items : [] };
+  }).filter((section) => section.items.length > 0);
 
   // 목차 3단(seoya 원본 구조 복원 2026-08-14) — 최상위(일반·에이전트) 아래에 '에이전트'
   // 묶음만 하위 분류(결의서입력·구매팀·회계전표)를 갖는다. 그 묶음의 items(에이전트 실행과
