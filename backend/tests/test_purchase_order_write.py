@@ -200,7 +200,8 @@ async def test_place_orders_parallel_workers_split_queue_and_aggregate(monkeypat
     }
     out = await po_mod.make_place_orders_node()(state)
     assert len(boots) == 2  # 메인 페이지 + 부트스트랩 2 = 워커 3.
-    assert sorted(processed) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4", "PRQ5"]  # 전 건 소비(실패에도 계속).
+    # 전 건 소비 + 실패 1건(소수)은 직렬 재시도 2회(총 3차) 뒤 표면화(2026-09-02 재시도 패스).
+    assert sorted(set(processed)) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4", "PRQ5"] and processed.count("PRQ3") == 3
     assert [r["prq"] for r in out["purchase_orders"]] == ["PRQ1", "PRQ2", "PRQ5"]  # 대상 순서 정렬.
     assert "PRQ3" in out["error"] and "1건 실패" in out["error"] and "3건 저장 완료" in out["error"]
     # 워커 상태 프레임(FE 라이브 스테이지 칩) — 부트스트랩 직후 3세션 브로드캐스트, 처리 항목(prq)
@@ -326,7 +327,7 @@ async def test_self_approve_parallel_workers_then_cleanup_pass(monkeypatch):
     }
     out = await sa_mod.make_self_approve_node(allow_submit=True)(state)
     assert len(boots) == 2 and len(closed) == 2  # 워커 3 부트스트랩, 정리 패스가 추가 세션 종료.
-    assert sorted(processed) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4"]
+    assert sorted(set(processed)) == ["PRQ1", "PRQ2", "PRQ3", "PRQ4"] and processed.count("PRQ2") == 3  # 직렬 재시도 2회.
     assert [r["number"] for r in out["submitted"]] == ["PRQ1", "PRQ3", "PRQ4"]
     assert "PRQ2" in out["error"] and "1건 실패" in out["error"]
     assert "worker_pool" not in out  # 인계 폐기 — 발주는 새 세션으로.
@@ -645,3 +646,142 @@ async def test_popup_bottom_apply_relocates_by_keys(monkeypatch):
     page.checked = []
     r2 = await _s3.popup_bottom_apply(page, [0], keys=[keys[0]])  # A → 재정렬 후 1번
     assert r2["ok"] is False and seen["checked"] == [1]
+
+
+# ── 재시도 패스(2026-09-02 사용자 설계) — 병렬 1차 → 소수 실패는 직렬, 다수 실패는 재병렬 ────
+from app.agents.purchase_order import parallel as _par  # noqa: E402
+
+
+def test_plan_retry_thresholds():
+    assert _par.plan_retry(0, 5, 1) is None
+    assert _par.plan_retry(1, 5, 1) == "serial"  # 소수(3 미만·절반 미만)
+    assert _par.plan_retry(3, 5, 1) == "parallel"  # 3건 이상
+    assert _par.plan_retry(2, 4, 1) == "parallel"  # 절반 이상
+    assert _par.plan_retry(1, 1, 1) == "serial"  # 1건 배치는 직렬(세션 1개면 충분)
+    assert _par.plan_retry(4, 5, 2) == "serial"  # 2차 이후는 항상 직렬
+    assert _par.plan_retry(1, 5, 3) is None  # 최대 3차
+
+
+@pytest.mark.asyncio
+async def test_run_with_retry_logs_each_pass_and_returns_last_errors():
+    events = asyncio.Queue()
+    calls: list[tuple[str, int, list]] = []
+
+    async def _pass(batch, mode, pass_no):
+        calls.append((mode, pass_no, list(batch)))
+        # 1차: a,b,c 실패(다수) → 2차 병렬: a 만 실패 → 3차 직렬: a 성공.
+        fail = {1: {"a", "b", "c"}, 2: {"a"}, 3: set()}[pass_no]
+        failed = [x for x in batch if x in fail]
+        return [x for x in batch if x not in fail], failed, [{"prq": x, "reason": f"{x}: 실패"} for x in failed]
+
+    done, errors = await _par.run_with_retry(["a", "b", "c", "d"], _pass, events=events, label="상신", item_id=str)
+    assert [(m, n, b) for m, n, b in calls] == [("parallel", 1, ["a", "b", "c", "d"]), ("parallel", 2, ["a", "b", "c"]), ("serial", 3, ["a"])]
+    assert sorted(done) == ["a", "b", "c", "d"] and errors == []
+    msgs = []
+    while not events.empty():
+        f = events.get_nowait()
+        if isinstance(f, dict) and f.get("log"):
+            msgs.append((f.get("level"), f["log"]))
+    assert any(lv == "warn" and "1차(병렬) 4건 중 3건 실패 → 병렬로 재시도(2차)" in m for lv, m in msgs)
+    assert any(lv == "warn" and "2차(병렬) 3건 중 1건 실패 → 직렬로 재시도(3차)" in m for lv, m in msgs)
+    assert not any(lv == "error" for lv, _ in msgs)
+
+
+@pytest.mark.asyncio
+async def test_place_orders_transient_failure_recovers_in_serial_pass(monkeypatch):
+    # 혼선·타이밍 실패(1회만 실패)는 직렬 재시도에서 해소돼 실패로 보고되지 않는다.
+    from app.agents.purchase_order.nodes import place_orders as po_mod
+
+    attempts: dict[str, int] = {}
+    boots: list[str] = []
+
+    class _Ctx:
+        async def close(self):
+            pass
+
+    async def _fake_bootstrap(browser, *, userid, password, base, scale):
+        boots.append(userid)
+        return _Ctx(), object()
+
+    async def _fake_navigate(page, schema, base, *, emit=None, **kw):
+        return None
+
+    async def _fake_process(page, prq, unit, prior, events, today):
+        await asyncio.sleep(0)
+        attempts[prq] = attempts.get(prq, 0) + 1
+        if prq == "PRQ2" and attempts[prq] == 1:
+            return {"ok": False, "reason": "PRQ2: 변경거래처 적용 미반영 행 6/6"}
+        return {"ok": True, "record": {"prq": prq, "seq": unit.get("seq"), "orders": [f"PUR-{prq}"], "vendors": []}}
+
+    monkeypatch.setattr(po_mod, "_bootstrap_worker_page", _fake_bootstrap)
+    monkeypatch.setattr(po_mod, "navigate_schema", _fake_navigate)
+    monkeypatch.setattr(po_mod, "_process_prq", _fake_process)
+    units = [{"seq": i, "purchaseReason": "r", "dueDate": "2026-12-31"} for i in range(1, 4)]
+    state = {
+        "events": asyncio.Queue(), "page": object(), "browser": object(), "userid": "u", "password": "x",
+        "params": {}, "confirmed_plan": {"units": units},
+        "purchase_request_nos": [{"seq": i, "number": f"PRQ{i}"} for i in range(1, 4)],
+    }
+    out = await po_mod.make_place_orders_node()(state)
+    assert "error" not in out
+    assert [r["prq"] for r in out["purchase_orders"]] == ["PRQ1", "PRQ2", "PRQ3"]
+    assert attempts == {"PRQ1": 1, "PRQ2": 2, "PRQ3": 1} and len(boots) == 2  # 2차는 직렬(부트스트랩 없음).
+    msgs = []
+    while not state["events"].empty():
+        f = state["events"].get_nowait()
+        if isinstance(f, dict) and f.get("log"):
+            msgs.append(f["log"])
+    assert any("1차(병렬) 3건 중 1건 실패 → 직렬로 재시도(2차): PRQ2" in m for m in msgs)
+    assert any("직렬 발주(재시도 2차)" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_self_approve_many_failures_retry_in_parallel(monkeypatch):
+    # 다수(3건 이상) 실패면 2차도 병렬 — 세션을 다시 띄운다(부트스트랩 2+2).
+    from app.agents.purchase_order.nodes import self_approve as sa_mod
+
+    attempts: dict[str, int] = {}
+    boots: list[str] = []
+
+    class _Ctx:
+        async def close(self):
+            pass
+
+    async def _fake_bootstrap(browser, *, userid, password, base, scale):
+        boots.append(userid)
+        return _Ctx(), object()
+
+    async def _fake_navigate(page, schema, base, *, emit=None, **kw):
+        return None
+
+    async def _fake_plant(page):
+        return {"ok": True}
+
+    async def _fake_submit(page, x, events, submit_on):
+        await asyncio.sleep(0)
+        no = x["number"]
+        attempts[no] = attempts.get(no, 0) + 1
+        if no in ("PRQ1", "PRQ2", "PRQ3") and attempts[no] == 1:
+            return {"ok": False, "reason": f"{no}: 결재창 무반응"}
+        return {"ok": True, "record": {"number": no, "submitted": True}}
+
+    monkeypatch.setattr(sa_mod, "_bootstrap_worker_page", _fake_bootstrap)
+    monkeypatch.setattr(sa_mod, "navigate_schema", _fake_navigate)
+    monkeypatch.setattr(sa_mod.steps_write, "ensure_req_plant", _fake_plant)
+    monkeypatch.setattr(sa_mod, "_submit_one", _fake_submit)
+    state = {
+        "events": asyncio.Queue(), "page": object(), "browser": object(), "userid": "u", "password": "x",
+        "params": {}, "purchase_request_nos": [{"seq": i, "number": f"PRQ{i}"} for i in range(1, 6)],
+    }
+    out = await sa_mod.make_self_approve_node(allow_submit=True)(state)
+    assert "error" not in out
+    assert [r["number"] for r in out["submitted"]] == ["PRQ1", "PRQ2", "PRQ3", "PRQ4", "PRQ5"]
+    assert len(boots) == 4  # 1차 병렬 2 + 2차 병렬(실패 3건 → 세션 3) 2.
+    msgs = []
+    while not state["events"].empty():
+        f = state["events"].get_nowait()
+        if isinstance(f, dict) and f.get("log"):
+            msgs.append(f["log"])
+    assert any("1차(병렬) 5건 중 3건 실패 → 병렬로 재시도(2차)" in m for m in msgs)
+    assert any("병렬 상신(재시도 2차)" in m for m in msgs)
+    assert any("추가 세션 4개 종료" in m for m in msgs)

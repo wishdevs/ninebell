@@ -22,7 +22,7 @@ import asyncio
 import time
 
 from app.agents.purchase_order import steps_write
-from app.agents.purchase_order.parallel import WORKERS, WorkerTracker
+from app.agents.purchase_order.parallel import WORKERS, WorkerTracker, run_with_retry
 from app.agents.purchase_order.parallel import bootstrap_worker_page as _bootstrap_worker_page
 from app.agents.voucher_receivable import steps as voucher_steps
 from app.config import get_settings
@@ -171,83 +171,105 @@ def make_self_approve_node(*, allow_submit: bool = False):
             )
 
         base = get_settings().erp_base
-        # ── 워커 부트스트랩 — 메인 페이지 1 + 추가 세션 최대 WORKERS-1(순차 로그인). 세션은
-        #    상신이 끝나면 정리 패스에서 전부 종료한다(인계 없음 — 2026-09-01 사용자 지시).
-        worker_pages: list = [page]
-        contexts: list = []
+        order_pos = {str(x.get("number")): i for i, x in enumerate(prqs)}
+        main = {"page": page}
         browser = state.get("browser")
         userid, password = state.get("userid"), state.get("password")
-        want_extra = min(WORKERS, len(prqs)) - len(worker_pages)
-        if want_extra > 0 and browser is not None and userid:
-            scale = getattr(page, "_scale", None)
-            for _ in range(want_extra):
-                try:
-                    ctx, wpage = await _bootstrap_worker_page(
-                        browser, userid=userid, password=password, base=base, scale=scale
-                    )
-                except Exception as exc:  # noqa: BLE001 — 워커 하나 실패는 해당 워커만 제외.
-                    await emit_log(events, f"병렬 워커 기동 실패 — 해당 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
-                    continue
-                contexts.append(ctx)
-                worker_pages.append(wpage)
-            if len(worker_pages) > 1:
-                await emit_log(
-                    events,
-                    f"병렬 상신 — 브라우저 세션 {len(worker_pages)}개가 {len(prqs)}건을 분담합니다"
-                    "(같은 계정 동시 세션 실측 허용 — concurrent_session_probe).",
-                    "info",
-                )
-        order_pos = {str(x.get("number")): i for i, x in enumerate(prqs)}
-        submitted: list[dict] = []
-        errors: list[dict] = []
-        main = {"page": page}
-        tracker = WorkerTracker(events, len(worker_pages))
-        await tracker.emit()
+        contexts_all: list = []
+        max_sessions = {"n": 1}
 
-        queue: asyncio.Queue = asyncio.Queue()
-        for x in prqs:
-            queue.put_nowait(x)
+        # ── 패스 1회 = (병렬: 메인 페이지 1 + 추가 세션 최대 WORKERS-1 순차 로그인 | 직렬: 메인 1)
+        #    → 큐 분담 → 추가 세션 종료. 재시도 패스는 run_with_retry 가 실패분만 다시 넘긴다.
+        async def _run_pass(batch: list[dict], mode: str, pass_no: int):
+            worker_pages: list = [main["page"]]
+            contexts: list = []
+            if mode == "parallel":
+                want_extra = min(WORKERS, len(batch)) - 1
+                if want_extra > 0 and browser is not None and userid:
+                    scale = getattr(page, "_scale", None)
+                    for _ in range(want_extra):
+                        try:
+                            ctx, wpage = await _bootstrap_worker_page(
+                                browser, userid=userid, password=password, base=base, scale=scale
+                            )
+                        except Exception as exc:  # noqa: BLE001 — 워커 하나 실패는 해당 워커만 제외.
+                            await emit_log(events, f"병렬 워커 기동 실패 — 해당 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
+                            continue
+                        contexts.append(ctx)
+                        worker_pages.append(wpage)
+                    if len(worker_pages) > 1:
+                        await emit_log(
+                            events,
+                            f"병렬 상신{f'(재시도 {pass_no}차)' if pass_no > 1 else ''} — 브라우저 세션 "
+                            f"{len(worker_pages)}개가 {len(batch)}건을 분담합니다"
+                            "(같은 계정 동시 세션 실측 허용 — concurrent_session_probe).",
+                            "info",
+                        )
+            elif pass_no > 1:
+                await emit_log(events, f"직렬 상신(재시도 {pass_no}차) — 세션 1개로 {len(batch)}건을 순서대로 처리합니다.", "info")
+            max_sessions["n"] = max(max_sessions["n"], len(worker_pages))
+            contexts_all.extend(contexts)
+            submitted_p: list[dict] = []
+            errors_p: list[dict] = []
+            tracker = WorkerTracker(events, len(worker_pages))
+            await tracker.emit()
 
-        async def _worker(wid: int, wpage) -> None:
-            page_w = wpage
-            # 워커당 1회 — 화면 진입 + 공장(나인벨) 지정. 실패하면 이 워커만 빠진다(큐는 남는다).
-            try:
-                active = await navigate_schema(page_w, PURCHASE_REQ_PROCESS, base, emit=events.put, step_id=None)
-                if active is not None:
-                    page_w = active
-                    if wid == 0:
-                        main["page"] = page_w
-                p = await steps_write.ensure_req_plant(page_w)
-                if not p.get("ok"):
-                    raise RuntimeError(p.get("reason") or "공장(나인벨) 지정 실패")
-            except Exception as exc:  # noqa: BLE001
-                await emit_log(events, f"상신 워커 {wid + 1} 화면 준비 실패 — 이 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
-                await tracker.done(wid)
-                return
-            while True:
+            queue: asyncio.Queue = asyncio.Queue()
+            for x in batch:
+                queue.put_nowait(x)
+
+            async def _worker(wid: int, wpage) -> None:
+                page_w = wpage
+                # 워커당 1회 — 화면 진입 + 공장(나인벨) 지정. 실패하면 이 워커만 빠진다(큐는 남는다).
                 try:
-                    x = queue.get_nowait()
-                except asyncio.QueueEmpty:
+                    active = await navigate_schema(page_w, PURCHASE_REQ_PROCESS, base, emit=events.put, step_id=None)
+                    if active is not None:
+                        page_w = active
+                        if wid == 0:
+                            main["page"] = page_w
+                    p = await steps_write.ensure_req_plant(page_w)
+                    if not p.get("ok"):
+                        raise RuntimeError(p.get("reason") or "공장(나인벨) 지정 실패")
+                except Exception as exc:  # noqa: BLE001
+                    await emit_log(events, f"상신 워커 {wid + 1} 화면 준비 실패 — 이 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
                     await tracker.done(wid)
                     return
-                no = str(x["number"])
-                await tracker.working(wid, no, x.get("seq"))
-                try:
-                    r = await _submit_one(page_w, x, events, submit_on)
-                except Exception as exc:  # noqa: BLE001
-                    r = {"ok": False, "reason": f"{no}: 상신 처리 예외 — {str(exc)[:160]}"}
-                if r.get("ok"):
-                    if r.get("record"):
-                        submitted.append(r["record"])
-                else:
-                    errors.append({"prq": no, "reason": str(r.get("reason"))})
-                    await emit_log(events, f"{r.get('reason')} — 나머지 구매요청은 계속 진행합니다.", "error")
+                while True:
+                    try:
+                        x = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        await tracker.done(wid)
+                        return
+                    no = str(x["number"])
+                    await tracker.working(wid, no, x.get("seq"))
+                    try:
+                        r = await _submit_one(page_w, x, events, submit_on)
+                    except Exception as exc:  # noqa: BLE001
+                        r = {"ok": False, "reason": f"{no}: 상신 처리 예외 — {str(exc)[:160]}"}
+                    if r.get("ok"):
+                        if r.get("record"):
+                            submitted_p.append(r["record"])
+                    else:
+                        errors_p.append({"prq": no, "reason": str(r.get("reason"))})
+                        await emit_log(events, f"{r.get('reason')} — 나머지 구매요청은 계속 진행합니다.", "error")
 
-        await asyncio.gather(*[_worker(i, wp) for i, wp in enumerate(worker_pages)])
-        # 전 워커가 준비 실패로 빠지면 큐가 남는다 — 조용히 삼키지 않고 실패로 승격.
-        while not queue.empty():
-            x = queue.get_nowait()
-            errors.append({"prq": str(x["number"]), "reason": f"{x['number']}: 처리 워커 없음(전 세션 준비 실패)."})
+            await asyncio.gather(*[_worker(i, wp) for i, wp in enumerate(worker_pages)])
+            # 전 워커가 준비 실패로 빠지면 큐가 남는다 — 조용히 삼키지 않고 실패로 승격.
+            while not queue.empty():
+                x = queue.get_nowait()
+                errors_p.append({"prq": str(x["number"]), "reason": f"{x['number']}: 처리 워커 없음(전 세션 준비 실패)."})
+            for ctx in contexts:
+                try:
+                    await ctx.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            failed_nos = {e["prq"] for e in errors_p}
+            failed = [x for x in batch if str(x["number"]) in failed_nos]
+            return submitted_p, failed, errors_p
+
+        submitted, errors = await run_with_retry(
+            prqs, _run_pass, events=events, label="셀프결재 상신", item_id=lambda x: str(x["number"])
+        )
 
         # ── 정리 패스(2026-09-01 사용자 지시) — 결제 병렬 후 '한 개의 창'으로 정돈: 잔여
         #    결제창(자식 페이지) 전부 닫기 + 추가 세션 종료 + FE 자식창(PIP) 표시 해제. 발주는
@@ -263,16 +285,11 @@ def make_self_approve_node(*, allow_submit: bool = False):
                     pass
         except Exception:  # noqa: BLE001 — 정리 실패가 결과를 바꾸면 안 된다.
             pass
-        for ctx in contexts:
-            try:
-                await ctx.close()
-            except Exception:  # noqa: BLE001
-                pass
         await events.put({"window": "child", "closed": True})  # FE 자식창 표시 해제(잔상 방지).
-        if len(worker_pages) > 1 or closed_children:
+        if max_sessions["n"] > 1 or closed_children:
             await emit_log(
                 events,
-                f"상신 세션 정리 — 잔여 결제창 {closed_children}개 닫음 · 추가 세션 {len(contexts)}개 종료. "
+                f"상신 세션 정리 — 잔여 결제창 {closed_children}개 닫음 · 추가 세션 {len(contexts_all)}개 종료. "
                 "발주는 새 병렬 세션으로 진행합니다.",
                 "info",
             )

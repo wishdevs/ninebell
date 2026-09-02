@@ -22,7 +22,7 @@ from datetime import datetime
 
 from app.agents.purchase_order import steps_screen3 as s3
 from app.agents.purchase_order.nodes.save_units import KST
-from app.agents.purchase_order.parallel import WORKERS, WorkerTracker
+from app.agents.purchase_order.parallel import WORKERS, WorkerTracker, run_with_retry
 from app.agents.purchase_order.parallel import bootstrap_worker_page as _bootstrap_worker_page
 from app.config import get_settings
 from app.live.events import emit_log, emit_step
@@ -229,85 +229,96 @@ def make_place_orders_node():
         base = get_settings().erp_base
         today = datetime.now(KST).strftime("%Y-%m-%d")
         order_pos = {prq: i for i, (prq, _, _) in enumerate(targets)}
-        done: list[dict] = []
-        errors: list[dict] = []
         main = {"page": page}  # navigate_schema 가 page 를 교체하면 반영(닫힌 page 재사용 방지)
-
-        # ── 워커 부트스트랩 — 메인 페이지 1 + 추가 세션 최대 WORKERS-1(순차 로그인).
-        #    상신 단계 세션은 정리 패스에서 이미 종료됐다(2026-09-01 사용자 지시 — 단계 사이
-        #    '한 개의 창' 정돈 후 새 세션으로 시작, 꼬임·화면 오염 방지).
-        worker_pages: list = [page]
-        contexts: list = []
         browser = state.get("browser")
         userid, password = state.get("userid"), state.get("password")
-        want_extra = min(WORKERS, len(targets)) - 1
-        if want_extra > 0 and browser is not None and userid:
-            scale = getattr(page, "_scale", None)
-            for _ in range(want_extra):
-                try:
-                    ctx, wpage = await _bootstrap_worker_page(
-                        browser, userid=userid, password=password, base=base, scale=scale
-                    )
-                except Exception as exc:  # noqa: BLE001 — 워커 하나 실패는 해당 워커만 제외.
-                    await emit_log(events, f"병렬 워커 기동 실패 — 해당 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
-                    continue
-                contexts.append(ctx)
-                worker_pages.append(wpage)
-            if len(worker_pages) > 1:
-                await emit_log(
-                    events,
-                    f"병렬 발주 — 브라우저 세션 {len(worker_pages)}개가 {len(targets)}건을 분담합니다"
-                    "(같은 계정 동시 세션 실측 허용 — concurrent_session_probe).",
-                    "info",
-                )
 
-        queue: asyncio.Queue = asyncio.Queue()
-        for t in targets:
-            queue.put_nowait(t)
+        # ── 패스 1회 = (병렬: 메인 페이지 1 + 추가 세션 최대 WORKERS-1 순차 로그인 | 직렬: 메인 1)
+        #    → 큐 분담 → 추가 세션 종료. 상신 단계 세션은 이미 정리됐다(2026-09-01 사용자 지시 —
+        #    단계 사이 '한 개의 창' 정돈 후 새 세션으로 시작). 재시도 패스는 실패분만 다시 받는다.
+        async def _run_pass(batch: list, mode: str, pass_no: int):
+            worker_pages: list = [main["page"]]
+            contexts: list = []
+            if mode == "parallel":
+                want_extra = min(WORKERS, len(batch)) - 1
+                if want_extra > 0 and browser is not None and userid:
+                    scale = getattr(page, "_scale", None)
+                    for _ in range(want_extra):
+                        try:
+                            ctx, wpage = await _bootstrap_worker_page(
+                                browser, userid=userid, password=password, base=base, scale=scale
+                            )
+                        except Exception as exc:  # noqa: BLE001 — 워커 하나 실패는 해당 워커만 제외.
+                            await emit_log(events, f"병렬 워커 기동 실패 — 해당 세션 없이 진행합니다({str(exc)[:120]}).", "warn")
+                            continue
+                        contexts.append(ctx)
+                        worker_pages.append(wpage)
+                    if len(worker_pages) > 1:
+                        await emit_log(
+                            events,
+                            f"병렬 발주{f'(재시도 {pass_no}차)' if pass_no > 1 else ''} — 브라우저 세션 "
+                            f"{len(worker_pages)}개가 {len(batch)}건을 분담합니다"
+                            "(같은 계정 동시 세션 실측 허용 — concurrent_session_probe).",
+                            "info",
+                        )
+            elif pass_no > 1:
+                await emit_log(events, f"직렬 발주(재시도 {pass_no}차) — 세션 1개로 {len(batch)}건을 순서대로 처리합니다.", "info")
 
-        # 워커 상태 프레임 — FE 라이브 스테이지가 "세션별 현재 처리 항목" 칩을 그린다(2026-09-01
-        # 사용자 요청). 병렬일 때만 방출(단독 직렬 런은 기존 로그로 충분 — 재생 노이즈 방지).
-        tracker = WorkerTracker(events, len(worker_pages))
-        await tracker.emit()
+            queue: asyncio.Queue = asyncio.Queue()
+            for t in batch:
+                queue.put_nowait(t)
+            done_p: list[dict] = []
+            errors_p: list[dict] = []
+            # 워커 상태 프레임 — FE 라이브 스테이지가 "세션별 현재 처리 항목" 칩을 그린다(2026-09-01
+            # 사용자 요청). 병렬일 때만 방출(단독 직렬 런은 기존 로그로 충분 — 재생 노이즈 방지).
+            tracker = WorkerTracker(events, len(worker_pages))
+            await tracker.emit()
 
-        async def _worker(wid: int, wpage) -> None:
-            page_w = wpage
-            while True:
-                try:
-                    prq, unit, prior = queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    await tracker.done(wid)
-                    return
-                await tracker.working(wid, prq, unit.get("seq"))
-                try:
-                    active = await navigate_schema(page_w, PURCHASE_PO_BATCH, base, emit=events.put, step_id=None)
-                    if active is not None:
-                        page_w = active
-                        if wid == 0:
-                            main["page"] = page_w
-                except Exception as exc:  # noqa: BLE001
-                    errors.append({"prq": prq, "reason": f"{prq}: 구매발주일괄입력 진입 실패 — {str(exc)[:160]}"})
-                    await emit_log(events, f"{prq}: 구매발주일괄입력 진입 실패 — 나머지 구매요청은 계속 진행합니다.", "error")
-                    continue
-                try:
-                    r = await _process_prq(page_w, prq, unit, prior, events, today)
-                except Exception as exc:  # noqa: BLE001
-                    r = {"ok": False, "reason": f"{prq}: 처리 예외 — {str(exc)[:160]}"}
-                if r.get("ok"):
-                    if r.get("record"):
-                        done.append(r["record"])
-                else:
-                    errors.append({"prq": prq, "reason": str(r.get("reason"))})
-                    await emit_log(events, f"{r.get('reason')} — 나머지 구매요청은 계속 진행합니다.", "error")
+            async def _worker(wid: int, wpage) -> None:
+                page_w = wpage
+                while True:
+                    try:
+                        prq, unit, prior = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        await tracker.done(wid)
+                        return
+                    await tracker.working(wid, prq, unit.get("seq"))
+                    try:
+                        active = await navigate_schema(page_w, PURCHASE_PO_BATCH, base, emit=events.put, step_id=None)
+                        if active is not None:
+                            page_w = active
+                            if wid == 0:
+                                main["page"] = page_w
+                    except Exception as exc:  # noqa: BLE001
+                        errors_p.append({"prq": prq, "reason": f"{prq}: 구매발주일괄입력 진입 실패 — {str(exc)[:160]}"})
+                        await emit_log(events, f"{prq}: 구매발주일괄입력 진입 실패 — 나머지 구매요청은 계속 진행합니다.", "error")
+                        continue
+                    try:
+                        r = await _process_prq(page_w, prq, unit, prior, events, today)
+                    except Exception as exc:  # noqa: BLE001
+                        r = {"ok": False, "reason": f"{prq}: 처리 예외 — {str(exc)[:160]}"}
+                    if r.get("ok"):
+                        if r.get("record"):
+                            done_p.append(r["record"])
+                    else:
+                        errors_p.append({"prq": prq, "reason": str(r.get("reason"))})
+                        await emit_log(events, f"{r.get('reason')} — 나머지 구매요청은 계속 진행합니다.", "error")
 
-        try:
-            await asyncio.gather(*[_worker(i, wp) for i, wp in enumerate(worker_pages)])
-        finally:
-            for ctx in contexts:
-                try:
-                    await ctx.close()
-                except Exception:  # noqa: BLE001 — 정리 실패는 결과에 영향 없음.
-                    pass
+            try:
+                await asyncio.gather(*[_worker(i, wp) for i, wp in enumerate(worker_pages)])
+            finally:
+                for ctx in contexts:
+                    try:
+                        await ctx.close()
+                    except Exception:  # noqa: BLE001 — 정리 실패는 결과에 영향 없음.
+                        pass
+            failed_nos = {e["prq"] for e in errors_p}
+            failed = [t for t in batch if t[0] in failed_nos]
+            return done_p, failed, errors_p
+
+        done, errors = await run_with_retry(
+            targets, _run_pass, events=events, label="구매발주 저장", item_id=lambda t: str(t[0])
+        )
 
         done.sort(key=lambda rec: order_pos.get(str(rec.get("prq")), len(order_pos)))
         if errors:
