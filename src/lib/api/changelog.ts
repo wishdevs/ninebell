@@ -4,12 +4,10 @@
  * 백엔드 계약(고정):
  *   GET    /changelog?q&status&hasMajorFix&limit&offset → {items, total, limit, offset} (세션)
  *   GET    /changelog/{id}                   → ChangelogEntry (세션)
- *   POST   /changelog {ChangelogInput}       → 201 ChangelogEntry (관리자, 아니면 403)
- *   PATCH  /changelog/{id} {ChangelogInput}  → ChangelogEntry (관리자, 전체 교체)
- *   DELETE /changelog/{id}                   → 204 (관리자)
  *
  * 일반 사용자에게는 백엔드가 status='released' 만 반환한다(draft 는 존재 자체를 숨김).
- * version 중복 시 409 — 화면은 errorMessage() 로 서버 문구를 그대로 노출한다.
+ * 릴리스는 파일(backend/app/data/releases/*.md)에서 적재되므로 화면 쪽 작성/수정/삭제
+ * 클라이언트는 없다(2026-09-02 제거).
  */
 
 import { api } from '@/lib/api/client';
@@ -39,16 +37,6 @@ export interface ChangelogEntry {
   updatedAt: string;
 }
 
-export interface ChangelogInput {
-  version: string;
-  title: string;
-  bodyMd: string;
-  status: ChangelogStatus;
-  hasMajorFix: boolean;
-  /** 'yyyy-mm-dd'. 생략 시 서버가 KST 기준 오늘로 채운다. */
-  releasedAt?: string;
-}
-
 export interface ChangelogQuery {
   limit: number;
   offset: number;
@@ -71,16 +59,4 @@ export async function fetchChangelog(
   if (query.hasMajorFix !== undefined) params.set('hasMajorFix', String(query.hasMajorFix));
   const res = await api.get<{ items?: ChangelogEntry[]; total: number }>(`/changelog?${params}`);
   return { items: res.items ?? [], total: res.total };
-}
-
-export function createChangelogEntry(input: ChangelogInput): Promise<ChangelogEntry> {
-  return api.post<ChangelogEntry>('/changelog', { ...input });
-}
-
-export function updateChangelogEntry(id: string, input: ChangelogInput): Promise<ChangelogEntry> {
-  return api.patch<ChangelogEntry>(`/changelog/${encodeURIComponent(id)}`, { ...input });
-}
-
-export function deleteChangelogEntry(id: string): Promise<void> {
-  return api.delete<void>(`/changelog/${encodeURIComponent(id)}`);
 }
