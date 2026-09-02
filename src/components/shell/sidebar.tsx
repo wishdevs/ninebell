@@ -21,6 +21,7 @@ import {
   RiBrainLine,
   RiBookOpenLine,
   RiGitCommitLine,
+  RiRefreshLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import { NAV_GROUPS, type NavIconKey, type NavItem } from '@/lib/data/nav';
@@ -51,6 +52,7 @@ const ICONS: Record<NavIconKey, RemixiconComponentType> = {
   learning: RiBrainLine,
   changelog: RiGitCommitLine,
   manual: RiBookOpenLine,
+  sync: RiRefreshLine,
 };
 
 export function Sidebar() {

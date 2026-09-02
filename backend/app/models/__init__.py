@@ -18,6 +18,7 @@ from app.models.card_seed_note import CardSeedNote
 from app.models.card_seed_selection import CardSeedSelection
 from app.models.changelog import ChangelogEntry
 from app.models.erp_code_catalog import ErpCodeCatalog
+from app.models.erp_sync_run import ErpSyncRun
 from app.models.merchant_dict_rule import MerchantDictRule
 from app.models.org_unit import AgentOrgAccess, OrgUnit
 from app.models.permission import Permission
@@ -46,6 +47,7 @@ __all__ = [
     "AgentOrgAccess",
     "UserCodeFavorite",
     "ErpCodeCatalog",
+    "ErpSyncRun",
     "MerchantDictRule",
     "ChangelogEntry",
     "CardLearnedSelection",

@@ -41,6 +41,7 @@ from app.routers import (
     auth,
     changelog,
     dev_llm,
+    erp_sync,
     logs,
     me_codes,
     org_units,
@@ -50,6 +51,7 @@ from app.routers import (
     users,
 )
 from app.services.catalog_sync_scheduler import run_daily_catalog_sync
+from app.services.erp_sync import reconcile_stale_runs
 from app.services.seed import seed_all
 from app.services.signup_cache import SignupCache
 
@@ -114,6 +116,8 @@ def create_app() -> FastAPI:
         async with get_sessionmaker()() as session:
             await seed_all(session)
             await session.commit()
+        # 재기동으로 태스크가 사라진 ERP 동기화 이력(running)을 failed 로 닫는다.
+        await reconcile_stale_runs(get_sessionmaker())
 
         # --- 공용 httpx 클라이언트(AI 어시스턴트 Gemini 스트리밍) ---
         # read=None: SSE 스트림이 장시간 idle 이어도 읽기 타임아웃으로 끊기지 않게 한다.
@@ -236,6 +240,7 @@ def create_app() -> FastAPI:
     app.include_router(runs.router)
     app.include_router(assistant.router)
     app.include_router(me_codes.router)
+    app.include_router(erp_sync.router)
     app.include_router(skills.router)
     app.include_router(changelog.router)
     app.include_router(purchase_order_plans.router)

@@ -69,16 +69,20 @@ class Settings(BaseSettings):
     erp_api_sync_enabled: bool = True
 
     # --- 일일 무인 카탈로그 동기화(스케줄러) ---
-    # 하루 1회 세 카탈로그를 자동 동기화한다. 무인 실행이라 사용자 세션(CredCache) 대신 전용
-    # 서비스 계정이 필요하다 — 둘 다 비면 스케줄러는 뜨지 않는다(미설정=비활성). env
+    # 하루 1회 ERP 소스 데이터 4종을 자동 동기화한다(2026-09-02 기본 활성·자정·4종). 무인
+    # 실행이라 사용자 세션(CredCache) 대신 전용 서비스 계정이 필요하다 — 둘 다 비면 스케줄러는
+    # 뜨지 않고 GET /admin/erp-sync 가 active=false 로 이유를 노출한다. env
     # ERP_SYNC_USERID/ERP_SYNC_PASSWORD. 저장소·로그에 비밀번호가 남지 않게 .env 로만 준다.
-    erp_sync_daily_enabled: bool = False
+    erp_sync_daily_enabled: bool = True
     erp_sync_userid: str = ""
     erp_sync_password: str = ""
-    # 실행 시각(서버 로컬 TZ, HH:MM 24h). env ERP_SYNC_AT.
-    erp_sync_at: str = "04:30"
-    # 동기화 대상 kind(쉼표). org_unit 은 관리자·권한 반영이 얽혀 무인 대상에서 제외한다.
-    erp_sync_kinds: str = "budget_unit,project,partner"
+    # 실행 시각(HH:MM 24h, erp_sync_tz 기준). env ERP_SYNC_AT.
+    erp_sync_at: str = "00:00"
+    # 실행 시각의 타임존(zoneinfo 이름). 컨테이너 TZ 가 UTC 여도 KST 자정에 돈다. env ERP_SYNC_TZ.
+    erp_sync_tz: str = "Asia/Seoul"
+    # 동기화 대상 kind(쉼표). org_unit 은 브라우저 + 실 ERP 계정(서비스 계정)으로 org_units
+    # 반영·사용자 재배치까지 수행한다. env ERP_SYNC_KINDS.
+    erp_sync_kinds: str = "budget_unit,project,partner,org_unit"
 
     def erp_sync_kind_list(self) -> list[str]:
         return [x.strip() for x in self.erp_sync_kinds.split(",") if x.strip()]

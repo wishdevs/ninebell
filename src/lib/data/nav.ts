@@ -24,7 +24,8 @@ export type NavIconKey =
   | 'budget'
   | 'learning'
   | 'changelog'
-  | 'manual';
+  | 'manual'
+  | 'sync';
 
 export interface NavItem {
   href: string;
@@ -81,6 +82,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/manage/agents', label: '에이전트 관리', icon: 'agents', minRole: 'admin' },
       // 조직구분(ERP 조직도 미러링) 관리 — 팀별 비용구분 설정(관리자+).
       { href: '/organizations', label: '조직구분 관리', icon: 'org', minRole: 'admin' },
+      // ERP 기준정보 4종(예산단위·프로젝트·거래처·조직) 동기화 현황·즉시 동기화·자정 자동화(관리자+).
+      { href: '/manage/erp-sync', label: 'ERP 동기화', icon: 'sync', minRole: 'admin' },
       // 감사 = 사용자 접속/행동 감시(로그인 access_logs). 로깅 = 에이전트 사용 내역(runs).
       { href: '/audit', label: '감사', icon: 'audit', permission: 'logs:read' },
       { href: '/logs', label: '로깅', icon: 'logging', permission: 'logs:read' },

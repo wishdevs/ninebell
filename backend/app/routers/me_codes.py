@@ -8,10 +8,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
-from contextlib import nullcontext
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -35,8 +33,8 @@ from app.models import (
     MerchantDictRule,
     UserCodeFavorite,
 )
-from app.services import card_learning
-from app.services.code_sync import dept_matches_budget_name, sync_catalog
+from app.services import card_learning, erp_sync
+from app.services.code_sync import dept_matches_budget_name
 from app.services.cost_project import resolve_cost_project
 from app.services.ordering import reorder_by_client_order
 from app.services.org_lookup import user_cost_type
@@ -53,11 +51,6 @@ _VALID_KINDS = ("budget_unit", "project", "partner", "org_unit")
 # 즐겨찾기 네임스페이스만 용도별로 가른다(2026-08-21). (user,kind,code) 유니크 + kind별
 # is_default 부분 유니크(0034)가 kind 단위라 마이그레이션 없이 독립 목록·독립 기본지정이 된다.
 CodeKind = Literal["budget_unit", "project", "project_purchase", "partner", "agent"]
-
-# 백그라운드 동기화 태스크 강참조 — 무참조 태스크는 GC 대상이라(파이썬 asyncio 규약) 실행 중
-# 소멸하면 브라우저 누수 + 세마포어 미반납으로 영구 409 가 될 수 있다(리뷰 MEDIUM #2).
-_SYNC_TASKS: set[asyncio.Task] = set()
-
 
 # ── 스키마 ────────────────────────────────────────────────────────────────────
 class FavoriteCreate(BaseModel):
@@ -650,45 +643,8 @@ async def get_catalog(
 
 
 # ── 헤드리스 동기화 트리거/상태 ─────────────────────────────────────────────────
-async def _run_catalog_sync(
-    kind: str,
-    userid: str,
-    password: str,
-    browser_factory,
-    sessionmaker,
-    semaphore: asyncio.Semaphore,
-    sync_state: dict,
-    run_semaphore: asyncio.Semaphore | None,
-) -> None:
-    """백그라운드 동기화 — 세마포어 반납 + 결과/에러를 sync_state[kind] 에 기록.
-
-    실 ERP 세션을 여는 작업이므로 전역 ERP 동시실행 예산(run_semaphore)도 함께 점유한다
-    — 동기화가 일반 실행 상한(max_concurrent_erp_runs)을 우회하지 않게(리뷰 MEDIUM #1).
-    """
-    try:
-        async with run_semaphore if run_semaphore is not None else nullcontext():
-            result = await sync_catalog(kind, userid, password, browser_factory, sessionmaker)
-        sync_state[kind] = {
-            "running": False,
-            "lastSyncedAt": result["syncedAt"],
-            "count": result["count"],
-            "error": None,
-            # org_unit 만 채워진다(다른 kind 는 None) — 프론트가 조직구분 반영 요약을 읽는다.
-            "applied": result.get("applied"),
-            "reassigned": result.get("reassigned"),
-        }
-    except Exception as exc:  # noqa: BLE001 — 백그라운드 실패를 상태로 남긴다
-        logger.exception("코드 카탈로그 동기화 실패(kind=%s)", kind)
-        sync_state[kind] = {
-            "running": False,
-            "lastSyncedAt": None,
-            "count": None,
-            "error": str(exc),
-        }
-    finally:
-        semaphore.release()
-
-
+# 실행 본체(세마포어·RAM 상태·erp_sync_runs 이력·run_semaphore 점유)는 services.erp_sync 공용
+# 러너 — 관리자 /admin/erp-sync 및 일일 스케줄러와 같은 경로를 탄다(2026-09-02 통합).
 @router.post("/catalog/sync", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_sync(body: SyncIn, request: Request, user: CurrentUser):
     """카탈로그 동기화 트리거. 1슬롯 세마포어(진행 중이면 409). 백그라운드 실행 → 202."""
@@ -704,39 +660,20 @@ async def trigger_sync(body: SyncIn, request: Request, user: CurrentUser):
         if user.password_hash is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "조직도 불러오기는 실제 ERP 계정으로 로그인한 관리자만 사용할 수 있습니다. "
-                    "로컬 admin 계정은 ERP 로그인이 없어 조직도를 가져올 수 없습니다."
-                ),
+                detail=erp_sync.ORG_UNIT_NEEDS_ERP_ACCOUNT_MSG,
             )
     password = _omnisol_password(request)
     if not password:
-        return JSONResponse(
-            {"error": "세션에 자격증명이 없습니다. 다시 로그인해 주세요."}, status_code=409
-        )
-    semaphore = request.app.state.catalog_sync_semaphore
-    if semaphore.locked():
-        return JSONResponse({"error": "동기화가 이미 진행 중입니다."}, status_code=409)
-    await semaphore.acquire()
-
-    sync_state = request.app.state.catalog_sync_state
-    sync_state[body.kind] = {"running": True, "lastSyncedAt": None, "count": None, "error": None}
-    browser_factory = getattr(request.app.state, "browser_factory", None)
-    sessionmaker = appdb.get_sessionmaker()
-    task = asyncio.create_task(
-        _run_catalog_sync(
-            body.kind,
-            user.omnisol_userid,
-            password,
-            browser_factory,
-            sessionmaker,
-            semaphore,
-            sync_state,
-            getattr(request.app.state, "run_semaphore", None),
-        )
+        return JSONResponse({"error": erp_sync.NO_CREDENTIALS_MSG}, status_code=409)
+    started = await erp_sync.launch(
+        request.app,
+        [(body.kind, user.omnisol_userid, password)],
+        trigger=erp_sync.TRIGGER_MANUAL,
+        actor_user_id=user.id,
+        sessionmaker=appdb.get_sessionmaker(),
     )
-    _SYNC_TASKS.add(task)
-    task.add_done_callback(_SYNC_TASKS.discard)
+    if not started:
+        return JSONResponse({"error": erp_sync.BUSY_MSG}, status_code=409)
     return {"started": True}
 
 

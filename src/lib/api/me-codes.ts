@@ -105,6 +105,8 @@ export interface SyncStatus {
   count: number;
   /** 직전 동기화 실패 사유(있을 때). */
   error?: string;
+  /** 스케줄러(자정 자동 동기화)가 세마포어 점유 등으로 이번 실행을 건너뛴 경우 true. */
+  skipped?: boolean;
   /** org_unit 동기화에서만 채워진다 — 조직구분 반영 요약. */
   applied?: OrgApplySummary | null;
   /** org_unit 동기화에서만 채워진다 — 재배치된 사용자 목록. */
