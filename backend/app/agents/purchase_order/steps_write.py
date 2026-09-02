@@ -119,8 +119,15 @@ async def _wait_signature(page: Any, prev: dict | None, accept, *, cap_ms: int) 
 
 
 def view_accepts(sig: dict, *, move_only: bool) -> bool:
-    """뷰 판정 — 이동요청만: mvY>0 ∧ leafN==0(구매요청 리프 없음; 구조행은 이 뷰에서도 MV_FG='N' —
-    ETRI-001 실측 163행 = Y 132 + 구조 N 31) / 구매요청만: count>0 ∧ **leafN>0**(구매요청 리프 존재).
+    """뷰 판정 — 이동요청만: mvY>0 ∧ mvY>leafN(이동 리프가 구매 리프보다 많다 — 뷰의 '모양' 판정;
+    구조행은 이 뷰에서도 MV_FG='N' — ETRI-001 실측 163행 = Y 132 + 구조 N 31) /
+    구매요청만: count>0 ∧ **leafN>0**(구매요청 리프 존재).
+
+    ⚠ 이동요청만의 `leafN==0` 하드 조건은 2026-09-02 제거 — ETRI-028 실측: 이동요청만 뷰에도
+      MV_FG='N' 리프 5행이 잔존해(112행 = Y 76 + N 36, 그중 리프 5) 3회×40초 동안 영원히 미수락
+      → save_move 실패. 대신 mvY>leafN 으로 판정한다: 이동 뷰는 리프 대부분이 Y, 구매 뷰(조회 전
+      스테일 포함)는 리프 대부분이 N 이라 mvY 잔존(ETRI-014 형)이 있어도 갈린다. 합집합 뷰
+      (Y 132 · 리프N 630)도 거부된다.
 
     ⚠ 구매요청만의 `mvY==0` 하드 조건은 2026-09-01 제거 — ETRI-014 실측: 구매불가(PUR_FG=N)인데
       MV_FG='Y' 로 남는 리프가 이 뷰에도 잔존해(read_bom 335행/1건, save_units 619행/2건) 영원히
@@ -131,7 +138,8 @@ def view_accepts(sig: dict, *, move_only: bool) -> bool:
     if c <= 0:
         return False
     if move_only:
-        return (sig.get("mvY") or 0) > 0 and (sig.get("leafN") or 0) == 0
+        mv_y = sig.get("mvY") or 0
+        return mv_y > 0 and mv_y > (sig.get("leafN") or 0)
     return (sig.get("leafN") or 0) > 0
 
 

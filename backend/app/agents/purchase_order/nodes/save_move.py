@@ -59,6 +59,8 @@ def make_save_move_node():
             await emit_step(events, STEP, "done", _ms(t0))
             return {"move_request_no": resume["moveRequestNo"], "resume": resume}
 
+        # 조회 대기는 최대 3회×40초라 그동안 화면 변화가 없다 — 진행 중임을 먼저 알린다(2026-09-02).
+        await emit_log(events, "이동요청만 조회 중 — 뷰 반영을 기다립니다(최대 약 2분).", "info")
         q = await steps_write.query_view(page, move_only=True)
         if not q.get("ok"):
             last = ((q.get("attempts") or [{}])[-1]).get("signature") or {}

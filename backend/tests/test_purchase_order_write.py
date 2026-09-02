@@ -46,6 +46,10 @@ def test_find_set_rows_missing_and_duplicate_are_explicit():
 def test_view_accepts_move_only_vs_purchase_only():
     assert steps_write.view_accepts({"count": 163, "mvY": 132, "mvN": 31, "leafN": 0}, move_only=True)
     assert not steps_write.view_accepts({"count": 164, "mvY": 0, "mvN": 31, "leafN": 0}, move_only=True)
+    # ETRI-028 실측(2026-09-02): 이동요청만 뷰에 N 리프 5행 잔존 — leafN==0 하드 조건이면 영원히 미수락.
+    assert steps_write.view_accepts({"count": 112, "mvY": 76, "mvN": 36, "leafN": 5}, move_only=True)
+    # 조회 전 스테일 구매요청만 뷰(mvY 잔존 2)는 이동요청만으로 수락하면 안 된다.
+    assert not steps_write.view_accepts({"count": 686, "mvY": 2, "mvN": 684, "leafN": 650}, move_only=True)
     assert not steps_write.view_accepts({"count": 793, "mvY": 132, "mvN": 661, "leafN": 630}, move_only=True)
     assert steps_write.view_accepts({"count": 664, "mvY": 0, "mvN": 664, "leafN": 633}, move_only=False)
     # ETRI-014 잔존 mvY(2026-09-01 라이브) — 구매불가 리프가 MV_FG='Y' 로 남아도 구매요청만 수락.
