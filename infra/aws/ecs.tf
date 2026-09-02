@@ -67,7 +67,7 @@ resource "aws_ecs_task_definition" "api" {
       { name = "COOKIE_DOMAIN", value = var.enable_https ? var.cookie_domain : "" },
       { name = "TZ", value = "Asia/Seoul" },
       { name = "PYTHONUNBUFFERED", value = "1" },
-      { name = "ERP_SYNC_USERID", value = var.erp_sync_userid }, # 자정 자동 동기화 서비스 계정(비밀번호는 secrets)
+      { name = "ERP_SYNC_USERID", value = var.erp_sync_userid }, # ERP 자동 동기화 서비스 계정(비밀번호는 secrets)
     ]
 
     secrets = [

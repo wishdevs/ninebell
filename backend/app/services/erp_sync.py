@@ -17,20 +17,15 @@ import asyncio
 import logging
 import uuid
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import update
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import get_settings
 from app.db import get_sessionmaker
-from app.models import ErpSyncRun
-from app.models.erp_sync_run import (
-    STATUS_FAILED,
-    STATUS_RUNNING,
-    STATUS_SKIPPED,
-    STATUS_SUCCEEDED,
-)
+from app.models import ErpSyncRun, ErpSyncSetting
+from app.models.erp_sync_run import STATUS_FAILED, STATUS_RUNNING, STATUS_SUCCEEDED
 from app.services.code_sync import sync_catalog
 
 logger = logging.getLogger(__name__)
@@ -47,6 +42,25 @@ KIND_LABELS: dict[str, str] = {
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"
 
+# 항목별 동기화 주기 선택지(초, 고정 7종) — GET schedule.intervalOptions·PATCH 검증의 단일 소스.
+INTERVAL_OPTIONS: tuple[tuple[int, str], ...] = (
+    (3600, "1시간"),
+    (21600, "6시간"),
+    (43200, "12시간"),
+    (86400, "하루"),
+    (259200, "3일"),
+    (604800, "일주일"),
+    (2592000, "한달"),
+)
+INTERVAL_SECONDS: frozenset[int] = frozenset(s for s, _ in INTERVAL_OPTIONS)
+# erp_sync_settings 행이 없을 때의 기본 주기.
+DEFAULT_INTERVALS: dict[str, int] = {
+    "budget_unit": 3600,
+    "project": 3600,
+    "partner": 3600,
+    "org_unit": 604800,
+}
+
 BUSY_MSG = "동기화가 이미 진행 중입니다."
 NO_CREDENTIALS_MSG = "세션에 자격증명이 없습니다. 다시 로그인해 주세요."
 ORG_UNIT_NEEDS_ERP_ACCOUNT_MSG = (
@@ -58,7 +72,6 @@ LOCAL_ACCOUNT_NEEDS_SERVICE_MSG = (
     "로컬 계정은 ERP 로그인이 없어 동기화할 수 없습니다. 서비스 계정(ERP_SYNC_USERID/"
     "ERP_SYNC_PASSWORD)을 설정하거나 실제 ERP 계정으로 로그인해 주세요."
 )
-SKIP_REASON_BUSY = "다른 동기화가 진행 중이라 건너뜀"
 STALE_RUN_ERROR = "서버 재기동으로 중단됨"
 
 # 백그라운드 태스크 강참조 — 무참조 태스크는 GC 대상이라 실행 중 소멸하면 브라우저 누수 +
@@ -126,9 +139,78 @@ def resolve_credentials(
     raise CredentialError(409, NO_CREDENTIALS_MSG)
 
 
-# ── RAM 상태 + 이력 행 ─────────────────────────────────────────────────────────
+# ── 주기 설정 + 실행 판정 ────────────────────────────────────────────────────────
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware(dt: datetime | None) -> datetime | None:
+    """timestamptz 정규화 — SQLite(테스트)는 naive 로 돌려주므로 UTC 로 간주한다."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def interval_options() -> list[dict]:
+    return [{"seconds": s, "label": label} for s, label in INTERVAL_OPTIONS]
+
+
+async def load_intervals(session: AsyncSession) -> dict[str, int]:
+    """kind → 주기(초). 저장값이 없으면 기본값."""
+    rows = (await session.execute(select(ErpSyncSetting))).scalars().all()
+    intervals = dict(DEFAULT_INTERVALS)
+    for row in rows:
+        if row.kind in intervals:
+            intervals[row.kind] = row.interval_seconds
+    return intervals
+
+
+async def save_interval(
+    session: AsyncSession, kind: str, seconds: int, *, updated_by: uuid.UUID | None = None
+) -> None:
+    """kind 주기 upsert + commit. 값 검증(INTERVAL_SECONDS)은 호출자(라우터 422) 몫."""
+    row = await session.get(ErpSyncSetting, kind)
+    if row is None:
+        session.add(
+            ErpSyncSetting(
+                kind=kind, interval_seconds=seconds, updated_at=_now(), updated_by=updated_by
+            )
+        )
+    else:
+        row.interval_seconds = seconds
+        row.updated_at = _now()
+        row.updated_by = updated_by
+    await session.commit()
+
+
+async def last_started_at(session: AsyncSession, kind: str) -> datetime | None:
+    """kind 의 마지막 실행 **시작** 시각(상태 무관 — 실패해도 주기 뒤 재시도)."""
+    dt = (
+        await session.execute(
+            select(func.max(ErpSyncRun.started_at)).where(ErpSyncRun.kind == kind)
+        )
+    ).scalar()
+    return _aware(dt)
+
+
+def next_run_at(
+    last_started: datetime | None, interval_seconds: int, *, now: datetime | None = None
+) -> datetime:
+    """다음 실행 시각 = 마지막 실행 시작 + 주기. 이력이 없으면 지금(즉시 대상)."""
+    now = now or _now()
+    if last_started is None:
+        return now
+    return _aware(last_started) + timedelta(seconds=interval_seconds)
+
+
+def is_due(
+    last_started: datetime | None, interval_seconds: int, *, now: datetime | None = None
+) -> bool:
+    now = now or _now()
+    return next_run_at(last_started, interval_seconds, now=now) <= now
+
+
+# ── RAM 상태 + 이력 행 ─────────────────────────────────────────────────────────
 
 
 def _state(app) -> dict:
@@ -173,33 +255,6 @@ async def _close_run(
             update(ErpSyncRun)
             .where(ErpSyncRun.id == run_id)
             .values(status=status, finished_at=_now(), count=count, error=error, extra=extra)
-        )
-        await s.commit()
-
-
-async def record_skip(
-    app,
-    kind: str,
-    *,
-    trigger: str,
-    sessionmaker: async_sessionmaker,
-    actor_user_id: uuid.UUID | None = None,
-    reason: str = SKIP_REASON_BUSY,
-) -> None:
-    """건너뜀을 RAM(skipped 플래그)·이력(status=skipped) 양쪽에 남긴다(조용한 실패 금지)."""
-    _state(app)[kind] = {"running": False, "error": None, "skipped": True}
-    now = _now()
-    async with sessionmaker() as s:
-        s.add(
-            ErpSyncRun(
-                kind=kind,
-                trigger=trigger,
-                status=STATUS_SKIPPED,
-                started_at=now,
-                finished_at=now,
-                error=reason,
-                actor_user_id=actor_user_id,
-            )
         )
         await s.commit()
 

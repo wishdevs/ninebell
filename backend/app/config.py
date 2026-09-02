@@ -68,24 +68,19 @@ class Settings(BaseSettings):
     # 브라우저 전용 전환(API 스펙이 바뀌어 오작동할 때의 킬 스위치). org_unit 은 항상 브라우저.
     erp_api_sync_enabled: bool = True
 
-    # --- 일일 무인 카탈로그 동기화(스케줄러) ---
-    # 하루 1회 ERP 소스 데이터 4종을 자동 동기화한다(2026-09-02 기본 활성·자정·4종). 무인
-    # 실행이라 사용자 세션(CredCache) 대신 전용 서비스 계정이 필요하다 — 둘 다 비면 스케줄러는
-    # 뜨지 않고 GET /admin/erp-sync 가 active=false 로 이유를 노출한다. env
-    # ERP_SYNC_USERID/ERP_SYNC_PASSWORD. 저장소·로그에 비밀번호가 남지 않게 .env 로만 준다.
+    # --- 무인 ERP 소스 데이터 동기화(스케줄러) ---
+    # 항목(kind)별 주기(erp_sync_settings, 관리자 화면에서 설정 — 기본 1시간, ERP 조직 일주일)로
+    # 백그라운드 동기화한다(2026-09-02 자정 고정 → 항목별 주기). 무인 실행이라 사용자 세션
+    # (CredCache) 대신 전용 서비스 계정이 필요하다 — 둘 다 비면 스케줄러는 뜨지 않고
+    # GET /admin/erp-sync 가 active=false 로 이유를 노출한다. env ERP_SYNC_USERID/ERP_SYNC_PASSWORD.
+    # 저장소·로그에 비밀번호가 남지 않게 .env 로만 준다.
+    # erp_sync_daily_enabled: 이름은 env 호환(ERP_SYNC_DAILY_ENABLED)을 위해 유지 — '일일'이 아니라
+    # 스케줄러 전체 on/off 다.
     erp_sync_daily_enabled: bool = True
     erp_sync_userid: str = ""
     erp_sync_password: str = ""
-    # 실행 시각(HH:MM 24h, erp_sync_tz 기준). env ERP_SYNC_AT.
-    erp_sync_at: str = "00:00"
-    # 실행 시각의 타임존(zoneinfo 이름). 컨테이너 TZ 가 UTC 여도 KST 자정에 돈다. env ERP_SYNC_TZ.
+    # 표시용 타임존(zoneinfo 이름) — GET /admin/erp-sync schedule.tz. 실행 판정은 주기 기반이라 무관.
     erp_sync_tz: str = "Asia/Seoul"
-    # 동기화 대상 kind(쉼표). org_unit 은 브라우저 + 실 ERP 계정(서비스 계정)으로 org_units
-    # 반영·사용자 재배치까지 수행한다. env ERP_SYNC_KINDS.
-    erp_sync_kinds: str = "budget_unit,project,partner,org_unit"
-
-    def erp_sync_kind_list(self) -> list[str]:
-        return [x.strip() for x in self.erp_sync_kinds.split(",") if x.strip()]
 
     # --- Gemini(대화형 법인카드 에이전트 P3) ---
     gemini_api_key: str = ""  # env GEMINI_API_KEY(backend/.env). 없으면 chat_form 이 명확 실패.

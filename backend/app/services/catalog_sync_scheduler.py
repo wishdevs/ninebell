@@ -1,9 +1,11 @@
-"""일일 무인 ERP 소스 데이터 동기화 스케줄러 — lifespan 백그라운드 태스크.
+"""주기 기반 무인 ERP 소스 데이터 동기화 스케줄러 — lifespan 백그라운드 태스크.
 
-하루 1회(erp_sync_at, erp_sync_tz 기준 — 기본 Asia/Seoul 00:00) 예산단위·프로젝트·거래처·ERP 조직
-카탈로그를 순차 동기화한다. 무인 실행이라 사용자 세션(CredCache) 대신 전용 서비스 계정
-(erp_sync_userid/password)을 쓰고, 수동 동기화와 같은 1슬롯 세마포어·전역 ERP 실행 예산을
-공유한다(경합 시 그 kind 는 건너뛰고 이력에 skipped 로 남긴다). 실행 본체는 services.erp_sync.
+60초 틱마다 4종 kind 각각에 대해 "마지막 실행 시작 시각(erp_sync_runs 최근 행 started_at, 상태
+무관 — 실패해도 주기 뒤 재시도) + 항목별 주기(erp_sync_settings, 없으면 기본값)" 가 지났는지
+판정하고, 대상 kind 를 순차 실행한다(2026-09-02 자정 고정 → 항목별 주기). 무인 실행이라
+사용자 세션(CredCache) 대신 전용 서비스 계정(erp_sync_userid/password)을 쓰고, 수동 동기화와
+같은 1슬롯 세마포어·전역 ERP 실행 예산을 공유한다 — 수동 동기화가 슬롯을 쥐고 있으면 그 틱은
+건너뛰고 다음 틱에 다시 판정한다(스킵 이력 행은 남기지 않는다). 실행 본체는 services.erp_sync.
 
 기존 reaper 관례(app/live/session.reap_sessions 등)와 동일하게 `while True + asyncio.sleep` 이며
 lifespan finally 에서 cancel 된다. api 는 desired_count=1·인메모리 상태라 이 스케줄러도 단일
@@ -14,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, tzinfo
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import datetime
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_sessionmaker
@@ -23,95 +26,62 @@ from app.services import erp_sync
 
 logger = logging.getLogger(__name__)
 
-# 실행 후 같은 분에 재계산해 즉시 재실행되는 것을 막는 여유 슬립(초).
-_POST_RUN_GRACE_S = 60
-_DEFAULT_TZ = "Asia/Seoul"
-
-
-def _parse_hhmm(value: str) -> tuple[int, int]:
-    """"HH:MM" → (hour, minute). 형식 오류면 기본 00:00 으로 폴백(경고)."""
-    try:
-        hh, mm = value.strip().split(":", 1)
-        hour, minute = int(hh), int(mm)
-        if 0 <= hour < 24 and 0 <= minute < 60:
-            return hour, minute
-    except (ValueError, AttributeError):
-        pass
-    logger.warning("ERP_SYNC_AT 형식 오류(%r) — 00:00 으로 폴백", value)
-    return 0, 0
-
-
-def _zone(name: str) -> tzinfo:
-    """zoneinfo 이름 → tzinfo. 알 수 없는 이름이면 Asia/Seoul 로 폴백(경고)."""
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning("ERP_SYNC_TZ 를 알 수 없음(%r) — %s 로 폴백", name, _DEFAULT_TZ)
-        return ZoneInfo(_DEFAULT_TZ)
-
-
-def _next_run(hour: int, minute: int, *, now: datetime) -> datetime:
-    """now 기준 다음 HH:MM(오늘 시각이 지났으면 내일). now 의 tzinfo 를 그대로 따른다."""
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return target
-
-
-def _seconds_until(
-    hour: int, minute: int, *, now: datetime | None = None, tz: tzinfo | None = None
-) -> float:
-    """다음 HH:MM 까지 남은 초. now 미지정 시 tz 의 현재 시각(tz 도 없으면 서버 로컬)."""
-    now = now or datetime.now(tz)
-    return (_next_run(hour, minute, now=now) - now).total_seconds()
+# 판정 주기(초). 주기 선택지의 최소가 1시간이라 60초면 충분히 촘촘하다.
+TICK_S = 60
 
 
 def schedule_status(settings) -> dict:
     """GET /admin/erp-sync 의 schedule 블록 — 설정에서 파생(비밀번호 값은 노출하지 않는다)."""
     configured = erp_sync.service_account(settings) is not None
     enabled = bool(settings.erp_sync_daily_enabled)
-    active = enabled and configured
-    next_run_at = None
-    if active:
-        hour, minute = _parse_hhmm(settings.erp_sync_at)
-        tz = _zone(settings.erp_sync_tz)
-        next_run_at = _next_run(hour, minute, now=datetime.now(tz)).isoformat()
     return {
         "enabled": enabled,
-        "at": settings.erp_sync_at,
-        "tz": settings.erp_sync_tz,
-        "kinds": settings.erp_sync_kind_list(),
         "serviceAccountConfigured": configured,
-        "active": active,
-        "nextRunAt": next_run_at,
+        "active": enabled and configured,
+        "tz": settings.erp_sync_tz,
+        "intervalOptions": erp_sync.interval_options(),
     }
 
 
-async def _guarded_sync(app, kind: str, userid: str, password: str) -> None:
-    """1슬롯 세마포어를 잡고 kind 1건 실행(공용 러너) — 슬롯 점유 중이면 건너뛰고 skipped 기록.
+async def due_kinds(session: AsyncSession, *, now: datetime | None = None) -> list[str]:
+    """이번 틱에 실행할 kind — KINDS 순서. 이력 없음 → 즉시, 마지막 시작 + 주기 ≤ now → 대상."""
+    intervals = await erp_sync.load_intervals(session)
+    due: list[str] = []
+    for kind in erp_sync.KINDS:
+        last = await erp_sync.last_started_at(session, kind)
+        if erp_sync.is_due(last, intervals[kind], now=now):
+            due.append(kind)
+    return due
 
-    수동 동기화가 슬롯을 쥐고 있으면(locked) 이 kind 는 건너뛴다(무인 작업이 사용자 조작을
-    막지 않도록). 세마포어 반납은 run_kinds 의 finally 가 맡는다.
+
+async def tick(app, userid: str, password: str, *, now: datetime | None = None) -> list[str]:
+    """한 틱 — 슬롯이 비어 있고 대상 kind 가 있으면 슬롯을 잡고 순차 실행. 실행한 kind 목록을 반환.
+
+    세마포어 반납은 run_kinds 의 finally 가 맡는다. DB 판정 중 수동 동기화가 슬롯을 잡았으면
+    이번 틱은 건너뛴다(locked 재확인 → acquire 사이에 await 가 없어 원자적).
     """
     semaphore = app.state.catalog_sync_semaphore
-    sessionmaker = get_sessionmaker()
     if semaphore.locked():
-        logger.info("일일 동기화 건너뜀(kind=%s) — 다른 동기화가 진행 중", kind)
-        await erp_sync.record_skip(
-            app, kind, trigger=erp_sync.TRIGGER_SCHEDULED, sessionmaker=sessionmaker
-        )
-        return
+        return []
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        due = await due_kinds(session, now=now)
+    if not due or semaphore.locked():
+        return []
     await semaphore.acquire()
+    logger.info("주기 ERP 동기화 시작 — kinds=%s", due)
     await erp_sync.run_kinds(
-        app, [(kind, userid, password)],
+        app, [(kind, userid, password) for kind in due],
         trigger=erp_sync.TRIGGER_SCHEDULED, sessionmaker=sessionmaker,
     )
+    return due
 
 
-async def run_daily_catalog_sync(app) -> None:
-    """일일 동기화 루프. 설정 미비(비활성·서비스계정 없음)면 조용히 종료한다.
+async def run_catalog_sync_scheduler(app) -> None:
+    """스케줄러 루프. 설정 미비(비활성·서비스계정 없음)면 조용히 종료한다.
 
     lifespan 이 asyncio.create_task 로 띄우고 finally 에서 cancel 한다. CancelledError 는 정상 종료.
+    틱 내부 예외(DB 등)는 로그로 남기고 다음 틱에 재시도한다 — 루프가 죽어 조용히 멈추지 않게.
     """
     settings = get_settings()
     if not settings.erp_sync_daily_enabled:
@@ -119,25 +89,22 @@ async def run_daily_catalog_sync(app) -> None:
     svc = erp_sync.service_account(settings)
     if svc is None:
         logger.warning(
-            "일일 ERP 동기화가 켜졌으나 ERP_SYNC_USERID/ERP_SYNC_PASSWORD 가 없습니다 — 비활성"
+            "ERP 동기화 스케줄러가 켜졌으나 ERP_SYNC_USERID/ERP_SYNC_PASSWORD 가 없습니다 — 비활성"
         )
         return
     userid, password = svc
-
-    hour, minute = _parse_hhmm(settings.erp_sync_at)
-    tz = _zone(settings.erp_sync_tz)
-    kinds = settings.erp_sync_kind_list()
     logger.info(
-        "일일 ERP 동기화 스케줄러 시작 — 매일 %02d:%02d (%s), kinds=%s",
-        hour, minute, settings.erp_sync_tz, kinds,
+        "ERP 동기화 스케줄러 시작 — %d초 틱, 항목별 주기(기본 %s)", TICK_S, erp_sync.DEFAULT_INTERVALS
     )
     try:
         while True:
-            await asyncio.sleep(_seconds_until(hour, minute, tz=tz))
-            logger.info("일일 ERP 동기화 시작 — kinds=%s", kinds)
-            for kind in kinds:
-                await _guarded_sync(app, kind, userid, password)
-            await asyncio.sleep(_POST_RUN_GRACE_S)  # 같은 분 재실행 방지.
+            await asyncio.sleep(TICK_S)
+            try:
+                await tick(app, userid, password)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — 틱 실패는 로그로 표면화하고 루프는 유지
+                logger.exception("ERP 동기화 스케줄러 틱 실패 — 다음 틱에 재시도")
     except asyncio.CancelledError:  # lifespan 종료 — 정상.
-        logger.info("일일 ERP 동기화 스케줄러 종료")
+        logger.info("ERP 동기화 스케줄러 종료")
         raise

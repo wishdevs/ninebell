@@ -9,6 +9,9 @@
  *   POST /admin/erp-sync/{kind}                   → 202 {started:true} | 409/400(한글 detail)
  *   POST /admin/erp-sync/all                      → 202 {started:true, kinds:[…]} | 409
  *   GET  /admin/erp-sync/runs?kind=&limit=20      → {items: ErpSyncRunRow[]} 최신순
+ *   PATCH /admin/erp-sync/{kind} {intervalSeconds} → {kind, intervalSeconds, nextRunAt} | 422
+ *
+ * v2(2026-09-02): 자정 고정 스케줄 → 항목별 주기. 판정은 각 kind 의 최근 실행 시작 시각 기준이다.
  */
 
 import { api } from './client';
@@ -64,20 +67,27 @@ export interface ErpSyncItem {
   /** 성공 실행 max(finished_at), 없으면 카탈로그 max(synced_at) 폴백. */
   lastSuccessAt: string | null;
   lastRun: ErpSyncRun | null;
+  /** 항목별 자동 동기화 주기(초) — 저장값 또는 기본값(v2, 2026-09-02). */
+  intervalSeconds: number;
+  /** active 일 때 최근 실행 started_at + interval(이력 없으면 now). active=false 면 null. */
+  nextRunAt: string | null;
+}
+
+/** 주기 선택지 1개 — 값은 초 단위로 고정(1시간 3600 … 한달 2592000). */
+export interface ErpSyncIntervalOption {
+  seconds: number;
+  label: string;
 }
 
 export interface ErpSyncSchedule {
   enabled: boolean;
-  /** "HH:MM". */
-  at: string;
   tz: string;
-  kinds: ErpSyncKind[];
   /** ERP_SYNC_USERID/PASSWORD 존재 여부(값은 노출되지 않는다). */
   serviceAccountConfigured: boolean;
   /** enabled && serviceAccountConfigured — 스케줄러 루프가 실제로 도는가. */
   active: boolean;
-  /** active 일 때만. */
-  nextRunAt: string | null;
+  /** 항목별 주기 select 의 옵션 — 7개 고정. */
+  intervalOptions: ErpSyncIntervalOption[];
 }
 
 /** 이 관리자가 '지금 동기화'를 누르면 쓰이는 자격증명 — 세션 ERP 계정 / 서비스 계정 / 없음. */
@@ -105,6 +115,21 @@ export function startErpSync(kind: ErpSyncKind): Promise<{ started: boolean }> {
 /** `POST /admin/erp-sync/all` — 4종을 한 백그라운드 태스크에서 순차 실행. 진행 중이면 409. */
 export function startErpSyncAll(): Promise<{ started: boolean; kinds: ErpSyncKind[] }> {
   return api.post<{ started: boolean; kinds: ErpSyncKind[] }>('/admin/erp-sync/all', {});
+}
+
+/** PATCH 응답 — 저장된 주기와 그로부터 계산된 다음 실행 시각. */
+export interface ErpSyncIntervalResult {
+  kind: ErpSyncKind;
+  intervalSeconds: number;
+  nextRunAt: string | null;
+}
+
+/** `PATCH /admin/erp-sync/{kind}` — 항목 주기 저장. 7개 옵션 외 값은 422(한글 detail). */
+export function updateErpSyncInterval(
+  kind: ErpSyncKind,
+  seconds: number,
+): Promise<ErpSyncIntervalResult> {
+  return api.patch<ErpSyncIntervalResult>(`/admin/erp-sync/${kind}`, { intervalSeconds: seconds });
 }
 
 /** `GET /admin/erp-sync/runs` — 최근 실행 이력(최신순). */

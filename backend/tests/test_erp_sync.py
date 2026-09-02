@@ -2,7 +2,8 @@
 
 - 러너: 성공/실패/건너뜀이 erp_sync_runs 이력 + RAM 상태에 남는다, 세마포어 반납, launch 즉시 running 행.
 - 자격증명 폴백: 세션 우선 → 서비스 계정 → 없음(409/400), org_unit 로컬 계정 예외.
-- API: GET 응답 shape(schedule/credentialSource/items 4종 순서), 403, POST 422/409/400, all 순차.
+- API: GET 응답 shape(schedule/credentialSource/items 4종 순서 + intervalSeconds/nextRunAt), 403,
+  POST 422/409/400, all 순차, PATCH 주기 저장(검증·기본값·반영).
 sync_catalog 는 fake 로 주입(실 ERP 미접속).
 """
 
@@ -27,14 +28,10 @@ def _settings(**over) -> SimpleNamespace:
         erp_sync_daily_enabled=True,
         erp_sync_userid="svc",
         erp_sync_password="svc-pw",
-        erp_sync_at="00:00",
         erp_sync_tz="Asia/Seoul",
-        erp_sync_kinds="budget_unit,project,partner,org_unit",
     )
     base.update(over)
-    ns = SimpleNamespace(**base)
-    ns.erp_sync_kind_list = lambda: [x for x in ns.erp_sync_kinds.split(",") if x]
-    return ns
+    return SimpleNamespace(**base)
 
 
 def _fake_app(*, locked: bool = False) -> SimpleNamespace:
@@ -109,15 +106,6 @@ async def test_execute_kind_records_failure(sm, monkeypatch):
     (row,) = await _rows(sm)
     assert row.status == "failed" and row.error == "ERP 로그인 거부" and row.count is None
     assert app.state.catalog_sync_state["project"]["error"] == "ERP 로그인 거부"
-
-
-@pytest.mark.asyncio
-async def test_record_skip_persists_skipped_row(sm):
-    app = _fake_app()
-    await erp_sync.record_skip(app, "partner", trigger=erp_sync.TRIGGER_SCHEDULED, sessionmaker=sm)
-    (row,) = await _rows(sm)
-    assert row.status == "skipped" and row.finished_at is not None and "진행 중" in row.error
-    assert app.state.catalog_sync_state["partner"] == {"running": False, "error": None, "skipped": True}
 
 
 @pytest.mark.asyncio
@@ -237,13 +225,16 @@ def test_credential_source():
 
 def test_schedule_status_active_and_inactive():
     active = sched.schedule_status(_settings())
+    assert set(active) == {"enabled", "serviceAccountConfigured", "active", "tz", "intervalOptions"}
     assert active["active"] is True and active["serviceAccountConfigured"] is True
-    assert active["at"] == "00:00" and active["tz"] == "Asia/Seoul"
-    assert active["kinds"] == ["budget_unit", "project", "partner", "org_unit"]
-    nxt = datetime.fromisoformat(active["nextRunAt"])
-    assert nxt.utcoffset() == timedelta(hours=9) and (nxt.hour, nxt.minute) == (0, 0)
+    assert active["tz"] == "Asia/Seoul"
+    assert [o["seconds"] for o in active["intervalOptions"]] == [
+        3600, 21600, 43200, 86400, 259200, 604800, 2592000,
+    ]
+    assert active["intervalOptions"][0] == {"seconds": 3600, "label": "1시간"}
+    assert active["intervalOptions"][-1]["label"] == "한달"
     inactive = sched.schedule_status(_settings(erp_sync_password=""))
-    assert inactive["enabled"] is True and inactive["active"] is False and inactive["nextRunAt"] is None
+    assert inactive["enabled"] is True and inactive["active"] is False
     assert inactive["serviceAccountConfigured"] is False
     assert "svc" not in str(active) and "svc-pw" not in str(active)  # 값 미노출
 
@@ -299,8 +290,10 @@ async def test_overview_shape(client, make_user, auth_as, sm, api_settings, sess
     body = (await client.get("/admin/erp-sync")).json()
     assert set(body) == {"schedule", "credentialSource", "items"}
     assert body["credentialSource"] == "service"
-    assert body["schedule"]["active"] is True and body["schedule"]["nextRunAt"]
+    assert body["schedule"]["active"] is True and len(body["schedule"]["intervalOptions"]) == 7
     assert [i["kind"] for i in body["items"]] == ["budget_unit", "project", "partner", "org_unit"]
+    # 주기: 저장값 없음 → 기본값(1시간, ERP 조직 일주일). 다음 실행 = 마지막 실행 시작 + 주기.
+    assert [i["intervalSeconds"] for i in body["items"]] == [3600, 3600, 3600, 604800]
     by = {i["kind"]: i for i in body["items"]}
     assert by["project"]["label"] == "프로젝트" and by["project"]["count"] == 2
     assert by["project"]["running"] is False
@@ -316,6 +309,71 @@ async def test_overview_shape(client, make_user, auth_as, sm, api_settings, sess
     assert by["partner"]["lastRun"] is None
     assert by["budget_unit"]["lastSuccessAt"] is None and by["budget_unit"]["count"] == 0
     assert by["org_unit"]["lastRun"]["applied"] == {"added": 1} and by["org_unit"]["lastRun"]["reassigned"] == 3
+    # nextRunAt: 이력 없음 → 지금(≈now), 있음 → 최근 실행 startedAt + 주기(상태 무관·최근 행 기준).
+    assert abs(datetime.fromisoformat(by["budget_unit"]["nextRunAt"]) - now) < timedelta(seconds=30)
+    assert datetime.fromisoformat(by["project"]["nextRunAt"]) == (
+        datetime.fromisoformat(by["project"]["lastRun"]["startedAt"]) + timedelta(hours=1)
+    )
+    assert datetime.fromisoformat(by["org_unit"]["nextRunAt"]) == (
+        datetime.fromisoformat(by["org_unit"]["lastRun"]["startedAt"]) + timedelta(days=7)
+    )
+    assert set(by["partner"]) == {"kind", "label", "running", "count", "lastSuccessAt", "lastRun",
+                                  "intervalSeconds", "nextRunAt"}
+
+
+async def test_overview_next_run_null_when_scheduler_inactive(client, make_user, auth_as, api_settings, session_password):
+    api_settings(erp_sync_password="")
+    session_password(None)
+    auth_as(await make_user("es-admin-inactive", "admin"))
+    body = (await client.get("/admin/erp-sync")).json()
+    assert body["schedule"]["active"] is False
+    assert all(i["nextRunAt"] is None for i in body["items"])
+    assert [i["intervalSeconds"] for i in body["items"]] == [3600, 3600, 3600, 604800]
+
+
+async def test_patch_interval_validation_and_persist(client, make_user, auth_as, sm, api_settings, session_password):
+    api_settings()
+    session_password(None)
+    uid = await make_user("es-admin-patch", "admin")
+    auth_as(uid)
+    assert (await client.patch("/admin/erp-sync/nope", json={"intervalSeconds": 3600})).status_code == 422
+    resp = await client.patch("/admin/erp-sync/budget_unit", json={"intervalSeconds": 1234})
+    assert resp.status_code == 422 and "주기" in resp.json()["error"]
+    assert (await client.patch("/admin/erp-sync/budget_unit", json={})).status_code == 422
+    # 이력 1건(30분 전) → 저장 후 nextRunAt = startedAt + 6시간.
+    started = datetime.now(timezone.utc) - timedelta(minutes=30)
+    async with sm() as s:
+        s.add(ErpSyncRun(kind="budget_unit", trigger="manual", status="failed", started_at=started,
+                         finished_at=started, error="x"))
+        await s.commit()
+    resp = await client.patch("/admin/erp-sync/budget_unit", json={"intervalSeconds": 21600})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "budget_unit" and body["intervalSeconds"] == 21600
+    assert datetime.fromisoformat(body["nextRunAt"]) == started.replace(microsecond=started.microsecond) + timedelta(hours=6)
+    # GET 반영 + 다른 kind 는 기본값 유지.
+    items = {i["kind"]: i for i in (await client.get("/admin/erp-sync")).json()["items"]}
+    assert items["budget_unit"]["intervalSeconds"] == 21600
+    assert items["budget_unit"]["nextRunAt"] == body["nextRunAt"]
+    assert items["project"]["intervalSeconds"] == 3600 and items["org_unit"]["intervalSeconds"] == 604800
+    # 재저장은 행을 갱신(중복 행 없음) + updated_by 기록.
+    assert (await client.patch("/admin/erp-sync/budget_unit", json={"intervalSeconds": 3600})).status_code == 200
+    from app.models import ErpSyncSetting
+
+    async with sm() as s:
+        rows = (await s.execute(select(ErpSyncSetting))).scalars().all()
+    assert len(rows) == 1 and rows[0].interval_seconds == 3600 and rows[0].updated_by == uid
+    # 스케줄러 판정도 저장값을 본다.
+    async with sm() as s:
+        assert await erp_sync.load_intervals(s) == {
+            "budget_unit": 3600, "project": 3600, "partner": 3600, "org_unit": 604800,
+        }
+
+
+async def test_patch_interval_requires_admin(client, make_user, auth_as, api_settings):
+    api_settings()
+    auth_as(await make_user("es-user-patch", "user"))
+    assert (await client.patch("/admin/erp-sync/budget_unit", json={"intervalSeconds": 3600})).status_code == 403
 
 
 async def test_post_kind_validation_and_credential_errors(client, make_user, auth_as, sm, api_settings, session_password):

@@ -4,7 +4,8 @@
 시각·최근 실행 결과를 보고 즉시 동기화한다. 실행 본체·자격증명 폴백은 services.erp_sync,
 스케줄 상태는 services.catalog_sync_scheduler.schedule_status. 응답은 프론트 규약대로 camelCase.
 
-- GET  /admin/erp-sync            : 스케줄 상태 + 이 관리자의 자격증명 소스 + kind 별 현황.
+- GET  /admin/erp-sync            : 스케줄 상태(주기 선택지) + 이 관리자의 자격증명 소스 + kind 별 현황.
+- PATCH /admin/erp-sync/{kind}    : 항목별 동기화 주기 저장(intervalSeconds, 7종 외 422).
 - POST /admin/erp-sync/all        : 4종 순차(한 태스크) → 202.
 - POST /admin/erp-sync/{kind}     : 단건 → 202. 세션 비밀번호 우선, 서비스 계정 폴백.
 - GET  /admin/erp-sync/runs       : 실행 이력 최신순(kind·limit).
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
 import app.db as appdb
@@ -63,7 +65,11 @@ def _runs_query(kind: str | None):
     return stmt.order_by(ErpSyncRun.started_at.desc(), ErpSyncRun.id.desc())
 
 
-async def _kind_item(db, sync_state: dict, kind: str) -> dict:
+class IntervalIn(BaseModel):
+    intervalSeconds: int
+
+
+async def _kind_item(db, sync_state: dict, kind: str, *, interval: int, active: bool) -> dict:
     count = (
         await db.execute(
             select(func.count()).select_from(ErpCodeCatalog).where(ErpCodeCatalog.kind == kind)
@@ -84,6 +90,8 @@ async def _kind_item(db, sync_state: dict, kind: str) -> dict:
             )
         ).scalar()
     last = (await db.execute(_runs_query(kind).limit(1))).first()
+    # 다음 자동 실행 = 마지막 실행 시작(상태 무관) + 주기, 이력 없으면 지금. 스케줄러 비활성이면 null.
+    next_run = erp_sync.next_run_at(last[0].started_at if last else None, interval) if active else None
     return {
         "kind": kind,
         "label": erp_sync.KIND_LABELS[kind],
@@ -91,19 +99,42 @@ async def _kind_item(db, sync_state: dict, kind: str) -> dict:
         "count": count,
         "lastSuccessAt": _iso(last_success),
         "lastRun": _run_dict(last[0], last[1]) if last else None,
+        "intervalSeconds": interval,
+        "nextRunAt": _iso(next_run),
     }
 
 
 @router.get("")
 async def overview(request: Request, user: RequireAdmin, db: DbSession) -> dict:
     settings = get_settings()
+    schedule = schedule_status(settings)
     sync_state = getattr(request.app.state, "catalog_sync_state", {})
-    items = [await _kind_item(db, sync_state, kind) for kind in erp_sync.KINDS]
+    intervals = await erp_sync.load_intervals(db)
+    items = [
+        await _kind_item(db, sync_state, kind, interval=intervals[kind], active=schedule["active"])
+        for kind in erp_sync.KINDS
+    ]
     return {
-        "schedule": schedule_status(settings),
+        "schedule": schedule,
         "credentialSource": erp_sync.credential_source(user, omnisol_password(request), settings),
         "items": items,
     }
+
+
+@router.patch("/{kind}")
+async def set_interval(kind: str, body: IntervalIn, user: RequireAdmin, db: DbSession):
+    """항목별 동기화 주기 저장 — 저장 즉시 다음 스케줄러 틱부터 반영."""
+    if kind not in erp_sync.KINDS:
+        return JSONResponse({"error": f"알 수 없는 kind: {kind}"}, status_code=422)
+    if body.intervalSeconds not in erp_sync.INTERVAL_SECONDS:
+        return JSONResponse(
+            {"error": f"허용되지 않는 주기입니다: {body.intervalSeconds}"}, status_code=422
+        )
+    await erp_sync.save_interval(db, kind, body.intervalSeconds, updated_by=user.id)
+    next_run = None
+    if schedule_status(get_settings())["active"]:
+        next_run = erp_sync.next_run_at(await erp_sync.last_started_at(db, kind), body.intervalSeconds)
+    return {"kind": kind, "intervalSeconds": body.intervalSeconds, "nextRunAt": _iso(next_run)}
 
 
 @router.get("/runs")

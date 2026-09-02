@@ -139,7 +139,7 @@ variable "gemini_api_key" {
   default   = ""
 }
 
-# 자정(Asia/Seoul) ERP 자동 동기화 서비스 계정(2026-09-02). userid 는 평문 env, password 는 Secrets Manager.
+# ERP 자동 동기화 서비스 계정(2026-09-02, 주기는 관리 화면에서 항목별 설정). userid 는 평문 env, password 는 Secrets Manager.
 variable "erp_sync_userid" {
   type    = string
   default = ""

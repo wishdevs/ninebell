@@ -1,12 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RiErrorWarningLine, RiRefreshLine, RiTimeLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiErrorWarningLine, RiRefreshLine, RiTimeLine } from '@remixicon/react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LockedEmptyState } from '@/components/ui/list-state';
-import { MetaChip } from '@/components/ui/meta-chip';
 import { SectionCard } from '@/components/ui/section-card';
 import { Spinner } from '@/components/ui/spinner';
 import { StatusDotPill, StatusPill } from '@/components/ui/status-pill';
@@ -21,6 +20,8 @@ import {
   reassignedCount,
   startErpSync,
   startErpSyncAll,
+  updateErpSyncInterval,
+  type ErpSyncIntervalOption,
   type ErpSyncItem,
   type ErpSyncKind,
   type ErpSyncOverview,
@@ -68,6 +69,14 @@ function orgApplySummary(run: ErpSyncRun): string | null {
   return `추가 ${added} · 삭제 ${deleted} · 재배치 ${reassignedCount(run)}`;
 }
 
+/** 조사 '(으)로' — 받침 없음·ㄹ 받침이면 '로', 그 외 '으로'. "6시간으로" / "하루로" / "3일로". */
+function roParticle(word: string): string {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  if (code < 0 || code > 11171) return '으로';
+  const jong = code % 28;
+  return jong === 0 || jong === 8 ? '로' : '으로';
+}
+
 /** 스케줄 비활성 사유 — 필 옆 안내 문구. active 면 null. */
 function scheduleReason(s: ErpSyncSchedule): string | null {
   if (s.active) return null;
@@ -108,6 +117,9 @@ export function ErpSyncClient() {
   const [polling, setPolling] = useState(false);
   // 시작 요청 중인 대상 — 응답이 오기 전 이중 클릭 방지('all' 은 전체 버튼).
   const [starting, setStarting] = useState<ErpSyncKind | 'all' | null>(null);
+  // 주기 select 의 낙관적 값 — PATCH 응답 전까지만 유지하고, 끝나면 overview 값으로 돌아간다.
+  const [intervalDraft, setIntervalDraft] = useState<Partial<Record<ErpSyncKind, number>>>({});
+  const [savingInterval, setSavingInterval] = useState<ErpSyncKind | null>(null);
   // kind 별로 결과를 이미 알린 lastRun.id — 새 id 가 종료 상태로 보이면 토스트한다.
   // running→종료 전이만 보면 한 폴링 간격(3초) 안에 시작·종료한 빠른 실행(전체 동기화의 API 경로
   // kind)을 놓친다(2026-09-02 실측: 프로젝트 토스트 누락).
@@ -207,6 +219,33 @@ export function ErpSyncClient() {
     }
   };
 
+  /** 주기 변경 — 즉시 PATCH. 성공이면 토스트 후 현황 재조회, 실패면 이전 값으로 되돌리고 오류 토스트. */
+  const changeInterval = async (item: ErpSyncItem, seconds: number) => {
+    if (seconds === item.intervalSeconds) return;
+    setIntervalDraft((d) => ({ ...d, [item.kind]: seconds }));
+    setSavingInterval(item.kind);
+    try {
+      await updateErpSyncInterval(item.kind, seconds);
+      const label =
+        overview?.schedule.intervalOptions.find((o) => o.seconds === seconds)?.label ??
+        `${seconds}초`;
+      toast.success(`${item.label} 주기를 ${label}${roParticle(label)} 저장했습니다`);
+      try {
+        setOverview(await fetchErpSyncOverview());
+      } catch {
+        /* 재조회 실패는 다음 진입/폴링에서 회복 — 저장 자체는 성공 */
+      }
+    } catch (err) {
+      toast.error(errorMessage(err, '주기를 저장하지 못했습니다.'));
+    } finally {
+      // 성공이면 재조회된 overview 값이, 실패면 원래 item.intervalSeconds 가 다시 보인다.
+      setIntervalDraft((d) =>
+        Object.fromEntries(Object.entries(d).filter(([k]) => k !== item.kind)),
+      );
+      setSavingInterval(null);
+    }
+  };
+
   const runAll = async () => {
     setStarting('all');
     try {
@@ -283,12 +322,13 @@ export function ErpSyncClient() {
         </div>
 
         <TableCard
-          minWidth={880}
+          minWidth={1000}
           ariaLabel="ERP 동기화 현황"
           head={
             <tr>
               <Th>항목</Th>
               <Th className="text-right">건수</Th>
+              <Th>주기</Th>
               <Th>마지막 성공 동기화</Th>
               <Th>최근 실행</Th>
               <Th className="w-28 text-right">
@@ -307,6 +347,15 @@ export function ErpSyncClient() {
               </Td>
               <Td className="text-foreground text-right align-top tabular-nums">
                 {item.count.toLocaleString('ko-KR')}
+              </Td>
+              <Td className="align-top">
+                <IntervalCell
+                  item={item}
+                  options={schedule.intervalOptions}
+                  value={intervalDraft[item.kind] ?? item.intervalSeconds}
+                  saving={savingInterval === item.kind}
+                  onChange={(seconds) => void changeInterval(item, seconds)}
+                />
               </Td>
               <Td className="text-foreground-secondary align-top tabular-nums">
                 {item.lastSuccessAt ? (
@@ -352,7 +401,7 @@ export function ErpSyncClient() {
   );
 }
 
-/** 상단 자동 동기화 카드 — 상태 필·일정·다음 실행·대상·즉시 동기화 자격증명. */
+/** 상단 자동 동기화 카드 — 상태 필·실행 방식(항목별 주기)·즉시 동기화 자격증명. 주기 자체는 표의 열이다. */
 function ScheduleCard({
   schedule,
   credentialSource,
@@ -365,7 +414,7 @@ function ScheduleCard({
     <SectionCard
       caption="스케줄"
       title="자동 동기화"
-      description="매일 정해진 시각에 4종 전부를 백그라운드로 최신화합니다."
+      description="항목별 주기로 백그라운드 실행 · 마지막 실행 기준"
       action={<StatusDotPill active={schedule.active} />}
       className="min-w-0"
     >
@@ -374,39 +423,84 @@ function ScheduleCard({
           {reason}
         </p>
       ) : null}
-      <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Fact label="실행 시각">
-          <span className="text-foreground text-lg font-semibold tracking-tight tabular-nums">
-            매일 {schedule.at}
+      <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+        <Fact label="실행 방식">
+          <span className="text-foreground text-sm leading-relaxed">
+            각 항목의 마지막 실행 시작 시각에서 주기가 지나면 다시 실행합니다. 실패해도 주기 뒤에
+            재시도하고, 실행 이력이 없으면 즉시 대상입니다. 주기는 아래 표에서 항목마다 고릅니다.
           </span>
-          <span className="text-foreground-tertiary block text-xs">{schedule.tz}</span>
-        </Fact>
-        <Fact label="다음 실행">
-          {schedule.nextRunAt ? (
-            <time
-              dateTime={schedule.nextRunAt}
-              title={schedule.nextRunAt}
-              className="text-foreground flex items-center gap-1.5 text-sm font-medium tabular-nums"
-            >
-              <RiTimeLine size={14} aria-hidden className="text-foreground-tertiary" />
-              {formatDateTime(schedule.nextRunAt)}
-            </time>
-          ) : (
-            <span className="text-foreground-tertiary text-sm">예정 없음</span>
-          )}
-        </Fact>
-        <Fact label="대상">
-          <div className="flex flex-wrap gap-1">
-            {schedule.kinds.map((k) => (
-              <MetaChip key={k}>{KIND_LABEL[k] ?? k}</MetaChip>
-            ))}
-          </div>
+          <span className="text-foreground-tertiary block text-xs">{schedule.tz} 기준</span>
         </Fact>
         <Fact label="즉시 동기화 자격증명">
           <CredentialSource source={credentialSource} />
         </Fact>
       </dl>
     </SectionCard>
+  );
+}
+
+/** 주기 셀 — 네이티브 select(테두리+배경, 포커스 링 없음) + 그 아래 다음 실행 시각. */
+function IntervalCell({
+  item,
+  options,
+  value,
+  saving,
+  onChange,
+}: {
+  item: ErpSyncItem;
+  options: ErpSyncIntervalOption[];
+  value: number;
+  saving: boolean;
+  onChange: (seconds: number) => void;
+}) {
+  // 저장값이 옵션 밖(서버 기본값 변경 등)이면 그 값도 보여야 select 가 빈 칸이 되지 않는다.
+  const known = options.some((o) => o.seconds === value);
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="relative inline-flex w-[7.5rem]">
+        <select
+          aria-label={`${item.label} 동기화 주기`}
+          value={value}
+          disabled={saving}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className={cn(
+            'border-border bg-surface text-foreground h-8 w-full appearance-none rounded-sm border py-1 pr-7 pl-2.5 text-xs font-medium transition-colors outline-none',
+            'hover:bg-muted focus:border-accent focus:bg-accent/5 focus-visible:outline-none',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          {!known ? <option value={value}>{value}초</option> : null}
+          {options.map((o) => (
+            <option key={o.seconds} value={o.seconds}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {saving ? (
+          <Spinner
+            size={12}
+            className="text-foreground-tertiary pointer-events-none absolute top-1/2 right-2 -translate-y-1/2"
+          />
+        ) : (
+          <RiArrowDownSLine
+            aria-hidden
+            className="text-foreground-tertiary pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2"
+          />
+        )}
+      </span>
+      {item.nextRunAt ? (
+        <time
+          dateTime={item.nextRunAt}
+          title={item.nextRunAt}
+          className="text-foreground-tertiary flex items-center gap-1 text-[11px] tabular-nums"
+        >
+          <RiTimeLine size={12} aria-hidden />
+          다음 실행 {formatDateTime(item.nextRunAt)}
+        </time>
+      ) : (
+        <span className="text-foreground-tertiary text-[11px]">자동 실행 없음</span>
+      )}
+    </div>
   );
 }
 

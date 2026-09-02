@@ -15,7 +15,7 @@ export default function ErpSyncPage() {
       <PageHeader
         caption="관리"
         title="ERP 동기화"
-        description="예산단위·프로젝트·거래처·ERP 조직의 기준정보를 옴니솔에서 가져옵니다. 매일 자정에 자동으로 최신화되며, 필요하면 여기서 즉시 동기화할 수 있습니다."
+        description="예산단위·프로젝트·거래처·ERP 조직의 기준정보를 옴니솔에서 가져옵니다. 항목별로 정한 주기마다 자동으로 최신화되며, 필요하면 여기서 즉시 동기화할 수 있습니다."
       />
       <ErpSyncClient />
     </div>
